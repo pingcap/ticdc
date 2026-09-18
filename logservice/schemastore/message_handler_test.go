@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/schemastore/client"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -42,12 +41,10 @@ import (
 
 func newRequestTestStore(t *testing.T, mc messaging.MessageCenter, workers int) *schemaStore {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
 	store := &schemaStore{
-		mc: mc, requestPool: threadpool.NewThreadPool(workers), requestCtx: ctx, requestCancel: cancel,
-		activeRequests:         make(map[schemaRequestKey]*schemaRequest),
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore), tombstoneKeyspaces: map[uint32]struct{}{7: {}},
 	}
+	store.messageHandler = newSchemaStoreMessageHandler(t.Context(), store, mc, workers)
 	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
 	return store
 }
@@ -73,13 +70,14 @@ func waitRequestInStore(t *testing.T, ks *keyspaceSchemaStore) {
 func TestSchemaStoreRequestPool(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 		mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 		store := newRequestTestStore(t, mc, 1)
-		responses := make(chan uint64, 2)
+		responses := make(chan uint64, 3)
 		release := make(chan struct{})
 		releaseRequest := sync.OnceFunc(func() { close(release) })
 		t.Cleanup(releaseRequest)
-		mc.EXPECT().SendCommand(gomock.Any()).Times(2).DoAndReturn(func(msg *messaging.TargetMessage) error {
+		mc.EXPECT().SendCommand(gomock.Any()).Times(3).DoAndReturn(func(msg *messaging.TargetMessage) error {
 			id := msg.Message[0].(*messaging.SchemaStoreResponse).RequestID
 			responses <- id
 			if id == 1 {
@@ -87,7 +85,7 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 			}
 			return nil
 		})
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(1, messaging.SchemaStoreRegisterKeyspace, 7))))
 		select {
 		case id := <-responses:
@@ -95,32 +93,28 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("first request did not run")
 		}
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(2, messaging.SchemaStoreGetTableInfos, 7))))
-		// Fake time advances only after submission. The first request holds the
-		// sole worker until the server timeout expires the queued request.
+		// Expire only the older queued request while the sole worker is busy.
+		// Fake time advances after admission, so submission cannot race expiry.
 		synctest.Wait()
 		require.Empty(t, responses)
-		time.Sleep(messaging.SchemaStoreRequestTimeout)
-		synctest.Wait()
-		require.Empty(t, responses)
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		time.Sleep(messaging.SchemaStoreRequestTimeout / 2)
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(3, messaging.SchemaStoreGetTableInfos, 7))))
-		func() {
-			store.requestMu.Lock()
-			defer store.requestMu.Unlock()
-			// Expired messages are released before the worker is
-			// available, but still count toward the queue limit until dequeued.
-			require.Len(t, store.activeRequests, 3)
-			require.Nil(t, store.activeRequests[schemaRequestKey{id: 2}].message)
-			require.NotNil(t, store.activeRequests[schemaRequestKey{id: 3}].message)
-		}()
+		time.Sleep(messaging.SchemaStoreRequestTimeout / 2)
+		synctest.Wait()
+		require.Empty(t, responses)
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			testRequest(4, messaging.SchemaStoreGetTableInfos, 7))))
 		releaseRequest()
-		select {
-		case id := <-responses:
-			require.Equal(t, uint64(3), id, "expired queued requests must do no work")
-		case <-time.After(time.Second):
-			t.Fatal("queued request did not run")
+		for _, expectedID := range []uint64{3, 4} {
+			select {
+			case id := <-responses:
+				require.Equal(t, expectedID, id, "unexpired requests must execute in FIFO order")
+			case <-time.After(time.Second):
+				t.Fatal("queued request did not run")
+			}
 		}
 	})
 }
@@ -128,31 +122,52 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 func TestSchemaStoreCloseReleasesQueuedMessages(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 		mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 		store := newRequestTestStore(t, mc, 1)
 		started := make(chan struct{})
 		release := make(chan struct{})
 		releaseWorker := sync.OnceFunc(func() { close(release) })
 		t.Cleanup(releaseWorker)
-		store.requestPool.SubmitFunc(func() time.Time {
+		mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+			require.Equal(t, uint64(1), msg.Message[0].(*messaging.SchemaStoreResponse).RequestID)
 			close(started)
 			<-release
-			return time.Time{}
-		}, time.Now())
+			return nil
+		})
+		require.NoError(t, store.messageHandler.submit(t.Context(), "client",
+			testRequest(1, messaging.SchemaStoreRegisterKeyspace, 7)))
 		<-started
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
-			testRequest(1, messaging.SchemaStoreGetTableInfos, 7))))
-		store.requestMu.Lock()
-		queued := store.activeRequests[schemaRequestKey{id: 1}]
-		store.requestMu.Unlock()
-		require.NotNil(t, queued.message)
+		require.NoError(t, store.messageHandler.submit(t.Context(), "client",
+			testRequest(2, messaging.SchemaStoreGetTableInfos, 7)))
+		// Submissions racing with shutdown must finish without depending on the
+		// blocked worker. Accepted requests are discarded when dispatch exits.
+		const concurrentRequests = 16
+		results := make(chan error, concurrentRequests)
+		var submitters sync.WaitGroup
+		for i := range concurrentRequests {
+			submitters.Go(func() {
+				results <- store.messageHandler.submit(t.Context(), "client",
+					testRequest(uint64(i+3), messaging.SchemaStoreGetTableInfos, 7))
+			})
+		}
 		closed := make(chan error, 1)
 		go func() { closed <- store.Close(t.Context()) }()
 		synctest.Wait()
-		// Close is still waiting for the running worker, but no queued message
-		// remains referenced, even if the pool stops without executing its task.
-		require.Empty(t, closed)
-		require.Nil(t, queued.message)
+		select {
+		case <-store.messageHandler.stopped:
+		default:
+			t.Fatal("queued requests were not released while the worker was busy")
+		}
+		submitters.Wait()
+		for range concurrentRequests {
+			if err := <-results; err != nil {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		}
+		require.Empty(t, closed, "close must wait for the running worker")
+		require.ErrorIs(t, store.messageHandler.submit(t.Context(), "client",
+			testRequest(1000, messaging.SchemaStoreGetTableInfos, 7)), context.Canceled)
 		releaseWorker()
 		require.NoError(t, <-closed)
 	})
@@ -176,7 +191,6 @@ func TestSchemaStoreCallerCancellation(t *testing.T) {
 				ksCtx, ksCancel := context.WithCancel(t.Context())
 				ks := &keyspaceSchemaStore{ctx: ksCtx, cancel: ksCancel}
 				store.keyspaceSchemaStoreMap[1] = ks
-				mc.RegisterHandler(messaging.SchemaStoreTopic, store.handleMessage)
 				schemaClient := client.New(mc, id)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
@@ -200,10 +214,7 @@ func TestSchemaStoreCallerCancellation(t *testing.T) {
 				}
 				// Caller cancellation only ends the local wait. The existing schema
 				// store wait continues until resolved ts advances or the keyspace closes.
-				store.requestMu.Lock()
-				pending := len(store.activeRequests)
-				store.requestMu.Unlock()
-				require.Equal(t, 1, pending)
+				waitRequestInStore(t, ks)
 				require.NoError(t, ksCtx.Err(), "canceling a query must not close the keyspace")
 				ksCancel()
 				synctest.Wait()
@@ -217,6 +228,7 @@ func TestSchemaStoreCallerCancellation(t *testing.T) {
 
 func TestSchemaStoreDiscoveryDiscardsCanceledResponse(t *testing.T) {
 	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 	store := newRequestTestStore(t, mc, 1)
 	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
@@ -236,7 +248,7 @@ func TestSchemaStoreDiscoveryDiscardsCanceledResponse(t *testing.T) {
 	req.Filter = config.NewDefaultFilterConfig()
 	finished := make(chan struct{})
 	go func() {
-		store.handleRequest(ctx, "client", req)
+		store.messageHandler.handleRequest(ctx, "client", req)
 		close(finished)
 	}()
 	require.Eventually(t, func() bool { return storage.db.Metrics().Snapshots.Count > 0 }, time.Second, time.Millisecond)
@@ -254,36 +266,35 @@ func TestSchemaStoreDiscoveryDiscardsCanceledResponse(t *testing.T) {
 func TestSchemaStoreRequestQueueLimitAndClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 		mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 		store := newRequestTestStore(t, mc, 1)
 		ctx, cancel := context.WithCancel(t.Context())
 		ks := &keyspaceSchemaStore{ctx: ctx, cancel: cancel}
 		store.keyspaceSchemaStoreMap[1] = ks
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(1, messaging.SchemaStoreGetTableInfos, 1))))
 		waitRequestInStore(t, ks)
 		for id := 2; id <= schemaStoreMaxPendingRequests; id++ {
-			require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 				testRequest(uint64(id), messaging.SchemaStoreGetTableInfos, 1))))
 		}
 		mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
 			require.Contains(t, msg.Message[0].(*messaging.SchemaStoreResponse).Error, "queue is full")
 			return nil
 		})
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		require.NoError(t, store.messageHandler.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(1000, messaging.SchemaStoreGetTableInfos, 1))))
-		// Expiration releases queued messages without changing the running
-		// schema store call. Slots remain reserved until the worker can drain them.
+		// Expiration frees queue capacity even while the running storage call
+		// remains blocked. All expired requests must be removed from the queue.
 		time.Sleep(messaging.SchemaStoreRequestTimeout)
 		synctest.Wait()
-		func() {
-			store.requestMu.Lock()
-			defer store.requestMu.Unlock()
-			require.Len(t, store.activeRequests, schemaStoreMaxPendingRequests)
-			for _, request := range store.activeRequests {
-				require.Nil(t, request.message)
-			}
-		}()
+		for id := 2; id <= schemaStoreMaxPendingRequests; id++ {
+			require.NoError(t, store.messageHandler.submit(t.Context(), "client",
+				testRequest(uint64(id), messaging.SchemaStoreGetTableInfos, 1)))
+		}
+		require.ErrorContains(t, store.messageHandler.submit(t.Context(), "client",
+			testRequest(1000, messaging.SchemaStoreGetTableInfos, 1)), "queue is full")
 		require.NoError(t, ctx.Err())
 		closed := make(chan error, 1)
 		go func() { closed <- store.Close(context.Background()) }()
@@ -293,7 +304,7 @@ func TestSchemaStoreRequestQueueLimitAndClose(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("closing the pool did not release schema requests")
 		}
-		require.ErrorIs(t, store.submitRequest(t.Context(), schemaRequestKey{}, testRequest(1001, messaging.SchemaStoreRegisterKeyspace, 2)), context.Canceled)
+		require.ErrorIs(t, store.messageHandler.submit(t.Context(), "client", testRequest(1001, messaging.SchemaStoreRegisterKeyspace, 2)), context.Canceled)
 	})
 }
 
@@ -311,7 +322,7 @@ func TestSchemaStoreResponseDelivery(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mc := mock.NewMockMessageCenter(gomock.NewController(t))
-			store := &schemaStore{mc: mc}
+			handler := &schemaStoreMessageHandler{mc: mc}
 			attempts := 0
 			mc.EXPECT().SendCommand(gomock.Any()).Times(tt.attempts).DoAndReturn(func(msg *messaging.TargetMessage) error {
 				attempts++
@@ -320,7 +331,7 @@ func TestSchemaStoreResponseDelivery(t *testing.T) {
 				}
 				return nil
 			})
-			err := store.sendResponse(t.Context(), "client", &messaging.SchemaStoreResponse{RequestID: 1})
+			err := handler.sendResponse(t.Context(), "client", &messaging.SchemaStoreResponse{RequestID: 1})
 			if tt.failures >= tt.attempts {
 				require.Error(t, err)
 			} else {
@@ -332,6 +343,7 @@ func TestSchemaStoreResponseDelivery(t *testing.T) {
 
 func TestSchemaStoreTableBatchSize(t *testing.T) {
 	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 	store := newRequestTestStore(t, mc, 1)
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
@@ -346,7 +358,7 @@ func TestSchemaStoreTableBatchSize(t *testing.T) {
 	}
 	req := testRequest(1, messaging.SchemaStoreGetTableInfos, 1)
 	req.TableIDs = []int64{1, 2}
-	infos, more, err := store.getTableInfosBatch(t.Context(), req)
+	infos, more, err := store.messageHandler.getTableInfosBatch(t.Context(), req)
 	require.NoError(t, err)
 	require.True(t, more)
 	require.Len(t, infos, 1)
@@ -354,7 +366,7 @@ func TestSchemaStoreTableBatchSize(t *testing.T) {
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(encoded), messaging.SchemaStoreTableBatchBytes)
 	req.TableIDs = []int64{2}
-	infos, more, err = store.getTableInfosBatch(t.Context(), req)
+	infos, more, err = store.messageHandler.getTableInfosBatch(t.Context(), req)
 	require.NoError(t, err)
 	require.False(t, more)
 	require.Len(t, infos, 1)
@@ -364,7 +376,7 @@ func TestSchemaStoreTableBatchSize(t *testing.T) {
 	oversized.setTableInfoInitialized()
 	storage.tableInfoStoreMap[3] = oversized
 	req.TableIDs = []int64{3}
-	_, _, err = store.getTableInfosBatch(t.Context(), req)
+	_, _, err = store.messageHandler.getTableInfosBatch(t.Context(), req)
 	require.ErrorContains(t, err, "exceeds the response size limit")
 }
 
@@ -386,7 +398,6 @@ func TestSchemaStoreRequests(t *testing.T) {
 	store := newRequestTestStore(t, mc, schemaStoreRequestWorkers)
 	store.keyspaceSchemaStoreMap[meta.ID] = ks
 	store.tombstoneKeyspaces = map[uint32]struct{}{8: {}}
-	mc.RegisterHandler(messaging.SchemaStoreTopic, store.handleMessage)
 	schemaClient := client.New(mc, id)
 	require.NoError(t, schemaClient.RegisterKeyspace(ctx, meta))
 	require.True(t, errors.ErrKeyspaceNotFound.Equal(schemaClient.RegisterKeyspace(ctx, common.KeyspaceMeta{ID: 8})))
@@ -435,6 +446,7 @@ func TestSchemaStoreRegistrationLifetime(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mc := mock.NewMockMessageCenter(ctrl)
+			mc.EXPECT().RegisterHandler(messaging.SchemaStoreTopic, gomock.Any())
 			mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
 			store := newRequestTestStore(t, mc, 1)
 			store.root = t.TempDir()
@@ -473,14 +485,14 @@ func TestSchemaStoreRegistrationLifetime(t *testing.T) {
 						return nil
 					})
 				}
-				store.handleRequest(requestCtx, "client", &messaging.SchemaStoreRequest{
+				store.messageHandler.handleRequest(requestCtx, "client", &messaging.SchemaStoreRequest{
 					RequestID: 1, Operation: messaging.SchemaStoreRegisterKeyspace, Keyspace: meta,
 				})
 			}
 			require.Contains(t, store.keyspaceSchemaStoreMap, meta.ID)
 			ks := store.keyspaceSchemaStoreMap[meta.ID]
 			if test.direct {
-				store.requestCancel()
+				store.messageHandler.cancel()
 				require.NoError(t, ks.ctx.Err(), "the request service must not own a directly registered keyspace")
 				cancelRequest()
 				require.ErrorIs(t, ks.ctx.Err(), context.Canceled)
@@ -495,7 +507,7 @@ func TestSchemaStoreRegistrationLifetime(t *testing.T) {
 			require.NoError(t, err)
 			require.Same(t, ks, acquired)
 			acquired.release()
-			store.requestCancel()
+			store.messageHandler.cancel()
 			require.ErrorIs(t, ks.ctx.Err(), context.Canceled)
 			require.NoError(t, store.Close(context.Background()))
 			require.ErrorIs(t, ks.ctx.Err(), context.Canceled)

@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -335,14 +334,8 @@ type schemaStore struct {
 	pdClock pdutil.Clock
 	pdCli   pd.Client
 	root    string
-	mc      messaging.MessageCenter
 
-	// Serialize submission with shutdown so no task is submitted to a stopped pool.
-	requestMu      sync.Mutex
-	requestPool    threadpool.ThreadPool
-	requestCtx     context.Context
-	requestCancel  context.CancelFunc
-	activeRequests map[schemaRequestKey]*schemaRequest
+	messageHandler *schemaStoreMessageHandler
 
 	// keyspaceSchemaStoreMap is a map to store *keyspaceSchemaStore for every keyspace.
 	// The key is keyspaceID
@@ -355,20 +348,15 @@ type schemaStore struct {
 }
 
 func New(root string, pdCli pd.Client) SchemaStore {
-	requestCtx, requestCancel := context.WithCancel(context.Background())
 	s := &schemaStore{
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		pdCli:                  pdCli,
 		root:                   root,
-		mc:                     appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		requestPool:            threadpool.NewThreadPool(schemaStoreRequestWorkers),
-		requestCtx:             requestCtx,
-		requestCancel:          requestCancel,
-		activeRequests:         make(map[schemaRequestKey]*schemaRequest),
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
-	s.mc.RegisterHandler(messaging.SchemaStoreTopic, s.handleMessage)
+	s.messageHandler = newSchemaStoreMessageHandler(context.Background(), s,
+		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter), schemaStoreRequestWorkers)
 	return s
 }
 
@@ -433,26 +421,11 @@ func (s *schemaStore) Run(ctx context.Context) error {
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	if s.mc != nil {
-		s.mc.DeRegisterHandler(messaging.SchemaStoreTopic)
-	}
-	s.requestMu.Lock()
-	if s.requestCancel != nil {
-		s.requestCancel()
-	}
-	for _, request := range s.activeRequests {
-		request.message = nil
-	}
-	s.requestMu.Unlock()
-	if s.requestPool != nil {
-		// Close the keyspace stores first to release requests waiting for resolved ts.
-		// Stop waits for running tasks and must run after keyspaceLocker is unlocked.
-		defer func() {
-			s.requestPool.Stop()
-			s.requestMu.Lock()
-			clear(s.activeRequests)
-			s.requestMu.Unlock()
-		}()
+	if s.messageHandler != nil {
+		s.messageHandler.stop()
+		// Closing keyspaces releases workers waiting for resolved ts. Wait after
+		// keyspaceLocker is unlocked so in-flight acquisitions can also finish.
+		defer s.messageHandler.workers.Wait()
 	}
 
 	s.keyspaceLocker.Lock()
