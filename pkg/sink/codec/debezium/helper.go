@@ -148,7 +148,13 @@ func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
 		return types.NewDecFromStringForTest(val)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny,
 		mysql.TypeYear:
-		v, err := strconv.ParseInt(val, 10, 64)
+		var v any
+		var err error
+		if mysql.HasUnsignedFlag(tp.GetFlag()) {
+			v, err = strconv.ParseUint(val, 10, 64)
+		} else {
+			v, err = strconv.ParseInt(val, 10, 64)
+		}
 		if err == nil {
 			return v
 		}
