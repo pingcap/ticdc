@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -63,7 +64,7 @@ func attachTestDMLMessageDataWithPayload(
 }
 
 func readGroupIndex(t *testing.T, group *EventsGroup) []spilledMessage {
-	return readGroupIndexFrom(t, group, group.indexCursor)
+	return readGroupIndexFrom(t, group, group.frontier)
 }
 
 func readGroupIndexFrom(t *testing.T, group *EventsGroup, lower []byte) []spilledMessage {
@@ -135,7 +136,7 @@ func TestEventsGroupCoalescesAppliedIndexCleanup(t *testing.T) {
 	}
 
 	require.Equal(t, int64(4), store.indexDeleteRangeCount)
-	require.Zero(t, group.indexCleanupCount)
+	require.Zero(t, group.retainedApplied)
 	require.Equal(t, int64(1), group.pendingCount)
 	entries := readGroupIndex(t, group)
 	require.Len(t, entries, 1)
@@ -618,13 +619,17 @@ func TestSpillStoreAllowsPendingAboveHighWatermark(t *testing.T) {
 	config.pendingLowBytes = 5
 	store := newSpillStore(config)
 
-	store.addPending(11)
+	store.mu.Lock()
+	store.addPendingLocked(11)
+	store.mu.Unlock()
 	require.True(t, store.ShouldDrain())
-	store.addPending(100)
+	store.mu.Lock()
+	store.addPendingLocked(100)
+	store.mu.Unlock()
 	require.Equal(t, int64(111), store.PendingBytes())
 	require.True(t, store.ShouldDrain())
 
-	store.releasePending(106)
+	store.releasePendingBytes(106)
 	require.Equal(t, int64(5), store.PendingBytes())
 	require.False(t, store.ShouldDrain())
 }
@@ -1140,4 +1145,143 @@ func BenchmarkEventsGroupResolveIncrementally(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestEventsGroupKeepsLateEventOfPendingBatch(t *testing.T) {
+	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	for _, commitTs := range []uint64{10, 20, 30} {
+		require.NoError(t, group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(commitTs))))
+	}
+	batch, hasMore, err := group.PrepareResolve(30, store.ResolveLimit())
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, batch.Messages, 3)
+
+	// An event older than the in-flight batch end arrives before it is applied.
+	require.NoError(t, group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(25))))
+	require.NoError(t, batch.Ack())
+	// Only the late event is left in the index: the acknowledged keys of the
+	// batch are gone, so they can neither be lost nor applied twice.
+	entries := readGroupIndex(t, group)
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(25), entries[0].commitTs)
+
+	// The late event must survive the applied range and be applied exactly once,
+	// while every event of the acknowledged batch stays applied.
+	messages, err := group.GetAllMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, uint64(25), messages[0].GetCommitTs())
+	require.Equal(t, int64(4), store.Stats().AppliedEventCount)
+	require.Zero(t, group.pendingCount)
+}
+
+func TestEventsGroupAppliesOutOfOrderAppendsExactlyOnce(t *testing.T) {
+	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	appended := make(map[uint64]int)
+	applied := make(map[uint64]int)
+	next, late := uint64(100), uint64(100)
+	for step := 0; step < 300; step++ {
+		for i := 0; i < 1+step%3; i++ {
+			commitTs := next
+			if step%4 == 0 {
+				// every fourth step appends an event behind every recent one
+				late++
+				commitTs = late
+			} else {
+				next++
+			}
+			require.NoError(t, group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(commitTs))))
+			appended[commitTs]++
+		}
+		batch, _, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
+		require.NoError(t, err)
+		if batch == nil {
+			continue
+		}
+		for _, message := range batch.Messages {
+			applied[message.GetCommitTs()]++
+		}
+		require.NoError(t, batch.Ack())
+	}
+	drain, err := group.GetAllMessages()
+	require.NoError(t, err)
+	for _, message := range drain {
+		applied[message.GetCommitTs()]++
+	}
+
+	require.Equal(t, appended, applied)
+	require.Zero(t, group.pendingCount)
+}
+
+func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
+	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+
+	const total = 400
+	var mu sync.Mutex
+	appended := make(map[uint64]int)
+	applied := make(map[uint64]int)
+	errc := make(chan error, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < total; i++ {
+			commitTs := uint64(i + 1)
+			mu.Lock()
+			appended[commitTs]++
+			mu.Unlock()
+			if err := group.AppendMessage(attachTestDMLMessageData(newTestDMLMessage(commitTs))); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < total; i++ {
+			batch, _, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
+			if err != nil {
+				errc <- err
+				return
+			}
+			if batch == nil {
+				continue
+			}
+			for _, message := range batch.Messages {
+				mu.Lock()
+				applied[message.GetCommitTs()]++
+				mu.Unlock()
+			}
+			if err := batch.Ack(); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		require.NoError(t, err)
+	}
+
+	drain, err := group.GetAllMessages()
+	require.NoError(t, err)
+	for _, message := range drain {
+		mu.Lock()
+		applied[message.GetCommitTs()]++
+		mu.Unlock()
+	}
+	require.Equal(t, appended, applied)
+	require.Zero(t, group.pendingCount)
 }

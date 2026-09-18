@@ -56,6 +56,8 @@ func main() {
 	flag.StringVar(&consumerOption.downstreamURI, "downstream-uri", "", "downstream sink uri")
 	flag.StringVar(&consumerOption.schemaRegistryURI, "schema-registry-uri", "", "schema registry uri")
 	flag.StringVar(&consumerOption.upstreamTiDBDSN, "upstream-tidb-dsn", "", "upstream TiDB DSN")
+	flag.BoolVar(&consumerOption.enableParallelResolve, "enable-parallel-resolve", false,
+		"resolve spilled events in parallel with reading")
 	flag.StringVar(&consumerOption.groupID, "consumer-group-id", groupID, "consumer group id")
 	flag.StringVar(&consumerOption.timezone, "tz", "System", "Specify time zone of Kafka consumer")
 	flag.StringVar(&consumerOption.ca, "ca", "", "CA certificate path for Kafka SSL connection")

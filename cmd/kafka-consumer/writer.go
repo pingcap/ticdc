@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -44,8 +45,42 @@ type partitionProgress struct {
 	watermark       uint64
 	watermarkOffset kafka.Offset
 
+	// mu guards eventsGroup: the resolve pipeline snapshots the groups while the
+	// read loop keeps appending to them.
+	mu          sync.RWMutex
 	eventsGroup map[int64]*util.EventsGroup
 	decoder     *util.DMLMessageDecoder
+}
+
+// group returns the events group of a table. The read loop creates the group on
+// the first event of that table; create is only called when it is missing.
+func (p *partitionProgress) group(tableID int64, create func() *util.EventsGroup) *util.EventsGroup {
+	p.mu.RLock()
+	group := p.eventsGroup[tableID]
+	p.mu.RUnlock()
+	if group != nil || create == nil {
+		return group
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	group = p.eventsGroup[tableID]
+	if group == nil {
+		group = create()
+		p.eventsGroup[tableID] = group
+	}
+	return group
+}
+
+// snapshotGroups copies the current groups of this partition.
+func (p *partitionProgress) snapshotGroups() []*util.EventsGroup {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	groups := make([]*util.EventsGroup, 0, len(p.eventsGroup))
+	for _, group := range p.eventsGroup {
+		groups = append(groups, group)
+	}
+	return groups
 }
 
 type tableIDProvider interface {
@@ -93,10 +128,20 @@ type writer struct {
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
 
+	// pipeline is set when the resolve path runs off the read loop.
+	pipeline *pipeline
+	// globalWatermarkValue is the published minimum of the partition
+	// watermarks. The read loop publishes it after every resolved message and
+	// the resolve pipeline only reads it.
+	globalWatermarkValue atomic.Uint64
+
 	stats pipelineStats
 }
 
 const statsLogInterval = 30 * time.Second
+
+// pipelineStopTimeout bounds how long shutdown waits for the resolve pipeline.
+const pipelineStopTimeout = 10 * time.Second
 
 // pipelineStats accumulates per-stage progress between windowed summary logs.
 // Counters are atomic because the stages are split across goroutines once the
@@ -202,11 +247,36 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	if o.enableParallelResolve {
+		w.pipeline = newPipeline(w)
+		log.Info("resolve pipeline enabled")
+	}
 	return w
 }
 
 func (w *writer) run(ctx context.Context) error {
+	if w.pipeline != nil {
+		w.pipeline.run(ctx)
+	}
 	return w.mysqlSink.Run(ctx)
+}
+
+// stopPipeline waits for the resolve pipeline to return, so the spill store is
+// not released while a resolve is still in flight.
+func (w *writer) stopPipeline() {
+	if w.pipeline == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		w.pipeline.stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(pipelineStopTimeout):
+		log.Warn("resolve pipeline did not stop in time")
+	}
 }
 
 func (w *writer) getSpillStore() *util.SpillStore {
@@ -219,7 +289,7 @@ func (w *writer) getSpillStore() *util.SpillStore {
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
 	for _, progress := range w.progresses {
-		for _, group := range progress.eventsGroup {
+		for _, group := range progress.snapshotGroups() {
 			_ = group.Cleanup()
 		}
 	}
@@ -231,17 +301,24 @@ func (w *writer) cleanupEventsGroups() error {
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
+	// The DDL flush uses the sink itself, so the resolve pipeline has to be
+	// quiesced first: otherwise it could submit events of the blocked tables
+	// after the DDL was executed.
+	if w.pipeline != nil {
+		resume := w.pipeline.pause(ctx)
+		defer resume()
+	}
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
 	start := time.Now()
 	groups := make([]*util.EventsGroup, 0)
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
-			g, ok := progress.eventsGroup[tableID]
-			if !ok {
+			group := progress.group(tableID, nil)
+			if group == nil {
 				continue
 			}
-			groups = append(groups, g)
+			groups = append(groups, group)
 		}
 	}
 	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
@@ -366,8 +443,8 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	switch ddl.GetBlockedTables().InfluenceType {
 	case event.InfluenceTypeDB, event.InfluenceTypeAll:
 		for _, progress := range w.progresses {
-			for tableID := range progress.eventsGroup {
-				tableIDs[tableID] = struct{}{}
+			for _, group := range progress.snapshotGroups() {
+				tableIDs[group.TableID()] = struct{}{}
 			}
 		}
 	case event.InfluenceTypeNormal:
@@ -414,6 +491,23 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 	}
 }
 
+// publishWatermark records the current global watermark so the resolve pipeline
+// can read it without touching the read loop's partition state.
+func (w *writer) publishWatermark() {
+	w.globalWatermarkValue.Store(w.globalWatermark())
+}
+
+// snapshotEventsGroups copies every events group of the consumer.
+func (w *writer) snapshotEventsGroups() []*util.EventsGroup {
+	groups := make([]*util.EventsGroup, 0)
+	for _, progress := range w.progresses {
+		groups = append(groups, progress.snapshotGroups()...)
+	}
+	return groups
+}
+
+// globalWatermark is the read loop's view of the watermark: the minimum over
+// all partitions, computed from the partition progress the read loop owns.
 func (w *writer) globalWatermark() uint64 {
 	watermark := uint64(math.MaxUint64)
 	for _, progress := range w.progresses {
@@ -424,15 +518,17 @@ func (w *writer) globalWatermark() uint64 {
 	return watermark
 }
 
+// publishedWatermark is the watermark the resolve pipeline may apply up to. It
+// is published by the read loop after every resolved message, so the resolver
+// never reads the read loop's partition state.
+func (w *writer) publishedWatermark() uint64 {
+	return w.globalWatermarkValue.Load()
+}
+
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	watermark := w.globalWatermark()
 	start := time.Now()
-	groups := make([]*util.EventsGroup, 0)
-	for _, p := range w.progresses {
-		for _, group := range p.eventsGroup {
-			groups = append(groups, group)
-		}
-	}
+	groups := w.snapshotEventsGroups()
 	total, err := w.flushEventsFromGroups(ctx, groups, watermark, zap.Uint64("watermark", watermark))
 	if err != nil {
 		return err
@@ -461,6 +557,11 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 // return error if flush messages failed.
 func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
 	w.maybeLogStats()
+	if w.pipeline != nil {
+		if err := w.pipeline.err(); err != nil {
+			return false, err
+		}
+	}
 
 	var (
 		partition = message.TopicPartition.Partition
@@ -482,6 +583,10 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
 		progress.updateWatermark(newWatermark, offset)
+		w.publishWatermark()
+		if w.pipeline != nil {
+			w.pipeline.request()
+		}
 		needFlush = true
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
@@ -579,7 +684,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		return w.Write(ctx, messageType)
 	}
 	if !wasDraining && w.getSpillStore().ShouldDrain() {
-		if err := w.flushDMLEventsByWatermark(ctx); err != nil {
+		if w.pipeline != nil {
+			w.pipeline.request()
+		} else if err := w.flushDMLEventsByWatermark(ctx); err != nil {
 			return false, err
 		}
 	}
@@ -641,8 +748,9 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) (boo
 
 	if messageType == common.MessageTypeResolved {
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		err := w.flushDMLEventsByWatermark(ctx)
-		if err != nil {
+		if w.pipeline != nil {
+			w.pipeline.request()
+		} else if err := w.flushDMLEventsByWatermark(ctx); err != nil {
 			return false, err
 		}
 	}
@@ -782,14 +890,13 @@ func (w *writer) appendMessage2Group(
 		return nil
 	}
 
-	group := progress.eventsGroup[tableID]
-	if group == nil {
-		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
+	group := progress.group(tableID, func() *util.EventsGroup {
+		group := util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
 		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
 			return w.messageWithPartitionCheck(message, progress.partition, kafka.Offset(sourcePosition))
 		})
-		progress.eventsGroup[tableID] = group
-	}
+		return group
+	})
 	if messageData, _ := message.SpillData(); messageData != nil {
 		messageData.SourcePosition = int64(offset)
 	}

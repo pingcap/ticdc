@@ -174,6 +174,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 // Run the consumer, read data and write to the downstream target.
 func (c *consumer) Run(ctx context.Context) (err error) {
 	defer func() {
+		c.writer.stopPipeline()
 		if cleanupErr := c.writer.cleanupEventsGroups(); err == nil && cleanupErr != nil {
 			err = cleanupErr
 		}

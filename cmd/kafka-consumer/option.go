@@ -57,6 +57,10 @@ type option struct {
 	upstreamTiDBDSN string
 
 	enableTableAcrossNodes bool
+
+	// enableParallelResolve runs the resolve path (restore plus downstream apply)
+	// off the read loop, so reading and applying overlap.
+	enableParallelResolve bool
 }
 
 func newOption() *option {
