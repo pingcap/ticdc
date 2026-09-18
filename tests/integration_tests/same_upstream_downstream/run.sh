@@ -58,6 +58,20 @@ function run() {
 		exit 1
 	fi
 
+	wait_for_rows() {
+		local expected=$1 table=$2 count=0
+		for _ in $(seq 1 60); do
+			count=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -N \
+				-e "select count(*) from $table" 2>/dev/null || echo 0)
+			if [ "$count" == "$expected" ]; then
+				return 0
+			fi
+			sleep 2
+		done
+		echo "Expected $expected rows in $table of the upstream cluster, got: $count"
+		return 1
+	}
+
 	# 4) Create is allowed when the changefeed config sets `allow-same-cluster`, as long as the
 	# changefeed cannot capture its own writes. The sink writes into the upstream cluster, but
 	# table routing maps the source table into another schema, which is not matched by the filter.
@@ -80,24 +94,49 @@ function run() {
 
 	run_sql "insert into $src_db.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
-	count=0
-	for _ in $(seq 1 60); do
-		count=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -N \
-			-e "select count(*) from $dst_db.$dst_table" 2>/dev/null || echo 0)
-		if [ "$count" == "2" ]; then
-			break
-		fi
-		sleep 2
-	done
-	if [ "$count" != "2" ]; then
-		echo "Expected 2 rows in $dst_db.$dst_table of the upstream cluster, got: $count"
-		exit 1
-	fi
+	wait_for_rows 2 "$dst_db.$dst_table"
 
 	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
 
-	# 5) `allow-same-cluster` is rejected without table routing, and when the route target stays
-	# inside the filter range, because the changefeed would then capture the writes of its own sink.
+	# 5) The target schema may also follow the source schema: `allow_same_cluster_src2_routed` is not
+	# replicated by the filter, so the configuration is accepted and stays safe for tables created
+	# later.
+	derived_id="allow-same-cluster-derived"
+	src_db2="allow_same_cluster_src2"
+	dst_db2="allow_same_cluster_src2_routed"
+	run_sql "create database $src_db2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create database $dst_db2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster_derived.toml" -c "$derived_id" 2>&1 || true)
+	if [[ "$result" != *"Create changefeed successfully"* ]]; then
+		echo "Expected create to be allowed when the target schema follows the source schema, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	# The table is created after the changefeed: its DDL is routed to the derived schema, and the
+	# rows must land there instead of being captured again.
+	run_sql "create table $src_db2.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "$dst_db2.t1_routed" "$UP_TIDB_HOST" "$UP_TIDB_PORT" 90
+	run_sql "insert into $src_db2.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	wait_for_rows 2 "$dst_db2.t1_routed"
+
+	# The gate also runs when a changefeed is updated.
+	cdc_cli_changefeed pause -c "$derived_id"
+	result=$(cdc_cli_changefeed update -c "$derived_id" \
+		--config="$CUR/conf/allow_same_cluster_bad_route.toml" --no-confirm 2>&1 || true)
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
+		echo "Expected update to be rejected when the route target is replicated as well, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	cdc_cli_changefeed remove -c "$derived_id"
+
+	# 6) `allow-same-cluster` is rejected whenever the configuration cannot be proven safe: without
+	# table routing, when a filter rule is not covered by any matcher, when the route target stays
+	# inside the filter range, and for rule forms the gate does not support.
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 		--config="$CUR/conf/allow_same_cluster_no_route.toml" -c "allow-same-cluster-no-route" 2>&1 || true)
 	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"requires table routing to be enabled"* ]]; then
@@ -107,9 +146,25 @@ function run() {
 	fi
 
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster_narrow_route.toml" -c "allow-same-cluster-narrow-route" 2>&1 || true)
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"is not covered by any dispatch rule matcher"* ]]; then
+		echo "Expected create to be rejected when the matcher is narrower than the filter rule, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 		--config="$CUR/conf/allow_same_cluster_bad_route.toml" -c "allow-same-cluster-bad-route" 2>&1 || true)
 	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
 		echo "Expected create to be rejected when the route target is replicated as well, got:"
+		echo "$result"
+		exit 1
+	fi
+
+	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$CUR/conf/allow_same_cluster_unsupported.toml" -c "allow-same-cluster-unsupported" 2>&1 || true)
+	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"does not support the filter rule"* ]]; then
+		echo "Expected create to be rejected for a filter rule the gate does not support, got:"
 		echo "$result"
 		exit 1
 	fi
