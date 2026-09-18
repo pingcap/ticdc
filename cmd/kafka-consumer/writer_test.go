@@ -43,6 +43,12 @@ func drainResolvePipeline(t *testing.T, w *writer) {
 func newTestWriter(t *testing.T, w *writer) *writer {
 	t.Helper()
 
+	// The read loop and the resolve pipeline reach the spill store through
+	// getSpillStore, so create it before the pipeline starts: creating it
+	// lazily from two goroutines is a data race.
+	if w.spillStore == nil {
+		w.spillStore = util.NewSpillStore()
+	}
 	w.pipeline = newPipeline(w)
 	w.pipeline.run(t.Context())
 	t.Cleanup(w.pipeline.stop)
@@ -330,6 +336,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}
 
 	p.watermark = 20
+	// The read loop publishes the watermark of the partition it just read from a
+	// resolved message, and that is what the resolve pipeline may apply up to.
+	w.publishWatermark()
 	needCommit, err := w.Write(ctx, codecCommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
@@ -646,4 +655,84 @@ func (d *singleDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 
 func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+// TestWriteMessageDefersTheDDLCommitUntilTheWatermarkIsApplied pins the commit
+// gate of the DDL path: the DDL is applied while the message is read, but its
+// offset may only advance once the events below the partition watermark reached
+// the downstream. The read loop runs ahead of the resolve pipeline and the spill
+// store is temporary, so committing the offset right away would skip those
+// events on a restart.
+func TestWriteMessageDefersTheDDLCommitUntilTheWatermarkIsApplied(t *testing.T) {
+	ctx := t.Context()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().WriteBlockEvent(gomock.Any()).Return(nil)
+
+	const (
+		tableID   = int64(1)
+		watermark = uint64(20)
+	)
+	ddl := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE t ADD COLUMN c INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: watermark,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{tableID},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   watermark,
+		decoder:     util.NewDMLMessageDecoder(&singleDDLDecoder{ddl: ddl}),
+	}
+	w := newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{progress},
+		mysqlSink:          s,
+		protocol:           config.ProtocolOpen,
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+
+	record := &kgo.Record{Partition: 0, Offset: 100}
+	needCommit, err := w.WriteMessage(ctx, record)
+	require.NoError(t, err)
+	require.False(t, needCommit)
+
+	require.Len(t, w.pendingCommits, 1)
+	require.Same(t, record, w.pendingCommits[0].message)
+	require.Equal(t, watermark, w.pendingCommits[0].watermark)
+
+	// The offset may only be committed once the partition watermark was applied.
+	require.Empty(t, w.takeCommittableMessages())
+	w.pipeline.appliedWatermarkValue.Store(watermark)
+	require.Equal(t, []*kgo.Record{record}, w.takeCommittableMessages())
+}
+
+type singleDDLDecoder struct {
+	ddl      *commonEvent.DDLEvent
+	consumed bool
+}
+
+func (d *singleDDLDecoder) AddKeyValue(_, _ []byte) {
+}
+
+func (d *singleDDLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeDDL, !d.consumed
+}
+
+func (d *singleDDLDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *singleDDLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
+	return nil
+}
+
+func (d *singleDDLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	d.consumed = true
+	return d.ddl
 }
