@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -104,7 +104,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, *ddls)
 	require.Empty(t, w.ddlList)
@@ -150,12 +150,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -196,12 +196,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, *ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -278,7 +278,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -319,7 +319,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	})
 
 	for _, item := range []struct {
-		message *codeccommon.DMLMessage
+		message *codecCommon.DMLMessage
 		offset  int64
 	}{
 		{newDMLMessageForWriterTest(20), 1},
@@ -330,7 +330,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}
 
 	p.watermark = 20
-	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	needCommit, err := w.Write(ctx, codecCommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
 	// The resolve pipeline applies events off the read loop, so drain it before
@@ -359,8 +359,8 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 		return nil
 	})
 
-	newMessage := func(tableID int64, table string) *codeccommon.DMLMessage {
-		message := codeccommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	newMessage := func(tableID int64, table string) *codecCommon.DMLMessage {
+		message := codecCommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 			return &commonEvent.DMLEvent{
 				PhysicalTableID: tableID,
 				CommitTs:        10,
@@ -371,8 +371,8 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 				},
 			}
 		})
-		data := codeccommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+		data := codecCommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		})
 		data.AttachDMLMessage(message)
 		return message
@@ -401,7 +401,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 			},
 		},
 		mysqlSink:              s,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
 	})
 	w.partitionTableAccessor.Add("test", "members")
 
@@ -491,7 +491,7 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
 	})
 
 	ddl := &commonEvent.DDLEvent{
@@ -525,8 +525,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	}
 
 	progress := w.progresses[0]
-	first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
-	second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+	first := codecCommon.NewDMLMessageFromEvent(newDMLEvent(200))
+	second := codecCommon.NewDMLMessageFromEvent(newDMLEvent(100))
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
@@ -550,7 +550,7 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,
-				partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+				partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
 			})
 
 			w.partitionTableAccessor.Add("target", "src")
@@ -576,8 +576,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			}
 
 			progress := w.progresses[0]
-			first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
-			second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+			first := codecCommon.NewDMLMessageFromEvent(newDMLEvent(200))
+			second := codecCommon.NewDMLMessageFromEvent(newDMLEvent(100))
 			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
 			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
@@ -589,8 +589,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	}
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+func newDMLMessageForWriterTest(commitTs uint64) *codecCommon.DMLMessage {
+	return codecCommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			StartTs:         commitTs - 1,
@@ -604,10 +604,10 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	})
 }
 
-func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+func attachDMLMessageDataForWriterTest(message *codecCommon.DMLMessage) *codecCommon.DMLMessage {
+	messageData := codecCommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)
@@ -615,12 +615,12 @@ func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codecco
 }
 
 type singleDMLDecoder struct {
-	message  *codeccommon.DMLMessage
+	message  *codecCommon.DMLMessage
 	consumed bool
 }
 
 type tableIDDecoder struct {
-	codeccommon.Decoder
+	codecCommon.Decoder
 	tableIDs []int64
 }
 
@@ -631,15 +631,15 @@ func (d *tableIDDecoder) GetTableIDs(string, string) []int64 {
 func (d *singleDMLDecoder) AddKeyValue(_, _ []byte) {
 }
 
-func (d *singleDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, !d.consumed
+func (d *singleDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, !d.consumed
 }
 
 func (d *singleDMLDecoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-func (d *singleDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *singleDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	d.consumed = true
 	return d.message
 }

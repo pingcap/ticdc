@@ -17,14 +17,14 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDMLMessageDecoderAttachesSharedData(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoder(decoder)
 
 	wrapped.AddKeyValue([]byte("key"), []byte("value"))
@@ -43,7 +43,7 @@ func TestDMLMessageDecoderAttachesSharedData(t *testing.T) {
 func TestDMLMessageDecoderSharesRestorerAcrossInputs(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoder(decoder)
 
 	wrapped.SetSourcePosition(100)
@@ -63,11 +63,11 @@ func TestDMLMessageDecoderSharesRestorerAcrossInputs(t *testing.T) {
 func TestDMLMessageDecoderKeepsCustomRestorersPerInput(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoderWithDataFactory(decoder,
-		func(_ codeccommon.Decoder, key, value []byte) *codeccommon.DMLMessageData {
-			return codeccommon.NewDMLMessageData(key, value,
-				func([]byte) ([]*codeccommon.DMLMessage, error) { return nil, nil })
+		func(_ codecCommon.Decoder, key, value []byte) *codecCommon.DMLMessageData {
+			return codecCommon.NewDMLMessageData(key, value,
+				func([]byte) ([]*codecCommon.DMLMessage, error) { return nil, nil })
 		})
 
 	wrapped.AddKeyValue([]byte("first-key"), []byte("first-value"))
@@ -98,18 +98,18 @@ func TestSharedRestorerDecodesMultipleInputs(t *testing.T) {
 }
 
 type dmlMessageDecoderStub struct {
-	messages []*codeccommon.DMLMessage
+	messages []*codecCommon.DMLMessage
 }
 
 func (d *dmlMessageDecoderStub) AddKeyValue(_, _ []byte) {}
 
-func (d *dmlMessageDecoderStub) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, len(d.messages) > 0
+func (d *dmlMessageDecoderStub) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, len(d.messages) > 0
 }
 
 func (d *dmlMessageDecoderStub) NextResolvedEvent() uint64 { return 0 }
 
-func (d *dmlMessageDecoderStub) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *dmlMessageDecoderStub) NextDMLMessage() *codecCommon.DMLMessage {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -121,7 +121,7 @@ func (d *dmlMessageDecoderStub) NextDMLMessage() *codeccommon.DMLMessage {
 func (d *dmlMessageDecoderStub) NextDDLEvent() *commonEvent.DDLEvent { return nil }
 
 type resettableDMLDecoder struct {
-	message *codeccommon.DMLMessage
+	message *codecCommon.DMLMessage
 }
 
 func (d *resettableDMLDecoder) AddKeyValue(_, value []byte) {
@@ -132,13 +132,13 @@ func (d *resettableDMLDecoder) AddKeyValue(_, value []byte) {
 	d.message = newTestDMLMessage(uint64(value[0]))
 }
 
-func (d *resettableDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, d.message != nil
+func (d *resettableDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, d.message != nil
 }
 
 func (d *resettableDMLDecoder) NextResolvedEvent() uint64 { return 0 }
 
-func (d *resettableDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *resettableDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	message := d.message
 	d.message = nil
 	return message

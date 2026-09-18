@@ -24,15 +24,15 @@ import (
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
 // newPipelineTestMessage builds a spillable event of one row for the given
 // commit-ts, mirroring the events the read loop produces.
-func newPipelineTestMessage(tableID int64, commitTs uint64) *codeccommon.DMLMessage {
-	message := codeccommon.NewDMLMessageFromEvent(&commonEvent.DMLEvent{
+func newPipelineTestMessage(tableID int64, commitTs uint64) *codecCommon.DMLMessage {
+	message := codecCommon.NewDMLMessageFromEvent(&commonEvent.DMLEvent{
 		PhysicalTableID: tableID,
 		CommitTs:        commitTs,
 		RowTypes:        []common.RowType{common.RowTypeInsert},
@@ -41,8 +41,8 @@ func newPipelineTestMessage(tableID int64, commitTs uint64) *codeccommon.DMLMess
 			TableName: common.TableName{Schema: "test", Table: "t", TableID: tableID},
 		},
 	})
-	data := codeccommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codeccommon.DMLMessage, error) {
-		return []*codeccommon.DMLMessage{message}, nil
+	data := codecCommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codecCommon.DMLMessage, error) {
+		return []*codecCommon.DMLMessage{message}, nil
 	})
 	data.AttachDMLMessage(message)
 	return message

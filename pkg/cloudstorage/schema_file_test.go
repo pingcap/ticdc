@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -556,5 +556,5 @@ func TestTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 		},
 	}
 
-	codeccommon.RequireRowLocatorByPrimaryKey(t, schemaFile.TableInfo(), "a", "b")
+	codecCommon.RequireRowLocatorByPrimaryKey(t, schemaFile.TableInfo(), "a", "b")
 }
