@@ -274,8 +274,12 @@ func (t *SchemaFile) Marshal() []byte {
 
 // marshalForChecksum marshals fields covered by the path checksum.
 func (t *SchemaFile) marshalForChecksum() []byte {
-	// sort columns by name
-	sortedColumns := slices.Clone(t.Columns)
+	// Copy the columns and sort them by name. The copy keeps the shape of the
+	// payload of older versions: a schema file without columns marshals them as
+	// [] rather than null, and the checksum is part of the file path, so the
+	// files already written must keep the name they were written with.
+	sortedColumns := make([]TableCol, 0, len(t.Columns))
+	sortedColumns = append(sortedColumns, t.Columns...)
 	slices.SortStableFunc(sortedColumns, func(a, b TableCol) int {
 		return cmp.Compare(a.Name, b.Name)
 	})

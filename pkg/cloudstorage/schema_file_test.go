@@ -487,6 +487,10 @@ func TestSchemaFile(t *testing.T) {
 func TestSchemaFileGenFilePath(t *testing.T) {
 	t.Parallel()
 
+	// The checksums below are the names already written schema files carry, so a
+	// change to the checksum changes where the files of an upgraded changefeed
+	// live. A schema file without columns must keep marshalling its columns as []
+	// rather than null for that reason.
 	dbSchemaFile := &SchemaFile{
 		Schema:       "schema1",
 		Version:      defaultSchemaFileVersion,
