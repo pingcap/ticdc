@@ -736,3 +736,99 @@ func (d *singleDDLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.consumed = true
 	return d.ddl
 }
+
+// TestWriteMessageResolvedFlushesEligibleDDLBeforePublishingTheWatermark pins
+// the DDL flush trigger: a DDL read before its commit ts reached the watermark
+// waits in ddlList, and the resolved message that raises the watermark is what
+// makes it eligible. It must be applied before the new watermark becomes visible
+// to the resolve pipeline, otherwise the pipeline applies a DML above the DDL
+// commit ts before the DDL created its downstream table.
+func TestWriteMessageResolvedFlushesEligibleDDLBeforePublishingTheWatermark(t *testing.T) {
+	ctx := t.Context()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+
+	const (
+		tableID   = int64(1)
+		watermark = uint64(20)
+	)
+	var (
+		w              *writer
+		written        []string
+		publishedAtDDL []uint64
+	)
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			written = append(written, ddl.Query)
+			publishedAtDDL = append(publishedAtDDL, w.globalWatermarkValue.Load())
+		}
+		return nil
+	}).AnyTimes()
+
+	ddl := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE t ADD COLUMN c INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: watermark,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{tableID},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		decoder:     util.NewDMLMessageDecoder(&singleDDLDecoder{ddl: ddl}),
+	}
+	w = newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{progress},
+		mysqlSink:          s,
+		protocol:           config.ProtocolOpen,
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+
+	// The DDL is read while the watermark is still below its commit ts, so it
+	// waits for the watermark.
+	needCommit, err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 0})
+	require.NoError(t, err)
+	require.False(t, needCommit)
+	require.Empty(t, written)
+	require.Len(t, w.ddlList, 1)
+
+	// The resolved message raises the watermark, which makes the DDL eligible.
+	progress.decoder = util.NewDMLMessageDecoder(&singleResolvedDecoder{watermark: watermark})
+	needCommit, err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 1})
+	require.NoError(t, err)
+	require.False(t, needCommit)
+	require.Equal(t, []string{ddl.Query}, written)
+	require.Empty(t, w.ddlList)
+	// The DDL ran before the new watermark was published to the resolve pipeline.
+	require.Equal(t, []uint64{0}, publishedAtDDL)
+	require.Equal(t, watermark, w.globalWatermarkValue.Load())
+}
+
+type singleResolvedDecoder struct {
+	watermark uint64
+	consumed  bool
+}
+
+func (d *singleResolvedDecoder) AddKeyValue(_, _ []byte) {
+}
+
+func (d *singleResolvedDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeResolved, !d.consumed
+}
+
+func (d *singleResolvedDecoder) NextResolvedEvent() uint64 {
+	d.consumed = true
+	return d.watermark
+}
+
+func (d *singleResolvedDecoder) NextDMLMessage() *codecCommon.DMLMessage {
+	return nil
+}
+
+func (d *singleResolvedDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
+}

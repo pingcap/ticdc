@@ -552,6 +552,17 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
 		progress.updateWatermark(newWatermark, offset)
+		// A DDL read before its commit ts reached the watermark waits in ddlList,
+		// and no DDL message may follow it: the watermark that just advanced is
+		// what makes it eligible, so run the flush a DDL message would run. It has
+		// to run before the new watermark is published, otherwise the resolve
+		// pipeline applies a DML above the DDL commit ts while the downstream
+		// table of the DDL does not exist yet.
+		if len(w.ddlList) != 0 {
+			if _, err := w.Write(ctx, messageType); err != nil {
+				return false, err
+			}
+		}
 		w.publishWatermark()
 		// The offset may only be committed once the events up to this watermark
 		// reached the downstream, so record it as pending.
@@ -560,16 +571,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 			watermark: newWatermark,
 		})
 		w.pipeline.request()
-		// A DDL read before its commit ts reached the watermark waits in ddlList,
-		// and no DDL message may follow it. The watermark that just advanced is
-		// what makes it eligible, so run the flush a DDL message would run. The
-		// resolved message itself is committed through pendingCommits, not by the
-		// caller.
-		if len(w.ddlList) != 0 {
-			if _, err := w.Write(ctx, messageType); err != nil {
-				return false, err
-			}
-		}
 		return false, nil
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
