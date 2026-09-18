@@ -1187,7 +1187,7 @@ func TestEventsGroupAppliesOutOfOrderAppendsExactlyOnce(t *testing.T) {
 	appended := make(map[uint64]int)
 	applied := make(map[uint64]int)
 	next, late := uint64(100), uint64(100)
-	for step := 0; step < 300; step++ {
+	for step := range 300 {
 		for i := 0; i < 1+step%3; i++ {
 			commitTs := next
 			if step%4 == 0 {
@@ -1233,7 +1233,7 @@ func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		for i := 0; i < total; i++ {
+		for i := range total {
 			commitTs := uint64(i + 1)
 			mu.Lock()
 			appended[commitTs]++
@@ -1245,7 +1245,7 @@ func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
 		}
 	})
 	wg.Go(func() {
-		for i := 0; i < total; i++ {
+		for range total {
 			batch, _, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
 			if err != nil {
 				errc <- err

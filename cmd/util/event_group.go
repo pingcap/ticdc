@@ -1049,7 +1049,7 @@ func (g *EventsGroup) PrepareResolve(
 		return nil, false, nil
 	}
 
-	entries, hasMore, err := g.claimResolveLocked(resolve, limit)
+	entries, hasMore, err := g.claimResolveLocked(limit)
 	if err != nil {
 		g.mu.Unlock()
 		return nil, false, err
@@ -1123,8 +1123,8 @@ func (g *EventsGroup) PrepareResolve(
 }
 
 // claimResolveLocked selects the commit-ts ordered prefix of this group at or
-// below resolve. It must be called with g.mu held.
-func (g *EventsGroup) claimResolveLocked(resolve uint64, limit ResolveLimit) ([]spilledMessage, bool, error) {
+// below the resolved ts. It must be called with g.mu held.
+func (g *EventsGroup) claimResolveLocked(limit ResolveLimit) ([]spilledMessage, bool, error) {
 	if err := g.store.flushEventIndex(); err != nil {
 		return nil, false, err
 	}
@@ -1162,7 +1162,12 @@ func (g *EventsGroup) claimResolveLocked(resolve uint64, limit ResolveLimit) ([]
 		payloadKey := payloadCacheKey{segmentID: entry.location.segmentID, offset: entry.location.handle.Offset}
 		additionalBytes := int64(0)
 		if _, ok := seenPayloads[payloadKey]; !ok {
-			if _, cached := g.store.cache[payloadKey]; !cached {
+			// A batch acknowledgement of another group can evict the entry from
+			// the shared cache at any time, so the lookup needs the store lock.
+			g.store.mu.Lock()
+			_, cached := g.store.cache[payloadKey]
+			g.store.mu.Unlock()
+			if !cached {
 				additionalBytes = int64(entry.location.handle.Length)
 			}
 		}
