@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -1445,18 +1444,5 @@ func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 		Extensions: &tidbExtension{CommitTs: 100},
 	})
 
-	columns := tableInfo.GetColumns()
-	preValues := make([]interface{}, 0, len(columns))
-	postValues := make([]interface{}, 0, len(columns))
-	for _, column := range columns {
-		preValues = append(preValues, "pre_"+column.Name.O)
-		postValues = append(postValues, "post_"+column.Name.O)
-	}
-
-	change := sqlmodel.NewRowChange(
-		&tableInfo.TableName, nil, preValues, postValues, tableInfo, tableInfo, nil)
-	sql, args := change.GenSQL(sqlmodel.DMLUpdate)
-
-	require.Contains(t, sql, "WHERE `s_i_id` = ? AND `s_w_id` = ?")
-	require.Equal(t, []interface{}{"pre_s_i_id", "pre_s_w_id"}, args[len(args)-2:])
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
 }

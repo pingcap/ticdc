@@ -351,6 +351,7 @@ func queryTableInfoFromPayload(
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, &timodel.ColumnInfo{
 			ID:        int64(idx),
+			Offset:    idx,
 			State:     timodel.StatePublic,
 			Name:      ast.NewCIStr(colName),
 			FieldType: *fieldType,
