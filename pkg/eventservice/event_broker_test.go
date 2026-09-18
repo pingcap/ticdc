@@ -403,7 +403,7 @@ func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
+func TestNotifyQueueFullDoesNotBlockOrLoseTask(t *testing.T) {
 	for _, testCase := range []struct {
 		name           string
 		lowLatencyMode bool
@@ -434,18 +434,6 @@ func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
 			}()
 
 			require.Eventually(t, func() bool {
-				disp.scanMu.Lock()
-				defer disp.scanMu.Unlock()
-				return disp.scanState == dispatcherScanQueued
-			}, time.Second, time.Millisecond)
-			select {
-			case <-done:
-				t.Fatal("notify returned while the scan queue was full")
-			default:
-			}
-
-			<-queue
-			require.Eventually(t, func() bool {
 				select {
 				case <-done:
 					return true
@@ -454,15 +442,50 @@ func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
 				}
 			}, time.Second, time.Millisecond)
 
-			task := <-queue
+			broker.onNotify(disp, 201, 0)
+			require.Len(t, queue, 1)
+			task := broker.pendingScanTasks[disp.scanWorkerIndex].pop()
 			require.Same(t, disp, task)
+			require.Nil(t, broker.pendingScanTasks[disp.scanWorkerIndex].pop())
 			require.Equal(t, droppedBefore, testutil.ToFloat64(metrics.EventServiceDroppedScanTaskCount))
-			require.Equal(t, uint64(200), disp.receivedResolvedTs.Load())
+			require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
 			require.True(t, task.beginScan())
 			broker.finishScan(task, false, false, 0)
 			require.False(t, disp.isScanBusy())
-			require.Empty(t, queue)
+			require.Len(t, queue, 1)
 		})
+	}
+}
+
+func TestScanWorkerDrainsPendingNotify(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	queue := make(chan scanTask, 1)
+	queue <- &dispatcherStat{scanState: dispatcherScanRemoved}
+	broker.taskChan[0] = queue
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.startTs = 100
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	broker.onNotify(disp, 200, 0)
+	require.True(t, disp.isScanBusy())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		_ = broker.runScanWorker(ctx, 0)
+		close(done)
+	}()
+	require.Eventually(t, func() bool { return !disp.isScanBusy() }, time.Second, time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scan worker did not stop")
 	}
 }
 

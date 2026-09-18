@@ -62,6 +62,42 @@ type schemaBlockedDispatcherBucket struct {
 	dirty       atomic.Bool
 }
 
+type pendingScanTaskQueue struct {
+	sync.Mutex
+	tasks []scanTask
+	wake  chan struct{}
+}
+
+func (q *pendingScanTaskQueue) push(task scanTask) {
+	q.Lock()
+	q.tasks = append(q.tasks, task)
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+	q.Unlock()
+}
+
+func (q *pendingScanTaskQueue) pop() scanTask {
+	q.Lock()
+	defer q.Unlock()
+	if len(q.tasks) == 0 {
+		return nil
+	}
+	task := q.tasks[0]
+	q.tasks[0] = nil
+	q.tasks = q.tasks[1:]
+	if len(q.tasks) == 0 {
+		q.tasks = nil
+	} else {
+		select {
+		case q.wake <- struct{}{}:
+		default:
+		}
+	}
+	return task
+}
+
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
 // Every TiDB cluster has a eventBroker.
 // All span subscriptions and dispatchers of the TiDB cluster are managed by the eventBroker.
@@ -92,6 +128,8 @@ type eventBroker struct {
 
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
+	// pendingScanTasks retains notify tasks when a worker's task channel is full.
+	pendingScanTasks []pendingScanTaskQueue
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -154,6 +192,7 @@ func newEventBroker(
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
+		pendingScanTasks:        make([]pendingScanTaskQueue, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
@@ -180,8 +219,9 @@ func newEventBroker(
 	for i := 0; i < scanWorkerCount; i++ {
 		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
+		c.pendingScanTasks[i].wake = make(chan struct{}, 1)
 		g.Go(func() error {
-			return c.runScanWorker(ctx, taskChan)
+			return c.runScanWorker(ctx, i)
 		})
 	}
 
@@ -343,13 +383,18 @@ func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) error {
+func (c *eventBroker) runScanWorker(ctx context.Context, workerIndex int) error {
+	pending := &c.pendingScanTasks[workerIndex]
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case task := <-taskChan:
+		case task := <-c.taskChan[workerIndex]:
 			c.doScan(ctx, task)
+		case <-pending.wake:
+			if task := pending.pop(); task != nil {
+				c.doScan(ctx, task)
+			}
 		}
 	}
 }
@@ -1109,9 +1154,12 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 	d.schemaBlockedUntilTs = 0
 	d.scanMu.Unlock()
 
-	// Only the external EventStore notify path may wait for capacity. Scan workers
-	// use requestScan so that they never block on their own queue.
-	c.taskChan[d.scanWorkerIndex] <- d
+	// Never block the EventStore notify path on a full scan worker queue.
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- d:
+	default:
+		c.pendingScanTasks[d.scanWorkerIndex].push(d)
+	}
 }
 
 func (c *eventBroker) requestScan(d *dispatcherStat) {
