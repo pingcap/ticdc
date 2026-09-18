@@ -560,6 +560,16 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 			watermark: newWatermark,
 		})
 		w.pipeline.request()
+		// A DDL read before its commit ts reached the watermark waits in ddlList,
+		// and no DDL message may follow it. The watermark that just advanced is
+		// what makes it eligible, so run the flush a DDL message would run. The
+		// resolved message itself is committed through pendingCommits, not by the
+		// caller.
+		if len(w.ddlList) != 0 {
+			if _, err := w.Write(ctx, messageType); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
