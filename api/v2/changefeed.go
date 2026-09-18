@@ -303,6 +303,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
+	if util.GetOrZero(cfg.Pause) {
+		info.State = config.StateStopped
+		info.BootstrapPending = util.AddressOf(true)
+	}
+
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.

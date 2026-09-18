@@ -35,7 +35,7 @@ type Changefeed struct {
 	ID       common.ChangeFeedID
 	info     *atomic.Pointer[config.ChangeFeedInfo]
 	sinkType common.SinkType
-	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
+	isNew    atomic.Bool // fresh initialization or resume with overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -74,7 +74,6 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
 		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
 		sinkType:                 getSinkType(uri.Scheme),
-		isNew:                    isNew,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -84,6 +83,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 			}),
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
+	res.isNew.Store(isNew || util.GetOrZero(info.BootstrapPending))
 	// Must set retrying to true when the changefeed is in warning state.
 	if info.State == config.StateWarning {
 		res.backoff.retrying.Store(true)
@@ -236,7 +236,7 @@ func (c *Changefeed) NeedCheckpointTsMessage() bool {
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
-	c.isNew = isNew
+	c.isNew.Store(isNew)
 }
 
 // GetStatus returns the changefeed status.
@@ -299,7 +299,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Id:              c.ID.ToPB(),
 			CheckpointTs:    checkpointTs,
 			Config:          []byte(configData),
-			IsNewChangefeed: c.isNew,
+			IsNewChangefeed: c.isNew.Load(),
 			KeyspaceId:      info.KeyspaceID,
 			MaintainerEpoch: info.Epoch,
 		})
