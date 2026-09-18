@@ -702,10 +702,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 		// fenced terminal report is therefore expected to carry the previous
 		// epoch. Preserve the final committed checkpoint before adding the new
 		// owner, while continuing to reject all other stale-epoch reports.
-		if acceptMoveOriginCheckpoint {
-			if !handoffCheckpointAdvanced {
-				return nil
-			}
+		if acceptMoveOriginCheckpoint && handoffCheckpointAdvanced {
 			log.Info("advance checkpoint from stopping maintainer",
 				zap.Stringer("changefeedID", cfID),
 				zap.Stringer("nodeID", from),
