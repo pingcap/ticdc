@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -31,6 +32,39 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetSchemaStoreClient(t *testing.T) {
+	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().RegisterHandler(messaging.SchemaStoreClientTopic, gomock.Any()).Times(1)
+	previousMC, hasPreviousMC := appcontext.TryGetService[messaging.MessageCenter](appcontext.MessageCenter)
+	previousID := appcontext.GetID()
+	id := node.NewID()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetID(id.String())
+	t.Cleanup(func() {
+		schemaStoreClient = nil
+		schemaStoreClientOnce = sync.Once{}
+		appcontext.SetID(previousID)
+		if hasPreviousMC {
+			appcontext.SetService(appcontext.MessageCenter, previousMC)
+		}
+	})
+
+	const callers = 32
+	clients := make(chan *Client, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Go(func() { clients <- GetSchemaStoreClient() })
+	}
+	wg.Wait()
+	close(clients)
+	c := GetSchemaStoreClient()
+	require.Same(t, mc, c.mc)
+	require.Equal(t, id, c.target)
+	for got := range clients {
+		require.Same(t, c, got)
+	}
+}
 
 func newTestClient(t *testing.T) (*Client, messaging.MessageCenter) {
 	t.Helper()
@@ -70,7 +104,6 @@ func TestSchemaStoreClientTableBatches(t *testing.T) {
 				req := msg.Message[0].(*messaging.SchemaStoreRequest)
 				require.Equal(t, messaging.SchemaStoreGetTableInfos, req.Operation)
 				require.LessOrEqual(t, len(req.TableIDs), messaging.SchemaStoreTableBatchSize)
-				require.Greater(t, req.Deadline, time.Now().UnixNano())
 				batch := req.TableIDs
 				if partial {
 					batch = batch[:min(len(batch), 31)]

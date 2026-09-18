@@ -37,13 +37,11 @@ const (
 	SchemaStoreCancelRequest
 )
 
-// SchemaStoreRequest has one response. Deadline is an absolute Unix timestamp in
-// nanoseconds, including time spent waiting in the server's queue. Cancellation
-// uses the original RequestID and does not produce another response.
+// SchemaStoreRequest has one response. Cancellation uses the original RequestID
+// and does not produce another response.
 type SchemaStoreRequest struct {
 	RequestID      uint64               `json:"request_id"`
 	Operation      SchemaStoreOperation `json:"operation"`
-	Deadline       int64                `json:"deadline"`
 	Keyspace       common.KeyspaceMeta  `json:"keyspace"`
 	Ts             uint64               `json:"ts,omitempty"`
 	TableIDs       []int64              `json:"table_ids,omitempty"`

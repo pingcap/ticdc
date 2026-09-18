@@ -36,6 +36,11 @@ type Client struct {
 	requests      sync.Map // uint64 request ID -> chan *messaging.SchemaStoreResponse
 }
 
+var (
+	schemaStoreClient     *Client
+	schemaStoreClientOnce sync.Once
+)
+
 // New registers the response handler. Create one client per message center.
 func New(mc messaging.MessageCenter, target node.ID) *Client {
 	c := &Client{mc: mc, target: target}
@@ -43,8 +48,27 @@ func New(mc messaging.MessageCenter, target node.ID) *Client {
 	return c
 }
 
+// GetSchemaStoreClient lazily creates the client for the local server.
 func GetSchemaStoreClient() *Client {
-	return appcontext.GetService[*Client](appcontext.SchemaStoreClient)
+	schemaStoreClientOnce.Do(func() {
+		mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+		schemaStoreClient = New(mc, node.ID(appcontext.GetID()))
+	})
+	return schemaStoreClient
+}
+
+// SetSchemaStoreClientForTest replaces the singleton and returns a restore function.
+// Tests must run serially and stop singleton users before replacing or restoring it.
+func SetSchemaStoreClientForTest(c *Client) func() {
+	previous := schemaStoreClient
+	schemaStoreClient = c
+	schemaStoreClientOnce.Do(func() {})
+	return func() {
+		schemaStoreClient = previous
+		if previous == nil {
+			schemaStoreClientOnce = sync.Once{}
+		}
+	}
 }
 
 func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) error {
@@ -141,8 +165,6 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 	if c.target.IsEmpty() {
 		return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("server id is empty")
 	}
-	deadline, _ := ctx.Deadline()
-	req.Deadline = deadline.UnixNano()
 	req.RequestID = c.nextRequestID.Add(1)
 	ch := make(chan *messaging.SchemaStoreResponse, 1)
 	c.requests.Store(req.RequestID, ch)
@@ -152,8 +174,8 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 	}
 	select {
 	case <-ctx.Done():
-		// Cancellation bypasses the worker pool. If delivery fails, the deadline
-		// carried by the original request still expires queued work and responses.
+		// Cancellation bypasses the worker pool. If delivery fails, the server's
+		// own timeout still expires queued work and responses.
 		_ = c.mc.SendCommand(messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreTopic,
 			&messaging.SchemaStoreRequest{RequestID: req.RequestID, Operation: messaging.SchemaStoreCancelRequest}))
 		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())

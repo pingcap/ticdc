@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
@@ -1000,7 +999,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	mc.Run(ctx)
 	t.Cleanup(mc.Close)
 
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, serverID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, serverID)))
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

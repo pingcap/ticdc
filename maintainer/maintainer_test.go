@@ -363,7 +363,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, n.ID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, n.ID)))
 	schemaStore.RegisterMessageHandler(mc)
 
 	nodeManager := watcher.NewNodeManager(nil, nil)

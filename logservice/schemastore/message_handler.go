@@ -59,6 +59,13 @@ type schemaRequestKey struct {
 	id   uint64
 }
 
+// Keep the queued message separate from the pool task so cancellation can
+// release it while workers are busy. Fields are protected by requestMu.
+type schemaRequest struct {
+	message *messaging.SchemaStoreRequest
+	cancel  context.CancelFunc
+}
+
 func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	for _, m := range msg.Message {
 		req, ok := m.(*messaging.SchemaStoreRequest)
@@ -68,8 +75,9 @@ func (s *schemaStore) handleMessage(ctx context.Context, msg *messaging.TargetMe
 		key := schemaRequestKey{from: msg.From, id: req.RequestID}
 		if req.Operation == messaging.SchemaStoreCancelRequest {
 			s.requestMu.Lock()
-			if cancel := s.activeRequests[key]; cancel != nil {
-				cancel()
+			if request := s.activeRequests[key]; request != nil {
+				request.message = nil
+				request.cancel()
 			}
 			s.requestMu.Unlock()
 			continue
@@ -105,27 +113,31 @@ func (s *schemaStore) submitRequest(ctx context.Context, key schemaRequestKey, r
 	if req.Operation == messaging.SchemaStoreGetTableInfos && (len(req.TableIDs) == 0 || len(req.TableIDs) > messaging.SchemaStoreTableBatchSize) {
 		return errors.ErrSchemaStoreRequestFailed.GenWithStack("invalid schema store batch size %d", len(req.TableIDs))
 	}
-	deadline := time.Unix(0, req.Deadline)
-	if !deadline.After(time.Now()) {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, context.DeadlineExceeded)
-	}
-	// Never let a peer extend the server's maximum request lifetime.
-	if limit := time.Now().Add(messaging.SchemaStoreRequestTimeout); deadline.After(limit) {
-		deadline = limit
-	}
-	requestCtx, cancel := context.WithDeadline(s.requestCtx, deadline)
-	s.activeRequests[key] = cancel
+	// Start the server timeout before submission so it includes time in the queue.
+	requestCtx, cancel := context.WithTimeout(s.requestCtx, messaging.SchemaStoreRequestTimeout)
+	request := &schemaRequest{message: req, cancel: cancel}
+	s.activeRequests[key] = request
+	stopRelease := context.AfterFunc(requestCtx, func() {
+		s.requestMu.Lock()
+		request.message = nil
+		s.requestMu.Unlock()
+	})
 	s.requestPool.SubmitFunc(func() time.Time {
 		defer func() {
+			stopRelease()
 			cancel()
 			s.requestMu.Lock()
 			delete(s.activeRequests, key)
 			s.requestMu.Unlock()
 		}()
-		// Canceled queued requests do no storage work. They retain their queue
-		// slot until dequeued so repeated cancellation cannot grow the pool queue.
-		if requestCtx.Err() == nil {
-			s.handleRequest(requestCtx, key.from, req)
+		s.requestMu.Lock()
+		message := request.message
+		request.message = nil
+		s.requestMu.Unlock()
+		// Cancellation releases the queued message, but keeps the slot until
+		// dequeued so repeated cancellation cannot grow the pool queue.
+		if message != nil && requestCtx.Err() == nil {
+			s.handleRequest(requestCtx, key.from, message)
 		}
 		return time.Time{}
 	}, time.Now())

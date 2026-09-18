@@ -342,7 +342,7 @@ type schemaStore struct {
 	requestPool    threadpool.ThreadPool
 	requestCtx     context.Context
 	requestCancel  context.CancelFunc
-	activeRequests map[schemaRequestKey]context.CancelFunc
+	activeRequests map[schemaRequestKey]*schemaRequest
 
 	// keyspaceSchemaStoreMap is a map to store *keyspaceSchemaStore for every keyspace.
 	// The key is keyspaceID
@@ -364,7 +364,7 @@ func New(root string, pdCli pd.Client) SchemaStore {
 		requestPool:            threadpool.NewThreadPool(schemaStoreRequestWorkers),
 		requestCtx:             requestCtx,
 		requestCancel:          requestCancel,
-		activeRequests:         make(map[schemaRequestKey]context.CancelFunc),
+		activeRequests:         make(map[schemaRequestKey]*schemaRequest),
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
@@ -439,6 +439,9 @@ func (s *schemaStore) Close(ctx context.Context) error {
 	s.requestMu.Lock()
 	if s.requestCancel != nil {
 		s.requestCancel()
+	}
+	for _, request := range s.activeRequests {
+		request.message = nil
 	}
 	s.requestMu.Unlock()
 	if s.requestPool != nil {

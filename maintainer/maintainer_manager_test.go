@@ -313,7 +313,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, selfNode.ID)))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -546,7 +546,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	defer mc.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, selfNode.ID)))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -689,7 +689,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, selfNode.ID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, selfNode.ID)))
 	store.RegisterMessageHandler(mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager, selfLis)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)

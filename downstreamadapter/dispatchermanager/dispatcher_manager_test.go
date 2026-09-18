@@ -474,7 +474,7 @@ func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	mc.Run(context.Background())
 	t.Cleanup(mc.Close)
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, serverID))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, serverID)))
 	tableInfo := common.WrapTableInfo("test", &model.TableInfo{ID: 11, Name: ast.NewCIStr("t")})
 	tableInfoData, err := tableInfo.Marshal()
 	require.NoError(t, err)

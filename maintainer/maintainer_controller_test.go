@@ -1414,7 +1414,7 @@ func setUpBootstrapTestServices(t *testing.T) {
 	t.Helper()
 	id := testutil.SetUpTestServices(t)
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, id))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, id)))
 }
 
 func TestFinishBootstrap(t *testing.T) {

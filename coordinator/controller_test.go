@@ -420,7 +420,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 			mc := messaging.NewMockMessageCenter()
 			appcontext.SetService(appcontext.MessageCenter, mc)
 			mc.EnableLocalDispatch()
-			appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, "coordinator"))
+			t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, "coordinator")))
 			eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 
 			nodeManager := watcher.NewNodeManager(nil, nil)
@@ -517,7 +517,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 	nodeManager.GetAliveNodes()[currentNode] = &node.Info{ID: currentNode}
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	mc.EnableLocalDispatch()
-	appcontext.SetService(appcontext.SchemaStoreClient, client.New(mc, "coordinator"))
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, "coordinator")))
 	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 

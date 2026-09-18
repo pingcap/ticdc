@@ -45,7 +45,7 @@ func newRequestTestStore(t *testing.T, mc messaging.MessageCenter, workers int) 
 	ctx, cancel := context.WithCancel(t.Context())
 	store := &schemaStore{
 		mc: mc, requestPool: threadpool.NewThreadPool(workers), requestCtx: ctx, requestCancel: cancel,
-		activeRequests:         make(map[schemaRequestKey]context.CancelFunc),
+		activeRequests:         make(map[schemaRequestKey]*schemaRequest),
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore), tombstoneKeyspaces: map[uint32]struct{}{7: {}},
 	}
 	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
@@ -55,7 +55,7 @@ func newRequestTestStore(t *testing.T, mc messaging.MessageCenter, workers int) 
 func testRequest(id uint64, operation messaging.SchemaStoreOperation, keyspace uint32) *messaging.SchemaStoreRequest {
 	return &messaging.SchemaStoreRequest{
 		RequestID: id, Operation: operation, Keyspace: common.KeyspaceMeta{ID: keyspace},
-		Deadline: time.Now().Add(time.Minute).UnixNano(), TableIDs: []int64{1}, Ts: 100,
+		TableIDs: []int64{1}, Ts: 100,
 	}
 }
 
@@ -95,18 +95,31 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("first request did not run")
 		}
-		queued := testRequest(2, messaging.SchemaStoreGetTableInfos, 7)
-		queued.Deadline = time.Now().Add(30 * time.Millisecond).UnixNano()
-		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic, queued)))
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			testRequest(2, messaging.SchemaStoreGetTableInfos, 7))))
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			testRequest(4, messaging.SchemaStoreGetTableInfos, 7))))
+		// Fake time advances only after submission. The first request holds the
+		// sole worker until the server timeout expires the queued request.
+		synctest.Wait()
+		require.Empty(t, responses)
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			&messaging.SchemaStoreRequest{RequestID: 4, Operation: messaging.SchemaStoreCancelRequest})))
+		time.Sleep(messaging.SchemaStoreRequestTimeout)
+		synctest.Wait()
+		require.Empty(t, responses)
 		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
 			testRequest(3, messaging.SchemaStoreGetTableInfos, 7))))
-		// Fake time advances only after both requests are submitted. The first
-		// request holds the sole worker until the queued request has expired.
-		synctest.Wait()
-		require.Empty(t, responses)
-		time.Sleep(50 * time.Millisecond)
-		synctest.Wait()
-		require.Empty(t, responses)
+		func() {
+			store.requestMu.Lock()
+			defer store.requestMu.Unlock()
+			// Expired and canceled messages are released before the worker is
+			// available, but still count toward the queue limit until dequeued.
+			require.Len(t, store.activeRequests, 4)
+			require.Nil(t, store.activeRequests[schemaRequestKey{id: 2}].message)
+			require.Nil(t, store.activeRequests[schemaRequestKey{id: 4}].message)
+			require.NotNil(t, store.activeRequests[schemaRequestKey{id: 3}].message)
+		}()
 		releaseRequest()
 		select {
 		case id := <-responses:
@@ -114,6 +127,39 @@ func TestSchemaStoreRequestPool(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("queued request did not run")
 		}
+	})
+}
+
+func TestSchemaStoreCloseReleasesQueuedMessages(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+		store := newRequestTestStore(t, mc, 1)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		releaseWorker := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(releaseWorker)
+		store.requestPool.SubmitFunc(func() time.Time {
+			close(started)
+			<-release
+			return time.Time{}
+		}, time.Now())
+		<-started
+		require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+			testRequest(1, messaging.SchemaStoreGetTableInfos, 7))))
+		store.requestMu.Lock()
+		queued := store.activeRequests[schemaRequestKey{id: 1}]
+		store.requestMu.Unlock()
+		require.NotNil(t, queued.message)
+		closed := make(chan error, 1)
+		go func() { closed <- store.Close(t.Context()) }()
+		synctest.Wait()
+		// Close is still waiting for the running worker, but no queued message
+		// remains referenced, even if the pool stops without executing its task.
+		require.Empty(t, closed)
+		require.Nil(t, queued.message)
+		releaseWorker()
+		require.NoError(t, <-closed)
 	})
 }
 
@@ -125,54 +171,66 @@ func TestSchemaStoreRequestCancellation(t *testing.T) {
 	}{
 		{"cancel table query", messaging.SchemaStoreGetTableInfos, false},
 		{"cancel table discovery", messaging.SchemaStoreGetAllPhysicalTables, false},
-		{"deadline without cancellation delivery", messaging.SchemaStoreGetTableInfos, true},
+		{"server timeout without cancellation delivery", messaging.SchemaStoreGetTableInfos, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			id := node.NewID()
-			mc := messaging.NewMessageCenter(t.Context(), id, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
-			mc.Run(t.Context())
-			t.Cleanup(mc.Close)
-			store := newRequestTestStore(t, mc, 1)
-			ksCtx, ksCancel := context.WithCancel(t.Context())
-			ks := &keyspaceSchemaStore{ctx: ksCtx, cancel: ksCancel}
-			store.keyspaceSchemaStoreMap[1] = ks
-			mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-				if test.dropCancel && msg.Message[0].(*messaging.SchemaStoreRequest).Operation == messaging.SchemaStoreCancelRequest {
-					return nil
+			synctest.Test(t, func(t *testing.T) {
+				id := node.NewID()
+				mc := messaging.NewMessageCenter(t.Context(), id, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
+				mc.Run(t.Context())
+				t.Cleanup(mc.Close)
+				store := newRequestTestStore(t, mc, 1)
+				ksCtx, ksCancel := context.WithCancel(t.Context())
+				ks := &keyspaceSchemaStore{ctx: ksCtx, cancel: ksCancel}
+				store.keyspaceSchemaStoreMap[1] = ks
+				mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
+					if test.dropCancel && msg.Message[0].(*messaging.SchemaStoreRequest).Operation == messaging.SchemaStoreCancelRequest {
+						return nil
+					}
+					return store.handleMessage(ctx, msg)
+				})
+				schemaClient := client.New(mc, id)
+				timeout := time.Minute
+				if test.dropCancel {
+					timeout = 100 * time.Millisecond
 				}
-				return store.handleMessage(ctx, msg)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
+				defer cancel()
+				finished := make(chan error, 1)
+				go func() {
+					var err error
+					if test.operation == messaging.SchemaStoreGetTableInfos {
+						_, err = schemaClient.GetTableInfos(ctx, common.KeyspaceMeta{ID: 1}, []int64{1}, 100)
+					} else {
+						_, err = schemaClient.GetAllPhysicalTables(ctx, common.KeyspaceMeta{ID: 1}, 100, config.NewDefaultFilterConfig(), true, false)
+					}
+					finished <- err
+				}()
+				waitRequestInStore(t, ks)
+				if !test.dropCancel {
+					cancel()
+				}
+				select {
+				case err := <-finished:
+					require.Error(t, err)
+				case <-time.After(time.Second):
+					t.Fatal("caller did not finish")
+				}
+				if test.dropCancel {
+					// The server cannot observe the client's shorter timeout when
+					// cancellation is lost. Its own timeout must still free the worker.
+					store.requestMu.Lock()
+					pending := len(store.activeRequests)
+					store.requestMu.Unlock()
+					require.Equal(t, 1, pending)
+					time.Sleep(messaging.SchemaStoreRequestTimeout)
+					synctest.Wait()
+				}
+				followCtx, followCancel := context.WithTimeout(t.Context(), time.Second)
+				defer followCancel()
+				require.True(t, errors.ErrKeyspaceNotFound.Equal(schemaClient.RegisterKeyspace(followCtx, common.KeyspaceMeta{ID: 7})))
+				require.NoError(t, ksCtx.Err(), "canceling a query must not close the keyspace")
 			})
-			schemaClient := client.New(mc, id)
-			timeout := time.Minute
-			if test.dropCancel {
-				timeout = 100 * time.Millisecond
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), timeout)
-			defer cancel()
-			finished := make(chan error, 1)
-			go func() {
-				var err error
-				if test.operation == messaging.SchemaStoreGetTableInfos {
-					_, err = schemaClient.GetTableInfos(ctx, common.KeyspaceMeta{ID: 1}, []int64{1}, 100)
-				} else {
-					_, err = schemaClient.GetAllPhysicalTables(ctx, common.KeyspaceMeta{ID: 1}, 100, config.NewDefaultFilterConfig(), true, false)
-				}
-				finished <- err
-			}()
-			waitRequestInStore(t, ks)
-			if !test.dropCancel {
-				cancel()
-			}
-			select {
-			case err := <-finished:
-				require.Error(t, err)
-			case <-time.After(time.Second):
-				t.Fatal("caller did not finish")
-			}
-			followCtx, followCancel := context.WithTimeout(t.Context(), time.Second)
-			defer followCancel()
-			require.True(t, errors.ErrKeyspaceNotFound.Equal(schemaClient.RegisterKeyspace(followCtx, common.KeyspaceMeta{ID: 7})))
-			require.NoError(t, ksCtx.Err(), "canceling a query must not close the keyspace")
 		})
 	}
 }
