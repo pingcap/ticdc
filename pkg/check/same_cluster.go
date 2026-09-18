@@ -11,17 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
+package check
 
 import (
 	"slices"
 	"strings"
 
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// This file decides whether a changefeed which may replicate into its own cluster
-// (`allow-same-cluster`) can capture the writes of its own sink.
+// This file validates the `allow-same-cluster` configuration: it decides whether a changefeed which
+// may replicate into its own cluster can capture the writes of its own sink.
 //
 // Let S be the tables the filter replicates and route(t) the target name of the routing rules.
 // The changefeed is safe exactly when route(S) ∩ S = ∅, that is when no replicated table is routed
@@ -41,6 +42,47 @@ const (
 	// contains one of them is rejected as unsupported.
 	unsupportedPatternChars = "*?[]{}/\\`\""
 )
+
+// ValidateSameClusterRouting rejects a changefeed which may replicate into its own cluster unless
+// its routing rules place every replicated table outside the filter. It is the static counterpart of
+// IsSameUpstreamDownstream: the flag is only safe when this validation passes, so it is evaluated
+// where the flag takes effect, on the configuration which is actually in use.
+func ValidateSameClusterRouting(cfg *config.ChangefeedConfig) error {
+	if cfg == nil || !cfg.AllowSameCluster {
+		return nil
+	}
+	if !cfg.SinkConfig.TableRouteEnabled() {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs("allow-same-cluster requires table routing to be enabled")
+	}
+	var dispatch []*config.DispatchRule
+	if cfg.SinkConfig != nil {
+		dispatch = cfg.SinkConfig.DispatchRules
+	}
+	return validateRouting(cfg.Filter, dispatch, cfg.CaseSensitive)
+}
+
+// validateRouting checks the routing rules against the filter rules.
+func validateRouting(filter *config.FilterConfig, dispatch []*config.DispatchRule, caseSensitive bool) error {
+	normalize := func(name string) string {
+		if caseSensitive {
+			return name
+		}
+		return strings.ToLower(name)
+	}
+
+	filters, err := parseFilterRules(effectiveFilterRules(filter), normalize)
+	if err != nil {
+		return err
+	}
+	routes, err := parseRouteRules(dispatch, normalize)
+	if err != nil {
+		return err
+	}
+	if err := verifyFilterRulesCovered(filters, routes); err != nil {
+		return err
+	}
+	return verifyRouteTargets(filters, routes)
+}
 
 // namePatternKind classifies the supported pattern forms.
 type namePatternKind int
@@ -137,7 +179,7 @@ func (r routeRuleToCheck) target(schema, table string) (string, string) {
 
 // effectiveFilterRules returns the filter rules which are in effect. It mirrors
 // pkg/filter.VerifyTableRules, where unset rules replicate every table.
-func effectiveFilterRules(cfg *FilterConfig) []string {
+func effectiveFilterRules(cfg *config.FilterConfig) []string {
 	if cfg == nil || len(cfg.Rules) == 0 {
 		return []string{"*.*"}
 	}
@@ -156,7 +198,7 @@ func parseFilterRules(rules []string, normalize func(string) string) ([]tablePat
 	return parsed, nil
 }
 
-func parseRouteRules(rules []*DispatchRule, normalize func(string) string) ([]routeRuleToCheck, error) {
+func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string) ([]routeRuleToCheck, error) {
 	parsed := make([]routeRuleToCheck, 0, len(rules))
 	for _, rule := range rules {
 		// Rules without a target keep the table name and are ignored by the router.
@@ -306,9 +348,9 @@ func parseTargetExpression(expr, placeholder string) (targetName, string, bool) 
 	return targetName{prefix: head, suffix: tail, hasVariable: true}, "", true
 }
 
-// checkFilterRulesCovered rejects filter rules which no dispatch rule with a target would route:
+// verifyFilterRulesCovered rejects filter rules which no dispatch rule with a target would route:
 // such a table keeps its own name and is replicated into itself.
-func checkFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck) error {
+func verifyFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck) error {
 	matchers := make([]tablePattern, 0, len(routes))
 	for _, route := range routes {
 		matchers = append(matchers, route.matchers...)
@@ -330,9 +372,9 @@ type witness struct {
 	targetSchema, targetTable string
 }
 
-// checkRouteTargets rejects a dispatch rule which can route a replicated table to a table which the
+// verifyRouteTargets rejects a dispatch rule which can route a replicated table to a table which the
 // filter replicates as well. It searches for a witness of such a pair and reports the witness.
-func checkRouteTargets(filters []tablePattern, routes []routeRuleToCheck) error {
+func verifyRouteTargets(filters []tablePattern, routes []routeRuleToCheck) error {
 	for _, route := range routes {
 		for _, matcher := range route.matchers {
 			if found, ok := findWitness(filters, route, matcher); ok {

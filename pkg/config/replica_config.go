@@ -277,49 +277,12 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 	}
 }
 
-// validateSameClusterRouting rejects a changefeed which replicates into the same cluster as its
-// upstream unless it is proven that it cannot capture the writes of its own sink.
-func (c *ReplicaConfig) validateSameClusterRouting() error {
-	if !util.GetOrZero(c.AllowSameCluster) {
-		return nil
-	}
-	if !c.Sink.TableRouteEnabled() {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("allow-same-cluster requires table routing to be enabled")
-	}
-
-	caseSensitive := util.GetOrZero(c.CaseSensitive)
-	normalize := func(name string) string {
-		if caseSensitive {
-			return name
-		}
-		return strings.ToLower(name)
-	}
-
-	filters, err := parseFilterRules(effectiveFilterRules(c.Filter), normalize)
-	if err != nil {
-		return err
-	}
-	routes, err := parseRouteRules(c.Sink.DispatchRules, normalize)
-	if err != nil {
-		return err
-	}
-	if err := checkFilterRulesCovered(filters, routes); err != nil {
-		return err
-	}
-	return checkRouteTargets(filters, routes)
-}
-
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
 	if c.Sink.TableRouteEnabled() {
 		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
 			return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing is incompatible with redo log/consistency feature")
 		}
-	}
-	// Replicating into the upstream cluster is only allowed when no replicated table is routed to a
-	// table which the filter replicates as well, otherwise the changefeed captures its own writes.
-	if err := c.validateSameClusterRouting(); err != nil {
-		return err
 	}
 
 	enableRedoIOCheck := true

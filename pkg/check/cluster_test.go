@@ -198,9 +198,12 @@ func TestIsSameUpstreamDownstream(t *testing.T) {
 		changefeedID common.ChangeFeedID
 		// allowSameCluster mirrors the changefeed config `allow-same-cluster`.
 		allowSameCluster bool
-		mockDownFunc     func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error)
-		wantResult       bool
-		wantErr          string
+		// routingWithAllowSameCluster adds the routing which keeps the replicated tables outside
+		// the filter, which `allow-same-cluster` requires.
+		routingWithAllowSameCluster bool
+		mockDownFunc                func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error)
+		wantResult                  bool
+		wantErr                     string
 	}{
 		{
 			name:         "same cluster",
@@ -230,24 +233,33 @@ func TestIsSameUpstreamDownstream(t *testing.T) {
 			wantResult: false,
 		},
 		{
-			name:             "same cluster but allow-same-cluster is enabled",
-			upClusterID:      123,
-			changefeedID:     common.NewChangefeedID4Test("default", "test"),
-			allowSameCluster: true,
+			name:                        "same cluster but allow-same-cluster is enabled",
+			upClusterID:                 123,
+			changefeedID:                common.NewChangefeedID4Test("default", "test"),
+			allowSameCluster:            true,
+			routingWithAllowSameCluster: true,
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 123, "default", true, nil
 			},
 			wantResult: false,
 		},
 		{
-			name:             "allow-same-cluster skips the check without connecting to the downstream",
-			upClusterID:      123,
-			changefeedID:     common.NewChangefeedID4Test("default", "test"),
-			allowSameCluster: true,
+			name:                        "allow-same-cluster skips the verification without connecting to the downstream",
+			upClusterID:                 123,
+			changefeedID:                common.NewChangefeedID4Test("default", "test"),
+			allowSameCluster:            true,
+			routingWithAllowSameCluster: true,
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 0, "", false, errors.New("should not be called")
 			},
 			wantResult: false,
+		},
+		{
+			name:             "allow-same-cluster without table routing is rejected",
+			upClusterID:      123,
+			changefeedID:     common.NewChangefeedID4Test("default", "test"),
+			allowSameCluster: true,
+			wantErr:          "allow-same-cluster requires table routing to be enabled",
 		},
 		{
 			name:         "not tidb",
@@ -271,6 +283,14 @@ func TestIsSameUpstreamDownstream(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			changefeedCfg.ChangefeedID = tc.changefeedID
 			changefeedCfg.AllowSameCluster = tc.allowSameCluster
+			changefeedCfg.SinkConfig = nil
+			changefeedCfg.Filter = nil
+			if tc.routingWithAllowSameCluster {
+				changefeedCfg.Filter = &config.FilterConfig{Rules: []string{"src.*"}}
+				changefeedCfg.SinkConfig = &config.SinkConfig{DispatchRules: []*config.DispatchRule{
+					{Matcher: []string{"src.*"}, TargetSchema: "dst"},
+				}}
+			}
 			SetGetClusterIDBySinkURIFnForTest(tc.mockDownFunc)
 			mockPD := &mockPDClient{clusterID: tc.upClusterID}
 

@@ -54,9 +54,14 @@ func IsSameUpstreamDownstream(
 	if changefeedCfg == nil {
 		return false, cerrors.ErrInternalCheckFailed.GenWithStackByArgs("changefeed config is nil")
 	}
-	// The user explicitly opted out of this check, report "not same" so that the callers proceed.
+	// The user explicitly opted out of this verification, report "not same" so that the callers
+	// proceed. The flag only makes the changefeed safe when its routing rules keep every replicated
+	// table outside the filter, so the validation runs here, on the configuration in use.
 	if changefeedCfg.AllowSameCluster {
-		log.Warn("skip the upstream/downstream cluster check because allow-same-cluster is enabled",
+		if err := ValidateSameClusterRouting(changefeedCfg); err != nil {
+			return false, err
+		}
+		log.Warn("skip the upstream/downstream cluster verification because allow-same-cluster is enabled",
 			zap.String("changefeedID", changefeedCfg.ChangefeedID.Name()),
 			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
 		return false, nil
