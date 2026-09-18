@@ -61,11 +61,13 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 		mu      sync.Mutex
 		applied []uint64
 	)
-	inFlight := make(chan struct{})
+	inFlight := make(chan struct{}, 1)
 	release := make(chan struct{})
-	closeInFlight := sync.OnceFunc(func() { close(inFlight) })
 	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
-		closeInFlight()
+		select {
+		case inFlight <- struct{}{}:
+		default:
+		}
 		<-release
 		mu.Lock()
 		applied = append(applied, event.GetCommitTs())
