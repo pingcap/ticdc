@@ -235,6 +235,11 @@ func TestReplicaConfig_AllowSameCluster(t *testing.T) {
 
 	// Clone must keep the option, the config is cloned when it is converted to the API model.
 	require.True(t, util.GetOrZero(cfg.Clone().AllowSameCluster))
+
+	// The same upstream/downstream check runs on the ChangefeedConfig derived from the persisted
+	// replica config, so the option must survive the conversion to skip the check.
+	info := &ChangeFeedInfo{Config: cfg}
+	require.True(t, info.ToChangefeedConfig().AllowSameCluster)
 }
 
 func TestReplicaConfigTableRouteSupport(t *testing.T) {

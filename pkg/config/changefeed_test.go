@@ -20,19 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestChangeFeedInfoToChangefeedConfigKeepsAllowSameCluster(t *testing.T) {
-	t.Parallel()
-
-	// The same upstream/downstream check runs on the ChangefeedConfig derived from the persisted
-	// replica config, so `allow-same-cluster` must survive the conversion to skip the check.
-	cfg := GetDefaultReplicaConfig()
-	require.False(t, util.GetOrZero(cfg.AllowSameCluster))
-	cfg.AllowSameCluster = util.AddressOf(true)
-	info := &ChangeFeedInfo{Config: cfg}
-
-	require.True(t, info.ToChangefeedConfig().AllowSameCluster)
-}
-
 func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
 	t.Parallel()
 
