@@ -68,6 +68,18 @@ func NewDecoder(
 	}
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with a
+// cursor of its own. The debezium protocol carries the table info of every
+// message, so there is no schema state to share, but the restore still may not
+// decode with the cursor of the read loop.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	return &decoder{
+		idx:          d.idx,
+		config:       d.config,
+		upstreamTiDB: d.upstreamTiDB,
+	}
+}
+
 // AddKeyValue add the received key and values to the decoder
 func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.valuePayload != nil || d.valueSchema != nil {

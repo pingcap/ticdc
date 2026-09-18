@@ -221,13 +221,13 @@ func newWriter(ctx context.Context, o *option) *writer {
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}
-		// The resolve pipeline restores spilled payloads on its own goroutine while
-		// the read loop keeps decoding with decoder, so the restore path builds a
-		// decoder of its own: one codec decoder holds the cursor of the input it
-		// decodes and the two paths must not share it.
+		// The resolve pipeline restores spilled payloads while the read loop keeps
+		// decoding with decoder, so the restore path gets a decoder with a cursor
+		// of its own that shares the schema state decoder learns from the DDLs: see
+		// common.SchemaStateDecoder.
 		progress := util.NewDMLMessageDecoderWithRestoreFactory(decoder,
 			func() (common.Decoder, error) {
-				return codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
+				return codec.NewRestoreDecoder(decoder), nil
 			})
 		w.progresses[i] = newPartitionProgress(int32(i), progress)
 	}
@@ -565,12 +565,14 @@ func (w *writer) publishedWatermark() uint64 {
 }
 
 // WriteMessage is to decode kafka message to event.
-// return true if the message is flushed to the downstream.
+// The read loop commits offsets from the applied watermark instead of the return
+// value: a resolved message is committed once its watermark was applied, and the
+// offset of a DDL is covered by the next resolved message of its partition.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, error) {
+func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) error {
 	w.maybeLogStats()
 	if err := w.pipeline.err(); err != nil {
-		return false, err
+		return err
 	}
 
 	var (
@@ -601,7 +603,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		// table of the DDL does not exist yet.
 		if len(w.ddlList) != 0 {
 			if _, err := w.Write(ctx, messageType); err != nil {
-				return false, err
+				return err
 			}
 		}
 		w.publishWatermark()
@@ -612,7 +614,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 			watermark: newWatermark,
 		})
 		w.pipeline.request()
-		return false, nil
+		return nil
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
 		// Consider that DDL a, b, c received from partition-0, the latest DDL is c,
@@ -630,7 +632,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 					zap.Int32("partition", partition), zap.Any("offset", offset))
 				progress.decoder.AttachCachedDMLMessage(dmlMessage)
 				if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
-					return false, err
+					return err
 				}
 			}
 		}
@@ -638,12 +640,12 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		w.onDDL(ddl)
 		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
 		if partition != 0 {
-			return false, nil
+			return nil
 		}
 
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
-			return false, nil
+			return nil
 		}
 		w.appendDDL(ddl)
 		log.Info("DDL event received",
@@ -666,7 +668,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		}
 
 		if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
-			return false, err
+			return err
 		}
 		counter++
 		for {
@@ -684,7 +686,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 				break
 			}
 			if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
-				return false, err
+				return err
 			}
 			counter++
 		}
@@ -706,18 +708,24 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
 	if needFlush {
-		// A DDL is committed as soon as it is applied, like the read loop did
-		// before the resolve moved off it: replaying DML writes the same rows
-		// again, but replaying a DDL fails downstream ("table already exists"),
-		// so its offset must not lag behind its application. Everything below the
-		// DDL commit ts reached the downstream in flushDDLEvent, which is what
-		// makes the offset of the DDL record safe to advance.
-		return w.Write(ctx, messageType)
+		flushed, err := w.Write(ctx, messageType)
+		if err != nil || !flushed {
+			return err
+		}
+		// A DDL record is not committed by itself: a record below it in this
+		// partition can hold events above the DDL commit ts that the resolve
+		// pipeline has not applied yet, so committing the offset of the DDL would
+		// skip them when the consumer restarts. The read loop commits watermarks
+		// instead, and the offset of the next resolved message covers every record
+		// below it once the applied watermark reached its watermark. A replayed
+		// DDL fails downstream, so that window stays as short as the next
+		// resolved message, which the upstream sends continuously.
+		return nil
 	}
 	if !wasDraining && w.getSpillStore().ShouldDrain() {
 		w.pipeline.request()
 	}
-	return false, nil
+	return nil
 }
 
 // Write will synchronously write data downstream

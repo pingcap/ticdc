@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -1234,6 +1235,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 	tableIDAllocator.Clean()
 	dec := &decoder{
+		tableInfoMu:    new(sync.RWMutex),
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}
@@ -1426,6 +1428,7 @@ func TestRowKey(t *testing.T) {
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	tableIDAllocator.Clean()
 	dec := &decoder{
+		tableInfoMu:    new(sync.RWMutex),
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}
@@ -1445,4 +1448,33 @@ func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	})
 
 	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
+}
+
+// TestRestoreDecoderSharesTableInfo pins the schema state sharing of the spill
+// restore: the read loop's decoder stores the table info of the DDLs it decoded,
+// and the restore decoder, which never sees those DDLs, resolves the table info
+// a spilled DML message names.
+func TestRestoreDecoderSharesTableInfo(t *testing.T) {
+	dec, err := NewDecoder(t.Context(), common.NewConfig(config.ProtocolCanalJSON), nil)
+	require.NoError(t, err)
+	read := dec.(*decoder)
+
+	key := tableKey{schema: "test", table: "t", ddlCommitTs: 10}
+	tableInfo := &commonType.TableInfo{
+		TableName: commonType.TableName{Schema: "test", Table: "t", TableID: 1},
+		UpdateTS:  10,
+	}
+	read.tableInfoCache[key] = tableInfo
+
+	restore := read.NewRestoreDecoder().(*decoder)
+	require.NotSame(t, read, restore, "the restore decodes with a cursor of its own")
+	require.Equal(t, tableInfo, restore.tableInfoCache[key], "the restore shares the table info")
+	require.Same(t, read.tableInfoMu, restore.tableInfoMu, "the schema state lock is shared")
+
+	// A table id the read loop allocated for a DDL blocks the tables of the DDL
+	// for the restore as well.
+	read.tableInfoMu.Lock()
+	read.ddlCommitTs[tableNameKey{schema: "test", table: "t"}] = []uint64{10}
+	read.tableInfoMu.Unlock()
+	require.Equal(t, []uint64{10}, restore.ddlCommitTs[tableNameKey{schema: "test", table: "t"}])
 }

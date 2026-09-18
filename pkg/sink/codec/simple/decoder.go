@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -94,6 +95,27 @@ func NewDecoder(
 		memo:           newMemoryTableInfoProvider(),
 		cachedMessages: list.New(),
 	}, errors.Trace(err)
+}
+
+// NewRestoreDecoder returns a decoder that restores spilled payloads with the
+// table info this decoder learned from the DDLs it decoded. The restore needs
+// it because a DML payload names its table info by version, and only a decoder
+// that saw the DDL can resolve that version. The cursors stay separate: the read
+// loop keeps decoding the stream with this decoder while the resolve pipeline
+// restores payloads with the returned one.
+func (d *Decoder) NewRestoreDecoder() common.Decoder {
+	m, err := newMarshaller(d.config)
+	if err != nil {
+		log.Panic("create the marshaller of the restore decoder failed", zap.Error(err))
+	}
+	return &Decoder{
+		config:         d.config,
+		marshaller:     m,
+		upstreamTiDB:   d.upstreamTiDB,
+		storage:        d.storage,
+		memo:           d.memo,
+		cachedMessages: list.New(),
+	}
 }
 
 // AddKeyValue add the received key and values to the Decoder,
@@ -340,6 +362,10 @@ type TableInfoProvider interface {
 }
 
 type memoryTableInfoProvider struct {
+	// The read loop's decoder writes the table info of the DDLs it decodes while
+	// the restore decoder reads it, and both share this state, so the map needs
+	// its own lock.
+	mu   sync.RWMutex
 	memo map[tableSchemaKey]*commonType.TableInfo
 }
 
@@ -359,6 +385,8 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 		version: info.GetUpdateTS(),
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, ok := m.memo[key]
 	if ok {
 		log.Debug("table info not stored, since it already exists",
@@ -376,8 +404,9 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 }
 
 // Read returns the table info with the exact (schema, table, version)
-// Note: It's a blocking call, it will wait until the table info is stored
 func (m *memoryTableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	key := tableSchemaKey{
 		schema:  schema,
 		table:   table,

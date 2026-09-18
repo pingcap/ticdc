@@ -127,3 +127,25 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 
 	common.RequireRowLocatorByPrimaryKey(t, newTableInfo(schema), "a", "b")
 }
+
+// TestRestoreDecoderSharesTableInfo pins the schema state sharing of the spill
+// restore: the read loop's decoder stores the table info of the DDLs it decoded,
+// and the restore decoder, which never sees those DDLs, resolves the table info
+// version a spilled DML message names.
+func TestRestoreDecoderSharesTableInfo(t *testing.T) {
+	decoder, err := NewDecoder(t.Context(), common.NewConfig(config.ProtocolSimple), nil)
+	require.NoError(t, err)
+	read := decoder.(*Decoder)
+
+	tableInfo := &commonType.TableInfo{
+		TableName: commonType.TableName{Schema: "test", Table: "t", TableID: 1},
+		UpdateTS:  10,
+	}
+	read.memo.Write(tableInfo)
+
+	restore := read.NewRestoreDecoder().(*Decoder)
+	require.Same(t, read.memo, restore.memo, "the restore shares the table info state")
+	require.NotNil(t, restore.memo.Read("test", "t", 10))
+	require.Nil(t, restore.memo.Read("test", "t", 11))
+	require.NotSame(t, read, restore, "the restore decodes with a cursor of its own")
+}

@@ -68,11 +68,11 @@ func newTLSConfig(o *option) (*tls.Config, error) {
 	if len(o.ca) != 0 {
 		pem, err := os.ReadFile(o.ca)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, errors.Errorf("no certificate found in %s", o.ca)
+			return nil, errors.ErrKafkaInvalidConfig.FastGen("no certificate found in %s", o.ca)
 		}
 		tlsConfig.RootCAs = pool
 	}
@@ -208,13 +208,8 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			if writeErr != nil {
 				return
 			}
-			needCommit, err := c.writer.WriteMessage(ctx, record)
-			if err != nil {
+			if err := c.writer.WriteMessage(ctx, record); err != nil {
 				writeErr = err
-				return
-			}
-			if needCommit {
-				c.commitMessage(ctx, record)
 			}
 		})
 		if writeErr != nil {

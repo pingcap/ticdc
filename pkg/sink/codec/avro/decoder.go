@@ -80,6 +80,22 @@ func NewDecoder(
 	}
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with the
+// schema manager of this decoder: it caches the schemas fetched from the
+// registry, while the codec cache stays per decoder because an lru cache is not
+// thread safe and the restore runs on the resolve pipeline.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	codecs, _ := lru.New(decoderCodecCacheSize)
+	return &decoder{
+		idx:          d.idx,
+		config:       d.config,
+		topic:        d.topic,
+		schemaM:      d.schemaM,
+		codecs:       codecs,
+		upstreamTiDB: d.upstreamTiDB,
+	}
+}
+
 func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.key != nil || d.value != nil {
 		log.Panic("add key/value to the decoder failed, since it's already set")

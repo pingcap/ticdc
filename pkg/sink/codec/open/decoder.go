@@ -88,6 +88,19 @@ func NewDecoder(
 	}, nil
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with a
+// cursor of its own. The open protocol carries the table info of every message,
+// so there is no schema state to share, but the restore still may not decode
+// with the cursor of the read loop.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	return &decoder{
+		config:       d.config,
+		storage:      d.storage,
+		upstreamTiDB: d.upstreamTiDB,
+		idx:          d.idx,
+	}
+}
+
 // AddKeyValue implements the Decoder interface
 func (b *decoder) AddKeyValue(key, value []byte) {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {

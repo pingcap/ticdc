@@ -460,10 +460,8 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		maxMessageBytes: 1,
 	})
 
-	needCommit, err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 10})
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 10})
 	require.NoError(t, err)
-
-	require.False(t, needCommit)
 	require.Nil(t, progress.eventsGroup[1])
 }
 
@@ -662,11 +660,13 @@ func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
 
-// TestWriteMessageCommitsTheDDLWithItsApplication pins the replay rule of the
-// DDL path: replaying DML writes the same rows again, but replaying a DDL fails
-// downstream with "table already exists", so a DDL offset is committed as soon
-// as the DDL is applied instead of waiting for the resolve pipeline.
-func TestWriteMessageCommitsTheDDLWithItsApplication(t *testing.T) {
+// TestWriteMessageLeavesTheDDLCommitToTheNextWatermark pins the commit rule of
+// the DDL path: the DDL is applied while its message is read, but its offset is
+// not committed on its own. A record below it in the partition can hold events
+// above the DDL commit ts that the resolve pipeline has not applied yet, so
+// committing the DDL offset would skip them on a restart. The offset of the next
+// resolved message covers every record below it once its watermark was applied.
+func TestWriteMessageLeavesTheDDLCommitToTheNextWatermark(t *testing.T) {
 	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
@@ -700,10 +700,26 @@ func TestWriteMessageCommitsTheDDLWithItsApplication(t *testing.T) {
 		ddlWithMaxCommitTs: make(map[int64]uint64),
 	})
 
-	needCommit, err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 100})
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 100})
 	require.NoError(t, err)
-	require.True(t, needCommit, "the read loop commits a flushed DDL itself")
-	require.Empty(t, w.pendingCommits, "the DDL is not gated on the applied watermark")
+	require.Empty(t, w.pendingCommits)
+
+	// The next resolved message of the partition commits its own offset, which
+	// covers the DDL record below it, once the applied watermark reached the
+	// watermark that message carries.
+	progress.decoder = util.NewDMLMessageDecoder(&singleResolvedDecoder{watermark: watermark})
+	err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 101})
+	require.NoError(t, err)
+	require.Len(t, w.pendingCommits, 1)
+	require.Equal(t, watermark, w.pendingCommits[0].watermark)
+	require.Equal(t, int64(101), w.pendingCommits[0].message.Offset)
+
+	require.Empty(t, w.takeCommittableMessages())
+	w.pipeline.appliedWatermarkValue.Store(watermark)
+	committable := w.takeCommittableMessages()
+	require.Len(t, committable, 1)
+	require.Equal(t, int64(101), committable[0].Offset,
+		"committing the resolved record advances past the DDL below it")
 }
 
 type singleDDLDecoder struct {
@@ -784,17 +800,15 @@ func TestWriteMessageResolvedFlushesEligibleDDLBeforePublishingTheWatermark(t *t
 
 	// The DDL is read while the watermark is still below its commit ts, so it
 	// waits for the watermark.
-	needCommit, err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 0})
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 0})
 	require.NoError(t, err)
-	require.False(t, needCommit)
 	require.Empty(t, written)
 	require.Len(t, w.ddlList, 1)
 
 	// The resolved message raises the watermark, which makes the DDL eligible.
 	progress.decoder = util.NewDMLMessageDecoder(&singleResolvedDecoder{watermark: watermark})
-	needCommit, err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 1})
+	err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 1})
 	require.NoError(t, err)
-	require.False(t, needCommit)
 	require.Equal(t, []string{ddl.Query}, written)
 	require.Empty(t, w.ddlList)
 	// The DDL ran before the new watermark was published to the resolve pipeline.

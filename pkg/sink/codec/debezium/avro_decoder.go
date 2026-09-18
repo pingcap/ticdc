@@ -78,6 +78,20 @@ func NewAvroDecoder(
 	}, nil
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with a
+// mapping cache of its own: an lru cache is not thread safe and the restore runs
+// on the resolve pipeline while the read loop keeps decoding.
+func (d *avroDecoder) NewRestoreDecoder() common.Decoder {
+	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
+	return &avroDecoder{
+		ctx:         d.ctx,
+		registryURL: d.registryURL,
+		httpClient:  d.httpClient,
+		inner:       d.inner.NewRestoreDecoder().(*decoder),
+		schemas:     schemas,
+	}
+}
+
 func (d *avroDecoder) AddKeyValue(key, value []byte) {
 	keyJSON, err := d.toDebeziumJSON(key)
 	if err != nil {
