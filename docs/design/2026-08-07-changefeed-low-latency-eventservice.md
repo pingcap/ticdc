@@ -99,23 +99,28 @@ mode. EventStore uses this value in two ways:
 
 ### EventService scan scheduling
 
-When EventStore reports a new resolved-ts, EventService first checks whether a
-real EventStore read is necessary. If no row event needs to be read, it can
-send progress without occupying the scan worker queue. This fast path also
-preserves the ordering of sync-point and resolved events.
+When EventStore reports a new resolved-ts, its callback only updates the latest
+dispatcher frontier and queues one preparation task. A separate preparation
+worker checks whether a real EventStore read is necessary. If no row event
+needs to be read, it can send progress without occupying the scan worker queue.
+This fast path also preserves the ordering of sync-point and resolved events
+without exposing EventStore to scan-queue backpressure.
 
-If a low-latency dispatcher receives another scan request while one attempt is
-running, EventService records one pending continuation. Multiple notifications
-are coalesced into that single continuation, so the dispatcher promptly checks
-the newest frontier without adding one task per notification. Throughput mode
-keeps its existing behavior and does not create this continuation.
+Notifications received while preparation is queued are folded into that task,
+which reads the latest dispatcher frontier. A notification received while
+preparation is running records one pending continuation in both modes, because
+preparation is now asynchronous. If a low-latency dispatcher receives another
+request while a scan is running, it also records one pending continuation.
+Multiple notifications are coalesced without adding one task per notification.
+Throughput mode keeps its existing behavior while a scan is running.
 
-Internal continuation and retry paths use non-blocking queue insertion. When
-the queue is full, the dispatcher returns to a recoverable state and a later
-signal can schedule it again. The EventStore notification path may wait for
-queue capacity after it has confirmed that a real scan is required. The
-`ticdc_event_service_dropped_scan_task_count` counter records failed internal
-scheduling attempts; it does not mean that a data event was dropped.
+The preparation queue is an unbounded wakeable FIFO, but dispatcher state
+limits it to at most one entry per dispatcher. The existing bounded worker
+channel remains the only scan queue. A preparation worker may wait for scan
+queue capacity after confirming that a real scan is required; EventStore never
+waits on that channel. Internal continuations and schema retries return to the
+preparation queue, so queue saturation does not drop the last scheduling
+signal or require another EventStore notification for recovery.
 
 ### Dispatcher scan state machine
 
@@ -124,38 +129,43 @@ Each dispatcher has one `dispatcherScanState`, protected by `scanMu`:
 | State | Meaning |
 | --- | --- |
 | `dispatcherScanIdle` | No preparation or scan task is outstanding. |
+| `dispatcherScanPrepareQueued` | A task is waiting in a preparation queue. |
+| `dispatcherScanPreparing` | A preparation worker owns the dispatcher. |
 | `dispatcherScanQueued` | A task is waiting in a scan worker queue. |
-| `dispatcherScanRunning` | One goroutine owns scan preparation or execution. |
-| `dispatcherScanRunningPending` | A low-latency request arrived while the dispatcher was running. |
+| `dispatcherScanRunning` | A scan worker owns the dispatcher. |
 | `dispatcherScanSchemaBlocked` | Progress is waiting for SchemaStore to advance. |
 | `dispatcherScanRemoved` | The dispatcher is removed; this state is terminal for that dispatcher instance. |
+
+`scanPending`, protected by the same mutex, records one coalesced follow-up
+received while preparation or a low-latency scan is running.
 
 The main transitions are:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Running: EventStore notification claims preparation
-    Running --> Queued: preparation finds data to scan
+    Idle --> PrepareQueued: EventStore notification
+    PrepareQueued --> Preparing: preparation worker begins
+    Preparing --> Queued: preparation finds data to scan
     Idle --> Queued: internal request
     Queued --> Running: worker begins
-    Running --> RunningPending: low-latency request arrives
-    RunningPending --> Queued: current attempt finishes
+    Preparing --> PrepareQueued: pending notification after preparation
+    Running --> PrepareQueued: pending low-latency notification or interruption
+    Preparing --> SchemaBlocked: low-latency preparation reaches schema frontier
     Running --> SchemaBlocked: low-latency scan reaches schema frontier
-    RunningPending --> SchemaBlocked: low-latency scan reaches schema frontier
-    SchemaBlocked --> Queued: SchemaStore advances
+    SchemaBlocked --> PrepareQueued: SchemaStore advances
+    Preparing --> Idle: preparation finishes with no pending work
     Running --> Idle: attempt finishes with no pending work
 ```
 
-The `Running` state deliberately covers both inline preparation and worker
-execution. This gives both paths the same ownership rule and prevents them
-from checking or updating one dispatcher concurrently.
+Preparation and scan execution have distinct ownership states. This keeps the
+EventStore callback outside both operations while preventing them from checking
+or updating one dispatcher concurrently.
 
-An interrupted scan is queued again. If an internal enqueue fails because the
-worker queue is full, its fallback is `Idle`, so the next notification can
-recover it. A failed schema retry stays `SchemaBlocked`, so the retry loop can
-try again. Removing or resetting a dispatcher marks the old dispatcher state
-as `Removed`; a reset creates a new dispatcher state starting from `Idle`.
+An interrupted scan is prepared again. When a direct internal enqueue finds the
+worker queue full, it falls back to `PrepareQueued` rather than dropping the
+request. Removing or resetting a dispatcher marks the old dispatcher state as
+`Removed`; a reset creates a new dispatcher state starting from `Idle`.
 
 ### Schema-blocked retry and active scans
 
@@ -170,9 +180,9 @@ scan range and acquired the required quota. Fast-path progress updates and
 other no-scan attempts do not create an active-scan lifecycle. Dispatcher
 removal cancels a real active scan before cleanup.
 
-For operational diagnostics, queued, running, and running-pending dispatchers
-are all reported as busy. This makes slow-dispatcher logs reflect the scheduler
-state even before a worker starts the actual EventStore scan.
+For operational diagnostics, preparation and scan tasks that are queued or
+running are all reported as busy. This makes slow-dispatcher logs reflect the
+scheduler state before a worker starts the actual EventStore scan.
 
 ## Compatibility
 
@@ -210,18 +220,18 @@ rules.
 
 - `TestEventStoreSeparatesSubscriptionsByPerformanceMode` verifies subscription
   isolation, reuse within one mode, and the zero/default advance intervals.
-- `TestNotifyFastPathSerializesRunningNotification` and
-  `TestNotifyFastPathPreservesSyncPointOrder` verify inline preparation,
+- `TestNotifyPreparationCoalescesRunningNotification` and
+  `TestNotifyFastPathPreservesSyncPointOrder` verify asynchronous preparation,
   serialization, continuation, and event ordering.
 - `TestLowLatencyScanRequestWhileRunningSchedulesContinuation` and
   `TestThroughputModeDoesNotContinueScanRequestWhileRunning` compare the two
   scheduling modes.
 - `TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify`,
   `TestInterruptedScanQueueFullRecoversOnNextNotify`, and
-  `TestNotifyQueueFullWaitsForCapacity` cover bounded-queue behavior and
+  `TestNotifyDoesNotBlockOnFullScanQueue` cover bounded-queue behavior and
   recovery.
 - `TestRunningNotifyParksAtSchemaBlock`,
-  `TestLowLatencySchemaBlockedQueueFullRetriesWithoutNotify`,
+  `TestLowLatencySchemaBlockedRetriesWithoutNotify`,
   `TestThroughputModeDoesNotParkSchemaBlockedDispatcher`, and
   `TestResetSchemaBlockedDispatcherRemovesOldEpoch` cover SchemaStore blocking,
   retry, mode isolation, and dispatcher reset.
