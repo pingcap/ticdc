@@ -52,7 +52,7 @@ func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
 	if changefeedCfg == nil {
-		return false, cerrors.New("changefeed config is nil")
+		return false, cerrors.ErrInternalCheckFailed.GenWithStackByArgs("changefeed config is nil")
 	}
 	// The user explicitly opted out of this check, report "not same" so that the callers proceed.
 	if changefeedCfg.AllowSameCluster {
@@ -62,7 +62,7 @@ func IsSameUpstreamDownstream(
 		return false, nil
 	}
 	if upPD == nil {
-		return false, cerrors.New("pd client is nil")
+		return false, cerrors.ErrInternalCheckFailed.GenWithStackByArgs("pd client is nil")
 	}
 
 	upID := upPD.GetClusterID(ctx)
@@ -181,7 +181,7 @@ func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
 			continue
 		}
 		if value != keyspace {
-			return "", cerrors.New("downstream TiDB reports inconsistent keyspace-name across instances")
+			return "", cerrors.ErrInternalCheckFailed.GenWithStack("downstream TiDB reports inconsistent keyspace-name across instances, got %s and %s", keyspace, value)
 		}
 	}
 	if err := rows.Err(); err != nil {
