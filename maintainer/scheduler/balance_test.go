@@ -142,8 +142,6 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 		drainState,
 		testDefaultBalanceMoveBatchSize,
 	)
-	s.drainBalanceBlockedUntil = time.Time{}
-
 	// First run sees an active drain and starts cooldown.
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
@@ -154,7 +152,9 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 	require.Equal(t, 0, oc.OperatorSize())
 
 	// Expire cooldown in test and verify scheduling resumes.
-	s.drainBalanceBlockedUntil = time.Now().Add(-time.Millisecond)
+	drainState.mu.Lock()
+	drainState.lastTargetClearedAt = time.Now().Add(-balanceDrainCooldown - time.Millisecond)
+	drainState.mu.Unlock()
 	_ = s.Execute()
 	require.Greater(t, oc.OperatorSize(), 0)
 }

@@ -105,11 +105,14 @@ const (
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
 
 	// Node drain related
-	TypeNodeHeartbeatRequest            IOType = 42
-	TypeSetNodeLivenessRequest          IOType = 43
-	TypeSetNodeLivenessResponse         IOType = 44
-	TypeSetDispatcherDrainTargetRequest IOType = 45
-	TypeNodeHeartbeatResponse           IOType = 46
+	TypeNodeHeartbeatRequest                     IOType = 42
+	TypeSetNodeLivenessRequest                   IOType = 43
+	TypeSetNodeLivenessResponse                  IOType = 44
+	TypeSetDispatcherDrainTargetRequest          IOType = 45
+	TypeNodeHeartbeatResponse                    IOType = 46
+	TypeLogCoordinatorEventBrokerDispatcherCount IOType = 47
+	TypeEventBrokerDispatcherCountRequest        IOType = 48
+	TypeEventBrokerDispatcherCountResponse       IOType = 49
 )
 
 func (t IOType) String() string {
@@ -206,6 +209,12 @@ func (t IOType) String() string {
 		return "SetDispatcherDrainTargetRequest"
 	case TypeNodeHeartbeatResponse:
 		return "NodeHeartbeatResponse"
+	case TypeLogCoordinatorEventBrokerDispatcherCount:
+		return "TypeLogCoordinatorEventBrokerDispatcherCount"
+	case TypeEventBrokerDispatcherCountRequest:
+		return "EventBrokerDispatcherCountRequest"
+	case TypeEventBrokerDispatcherCountResponse:
+		return "EventBrokerDispatcherCountResponse"
 	default:
 	}
 	return "Unknown"
@@ -408,6 +417,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
 	case TypeNodeHeartbeatResponse:
 		m = &heartbeatpb.NodeHeartbeatResponse{}
+	case TypeLogCoordinatorEventBrokerDispatcherCount:
+		m = &logservicepb.EventBrokerDispatcherCount{}
+	case TypeEventBrokerDispatcherCountRequest:
+		m = &logservicepb.EventBrokerDispatcherCountRequest{}
+	case TypeEventBrokerDispatcherCountResponse:
+		m = &logservicepb.EventBrokerDispatcherCountResponse{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -530,6 +545,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeSetDispatcherDrainTargetRequest
 	case *heartbeatpb.NodeHeartbeatResponse:
 		ioType = TypeNodeHeartbeatResponse
+	case *logservicepb.EventBrokerDispatcherCount:
+		ioType = TypeLogCoordinatorEventBrokerDispatcherCount
+	case *logservicepb.EventBrokerDispatcherCountRequest:
+		ioType = TypeEventBrokerDispatcherCountRequest
+	case *logservicepb.EventBrokerDispatcherCountResponse:
+		ioType = TypeEventBrokerDispatcherCountResponse
 	default:
 		panic("unknown io type")
 	}

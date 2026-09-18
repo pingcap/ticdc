@@ -48,8 +48,6 @@ type balanceSplitsScheduler struct {
 	mode     int64
 
 	drainState *DrainState
-
-	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceSplitsScheduler(
@@ -83,7 +81,7 @@ func (s *balanceSplitsScheduler) Name() string {
 func (s *balanceSplitsScheduler) Execute() time.Time {
 	now := time.Now()
 	state := s.drainState.snapshot()
-	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
+	if shouldPauseBalanceForDrain(state, now) {
 		// Pause split-table balancing while dispatcher drain is active
 		// and keep a cooldown window after drain completion to avoid churn.
 		return time.Now().Add(time.Second * 15)

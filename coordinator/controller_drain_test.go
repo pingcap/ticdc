@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -174,6 +175,43 @@ func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 	require.Equal(t, 2, remaining)
 
 	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
+func TestDrainNodeEventBrokerDispatcherCountBlocksCompletion(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
+	setTargetStoppingObserved(drainController, target)
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 1,
+	})
+	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId:    target.String(),
+		DispatcherCount: 1,
+		Observed:        true,
+		ReportAgeMs:     0,
+	})
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: target.String(),
+		AssumedEmpty: true,
+	})
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
@@ -1172,11 +1210,15 @@ func setTargetStoppingObserved(
 	drainController *drain.Controller,
 	target node.ID,
 ) {
-	resp := &heartbeatpb.SetNodeLivenessResponse{
-		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch: 1,
-	}
-	drainController.ObserveSetNodeLivenessResponse(target, resp)
+	})
+	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId:    target.String(),
+		Observed:        true,
+		DispatcherCount: 0,
+	})
 }
 
 func drainMessageChannel(ch chan *messaging.TargetMessage) {

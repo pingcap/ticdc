@@ -73,10 +73,10 @@ func NewBalanceScheduler(
 func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
 	nextCheckTime := now.Add(s.checkBalanceInterval)
-	if hasDrainingOrStoppingNode(s.liveness) {
-		// Pause regular balance scheduling while any node is observed draining or
-		// stopping. Each observation extends the block window by one balance
-		// interval so regular rebalance does not race with evacuation progress.
+	if s.liveness != nil && s.liveness.ShouldPauseRegularBalance() {
+		// Pause regular balance for the full drain workflow, including the window
+		// where the target is Unknown but has not left membership yet. Each
+		// observation extends the post-drain block window by one balance interval.
 		s.drainBalanceBlockedUntil = now.Add(s.drainCooldown())
 		return nextCheckTime
 	}
