@@ -128,10 +128,8 @@ type writer struct {
 
 	// pipeline is set when the resolve path runs off the read loop.
 	pipeline *pipeline
-	// pendingCommits holds messages waiting for the events below their watermark
-	// to be applied: resolved messages, and DDL records that were flushed while
-	// the resolve pipeline still had events to apply. It is owned by the read
-	// loop.
+	// pendingCommits holds resolved messages waiting for their events to be
+	// applied; it is owned by the read loop.
 	pendingCommits []pendingCommit
 	// globalWatermarkValue is the published minimum of the partition
 	// watermarks. The read loop publishes it after every resolved message and
@@ -253,10 +251,11 @@ func newWriter(ctx context.Context, o *option) *writer {
 	return w
 }
 
-// pendingCommit is a message whose offset may only be committed once the events
-// at or below its watermark are applied. The spill store is temporary, so
-// committing its offset earlier would skip those events when the consumer
-// restarts.
+// pendingCommit is a resolved message whose events are not applied yet. The
+// spill store is temporary, so committing its offset earlier would skip those
+// events when the consumer restarts. A DDL commit does not need this gate: the
+// commit of a resolved message is only a watermark, while a DDL is committed as
+// soon as it is applied, because replaying it may fail downstream.
 type pendingCommit struct {
 	message   *kgo.Record
 	watermark uint64
@@ -532,9 +531,7 @@ func (w *writer) publishedWatermark() uint64 {
 }
 
 // WriteMessage is to decode kafka message to event.
-// return true if the read loop must commit the offset of this message itself.
-// A flushed DDL returns false: its offset is queued behind the resolved
-// messages of the partition, which are committed by the applied-watermark gate.
+// return true if the message is flushed to the downstream.
 // return error if flush messages failed.
 func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, error) {
 	w.maybeLogStats()
@@ -675,21 +672,13 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
 	if needFlush {
-		needCommit, err := w.Write(ctx, messageType)
-		if err != nil || !needCommit {
-			return false, err
-		}
-		// The DDL is applied, but its offset may only advance once the events below
-		// the partition watermark are applied. The read loop runs ahead of the
-		// resolve pipeline, so committing the offset here would skip those events
-		// on a restart. Queue it behind the resolved messages of the partition,
-		// which are committed by the same applied-watermark gate.
-		w.pendingCommits = append(w.pendingCommits, pendingCommit{
-			message:   message,
-			watermark: progress.watermark,
-		})
-		w.pipeline.request()
-		return false, nil
+		// A DDL is committed as soon as it is applied, like the read loop did
+		// before the resolve moved off it: replaying DML writes the same rows
+		// again, but replaying a DDL fails downstream ("table already exists"),
+		// so its offset must not lag behind its application. Everything below the
+		// DDL commit ts reached the downstream in flushDDLEvent, which is what
+		// makes the offset of the DDL record safe to advance.
+		return w.Write(ctx, messageType)
 	}
 	if !wasDraining && w.getSpillStore().ShouldDrain() {
 		w.pipeline.request()

@@ -662,13 +662,11 @@ func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
 
-// TestWriteMessageDefersTheDDLCommitUntilTheWatermarkIsApplied pins the commit
-// gate of the DDL path: the DDL is applied while the message is read, but its
-// offset may only advance once the events below the partition watermark reached
-// the downstream. The read loop runs ahead of the resolve pipeline and the spill
-// store is temporary, so committing the offset right away would skip those
-// events on a restart.
-func TestWriteMessageDefersTheDDLCommitUntilTheWatermarkIsApplied(t *testing.T) {
+// TestWriteMessageCommitsTheDDLWithItsApplication pins the replay rule of the
+// DDL path: replaying DML writes the same rows again, but replaying a DDL fails
+// downstream with "table already exists", so a DDL offset is committed as soon
+// as the DDL is applied instead of waiting for the resolve pipeline.
+func TestWriteMessageCommitsTheDDLWithItsApplication(t *testing.T) {
 	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
@@ -702,19 +700,10 @@ func TestWriteMessageDefersTheDDLCommitUntilTheWatermarkIsApplied(t *testing.T) 
 		ddlWithMaxCommitTs: make(map[int64]uint64),
 	})
 
-	record := &kgo.Record{Partition: 0, Offset: 100}
-	needCommit, err := w.WriteMessage(ctx, record)
+	needCommit, err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 100})
 	require.NoError(t, err)
-	require.False(t, needCommit)
-
-	require.Len(t, w.pendingCommits, 1)
-	require.Same(t, record, w.pendingCommits[0].message)
-	require.Equal(t, watermark, w.pendingCommits[0].watermark)
-
-	// The offset may only be committed once the partition watermark was applied.
-	require.Empty(t, w.takeCommittableMessages())
-	w.pipeline.appliedWatermarkValue.Store(watermark)
-	require.Equal(t, []*kgo.Record{record}, w.takeCommittableMessages())
+	require.True(t, needCommit, "the read loop commits a flushed DDL itself")
+	require.Empty(t, w.pendingCommits, "the DDL is not gated on the applied watermark")
 }
 
 type singleDDLDecoder struct {
