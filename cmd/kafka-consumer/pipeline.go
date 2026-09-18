@@ -39,6 +39,9 @@ const batchChannelSize = 64
 // A batch with appliedUpTo set carries no events either: it means every batch
 // submitted before it is applied, so the read loop may commit the resolved
 // messages whose watermark is at or below appliedUpTo.
+//
+// A batch with flushOnly set carries no events either: it applies and
+// acknowledges what the submitter already holds without publishing a watermark.
 type preparedBatch struct {
 	batch  *util.ResolveBatch
 	events []*event.DMLEvent
@@ -50,6 +53,7 @@ type preparedBatch struct {
 	barrier     chan struct{}
 	resume      chan struct{}
 	appliedUpTo uint64
+	flushOnly   bool
 }
 
 // pipeline runs the resolve path, restore plus downstream apply, off the read
@@ -191,11 +195,17 @@ func (p *pipeline) resolveOnce(ctx context.Context) bool {
 	watermark := p.w.publishedWatermark()
 	limit := p.w.getSpillStore().ResolveLimit()
 	more := false
+	skipped := false
 	for _, group := range p.w.snapshotEventsGroups() {
 		if ctx.Err() != nil {
 			return false
 		}
 		if group.HasPendingBatch() {
+			// The group may still hold events at or below the watermark beyond the
+			// batch in flight, so this pass may not claim the watermark was
+			// applied. Skipping it is recorded and the pass flushes instead of
+			// publishing the applied range.
+			skipped = true
 			continue
 		}
 		restoreStart := time.Now()
@@ -220,6 +230,18 @@ func (p *pipeline) resolveOnce(ctx context.Context) bool {
 	}
 	if more {
 		p.request()
+		return true
+	}
+	if skipped {
+		// Every group of this pass is drained, but a skipped group is not, so
+		// the applied range is not complete. Flush what was submitted: the next
+		// pass sees the group once its batch was acknowledged, and the flush
+		// asks for that pass.
+		select {
+		case p.batches <- &preparedBatch{flushOnly: true}:
+		case <-ctx.Done():
+			return false
+		}
 		return true
 	}
 	// Every group is drained up to watermark, and every batch of this pass was
@@ -296,6 +318,18 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 					return
 				}
 				p.appliedWatermarkValue.Store(item.appliedUpTo)
+				continue
+			}
+			if item.flushOnly {
+				if err := flush(); err != nil {
+					p.fail(err)
+					return
+				}
+				// The pass that sent this item skipped a group whose batch was
+				// still in flight. Run another pass so that group is resolved as
+				// soon as the batch acknowledged above released it; flush already
+				// asked for a pass when it applied events.
+				p.request()
 				continue
 			}
 			prepared = append(prepared, item)

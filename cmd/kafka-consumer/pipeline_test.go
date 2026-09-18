@@ -131,3 +131,53 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 	require.Equal(t, lateCommitTs, applied[batchSize], "the late event is applied after the batch")
 	require.Equal(t, int64(batchSize+1), w.getSpillStore().Stats().AppliedEventCount)
 }
+
+// TestPipelineWithholdsAppliedWatermarkWhileABatchIsInFlight pins the commit
+// gate of the resolve path: a pass that skipped a group whose batch is still in
+// flight must not publish the applied watermark, because that group may hold
+// events at or below the watermark that are not applied yet. The read loop
+// commits resolved offsets up to that watermark, so publishing it early would
+// skip those events once the temporary spill store is gone.
+func TestPipelineWithholdsAppliedWatermarkWhileABatchIsInFlight(t *testing.T) {
+	const (
+		tableID   = 1
+		watermark = uint64(30)
+	)
+	store := util.NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	w := &writer{
+		progresses: []*partitionProgress{{
+			partition:   0,
+			eventsGroup: make(map[int64]*util.EventsGroup),
+		}},
+		spillStore: store,
+	}
+	w.pipeline = newPipeline(w)
+	group := w.progresses[0].group(tableID, func() *util.EventsGroup {
+		return util.NewEventsGroup(0, tableID, store)
+	})
+	for _, commitTs := range []uint64{10, 20, 30} {
+		require.NoError(t, group.AppendMessage(newPipelineTestMessage(tableID, commitTs)))
+	}
+	w.globalWatermarkValue.Store(watermark)
+
+	// The group has a batch claimed and handed to the sink, which is still
+	// applying it.
+	batch, hasMore, err := group.PrepareResolve(watermark, store.ResolveLimit())
+	require.NoError(t, err)
+	require.NotNil(t, batch)
+	require.False(t, hasMore)
+
+	require.True(t, w.pipeline.resolveOnce(t.Context()))
+	item := <-w.pipeline.batches
+	require.True(t, item.flushOnly, "the pass must flush instead of publishing the watermark")
+	require.Zero(t, item.appliedUpTo)
+
+	// Acknowledging the batch drains the group, so the next pass may publish the
+	// watermark.
+	require.NoError(t, batch.Ack())
+	require.True(t, w.pipeline.resolveOnce(t.Context()))
+	item = <-w.pipeline.batches
+	require.False(t, item.flushOnly)
+	require.Equal(t, watermark, item.appliedUpTo)
+}
