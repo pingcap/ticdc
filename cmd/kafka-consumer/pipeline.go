@@ -43,7 +43,12 @@ type preparedBatch struct {
 	batch  *util.ResolveBatch
 	events []*event.DMLEvent
 
+	// barrier is closed by the submitter once everything submitted before this
+	// item is applied; resume is then closed by the read loop, which releases
+	// the resolver and the submitter together. Closing it is a broadcast, a
+	// single send would only release one of them.
 	barrier     chan struct{}
+	resume      chan struct{}
 	appliedUpTo uint64
 }
 
@@ -62,8 +67,7 @@ type pipeline struct {
 
 	requests chan struct{}
 	batches  chan *preparedBatch
-	barriers chan chan struct{}
-	resume   chan struct{}
+	barriers chan *preparedBatch
 
 	// appliedWatermarkValue is the highest watermark whose events reached the
 	// downstream. The read loop commits a resolved message only after this
@@ -82,8 +86,7 @@ func newPipeline(w *writer) *pipeline {
 		w:        w,
 		requests: make(chan struct{}, 1),
 		batches:  make(chan *preparedBatch, batchChannelSize),
-		barriers: make(chan chan struct{}, 1),
-		resume:   make(chan struct{}, 1),
+		barriers: make(chan *preparedBatch, 1),
 	}
 }
 
@@ -135,22 +138,22 @@ func (p *pipeline) stop() {
 // touches the sink until the returned function is called. The caller may then
 // use the sink itself.
 func (p *pipeline) pause(ctx context.Context) func() {
-	barrier := make(chan struct{})
+	item := &preparedBatch{
+		barrier: make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
 	select {
-	case p.barriers <- barrier:
+	case p.barriers <- item:
 	case <-ctx.Done():
 		return func() {}
 	}
 	select {
-	case <-barrier:
+	case <-item.barrier:
 	case <-ctx.Done():
 		return func() {}
 	}
 	return func() {
-		select {
-		case p.resume <- struct{}{}:
-		default:
-		}
+		close(item.resume)
 	}
 }
 
@@ -161,18 +164,18 @@ func (p *pipeline) resolveLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case barrier := <-p.barriers:
+		case item := <-p.barriers:
 			// The barrier travels on the batch channel, so the submitter
 			// acknowledges it after everything submitted before it.
 			select {
-			case p.batches <- &preparedBatch{barrier: barrier}:
+			case p.batches <- item:
 			case <-ctx.Done():
 				return
 			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-p.resume:
+			case <-item.resume:
 			}
 			continue
 		case <-p.requests:
@@ -284,7 +287,7 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case <-p.resume:
+				case <-item.resume:
 				}
 				continue
 			}

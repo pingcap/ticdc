@@ -237,21 +237,17 @@ func (t *SchemaFile) TableInfo() *common.TableInfo {
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
-	primaryColumns := make([]*model.ColumnInfo, 0, 1)
+	indexColumns := make([]*model.IndexColumn, 0, 1)
 	for _, col := range t.Columns {
 		tiCol := col.toTiColumnInfo(nextMockID)
 		tiCol.Offset = len(tidbTableInfo.Columns)
 		if mysql.HasPriKeyFlag(tiCol.GetFlag()) {
-			primaryColumns = append(primaryColumns, tiCol)
+			indexColumns = append(indexColumns, &model.IndexColumn{Name: tiCol.Name, Offset: tiCol.Offset})
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID++
 	}
-	if len(primaryColumns) != 0 {
-		indexColumns := make([]*model.IndexColumn, 0, len(primaryColumns))
-		for _, col := range primaryColumns {
-			indexColumns = append(indexColumns, &model.IndexColumn{Name: col.Name, Offset: col.Offset})
-		}
+	if len(indexColumns) != 0 {
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, &model.IndexInfo{
 			ID:      1,
 			Name:    ast.NewCIStr("primary"),

@@ -278,12 +278,6 @@ func (w *writer) run(ctx context.Context) error {
 	return w.mysqlSink.Run(ctx)
 }
 
-// stopPipeline waits for the resolve pipeline to return, so the spill store is
-// not released while a resolve is still in flight.
-func (w *writer) stopPipeline() {
-	w.pipeline.stop()
-}
-
 func (w *writer) getSpillStore() *util.SpillStore {
 	if w.spillStore == nil {
 		w.spillStore = util.NewSpillStore()
@@ -524,33 +518,6 @@ func (w *writer) globalWatermark() uint64 {
 // never reads the read loop's partition state.
 func (w *writer) publishedWatermark() uint64 {
 	return w.globalWatermarkValue.Load()
-}
-
-func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
-	watermark := w.globalWatermark()
-	start := time.Now()
-	groups := w.snapshotEventsGroups()
-	total, err := w.flushEventsFromGroups(ctx, groups, watermark, zap.Uint64("watermark", watermark))
-	if err != nil {
-		return err
-	}
-	if total != 0 {
-		stats := w.getSpillStore().Stats()
-		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
-			zap.Int64("spillPayloadReadBytes", stats.PayloadReadBytes),
-			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
-			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
-			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
-			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
-			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
-			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
-			zap.Int64("spillPendingBytes", stats.PendingBytes),
-			zap.Int("spillLivePayloads", stats.LivePayloads),
-			zap.Int("spillLiveSegments", stats.LiveSegments))
-	}
-	return nil
 }
 
 // WriteMessage is to decode kafka message to event.

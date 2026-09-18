@@ -182,7 +182,7 @@ func (c *consumer) commitMessage(msg *kafka.Message) {
 // Run the consumer, read data and write to the downstream target.
 func (c *consumer) Run(ctx context.Context) (err error) {
 	defer func() {
-		c.writer.stopPipeline()
+		c.writer.pipeline.stop()
 		if cleanupErr := c.writer.cleanupEventsGroups(); err == nil && cleanupErr != nil {
 			err = cleanupErr
 		}

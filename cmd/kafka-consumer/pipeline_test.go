@@ -74,19 +74,14 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 		event.PostFlush()
 	}).AnyTimes()
 
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{{
 			partition:   0,
 			eventsGroup: make(map[int64]*util.EventsGroup),
 		}},
 		mysqlSink:  s,
 		spillStore: util.NewSpillStore(),
-	}
-	w.pipeline = newPipeline(w)
-	ctx, cancel := context.WithCancel(context.Background())
-	w.pipeline.run(ctx)
-	defer w.stopPipeline()
-	defer cancel()
+	})
 
 	group := w.progresses[0].group(tableID, func() *util.EventsGroup {
 		return util.NewEventsGroup(0, tableID, w.getSpillStore())
@@ -120,7 +115,7 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 
 	// The barrier drains the resolve path: once it returns, the sink saw every
 	// submitted event and no batch is in flight.
-	resume := w.pipeline.pause(ctx)
+	resume := w.pipeline.pause(context.Background())
 	mu.Lock()
 	require.Len(t, applied, batchSize+1)
 	mu.Unlock()
