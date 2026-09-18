@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 )
 
 // This file decides whether a changefeed which may replicate into its own cluster
@@ -27,9 +26,9 @@ import (
 // Let S be the tables the filter replicates and route(t) the target name of the routing rules.
 // The changefeed is safe exactly when route(S) ∩ S = ∅, that is when no replicated table is routed
 // to a table which the filter replicates as well. The decision here is exact for the supported
-// pattern class (see parseNamePattern): it searches for a witness table which the filter replicates
-// and whose routed target the filter replicates as well, and rejects the configuration only when
-// such a witness exists. Configurations outside the supported class are rejected as unsupported
+// pattern class (see parseNamePattern): it lists the table names which can witness such a pair and
+// verifies every candidate against the filter rules and the matcher, so a configuration is rejected
+// only when a witness exists. Patterns outside the supported class are rejected as unsupported
 // instead of being approximated.
 //
 // The check reasons about the patterns instead of the tables which exist at that moment, so it
@@ -38,7 +37,7 @@ import (
 const (
 	schemaPlaceholder = "{schema}"
 	tablePlaceholder  = "{table}"
-	// unsupportedPatternChars are characters which this check does not parse, so a pattern which
+	// unsupportedPatternChars are characters which this decision does not parse, so a pattern which
 	// contains one of them is rejected as unsupported.
 	unsupportedPatternChars = "*?[]{}/\\`\""
 )
@@ -95,187 +94,21 @@ func (p namePattern) covers(matcher namePattern) bool {
 	}
 }
 
-// substitution is the literal text around a placeholder in a route target expression, so the
-// target name of sub.apply(name) is prefix + name + suffix.
-type substitution struct {
-	prefix string
-	suffix string
-}
-
-func (s substitution) apply(name string) string {
-	return s.prefix + name + s.suffix
-}
-
 // targetName is a parsed route target expression: literal text around one placeholder, or a literal
 // name. An empty expression keeps the source name, which is an empty substitution.
 type targetName struct {
 	literal     string
-	sub         substitution
+	prefix      string
+	suffix      string
 	hasVariable bool
 }
 
+// apply returns the target name of a source name.
 func (t targetName) apply(name string) string {
 	if t.hasVariable {
-		return t.sub.apply(name)
+		return t.prefix + name + t.suffix
 	}
 	return t.literal
-}
-
-// requirement is a conjunction of constraints over one name: the name is a given value, or it
-// starts with and ends with given text.
-type requirement struct {
-	exact    *string
-	starts   []string
-	ends     []string
-	conflict bool
-}
-
-func (r requirement) merge(other requirement) requirement {
-	if r.exact != nil && other.exact != nil && *r.exact != *other.exact {
-		r.conflict = true
-	}
-	if other.exact != nil {
-		r.exact = other.exact
-	}
-	r.starts = slices.Concat(r.starts, other.starts)
-	r.ends = slices.Concat(r.ends, other.ends)
-	return r
-}
-
-// name returns a concrete name which satisfies every constraint, if one exists.
-func (r requirement) name() (string, bool) {
-	if r.conflict {
-		return "", false
-	}
-	if r.exact != nil {
-		name := *r.exact
-		for _, prefix := range r.starts {
-			if !strings.HasPrefix(name, prefix) {
-				return "", false
-			}
-		}
-		for _, suffix := range r.ends {
-			if !strings.HasSuffix(name, suffix) {
-				return "", false
-			}
-		}
-		return name, true
-	}
-
-	head := ""
-	for _, prefix := range r.starts {
-		if len(prefix) > len(head) {
-			if head != "" && !strings.HasPrefix(prefix, head) {
-				return "", false
-			}
-			head = prefix
-			continue
-		}
-		if !strings.HasPrefix(head, prefix) {
-			return "", false
-		}
-	}
-	tail := ""
-	for _, suffix := range r.ends {
-		if len(suffix) > len(tail) {
-			if tail != "" && !strings.HasSuffix(suffix, tail) {
-				return "", false
-			}
-			tail = suffix
-			continue
-		}
-		if !strings.HasSuffix(tail, suffix) {
-			return "", false
-		}
-	}
-	if head == "" && tail == "" {
-		return "x", true
-	}
-	return head + tail, true
-}
-
-// requirements lists the alternatives which make `sub.apply(name)` match the pattern, expressed as
-// constraints on name. No alternative means the pattern can never match a substituted name.
-func (p namePattern) requirements(sub substitution) []requirement {
-	switch p.kind {
-	case patternAny:
-		return []requirement{{}}
-	case patternLiteral:
-		value, ok := trimLiteral(p.value, sub)
-		if !ok {
-			return nil
-		}
-		return []requirement{{exact: &value}}
-	case patternPrefix:
-		return prefixRequirements(p.value, sub)
-	case patternSuffix:
-		return suffixRequirements(p.value, sub)
-	default:
-		return nil
-	}
-}
-
-// trimLiteral removes the substitution from a literal pattern value.
-func trimLiteral(value string, sub substitution) (string, bool) {
-	if !strings.HasPrefix(value, sub.prefix) || !strings.HasSuffix(value, sub.suffix) {
-		return "", false
-	}
-	if len(value) < len(sub.prefix)+len(sub.suffix) {
-		return "", false
-	}
-	middle := value[len(sub.prefix) : len(value)-len(sub.suffix)]
-	if middle == "" {
-		return "", false
-	}
-	return middle, true
-}
-
-// prefixRequirements lists the alternatives for "prefix + name + suffix starts with need".
-func prefixRequirements(need string, sub substitution) []requirement {
-	if len(need) <= len(sub.prefix) {
-		// The prefix covers the requirement on its own.
-		if !strings.HasPrefix(sub.prefix, need) {
-			return nil
-		}
-		return []requirement{{}}
-	}
-	if !strings.HasPrefix(need, sub.prefix) {
-		return nil
-	}
-	rest := need[len(sub.prefix):]
-	alternatives := []requirement{{starts: []string{rest}}}
-	// The name can be shorter than rest when the suffix covers its tail.
-	for length := 1; length < len(rest); length++ {
-		if strings.HasPrefix(sub.suffix, rest[length:]) {
-			value := rest[:length]
-			alternatives = append(alternatives, requirement{exact: &value})
-		}
-	}
-	return alternatives
-}
-
-// suffixRequirements lists the alternatives for "prefix + name + suffix ends with need".
-func suffixRequirements(need string, sub substitution) []requirement {
-	if len(need) <= len(sub.suffix) {
-		// The suffix covers the requirement on its own.
-		if !strings.HasSuffix(sub.suffix, need) {
-			return nil
-		}
-		return []requirement{{}}
-	}
-	if !strings.HasSuffix(need, sub.suffix) {
-		return nil
-	}
-	rest := need[:len(need)-len(sub.suffix)]
-	alternatives := []requirement{{ends: []string{rest}}}
-	// The name can be shorter than rest when the prefix covers its head.
-	for length := 1; length < len(rest); length++ {
-		if strings.HasSuffix(sub.prefix, rest[:len(rest)-length]) {
-			value := rest[len(rest)-length:]
-			alternatives = append(alternatives, requirement{exact: &value})
-		}
-	}
-	return alternatives
 }
 
 // tablePattern is a parsed `schema.table` pattern: a filter rule, or a matcher of a dispatch rule
@@ -302,38 +135,6 @@ func (r routeRuleToCheck) target(schema, table string) (string, string) {
 	return r.schema.apply(schema), r.table.apply(table)
 }
 
-// validateSameClusterRouting rejects a changefeed which replicates into the same cluster as its
-// upstream unless it is proven that it cannot capture the writes of its own sink.
-func (c *ReplicaConfig) validateSameClusterRouting() error {
-	if !util.GetOrZero(c.AllowSameCluster) {
-		return nil
-	}
-	if !c.Sink.TableRouteEnabled() {
-		return errors.ErrInvalidReplicaConfig.FastGenByArgs("allow-same-cluster requires table routing to be enabled")
-	}
-
-	caseSensitive := util.GetOrZero(c.CaseSensitive)
-	normalize := func(name string) string {
-		if caseSensitive {
-			return name
-		}
-		return strings.ToLower(name)
-	}
-
-	filters, err := parseFilterRules(effectiveFilterRules(c.Filter), normalize)
-	if err != nil {
-		return err
-	}
-	routes, err := parseRouteRules(c.Sink.DispatchRules, normalize)
-	if err != nil {
-		return err
-	}
-	if err := checkFilterRulesCovered(filters, routes); err != nil {
-		return err
-	}
-	return checkRouteTargets(filters, routes)
-}
-
 // effectiveFilterRules returns the filter rules which are in effect. It mirrors
 // pkg/filter.VerifyTableRules, where unset rules replicate every table.
 func effectiveFilterRules(cfg *FilterConfig) []string {
@@ -346,10 +147,9 @@ func effectiveFilterRules(cfg *FilterConfig) []string {
 func parseFilterRules(rules []string, normalize func(string) string) ([]tablePattern, error) {
 	parsed := make([]tablePattern, 0, len(rules))
 	for _, rule := range rules {
-		pattern, err := parseRulePattern(rule, normalize)
+		pattern, err := parseRulePattern("filter rule", rule, normalize)
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
-				"allow-same-cluster does not support the filter rule "+rule)
+			return nil, err
 		}
 		parsed = append(parsed, pattern)
 	}
@@ -365,42 +165,46 @@ func parseRouteRules(rules []*DispatchRule, normalize func(string) string) ([]ro
 		}
 		route := routeRuleToCheck{rawMatchers: rule.Matcher}
 		for _, matcher := range rule.Matcher {
-			pattern, err := parseRulePattern(matcher, normalize)
+			pattern, err := parseRulePattern("dispatch rule matcher", matcher, normalize)
 			if err != nil {
-				return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
-					"allow-same-cluster does not support the dispatch rule matcher "+matcher)
+				return nil, err
 			}
 			route.matchers = append(route.matchers, pattern)
 		}
-		var err error
-		if route.schema, err = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); err != nil {
-			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
-				"allow-same-cluster does not support the target schema of the dispatch rule matching "+strings.Join(rule.Matcher, ","))
+		var reason string
+		var ok bool
+		if route.schema, reason, ok = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); !ok {
+			return nil, unsupportedError("target schema of the dispatch rule matching "+strings.Join(rule.Matcher, ","), rule.TargetSchema, reason)
 		}
-		if route.table, err = parseTargetExpression(rule.TargetTable, tablePlaceholder); err != nil {
-			return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err,
-				"allow-same-cluster does not support the target table of the dispatch rule matching "+strings.Join(rule.Matcher, ","))
+		if route.table, reason, ok = parseTargetExpression(rule.TargetTable, tablePlaceholder); !ok {
+			return nil, unsupportedError("target table of the dispatch rule matching "+strings.Join(rule.Matcher, ","), rule.TargetTable, reason)
 		}
 		parsed = append(parsed, route)
 	}
 	return parsed, nil
 }
 
-// parseRulePattern parses a `schema.table` pattern into its two parts.
-func parseRulePattern(pattern string, normalize func(string) string) (tablePattern, error) {
+// parseRulePattern parses a `schema.table` pattern into its two parts. It rejects, instead of
+// approximating, the patterns which this decision cannot handle.
+func parseRulePattern(kind, pattern string, normalize func(string) string) (tablePattern, error) {
 	schemaPart, tablePart, ok := splitRulePattern(pattern)
 	if !ok {
-		return tablePattern{}, errors.New("expected a `schema.table` pattern")
+		return tablePattern{}, unsupportedError(kind, pattern, "expected a `schema.table` pattern")
 	}
-	schema, ok := parseNamePattern(normalize(schemaPart))
+	schema, reason, ok := parseNamePattern(normalize(schemaPart))
 	if !ok {
-		return tablePattern{}, errors.New("unsupported schema pattern")
+		return tablePattern{}, unsupportedError(kind, pattern, "schema pattern "+reason)
 	}
-	table, ok := parseNamePattern(normalize(tablePart))
+	table, reason, ok := parseNamePattern(normalize(tablePart))
 	if !ok {
-		return tablePattern{}, errors.New("unsupported table pattern")
+		return tablePattern{}, unsupportedError(kind, pattern, "table pattern "+reason)
 	}
 	return tablePattern{raw: pattern, schema: schema, table: table}, nil
+}
+
+// unsupportedError reports a configuration which the decision cannot handle.
+func unsupportedError(what, name, reason string) error {
+	return errors.ErrInvalidReplicaConfig.FastGen("allow-same-cluster does not support the %s %q: %s", what, name, reason)
 }
 
 // splitRulePattern splits a `schema.table` pattern at its single dot. A dot inside a quoted name
@@ -430,42 +234,43 @@ func splitRulePattern(pattern string) (string, string, bool) {
 }
 
 // parseNamePattern parses one part of a pattern. Supported forms are a literal name, `*`, a single
-// leading `*`, a single trailing `*`, and quoted names.
-func parseNamePattern(part string) (namePattern, bool) {
+// leading `*`, a single trailing `*`, and quoted names. It returns the reason for a pattern which
+// is not supported.
+func parseNamePattern(part string) (namePattern, string, bool) {
 	if part == "" {
-		return namePattern{}, false
+		return namePattern{}, "is empty", false
 	}
 	switch part[0] {
 	case '!':
-		// Negated rules depend on the rule order of the table filter, which this check does not
+		// Negated rules depend on the rule order of the table filter, which this decision does not
 		// reason about.
-		return namePattern{}, false
+		return namePattern{}, "is negated, which is not supported", false
 	case '`', '"':
 		name, ok := unquoteName(part)
 		if !ok {
-			return namePattern{}, false
+			return namePattern{}, "has an unsupported quoted name", false
 		}
-		return namePattern{kind: patternLiteral, value: name}, true
+		return namePattern{kind: patternLiteral, value: name}, "", true
 	}
 	if rest, ok := strings.CutPrefix(part, "*"); ok {
 		if rest == "" {
-			return namePattern{kind: patternAny}, true
+			return namePattern{kind: patternAny}, "", true
 		}
 		if strings.ContainsAny(rest, unsupportedPatternChars) {
-			return namePattern{}, false
+			return namePattern{}, "uses characters or wildcards which are not supported", false
 		}
-		return namePattern{kind: patternSuffix, value: rest}, true
+		return namePattern{kind: patternSuffix, value: rest}, "", true
 	}
 	if rest, ok := strings.CutSuffix(part, "*"); ok {
 		if strings.ContainsAny(rest, unsupportedPatternChars) {
-			return namePattern{}, false
+			return namePattern{}, "uses characters or wildcards which are not supported", false
 		}
-		return namePattern{kind: patternPrefix, value: rest}, true
+		return namePattern{kind: patternPrefix, value: rest}, "", true
 	}
 	if strings.ContainsAny(part, unsupportedPatternChars) {
-		return namePattern{}, false
+		return namePattern{}, "uses characters or wildcards which are not supported", false
 	}
-	return namePattern{kind: patternLiteral, value: part}, true
+	return namePattern{kind: patternLiteral, value: part}, "", true
 }
 
 // unquoteName removes a pair of backticks or double quotes around a name.
@@ -481,23 +286,24 @@ func unquoteName(part string) (string, bool) {
 	return name, true
 }
 
-// parseTargetExpression parses a route target expression. An empty expression keeps the source
-// name, which is an empty substitution.
-func parseTargetExpression(expr, placeholder string) (targetName, error) {
+// parseTargetExpression parses a route target expression. An empty expression keeps the source name,
+// which is an empty substitution. It returns the reason for an expression which is not supported.
+func parseTargetExpression(expr, placeholder string) (targetName, string, bool) {
+	unsupported := "expected literal text with at most one " + placeholder + " placeholder"
 	if expr == "" {
-		return targetName{hasVariable: true}, nil
+		return targetName{hasVariable: true}, "", true
 	}
 	head, tail, found := strings.Cut(expr, placeholder)
 	if !found {
 		if strings.ContainsAny(expr, "{}") {
-			return targetName{}, errors.New("expected literal text or a single " + placeholder + " placeholder")
+			return targetName{}, unsupported, false
 		}
-		return targetName{literal: expr}, nil
+		return targetName{literal: expr}, "", true
 	}
 	if strings.ContainsAny(head+tail, "{}") {
-		return targetName{}, errors.New("expected literal text or a single " + placeholder + " placeholder")
+		return targetName{}, unsupported, false
 	}
-	return targetName{sub: substitution{prefix: head, suffix: tail}, hasVariable: true}, nil
+	return targetName{prefix: head, suffix: tail, hasVariable: true}, "", true
 }
 
 // checkFilterRulesCovered rejects filter rules which no dispatch rule with a target would route:
@@ -542,7 +348,7 @@ func checkRouteTargets(filters []tablePattern, routes []routeRuleToCheck) error 
 func findWitness(filters []tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
 	for _, source := range filters {
 		for _, target := range filters {
-			if found, ok := buildWitness(source, target, route, matcher); ok {
+			if found, ok := witnessForPair(source, target, route, matcher); ok {
 				return found, true
 			}
 		}
@@ -550,30 +356,11 @@ func findWitness(filters []tablePattern, route routeRuleToCheck, matcher tablePa
 	return witness{}, false
 }
 
-// buildWitness combines the constraints of the source rule, the matcher and the target rule, and
-// verifies the candidate names against every pattern.
-func buildWitness(source, target tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
-	schemaRequirements := combineRequirements(
-		source.schema.requirements(substitution{}),
-		matcher.schema.requirements(substitution{}),
-		targetRequirements(target.schema, route.schema),
-	)
-	tableRequirements := combineRequirements(
-		source.table.requirements(substitution{}),
-		matcher.table.requirements(substitution{}),
-		targetRequirements(target.table, route.table),
-	)
-	for _, schemaRequirement := range schemaRequirements {
-		schemaName, ok := schemaRequirement.name()
-		if !ok {
-			continue
-		}
-		for _, tableRequirement := range tableRequirements {
-			tableName, ok := tableRequirement.name()
-			if !ok {
-				continue
-			}
-			if found, ok := verifyWitness(source, target, route, matcher, schemaName, tableName); ok {
+// witnessForPair verifies every candidate table for one pair of filter rules.
+func witnessForPair(source, target tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
+	for _, schema := range candidateNames(source.schema, matcher.schema, target.schema, route.schema) {
+		for _, table := range candidateNames(source.table, matcher.table, target.table, route.table) {
+			if found, ok := verifyWitness(source, target, route, matcher, schema, table); ok {
 				return found, true
 			}
 		}
@@ -581,7 +368,8 @@ func buildWitness(source, target tablePattern, route routeRuleToCheck, matcher t
 	return witness{}, false
 }
 
-// verifyWitness checks the candidate table against every pattern.
+// verifyWitness returns the witness when the candidate table is matched by the source rule and the
+// matcher, and its routed target is matched by the target rule.
 func verifyWitness(source, target tablePattern, route routeRuleToCheck, matcher tablePattern, schema, table string) (witness, bool) {
 	if !source.matches(schema, table) || !matcher.matches(schema, table) {
 		return witness{}, false
@@ -593,30 +381,80 @@ func verifyWitness(source, target tablePattern, route routeRuleToCheck, matcher 
 	return witness{schema: schema, table: table, targetSchema: targetSchema, targetTable: targetTable}, true
 }
 
-// targetRequirements returns the constraints which a target-capturing rule puts on the source name,
-// or no alternative when the target can never match that rule.
-func targetRequirements(capture namePattern, target targetName) []requirement {
-	if !target.hasVariable {
-		if !capture.matches(target.literal) {
-			return nil
+// candidateNames lists the names which can satisfy the source rule, the matcher and the target rule
+// at the same time. Every candidate is verified afterwards, so extra names cost nothing, while the
+// generated set stays complete: it contains the literal text of each pattern, the head or tail the
+// pattern requires, every combination of a head with a tail, and the names where the substitution
+// completes a pattern.
+func candidateNames(source, matcher, capture namePattern, target targetName) []string {
+	atoms := slices.Concat(
+		atomsOf(source, "", ""),
+		atomsOf(matcher, "", ""),
+		atomsOf(capture, target.prefix, target.suffix),
+	)
+	names := make([]string, 0, 3*len(atoms)+len(atoms)*len(atoms)+1)
+	names = append(names, "x")
+	for _, atom := range atoms {
+		names = append(names, atom, atom+"x", "x"+atom)
+		for _, other := range atoms {
+			names = append(names, atom+other)
 		}
-		return []requirement{{}}
 	}
-	return capture.requirements(target.sub)
+	return names
 }
 
-// combineRequirements merges the alternatives of three constraint groups into one list.
-func combineRequirements(first, second, third []requirement) []requirement {
-	if len(first) == 0 || len(second) == 0 || len(third) == 0 {
+// atomsOf returns the names which this pattern contributes to the candidates, given that `prefix`
+// and `suffix` are added around the name before the pattern is matched (both empty when the pattern
+// is matched directly).
+func atomsOf(p namePattern, prefix, suffix string) []string {
+	switch p.kind {
+	case patternAny:
+		return nil
+	case patternLiteral:
+		if !strings.HasPrefix(p.value, prefix) || !strings.HasSuffix(p.value, suffix) || len(p.value) < len(prefix)+len(suffix) {
+			return nil
+		}
+		if name := p.value[len(prefix) : len(p.value)-len(suffix)]; name != "" {
+			return []string{name}
+		}
+		return nil
+	case patternPrefix:
+		if len(p.value) <= len(prefix) {
+			// The prefix covers the requirement on its own.
+			return nil
+		}
+		if !strings.HasPrefix(p.value, prefix) {
+			return nil
+		}
+		return prefixesOf(p.value[len(prefix):])
+	case patternSuffix:
+		if len(p.value) <= len(suffix) {
+			// The suffix covers the requirement on its own.
+			return nil
+		}
+		if !strings.HasSuffix(p.value, suffix) {
+			return nil
+		}
+		return suffixesOf(p.value[:len(p.value)-len(suffix)])
+	default:
 		return nil
 	}
-	combined := make([]requirement, 0, len(first)*len(second)*len(third))
-	for _, a := range first {
-		for _, b := range second {
-			for _, c := range third {
-				combined = append(combined, a.merge(b).merge(c))
-			}
-		}
+}
+
+// prefixesOf returns every non-empty prefix of text, shortest first.
+func prefixesOf(text string) []string {
+	prefixes := make([]string, 0, len(text))
+	for length := 1; length <= len(text); length++ {
+		prefixes = append(prefixes, text[:length])
 	}
-	return combined
+	return prefixes
+}
+
+// suffixesOf returns every non-empty suffix of text, longest first.
+func suffixesOf(text string) []string {
+	suffixes := make([]string, 0, len(text))
+	for start := 0; start < len(text); start++ {
+		suffixes = append(suffixes, text[start:])
+	}
+	return suffixes
 }

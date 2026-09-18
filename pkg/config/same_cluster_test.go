@@ -148,6 +148,18 @@ func TestValidateSameClusterRouting(t *testing.T) {
 			wantError:   "does not support the filter rule",
 		},
 		{
+			// `sr_rout*` only matches the target schema once the `{schema}_routed` suffix is appended,
+			// so the witness schema `sr` is shorter than the text the pattern asks for.
+			name:        "the substitution completes the target pattern",
+			allowSame:   true,
+			filterRules: []string{"*r.t1", "sr_rout*.t1"},
+			dispatch: []*DispatchRule{
+				{Matcher: []string{"*r.*"}, TargetSchema: "{schema}_routed", TargetTable: "{table}"},
+				{Matcher: []string{"sr_rout*.*"}, TargetSchema: "dst"},
+			},
+			wantError: "which the filter replicates",
+		},
+		{
 			name:        "the target schema must not use the table placeholder",
 			allowSame:   true,
 			filterRules: []string{"src.*"},
