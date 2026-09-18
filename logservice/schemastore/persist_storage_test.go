@@ -2343,7 +2343,7 @@ func TestApplyDDLJobs(t *testing.T) {
 			map[int64][]uint64{
 				300: {1010, 1020, 1030, 1040, 1050, 1060, 1080, 1090, 1100, 1110, 1130, 1140, 1150},
 			},
-			[]uint64{1110, 1120},
+			[]uint64{1010, 1110, 1120},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
