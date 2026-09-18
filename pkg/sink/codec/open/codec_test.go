@@ -22,6 +22,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -206,4 +207,19 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
 	require.Error(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+}
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// builds from a message: a composite primary key must stay the handle key, with
+// the real column offsets, because that is what the MySQL sink locates rows by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	decoder := &decoder{}
+	key := &messageKey{Schema: "test", Table: "t"}
+	value := &messageRow{Update: map[string]column{
+		"a": {Type: mysql.TypeLong, Flag: primaryKeyFlag | handleKeyFlag, Value: int64(1)},
+		"b": {Type: mysql.TypeLong, Flag: primaryKeyFlag | handleKeyFlag, Value: int64(2)},
+		"c": {Type: mysql.TypeLong, Value: int64(3)},
+	}}
+
+	common.RequireRowLocatorByPrimaryKey(t, decoder.newTableInfo(key, value), "a", "b")
 }

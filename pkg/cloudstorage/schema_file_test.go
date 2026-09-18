@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -539,4 +540,21 @@ func TestSchemaFileChecksum(t *testing.T) {
 		newChecksum := newSchemaFile.Checksum()
 		require.Equal(t, checksum1, newChecksum)
 	}
+}
+
+// TestTableInfoLocatesRowByPrimaryKey checks the table info rebuilt from a schema
+// file: a composite primary key must stay the handle key, because that is what
+// the MySQL sink locates rows by.
+func TestTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	schemaFile := &SchemaFile{
+		Schema: "test",
+		Table:  "t",
+		Columns: []TableCol{
+			{Name: "a", Tp: "int", IsPK: "true"},
+			{Name: "b", Tp: "int", IsPK: "true"},
+			{Name: "c", Tp: "varchar"},
+		},
+	}
+
+	codeccommon.RequireRowLocatorByPrimaryKey(t, schemaFile.TableInfo(), "a", "b")
 }
