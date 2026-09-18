@@ -35,7 +35,7 @@ import (
 // trailing comma leaves behind.
 func consumerTopics(o *option) []string {
 	topics := make([]string, 0, 1)
-	for _, topic := range strings.Split(o.topic, ",") {
+	for topic := range strings.SplitSeq(o.topic, ",") {
 		if topic = strings.TrimSpace(topic); topic != "" {
 			topics = append(topics, topic)
 		}
@@ -112,9 +112,7 @@ func getPartitionNum(o *option) (int32, error) {
 					log.Info("get partition number of topic",
 						zap.String("topic", topic),
 						zap.Int32("partitionNum", numPartitions))
-					if numPartitions > maxPartitionNum {
-						maxPartitionNum = numPartitions
-					}
+					maxPartitionNum = max(maxPartitionNum, numPartitions)
 					found = true
 					break
 				}

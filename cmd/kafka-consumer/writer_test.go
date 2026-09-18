@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -81,7 +80,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	//    commitTs > watermark.
 	// 2) Call writer.Write and expect the DDL is executed to advance downstream schema even without the
 	//    watermark catching up.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
@@ -119,7 +118,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	// 1) Enqueue a blocking DDL followed by an independent CREATE TABLE DDL, with watermark behind the first DDL.
 	// 2) Call writer.Write and expect nothing executes.
 	// 3) Advance watermark beyond the first DDL and expect both execute in order.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := newTestWriter(t, &writer{
@@ -172,7 +171,7 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	// 1) Enqueue a CREATE TABLE ... LIKE ... DDL with commitTs > watermark.
 	// 2) Call writer.Write and expect the DDL is NOT executed.
 	// 3) Advance watermark beyond the DDL commitTs and expect the DDL executes.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := newTestWriter(t, &writer{
@@ -216,7 +215,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	//    later DDL at the front is not yet eligible (commitTs > watermark).
 	// 2) Call writer.Write and expect all DDLs with commitTs <= watermark execute (in commit-ts order),
 	//    and only the truly "future" DDL remains pending.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
 	w := newTestWriter(t, &writer{
@@ -292,7 +291,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 }
 
 func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	flushedCommitTs := make([]uint64, 0)
@@ -406,7 +405,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	})
 	w.partitionTableAccessor.Add("test", "members")
 
-	err := w.flushDDLEvent(context.Background(), &commonEvent.DDLEvent{
+	err := w.flushDDLEvent(t.Context(), &commonEvent.DDLEvent{
 		Query:      "ALTER TABLE members DROP PARTITION p0",
 		SchemaName: "test",
 		TableName:  "members",
@@ -428,7 +427,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)

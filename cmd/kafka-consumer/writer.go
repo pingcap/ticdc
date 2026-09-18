@@ -14,12 +14,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"maps"
 	"math"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -210,7 +210,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 				zap.String("dsn", o.upstreamTiDBDSN))
 		}
 	}
-	for i := 0; i < int(o.partitionNum); i++ {
+	for i := range int(o.partitionNum) {
 		decoder, err := codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
@@ -664,11 +664,9 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) (boo
 	// "future" DDL that is not yet eligible (commitTs > watermark) can block executing earlier DDLs
 	// that are already eligible, and the subsequent watermark-based DML flush can observe an out-of-date
 	// downstream schema (e.g. DML applied before its ALTER TABLE), causing test failures like common_1.
-	if len(w.ddlList) > 1 {
-		sort.SliceStable(w.ddlList, func(i, j int) bool {
-			return w.ddlList[i].GetCommitTs() < w.ddlList[j].GetCommitTs()
-		})
-	}
+	slices.SortStableFunc(w.ddlList, func(a, b *event.DDLEvent) int {
+		return cmp.Compare(a.GetCommitTs(), b.GetCommitTs())
+	})
 
 	watermark := w.globalWatermark()
 	ddlList := make([]*event.DDLEvent, 0)
