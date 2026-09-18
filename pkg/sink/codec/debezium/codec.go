@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -46,6 +47,13 @@ type dbzCodec struct {
 
 func (c *dbzCodec) isDebeziumAvro() bool {
 	return c.config.Protocol == config.ProtocolDebeziumAvro
+}
+
+func (c *dbzCodec) encodeUnsignedBigintAsString() bool {
+	if c.isDebeziumAvro() {
+		return c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString
+	}
+	return c.config.DebeziumBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString
 }
 
 func (c *dbzCodec) debeziumAvroNamespace(schema string) string {
@@ -203,12 +211,13 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				})
 				writer.WriteStringField("field", colName)
 				if col.GetDefaultValue() != nil {
-					c.writeBinaryField(writer, "default", getBitFromUint64(n, v)) // binary
+					writer.WriteBase64StringField("default", getBitFromUint64(n, v)) // binary
 				}
 			}
 		case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 			mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
-			if c.isDebeziumAvro() && mysql.HasBinaryFlag(ft.GetFlag()) {
+			if mysql.HasBinaryFlag(ft.GetFlag()) &&
+				(c.isDebeziumAvro() || c.config.DebeziumBinaryHandlingMode == common.BinaryHandlingModeBytes) {
 				writer.WriteStringField("type", "bytes")
 			} else {
 				writer.WriteStringField("type", "string")
@@ -216,7 +225,11 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 			writer.WriteBoolField("optional", c.columnOptional(ft))
 			writer.WriteStringField("field", colName)
 			if col.GetDefaultValue() != nil {
-				writer.WriteAnyField("default", col.GetDefaultValue())
+				if v, ok := col.GetDefaultValue().(string); ok && mysql.HasBinaryFlag(ft.GetFlag()) && !c.isDebeziumAvro() {
+					c.writeBinaryField(writer, "default", []byte(v))
+				} else {
+					writer.WriteAnyField("default", col.GetDefaultValue())
+				}
 			}
 		case mysql.TypeEnum:
 			writer.WriteStringField("type", "string")
@@ -459,9 +472,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				writer.WriteFloat64Field("default", floatV)
 			}
 		case mysql.TypeLonglong: // BIGINT
-			if c.isDebeziumAvro() &&
-				mysql.HasUnsignedFlag(ft.GetFlag()) &&
-				c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
+			if mysql.HasUnsignedFlag(ft.GetFlag()) && c.encodeUnsignedBigintAsString() {
 				writer.WriteStringField("type", "string")
 			} else {
 				writer.WriteStringField("type", "int64")
@@ -473,11 +484,23 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				if !ok {
 					return
 				}
-				floatV, err := strconv.ParseFloat(v, 64)
+				if mysql.HasUnsignedFlag(ft.GetFlag()) {
+					if c.encodeUnsignedBigintAsString() {
+						writer.WriteStringField("default", v)
+						return
+					}
+					uintV, err := strconv.ParseUint(v, 10, 64)
+					if err != nil {
+						return
+					}
+					writer.WriteInt64Field("default", int64(uintV))
+					return
+				}
+				intV, err := strconv.ParseInt(v, 10, 64)
 				if err != nil {
 					return
 				}
-				writer.WriteFloat64Field("default", floatV)
+				writer.WriteInt64Field("default", intV)
 			}
 		case mysql.TypeFloat:
 			if ft.GetDecimal() != -1 {
@@ -525,8 +548,9 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 					writer.WriteStringField("precision", strconv.Itoa(precision))
 					writer.WriteStringField("scale", strconv.Itoa(scale))
 				})
-			} else if c.isDebeziumAvro() &&
-				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModeString {
+			} else if (c.isDebeziumAvro() &&
+				c.config.AvroDecimalHandlingMode == common.DecimalHandlingModeString) ||
+				(!c.isDebeziumAvro() && c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString) {
 				writer.WriteStringField("type", "string")
 			} else {
 				writer.WriteStringField("type", "double")
@@ -538,7 +562,7 @@ func (c *dbzCodec) writeDebeziumFieldSchema(
 				if !ok {
 					return
 				}
-				if c.isDebeziumAvro() {
+				if c.isDebeziumAvro() || c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString {
 					writer.WriteStringField("default", v)
 					return
 				}
@@ -628,7 +652,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 			writer.WriteBoolField(colName, v != 0)
 			return nil
 		} else {
-			c.writeBinaryField(writer, colName, getBitFromUint64(n, v))
+			writer.WriteBase64StringField(colName, getBitFromUint64(n, v))
 			return nil
 		}
 
@@ -666,7 +690,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		return nil
 
 	case mysql.TypeNewDecimal:
-		if c.isDebeziumAvro() {
+		if c.isDebeziumAvro() || c.config.DebeziumDecimalHandlingMode == common.DecimalHandlingModeString {
 			writer.WriteStringField(colName, datum.GetMysqlDecimal().String())
 			return nil
 		}
@@ -827,16 +851,16 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		isUnsigned := mysql.HasUnsignedFlag(colInfo.GetFlag())
 		if isUnsigned {
 			v := datum.GetUint64()
+			if ft.GetType() == mysql.TypeLonglong && c.encodeUnsignedBigintAsString() {
+				writer.WriteStringField(colName, strconv.FormatUint(v, 10))
+				return nil
+			}
 			if c.isDebeziumAvro() && ft.GetType() == mysql.TypeLonglong {
-				if c.config.AvroBigintUnsignedHandlingMode == common.BigintUnsignedHandlingModeString {
-					writer.WriteStringField(colName, strconv.FormatUint(v, 10))
-				} else {
-					if v > math.MaxInt64 {
-						return errors.ErrDebeziumEncodeFailed.GenWithStackByArgs(
-							fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
-					}
-					writer.WriteInt64Field(colName, int64(v))
+				if v > math.MaxInt64 {
+					return errors.ErrDebeziumEncodeFailed.GenWithStackByArgs(
+						fmt.Sprintf("unsigned bigint value %d overflows avro long", v))
 				}
+				writer.WriteInt64Field(colName, int64(v))
 				return nil
 			}
 			if ft.GetType() == mysql.TypeLonglong && v == maxValue.GetUint64() || v > maxValue.GetUint64() {
@@ -882,7 +906,17 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 }
 
 func (c *dbzCodec) writeBinaryField(writer *util.JSONWriter, fieldName string, value []byte) {
-	// TODO: Deal with different binary output later.
+	if !c.isDebeziumAvro() {
+		switch c.config.DebeziumBinaryHandlingMode {
+		case common.BinaryHandlingModeBase64URLSafe:
+			writer.WriteStringField(fieldName, base64.URLEncoding.EncodeToString(value))
+			return
+		case common.BinaryHandlingModeHex:
+			writer.WriteStringField(fieldName, hex.EncodeToString(value))
+			return
+		}
+	}
+	// JSON represents bytes as Base64 too; bytes mode only changes the schema.
 	writer.WriteBase64StringField(fieldName, value)
 }
 

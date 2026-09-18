@@ -101,7 +101,10 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
 			DebeziumConfig: &DebeziumConfig{
-				IncludeStartTs: util.AddressOf(true),
+				IncludeStartTs:             util.AddressOf(true),
+				DecimalHandlingMode:        util.AddressOf("string"),
+				BigintUnsignedHandlingMode: util.AddressOf("string"),
+				BinaryHandlingMode:         util.AddressOf("hex"),
 			},
 			SimpleConfig: &SimpleConfig{
 				IncludeStartTs: util.AddressOf(true),
@@ -145,6 +148,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
@@ -172,6 +178,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
 	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
 	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
+	require.Nil(t, internalDebezium.Sink.Debezium.DecimalHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -192,6 +201,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))

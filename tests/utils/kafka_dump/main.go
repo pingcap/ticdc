@@ -19,10 +19,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/linkedin/goavro/v2"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -33,7 +35,13 @@ func main() {
 	timeout := flag.Duration("timeout", 90*time.Second, "How long to wait for matching messages.")
 	untilTable := flag.String("until-table", "", "Stop after seeing this many DML messages for the table.")
 	untilCount := flag.Int("until-count", 1, "Number of matching table messages required to stop.")
+	registryURL := flag.String("schema-registry-uri", "", "Decode Confluent Avro keys and values using this Schema Registry.")
 	flag.Parse()
+	avroDecoder := &avroMessageDecoder{
+		registryURL: strings.TrimRight(*registryURL, "/"),
+		client:      &http.Client{Timeout: 10 * time.Second},
+		codecs:      make(map[uint32]*goavro.Codec),
+	}
 
 	if *topic == "" {
 		log.Fatal("topic must not be empty")
@@ -101,13 +109,31 @@ func main() {
 			if done {
 				return
 			}
-			if _, err := os.Stdout.Write(record.Value); err != nil {
+			key, value := record.Key, record.Value
+			if *registryURL != "" {
+				decoded, err := avroDecoder.decode(ctx, value)
+				if err != nil {
+					log.Fatalf("decode Avro value: %v", err)
+				}
+				if len(key) > 0 {
+					decodedKey, err := avroDecoder.decode(ctx, key)
+					if err != nil {
+						log.Fatalf("decode Avro key: %v", err)
+					}
+					decoded["key"] = decodedKey
+				}
+				value, err = json.Marshal(decoded)
+				if err != nil {
+					log.Fatalf("marshal Avro dump: %v", err)
+				}
+			}
+			if _, err := os.Stdout.Write(value); err != nil {
 				log.Fatalf("write message: %v", err)
 			}
 			if _, err := os.Stdout.Write([]byte("\n")); err != nil {
 				log.Fatalf("write newline: %v", err)
 			}
-			if tableOf(record.Value) == *untilTable {
+			if tableOf(value) == *untilTable {
 				matched++
 				if matched >= *untilCount {
 					done = true
@@ -138,10 +164,25 @@ func waitFor(ctx context.Context, attempt func() error) error {
 
 func tableOf(raw []byte) string {
 	var msg struct {
-		Table string `json:"table"`
+		Table   string `json:"table"`
+		Payload struct {
+			Op     string `json:"op"`
+			Source struct {
+				Table string `json:"table"`
+			} `json:"source"`
+		} `json:"payload"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return ""
 	}
-	return msg.Table
+	if msg.Table != "" {
+		return msg.Table
+	}
+	// Debezium also includes source.table in DDL messages. Only count row events.
+	switch msg.Payload.Op {
+	case "c", "u", "d", "r":
+		return msg.Payload.Source.Table
+	default:
+		return ""
+	}
 }
