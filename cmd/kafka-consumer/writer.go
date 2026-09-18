@@ -16,7 +16,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -76,11 +78,7 @@ func (p *partitionProgress) group(tableID int64, create func() *util.EventsGroup
 func (p *partitionProgress) snapshotGroups() []*util.EventsGroup {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	groups := make([]*util.EventsGroup, 0, len(p.eventsGroup))
-	for _, group := range p.eventsGroup {
-		groups = append(groups, group)
-	}
-	return groups
+	return slices.Collect(maps.Values(p.eventsGroup))
 }
 
 type tableIDProvider interface {

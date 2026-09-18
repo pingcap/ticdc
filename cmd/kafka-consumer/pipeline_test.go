@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"math"
 	"sync"
 	"testing"
@@ -64,9 +63,9 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 	)
 	inFlight := make(chan struct{})
 	release := make(chan struct{})
-	var once sync.Once
+	closeInFlight := sync.OnceFunc(func() { close(inFlight) })
 	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
-		once.Do(func() { close(inFlight) })
+		closeInFlight()
 		<-release
 		mu.Lock()
 		applied = append(applied, event.GetCommitTs())
@@ -115,7 +114,7 @@ func TestPipelineAppliesLateEventAfterTheInFlightBatch(t *testing.T) {
 
 	// The barrier drains the resolve path: once it returns, the sink saw every
 	// submitted event and no batch is in flight.
-	resume := w.pipeline.pause(context.Background())
+	resume := w.pipeline.pause(t.Context())
 	mu.Lock()
 	require.Len(t, applied, batchSize+1)
 	mu.Unlock()

@@ -38,7 +38,7 @@ func AppendRow2Chunk(data map[string]any, columns []*model.ColumnInfo, chk *chun
 	}
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
+func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	if raw == nil {
 		chk.AppendNull(idx)
 		return
@@ -153,8 +153,8 @@ func CompareRow(
 // primary key the sink scans the table by an unindexed column instead.
 func RequireRowLocatorByPrimaryKey(t require.TestingT, tableInfo *commonType.TableInfo, primaryKeys ...string) {
 	columns := tableInfo.GetColumns()
-	preValues := make([]interface{}, 0, len(columns))
-	postValues := make([]interface{}, 0, len(columns))
+	preValues := make([]any, 0, len(columns))
+	postValues := make([]any, 0, len(columns))
 	for _, column := range columns {
 		preValues = append(preValues, "pre_"+column.Name.O)
 		postValues = append(postValues, "post_"+column.Name.O)
@@ -165,7 +165,7 @@ func RequireRowLocatorByPrimaryKey(t require.TestingT, tableInfo *commonType.Tab
 	sql, args := change.GenSQL(sqlmodel.DMLUpdate)
 
 	predicates := make([]string, 0, len(primaryKeys))
-	values := make([]interface{}, 0, len(primaryKeys))
+	values := make([]any, 0, len(primaryKeys))
 	for _, key := range primaryKeys {
 		predicates = append(predicates, fmt.Sprintf("`%s` = ?", key))
 		values = append(values, "pre_"+key)

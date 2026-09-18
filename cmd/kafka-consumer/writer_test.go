@@ -35,7 +35,7 @@ import (
 // reached the sink.
 func drainResolvePipeline(t *testing.T, w *writer) {
 	t.Helper()
-	resume := w.pipeline.pause(context.Background())
+	resume := w.pipeline.pause(t.Context())
 	resume()
 }
 
@@ -44,11 +44,9 @@ func drainResolvePipeline(t *testing.T, w *writer) {
 func newTestWriter(t *testing.T, w *writer) *writer {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(context.Background())
 	w.pipeline = newPipeline(w)
-	w.pipeline.run(ctx)
+	w.pipeline.run(t.Context())
 	t.Cleanup(w.pipeline.stop)
-	t.Cleanup(cancel)
 	return w
 }
 

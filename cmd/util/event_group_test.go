@@ -1232,9 +1232,7 @@ func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
 	errc := make(chan error, 2)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; i < total; i++ {
 			commitTs := uint64(i + 1)
 			mu.Lock()
@@ -1245,10 +1243,8 @@ func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
 				return
 			}
 		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		for i := 0; i < total; i++ {
 			batch, _, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
 			if err != nil {
@@ -1268,7 +1264,7 @@ func TestEventsGroupConcurrentAppendResolveAck(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 	wg.Wait()
 	close(errc)
 	for err := range errc {

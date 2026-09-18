@@ -14,7 +14,6 @@
 package debezium
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -40,7 +39,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	cfg.TimeZone = time.UTC
 
 	encoder := NewBatchEncoder(cfg, "dbserver1")
-	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", compositeKeyRowEvent(t)))
+	require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", compositeKeyRowEvent(t)))
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 

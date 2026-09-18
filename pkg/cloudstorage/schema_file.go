@@ -13,8 +13,9 @@
 package cloudstorage
 
 import (
+	"cmp"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -274,10 +275,9 @@ func (t *SchemaFile) Marshal() []byte {
 // marshalForChecksum marshals fields covered by the path checksum.
 func (t *SchemaFile) marshalForChecksum() []byte {
 	// sort columns by name
-	sortedColumns := make([]TableCol, len(t.Columns))
-	copy(sortedColumns, t.Columns)
-	sort.Slice(sortedColumns, func(i, j int) bool {
-		return sortedColumns[i].Name < sortedColumns[j].Name
+	sortedColumns := slices.Clone(t.Columns)
+	slices.SortStableFunc(sortedColumns, func(a, b TableCol) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 
 	payload := checksumPayload{

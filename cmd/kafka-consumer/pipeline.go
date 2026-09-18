@@ -121,9 +121,8 @@ func (p *pipeline) appliedWatermark() uint64 {
 }
 
 func (p *pipeline) run(ctx context.Context) {
-	p.wg.Add(2)
-	go func() { defer p.wg.Done(); p.resolveLoop(ctx) }()
-	go func() { defer p.wg.Done(); p.submitLoop(ctx) }()
+	p.wg.Go(func() { p.resolveLoop(ctx) })
+	p.wg.Go(func() { p.submitLoop(ctx) })
 }
 
 // stop waits until both pipeline goroutines returned. It must only be called
