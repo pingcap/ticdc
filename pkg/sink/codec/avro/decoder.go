@@ -451,14 +451,19 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 			})
 		}
 	}
-	tidbTableInfo.Indices = []*timodel.IndexInfo{{
-		Primary: true,
-		Unique:  true,
-		Name:    ast.NewCIStr("primary"),
-		Columns: indexColumns,
-		State:   timodel.StatePublic,
-	}}
-	commonType.SetHandleKeyFlags(tidbTableInfo)
+	// A message without a key column carries no row locator: an empty primary
+	// index would tell the sink the row is located by the primary key while the
+	// WHERE clause has no column to compare.
+	if len(indexColumns) != 0 {
+		tidbTableInfo.Indices = []*timodel.IndexInfo{{
+			Primary: true,
+			Unique:  true,
+			Name:    ast.NewCIStr("primary"),
+			Columns: indexColumns,
+			State:   timodel.StatePublic,
+		}}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
+	}
 	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
 
