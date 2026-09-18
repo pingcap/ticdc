@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
@@ -38,11 +39,16 @@ const sinkBatchMessages = 10000
 // A barrier batch carries no events: the submitter drains everything submitted
 // before it and then acknowledges the barrier, which lets the read loop run a
 // DDL flush while the resolve path is quiesced.
+//
+// A batch with appliedUpTo set carries no events either: it means every batch
+// submitted before it is applied, so the read loop may commit the resolved
+// messages whose watermark is at or below appliedUpTo.
 type preparedBatch struct {
 	batch  *util.ResolveBatch
 	events []*event.DMLEvent
 
-	barrier chan struct{}
+	barrier     chan struct{}
+	appliedUpTo uint64
 }
 
 // pipeline runs the resolve path, restore plus downstream apply, off the read
@@ -65,6 +71,12 @@ type pipeline struct {
 
 	mu     sync.Mutex
 	paused bool
+
+	// appliedWatermarkValue is the highest watermark whose events reached the
+	// downstream. The read loop commits a resolved message only after this
+	// reaches that message's watermark, because the spill store is temporary: an
+	// offset committed before its events are applied would be skipped on restart.
+	appliedWatermarkValue atomic.Uint64
 
 	wg sync.WaitGroup
 
@@ -113,6 +125,11 @@ func (p *pipeline) err() error {
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.failure
+}
+
+// appliedWatermark is the watermark whose events are known to be applied.
+func (p *pipeline) appliedWatermark() uint64 {
+	return p.appliedWatermarkValue.Load()
 }
 
 func (p *pipeline) run(ctx context.Context) {
@@ -200,7 +217,9 @@ func (p *pipeline) resolveOnce(ctx context.Context) bool {
 		if group.HasPendingBatch() {
 			continue
 		}
+		restoreStart := time.Now()
 		batch, hasMore, err := group.PrepareResolve(watermark, limit)
+		p.w.stats.restoreNanos.Add(int64(time.Since(restoreStart)))
 		if err != nil {
 			p.fail(err)
 			return false
@@ -220,6 +239,17 @@ func (p *pipeline) resolveOnce(ctx context.Context) bool {
 	}
 	if more {
 		p.request()
+		return true
+	}
+	// Every group is drained up to watermark, and every batch of this pass was
+	// submitted before this item, so once the submitter applied it the read loop
+	// may commit the resolved messages up to that watermark.
+	if watermark != 0 {
+		select {
+		case p.batches <- &preparedBatch{appliedUpTo: watermark}:
+		case <-ctx.Done():
+			return false
+		}
 	}
 	return true
 }
@@ -235,7 +265,10 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 		if len(events) == 0 {
 			return nil
 		}
-		if err := p.w.flushDMLBatch(ctx, events); err != nil {
+		applyStart := time.Now()
+		err := p.w.flushDMLBatch(ctx, events)
+		p.w.stats.applyWaitNanos.Add(int64(time.Since(applyStart)))
+		if err != nil {
 			return err
 		}
 		for _, item := range prepared {
@@ -250,6 +283,10 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 		p.w.stats.flushEvents.Add(int64(len(events)))
 		prepared = prepared[:0]
 		events = events[:0]
+		// A group whose batch was just acknowledged may hold events that arrived
+		// while that batch was in flight, so ask for another resolve pass instead
+		// of waiting for the next resolved message of the topic.
+		p.request()
 		return nil
 	}
 
@@ -269,6 +306,14 @@ func (p *pipeline) submitLoop(ctx context.Context) {
 					return
 				case <-p.resume:
 				}
+				continue
+			}
+			if item.appliedUpTo != 0 {
+				if err := flush(); err != nil {
+					p.fail(err)
+					return
+				}
+				p.appliedWatermarkValue.Store(item.appliedUpTo)
 				continue
 			}
 			prepared = append(prepared, item)

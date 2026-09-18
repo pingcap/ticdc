@@ -130,6 +130,9 @@ type writer struct {
 
 	// pipeline is set when the resolve path runs off the read loop.
 	pipeline *pipeline
+	// pendingCommits holds resolved messages waiting for their events to be
+	// applied; it is owned by the read loop.
+	pendingCommits []pendingCommit
 	// globalWatermarkValue is the published minimum of the partition
 	// watermarks. The read loop publishes it after every resolved message and
 	// the resolve pipeline only reads it.
@@ -252,6 +255,34 @@ func newWriter(ctx context.Context, o *option) *writer {
 		log.Info("resolve pipeline enabled")
 	}
 	return w
+}
+
+// pendingCommit is a resolved message whose events are not applied yet. The
+// spill store is temporary, so committing its offset earlier would skip those
+// events when the consumer restarts.
+type pendingCommit struct {
+	message   *kafka.Message
+	watermark uint64
+}
+
+// takeCommittableMessages returns the resolved messages whose events are known
+// to be applied, and forgets them. It is only called by the read loop.
+func (w *writer) takeCommittableMessages() []*kafka.Message {
+	if w.pipeline == nil || len(w.pendingCommits) == 0 {
+		return nil
+	}
+	applied := w.pipeline.appliedWatermark()
+	messages := make([]*kafka.Message, 0, len(w.pendingCommits))
+	remaining := w.pendingCommits[:0]
+	for _, pending := range w.pendingCommits {
+		if pending.watermark <= applied {
+			messages = append(messages, pending.message)
+			continue
+		}
+		remaining = append(remaining, pending)
+	}
+	w.pendingCommits = remaining
+	return messages
 }
 
 func (w *writer) run(ctx context.Context) error {
@@ -585,7 +616,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		progress.updateWatermark(newWatermark, offset)
 		w.publishWatermark()
 		if w.pipeline != nil {
+			// The offset may only be committed once the events up to this
+			// watermark reached the downstream, so record it as pending.
+			w.pendingCommits = append(w.pendingCommits, pendingCommit{
+				message:   message,
+				watermark: newWatermark,
+			})
 			w.pipeline.request()
+			return false, nil
 		}
 		needFlush = true
 	case common.MessageTypeDDL:

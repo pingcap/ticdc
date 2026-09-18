@@ -155,20 +155,28 @@ func (c *consumer) readMessage(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if !needCommit {
-			continue
+		if needCommit {
+			c.commitMessage(msg)
 		}
-		topicPartition, err := c.client.CommitMessage(msg)
-		if err != nil {
-			log.Error("commit message failed, just continue",
-				zap.String("topic", *msg.TopicPartition.Topic), zap.Int32("partition", msg.TopicPartition.Partition),
-				zap.Any("offset", msg.TopicPartition.Offset), zap.Error(err))
-			continue
+		// Resolved messages of the parallel resolve path are committed once
+		// their events reached the downstream.
+		for _, pending := range c.writer.takeCommittableMessages() {
+			c.commitMessage(pending)
 		}
-		log.Debug("commit message success",
-			zap.String("topic", topicPartition[0].String()), zap.Int32("partition", topicPartition[0].Partition),
-			zap.Any("offset", topicPartition[0].Offset))
 	}
+}
+
+func (c *consumer) commitMessage(msg *kafka.Message) {
+	topicPartition, err := c.client.CommitMessage(msg)
+	if err != nil {
+		log.Error("commit message failed, just continue",
+			zap.String("topic", *msg.TopicPartition.Topic), zap.Int32("partition", msg.TopicPartition.Partition),
+			zap.Any("offset", msg.TopicPartition.Offset), zap.Error(err))
+		return
+	}
+	log.Debug("commit message success",
+		zap.String("topic", topicPartition[0].String()), zap.Int32("partition", topicPartition[0].Partition),
+		zap.Any("offset", topicPartition[0].Offset))
 }
 
 // Run the consumer, read data and write to the downstream target.
