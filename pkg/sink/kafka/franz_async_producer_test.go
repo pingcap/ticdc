@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -33,16 +33,16 @@ func TestAsyncSendClosed(t *testing.T) {
 	producer := &asyncProducer{}
 	producer.closed.Store(true)
 
-	err := producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{})
+	err := producer.AsyncSend(t.Context(), "topic", 0, &codecCommon.Message{})
 
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }
 
 func TestAsyncSendCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	producer := &asyncProducer{}
-	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{}), context.Canceled)
+	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codecCommon.Message{}), context.Canceled)
 }
 
 func TestAsyncPartition(t *testing.T) {
@@ -64,7 +64,7 @@ func TestAsyncPartition(t *testing.T) {
 		resultCh:     make(chan asyncProduceResult, 1),
 	}
 
-	require.NoError(t, producer.AsyncSend(t.Context(), topic, 2, &codeccommon.Message{Value: []byte("value")}))
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 2, &codecCommon.Message{Value: []byte("value")}))
 	require.Eventually(t, func() bool { return client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
 	require.Equal(t, int32(2), <-partition)
 }
@@ -79,7 +79,7 @@ func TestAsyncCallbackStopsWithClient(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- producer.AsyncRunCallback(context.Background()) }()
+	go func() { done <- producer.AsyncRunCallback(t.Context()) }()
 	client.Close()
 
 	select {
@@ -102,7 +102,7 @@ func TestFactoryCloseUnblocksPromise(t *testing.T) {
 		resultCh:     make(chan asyncProduceResult, 1),
 	}
 	producer.resultCh <- asyncProduceResult{}
-	require.NoError(t, producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{}))
+	require.NoError(t, producer.AsyncSend(t.Context(), "topic", 0, &codecCommon.Message{}))
 	require.Equal(t, int64(1), client.BufferedProduceRecords())
 
 	factory.Close()
@@ -130,18 +130,18 @@ func TestAsyncCallbackOnce(t *testing.T) {
 
 	var calls atomic.Int32
 	called := make(chan struct{}, 10)
-	message := &codeccommon.Message{
+	message := &codecCommon.Message{
 		Value: []byte("value"),
 		Callback: func() {
 			calls.Add(1)
 			called <- struct{}{}
 		},
 	}
-	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, message))
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, message))
 	require.Eventually(t, func() bool { return producer.client.BufferedProduceRecords() == 0 }, time.Second, time.Millisecond)
 	require.Zero(t, calls.Load())
 
-	callbackCtx, cancel := context.WithCancel(context.Background())
+	callbackCtx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- producer.AsyncRunCallback(callbackCtx) }()
 
@@ -176,19 +176,19 @@ func TestAsyncCallbackIsolation(t *testing.T) {
 	callbackStarted := make(chan struct{})
 	releaseCallback := make(chan struct{})
 	secondCallback := make(chan struct{})
-	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, &codeccommon.Message{
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, &codecCommon.Message{
 		Value: []byte("first"),
 		Callback: func() {
 			close(callbackStarted)
 			<-releaseCallback
 		},
 	}))
-	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, &codeccommon.Message{
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, &codecCommon.Message{
 		Value:    []byte("second"),
 		Callback: func() { close(secondCallback) },
 	}))
 
-	callbackCtx, cancel := context.WithCancel(context.Background())
+	callbackCtx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- producer.AsyncRunCallback(callbackCtx) }()
 	select {
@@ -234,13 +234,13 @@ func TestAsyncProduceFailure(t *testing.T) {
 	defer producer.Close()
 
 	var callbackCalled atomic.Bool
-	message := &codeccommon.Message{
+	message := &codecCommon.Message{
 		Value:    []byte("value"),
 		Callback: func() { callbackCalled.Store(true) },
 	}
-	require.NoError(t, producer.AsyncSend(context.Background(), topic, 0, message))
+	require.NoError(t, producer.AsyncSend(t.Context(), topic, 0, message))
 
-	callbackCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	callbackCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	err = producer.AsyncRunCallback(callbackCtx)
@@ -260,12 +260,12 @@ func TestBufferBackpressure(t *testing.T) {
 	t.Cleanup(client.Close)
 	t.Cleanup(producer.Close)
 
-	require.NoError(t, producer.AsyncSend(context.Background(), "topic", 0, &codeccommon.Message{Value: make([]byte, 10)}))
+	require.NoError(t, producer.AsyncSend(t.Context(), "topic", 0, &codecCommon.Message{Value: make([]byte, 10)}))
 	require.Equal(t, int64(1), client.BufferedProduceRecords())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- producer.AsyncSend(ctx, "topic", 0, &codeccommon.Message{Value: make([]byte, 10)}) }()
+	go func() { done <- producer.AsyncSend(ctx, "topic", 0, &codecCommon.Message{Value: make([]byte, 10)}) }()
 
 	select {
 	case <-done:

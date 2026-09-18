@@ -684,10 +684,7 @@ func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFe
 	}
 	options.MaxMessageBytes = maxMessageBytes
 
-	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
-		return err
-	}
-	return nil
+	return options.setPartitionNum(changefeedID, info.NumPartitions)
 }
 
 func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID common.ChangeFeedID, options *options) {

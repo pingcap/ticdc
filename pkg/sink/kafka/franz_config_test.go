@@ -15,7 +15,6 @@
 package kafka
 
 import (
-	"context"
 	"crypto/tls"
 	"io"
 	"net/http"
@@ -286,9 +285,9 @@ func TestFranzOAuth(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		_, _, err = mechanism.Authenticate(context.Background(), "")
+		_, _, err = mechanism.Authenticate(t.Context(), "")
 		require.NoError(t, err)
-		_, _, err = mechanism.Authenticate(context.Background(), "")
+		_, _, err = mechanism.Authenticate(t.Context(), "")
 		require.NoError(t, err)
 
 		form := <-request
@@ -310,7 +309,7 @@ func TestFranzOAuth(t *testing.T) {
 		mechanism, err := buildOAuthMechanism(t.Context(), oauth2Config{tokenURL: server.URL})
 		require.NoError(t, err)
 
-		_, _, err = mechanism.Authenticate(context.Background(), "")
+		_, _, err = mechanism.Authenticate(t.Context(), "")
 		require.ErrorIs(t, err, errors.ErrNewKafkaSink)
 		var retrieveErr *oauth2.RetrieveError
 		require.ErrorAs(t, err, &retrieveErr)

@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
@@ -35,7 +35,7 @@ type asyncProducer struct {
 
 type asyncProduceResult struct {
 	callback func()
-	logInfo  *codeccommon.MessageLogInfo
+	logInfo  *codecCommon.MessageLogInfo
 	err      error
 }
 
@@ -49,7 +49,7 @@ func (p *asyncProducer) Close() {
 		zap.String("changefeed", p.changefeedID.Name()))
 }
 
-func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codeccommon.Message) error {
+func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}

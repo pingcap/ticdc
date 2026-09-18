@@ -15,9 +15,10 @@
 package kafka
 
 import (
+	"cmp"
 	"context"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -30,7 +31,7 @@ import (
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	client       *kgo.Client
-	closeOnce    sync.Once
+	closed       atomic.Bool
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
@@ -69,10 +70,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		return nil, errors.WrapError(errors.ErrNewKafkaSink, err)
 	}
 
-	compression := strings.ToLower(strings.TrimSpace(o.Compression))
-	if compression == "" {
-		compression = "none"
-	}
+	compression := cmp.Or(strings.ToLower(strings.TrimSpace(o.Compression)), "none")
 
 	log.Info("kafka sink configuration resolved",
 		zap.String("keyspace", changefeedID.Keyspace()),
@@ -117,12 +115,13 @@ func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
 }
 
 func (f *franzFactory) Close() {
-	f.closeOnce.Do(func() {
-		if f.client != nil {
-			f.client.Close()
-		}
-		cleanupMetrics(f.changefeedID)
-	})
+	if !f.closed.CompareAndSwap(false, true) {
+		return
+	}
+	if f.client != nil {
+		f.client.Close()
+	}
+	cleanupMetrics(f.changefeedID)
 }
 
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {

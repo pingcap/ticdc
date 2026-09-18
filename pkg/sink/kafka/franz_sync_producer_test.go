@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -33,10 +33,10 @@ func TestSyncProducerClosed(t *testing.T) {
 	producer := &syncProducer{}
 	producer.closed.Store(true)
 
-	err := producer.SendMessage(t.Context(), "topic", 1, &codeccommon.Message{})
+	err := producer.SendMessage(t.Context(), "topic", 1, &codecCommon.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 
-	err = producer.SendMessages(t.Context(), "topic", 1, &codeccommon.Message{})
+	err = producer.SendMessages(t.Context(), "topic", 1, &codecCommon.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSinkClosed)
 }
 
@@ -69,12 +69,12 @@ func TestSyncProducerPartitions(t *testing.T) {
 	}
 	defer producer.Close()
 
-	require.NoError(t, producer.SendMessage(t.Context(), topic, 2, &codeccommon.Message{Key: []byte("key"), Value: []byte("value")}))
+	require.NoError(t, producer.SendMessage(t.Context(), topic, 2, &codecCommon.Message{Key: []byte("key"), Value: []byte("value")}))
 	mu.Lock()
 	require.Equal(t, []int32{2}, partitions)
 	partitions = nil
 	mu.Unlock()
-	require.NoError(t, producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("all")}))
+	require.NoError(t, producer.SendMessages(t.Context(), topic, 3, &codecCommon.Message{Value: []byte("all")}))
 	mu.Lock()
 	slices.Sort(partitions)
 	require.Equal(t, []int32{0, 1, 2}, partitions)
@@ -100,7 +100,7 @@ func TestSyncProducerPartialFailure(t *testing.T) {
 	}
 	defer producer.Close()
 
-	err = producer.SendMessages(t.Context(), topic, 3, &codeccommon.Message{Value: []byte("value")})
+	err = producer.SendMessages(t.Context(), topic, 3, &codecCommon.Message{Value: []byte("value")})
 	requireKafkaSendError(t, err, kerr.InvalidTopicException)
 }
 
@@ -118,7 +118,7 @@ func TestSyncProducerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err = producer.SendMessage(ctx, "topic", 0, &codeccommon.Message{})
+	err = producer.SendMessage(ctx, "topic", 0, &codecCommon.Message{})
 	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
 	require.ErrorIs(t, err, context.Canceled)
 }
