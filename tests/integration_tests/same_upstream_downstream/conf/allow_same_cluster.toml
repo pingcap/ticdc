@@ -1,13 +1,15 @@
 # This changefeed writes to the upstream cluster itself, which is only allowed because
-# `allow-same-cluster` is set. The sink writes into `allow_same_cluster.t2`, which is not
-# matched by the filter, so the changefeed cannot capture its own writes.
+# `allow-same-cluster` is set.
+#
+# Table routing maps `allow_same_cluster_src.t1` to `allow_same_cluster_dst.t1_routed`,
+# which is not matched by the filter, so the changefeed cannot capture its own writes.
 allow-same-cluster = true
 
 [filter]
-rules = ['allow_same_cluster.t1']
+rules = ['allow_same_cluster_src.*']
 
 [sink]
 [[sink.dispatchers]]
-matcher = ['allow_same_cluster.t1']
-target-schema = 'allow_same_cluster'
-target-table = 't2'
+matcher = ['allow_same_cluster_src.t1']
+target-schema = 'allow_same_cluster_dst'
+target-table = '{table}_routed'

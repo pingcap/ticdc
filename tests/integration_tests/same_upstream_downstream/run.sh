@@ -59,13 +59,16 @@ function run() {
 	fi
 
 	# 4) Create is allowed when the changefeed config sets `allow-same-cluster`, as long as the
-	# changefeed cannot capture its own writes: the sink writes to the same cluster, but into a
-	# table which is not matched by the filter.
-	allow_same_cluster_db="allow_same_cluster"
+	# changefeed cannot capture its own writes. The sink writes into the upstream cluster, but
+	# table routing maps the source table into another schema, which is not matched by the filter.
 	allow_same_cluster_id="allow-same-cluster"
-	run_sql "create database $allow_same_cluster_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "create table $allow_same_cluster_db.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "create table $allow_same_cluster_db.t2 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	src_db="allow_same_cluster_src"
+	dst_db="allow_same_cluster_dst"
+	dst_table="t1_routed"
+	run_sql "create database $src_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create database $dst_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create table $src_db.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create table $dst_db.$dst_table (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 		--config="$CUR/conf/allow_same_cluster.toml" -c "$allow_same_cluster_id" 2>&1 || true)
@@ -75,19 +78,19 @@ function run() {
 		exit 1
 	fi
 
-	run_sql "insert into $allow_same_cluster_db.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "insert into $src_db.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	count=0
 	for _ in $(seq 1 60); do
 		count=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -N \
-			-e "select count(*) from $allow_same_cluster_db.t2" 2>/dev/null || echo 0)
+			-e "select count(*) from $dst_db.$dst_table" 2>/dev/null || echo 0)
 		if [ "$count" == "2" ]; then
 			break
 		fi
 		sleep 2
 	done
 	if [ "$count" != "2" ]; then
-		echo "Expected 2 rows in $allow_same_cluster_db.t2 of the upstream cluster, got: $count"
+		echo "Expected 2 rows in $dst_db.$dst_table of the upstream cluster, got: $count"
 		exit 1
 	fi
 
