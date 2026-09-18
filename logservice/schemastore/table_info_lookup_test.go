@@ -15,10 +15,8 @@
 package schemastore
 
 import (
-	"context"
 	"fmt"
 	"testing"
-	"testing/synctest"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -120,25 +118,6 @@ func TestGetTableInfoAtTs(t *testing.T) {
 			require.ErrorIs(t, err, errors.ErrSnapshotLostByGC)
 		})
 	}
-}
-
-func TestGetTableInfoAtTsCancelsPendingRegistration(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		store := newEmptyVersionedTableInfoStore(100)
-		storage := &persistentStorage{
-			tableInfoStoreMap: map[int64]*versionedTableInfoStore{100: store},
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		done := make(chan error, 1)
-		go func() {
-			_, err := storage.getTableInfoAtTsWithContext(ctx, 100, 10)
-			done <- err
-		}()
-		synctest.Wait()
-		cancel()
-		require.ErrorIs(t, <-done, context.Canceled)
-	})
 }
 
 func TestGetTableInfoAtTsReadsOnlyLatestSchema(t *testing.T) {

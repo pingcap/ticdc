@@ -262,7 +262,7 @@ func (p *persistentStorage) initializeFromDisk() {
 
 	var err error
 	if p.databaseMap, err = loadDatabasesInKVSnapWithEncryption(
-		context.Background(), storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
+		storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load database info from disk failed")
 	}
 
@@ -300,13 +300,6 @@ func (p *persistentStorage) close() error {
 // getAllPhysicalTables returns all physical tables in the snapshot
 // caller must ensure current resolve ts is larger than snapTs
 func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
-	return p.getAllPhysicalTablesWithContext(context.Background(), snapTs, tableFilter)
-}
-
-func (p *persistentStorage) getAllPhysicalTablesWithContext(ctx context.Context, snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	storageSnap := p.db.NewSnapshot()
 	defer storageSnap.Close()
 
@@ -327,7 +320,7 @@ func (p *persistentStorage) getAllPhysicalTablesWithContext(ctx context.Context,
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(ctx, storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
 }
 
 // only return when table info is initialized
@@ -385,22 +378,11 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 // getTableInfoAtTs reads the table schema at ts without
 // reconstructing every retained version for tables without local dispatchers.
 func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.TableInfo, error) {
-	return p.getTableInfoAtTsWithContext(context.Background(), tableID, ts)
-}
-
-func (p *persistentStorage) getTableInfoAtTsWithContext(ctx context.Context, tableID int64, ts uint64) (*common.TableInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	p.mu.RLock()
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
-		select {
-		case <-ctx.Done():
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
-		case <-store.readyToRead:
-			return store.getTableInfo(ts)
-		}
+		store.waitTableInfoInitialized()
+		return store.getTableInfo(ts)
 	}
 	gcTs := p.gcTs
 	if ts < gcTs {
@@ -420,9 +402,6 @@ func (p *persistentStorage) getTableInfoAtTsWithContext(ctx context.Context, tab
 	}()
 
 	for _, version := range slices.Backward(history) {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
 		event := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
 		handler := allDDLHandlers[model.ActionType(event.Type)]
 		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)

@@ -137,7 +137,7 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 	var err error
 	switch req.Operation {
 	case messaging.SchemaStoreRegisterKeyspace:
-		err = s.RegisterKeyspace(ctx, req.Keyspace)
+		err = s.registerRequestKeyspace(ctx, req.Keyspace)
 	case messaging.SchemaStoreGetAllPhysicalTables:
 		var f filter.Filter
 		f, err = filter.NewFilter(req.Filter, "", req.CaseSensitive, req.ForceReplicate)
@@ -145,7 +145,9 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 			var store *keyspaceSchemaStore
 			store, err = s.acquireRequestStore(ctx, req)
 			if err == nil {
-				resp.Tables, err = store.dataStorage.getAllPhysicalTablesWithContext(ctx, req.Ts, f)
+				// Existing storage calls are synchronous. Cancellation suppresses
+				// their response but does not interrupt an in-progress scan.
+				resp.Tables, err = store.dataStorage.getAllPhysicalTables(req.Ts, f)
 				store.release()
 			}
 		}
@@ -169,19 +171,72 @@ func (s *schemaStore) handleRequest(ctx context.Context, from node.ID, req *mess
 	}
 }
 
+// Request registration uses the service lifetime without changing the existing
+// RegisterKeyspace API. Once started, registration completes even if its caller
+// cancels; only the response is discarded.
+func (s *schemaStore) registerRequestKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {
+	if err := ctx.Err(); err != nil {
+		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	if err := s.requestCtx.Err(); err != nil {
+		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	if err := s.RegisterKeyspace(s.requestCtx, keyspaceMeta); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	return nil
+}
+
+func (s *schemaStore) acquireRequestKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	s.keyspaceLocker.RLock()
+	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
+	if ok && !store.acquire() {
+		ok = false
+	}
+	s.keyspaceLocker.RUnlock()
+	if ok {
+		return store, nil
+	}
+
+	if err := s.registerRequestKeyspace(ctx, keyspaceMeta); err != nil {
+		return nil, err
+	}
+	return s.acquireKeyspaceSchemaStore(keyspaceMeta)
+}
+
 // acquireRequestStore waits with the request context, independently of the
 // keyspace lifetime, so a stalled resolved ts cannot retain a worker forever.
 func (s *schemaStore) acquireRequestStore(ctx context.Context, req *messaging.SchemaStoreRequest) (*keyspaceSchemaStore, error) {
-	store, err := s.acquireKeyspaceSchemaStoreWithContext(ctx, req.Keyspace)
+	store, err := s.acquireRequestKeyspace(ctx, req.Keyspace)
 	if err != nil {
 		return nil, err
 	}
-	if !store.waitResolvedTs(ctx, 0, req.Ts, 10*time.Second) {
-		store.release()
-		if err := ctx.Err(); err != nil {
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	var storeDone <-chan struct{}
+	if store.ctx != nil {
+		storeDone = store.ctx.Done()
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for store.resolvedTs.Load() < req.Ts {
+		select {
+		case <-ctx.Done():
+			store.release()
+			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
+		case <-storeDone:
+			store.release()
+			return nil, errors.ErrKeyspaceNotFound.GenWithStackByArgs(req.Keyspace.ID)
+		case <-ticker.C:
 		}
-		return nil, errors.ErrKeyspaceNotFound.GenWithStackByArgs(req.Keyspace.ID)
+	}
+	if err := ctx.Err(); err != nil {
+		store.release()
+		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
 	}
 	return store, nil
 }
@@ -202,7 +257,7 @@ func (s *schemaStore) getTableInfosBatch(ctx context.Context, req *messaging.Sch
 		}
 		item := messaging.SchemaStoreTableInfo{TableID: tableID}
 		var info *common.TableInfo
-		info, err = store.dataStorage.getTableInfoAtTsWithContext(ctx, tableID, req.Ts)
+		info, err = store.dataStorage.getTableInfoAtTs(tableID, req.Ts)
 		if err == nil {
 			if info == nil {
 				return nil, false, errors.ErrSchemaStoreRequestFailed.GenWithStack("table info is nil for table %d", tableID)

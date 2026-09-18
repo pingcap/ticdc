@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -178,51 +177,44 @@ func TestSchemaStoreRequestCancellation(t *testing.T) {
 	}
 }
 
-func TestSchemaStoreDiscoveryCancellationDuringScan(t *testing.T) {
-	for _, point := range []string{"onScanPhysicalTable", "onFilterPhysicalTable"} {
-		t.Run(point, func(t *testing.T) {
-			mc := mock.NewMockMessageCenter(gomock.NewController(t))
-			mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
-			store := newRequestTestStore(t, mc, 1)
-			storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")},
-				tables: []*model.TableInfo{
-					newEligibleTableInfoForTest(100, "t1"),
-					newEligibleTableInfoForTest(101, "t2"),
-				},
-			}})
-			ks := &keyspaceSchemaStore{dataStorage: storage}
-			ks.resolvedTs.Store(100)
-			store.keyspaceSchemaStoreMap[1] = ks
-			visited := 0
-			point = "github.com/pingcap/ticdc/logservice/schemastore/" + point
-			require.NoError(t, failpoint.EnableCall(point, func() {
-				visited++
-				if visited == 1 {
-					require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
-						&messaging.SchemaStoreRequest{RequestID: 1, Operation: messaging.SchemaStoreCancelRequest})))
-				}
-			}))
-			t.Cleanup(func() { require.NoError(t, failpoint.Disable(point)) })
-			responses := make(chan *messaging.SchemaStoreResponse, 2)
-			mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
-				responses <- msg.Message[0].(*messaging.SchemaStoreResponse)
-				return nil
-			})
-			req := testRequest(1, messaging.SchemaStoreGetAllPhysicalTables, 1)
-			req.Filter = config.NewDefaultFilterConfig()
-			require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic, req)))
-			require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
-				testRequest(2, messaging.SchemaStoreRegisterKeyspace, 7))))
-			select {
-			case resp := <-responses:
-				require.Equal(t, uint64(2), resp.RequestID, "cancellation must free the worker for the next request")
-				require.Contains(t, resp.Error, "keyspace")
-				require.Equal(t, 1, visited, "cancellation must stop scanning or filtering subsequent tables")
-			case <-time.After(10 * time.Second):
-				t.Fatal("canceled discovery did not release the request worker")
-			}
-		})
+func TestSchemaStoreDiscoveryDiscardsCanceledResponse(t *testing.T) {
+	mc := mock.NewMockMessageCenter(gomock.NewController(t))
+	mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
+	store := newRequestTestStore(t, mc, 1)
+	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
+		dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")},
+		tables: []*model.TableInfo{newEligibleTableInfoForTest(100, "t1")},
+	}})
+	ks := &keyspaceSchemaStore{dataStorage: storage}
+	ks.resolvedTs.Store(100)
+	store.keyspaceSchemaStoreMap[1] = ks
+	// Pause the existing synchronous read after it has opened its snapshot.
+	storage.mu.Lock()
+	releaseRead := sync.OnceFunc(storage.mu.Unlock)
+	t.Cleanup(releaseRead)
+	responses := make(chan *messaging.SchemaStoreResponse, 1)
+	mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+		responses <- msg.Message[0].(*messaging.SchemaStoreResponse)
+		return nil
+	})
+	req := testRequest(1, messaging.SchemaStoreGetAllPhysicalTables, 1)
+	req.Filter = config.NewDefaultFilterConfig()
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic, req)))
+	require.Eventually(t, func() bool { return storage.db.Metrics().Snapshots.Count > 0 }, time.Second, time.Millisecond)
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		&messaging.SchemaStoreRequest{RequestID: 1, Operation: messaging.SchemaStoreCancelRequest})))
+	require.NoError(t, store.handleMessage(t.Context(), messaging.NewSingleTargetMessage("store", messaging.SchemaStoreTopic,
+		testRequest(2, messaging.SchemaStoreRegisterKeyspace, 7))))
+	require.Empty(t, responses)
+	// Cancellation does not interrupt storage. Once that read finishes, its
+	// response is discarded and the worker can process the queued request.
+	releaseRead()
+	select {
+	case resp := <-responses:
+		require.Equal(t, uint64(2), resp.RequestID)
+		require.Contains(t, resp.Error, "keyspace")
+	case <-time.After(time.Second):
+		t.Fatal("request worker did not continue after the storage read finished")
 	}
 }
 
@@ -269,7 +261,7 @@ func TestSchemaStoreRequestQueueLimitAndClose(t *testing.T) {
 		t.Fatal("closing the pool did not release schema requests")
 	}
 	require.ErrorIs(t, store.submitRequest(t.Context(), schemaRequestKey{}, testRequest(1001, messaging.SchemaStoreRegisterKeyspace, 2)), context.Canceled)
-	require.True(t, errors.ErrSchemaStoreRequestFailed.Equal(store.RegisterKeyspace(t.Context(), common.KeyspaceMeta{ID: 2})))
+	require.ErrorIs(t, store.registerRequestKeyspace(t.Context(), common.KeyspaceMeta{ID: 2}), context.Canceled)
 }
 
 func TestSchemaStoreResponseDelivery(t *testing.T) {
@@ -395,11 +387,19 @@ func TestSchemaStoreRequests(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A successful registration transfers ownership to the service. Cancellation
-// during initialization must instead close its context and leave no store behind.
+// Request registration always uses the service lifetime. Canceling a request
+// does not change storage initialization or directly registered keyspaces.
 func TestSchemaStoreRegistrationLifetime(t *testing.T) {
-	for _, cancelInit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "successful registration", true: "canceled initialization"}[cancelInit], func(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		cancelInit bool
+		direct     bool
+	}{
+		{name: "successful request registration"},
+		{name: "request canceled during registration", cancelInit: true},
+		{name: "direct registration retains caller lifetime", direct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mc := mock.NewMockMessageCenter(ctrl)
 			mc.EXPECT().DeRegisterHandler(messaging.SchemaStoreTopic).AnyTimes()
@@ -418,7 +418,7 @@ func TestSchemaStoreRegistrationLifetime(t *testing.T) {
 			requestCtx, cancelRequest := context.WithCancel(t.Context())
 			defer cancelRequest()
 			manager.EXPECT().GetStorage(gomock.Any(), meta.Name).DoAndReturn(func(context.Context, string) (kv.Storage, error) {
-				if cancelInit {
+				if test.cancelInit {
 					cancelRequest()
 				}
 				return kvStore, nil
@@ -429,18 +429,31 @@ func TestSchemaStoreRegistrationLifetime(t *testing.T) {
 				}
 				return 100, nil
 			}
-			err = store.RegisterKeyspace(requestCtx, meta)
-			if cancelInit {
-				require.Error(t, err)
-				require.NotContains(t, store.keyspaceSchemaStoreMap, meta.ID)
+			if test.direct {
+				err = store.RegisterKeyspace(requestCtx, meta)
+			} else {
+				err = store.registerRequestKeyspace(requestCtx, meta)
+			}
+			if test.cancelInit {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Contains(t, store.keyspaceSchemaStoreMap, meta.ID)
+			ks := store.keyspaceSchemaStoreMap[meta.ID]
+			if test.direct {
+				store.requestCancel()
+				require.NoError(t, ks.ctx.Err(), "the request service must not own a directly registered keyspace")
+				cancelRequest()
+				require.ErrorIs(t, ks.ctx.Err(), context.Canceled)
+				require.ErrorIs(t, ks.dataStorage.ctx.Err(), context.Canceled)
+				require.NoError(t, store.Close(context.Background()))
 				return
 			}
-			require.NoError(t, err)
-			ks := store.keyspaceSchemaStoreMap[meta.ID]
 			cancelRequest()
 			require.NoError(t, ks.ctx.Err())
 			require.NoError(t, ks.dataStorage.ctx.Err())
-			acquired, err := store.acquireKeyspaceSchemaStoreWithContext(t.Context(), meta)
+			acquired, err := store.acquireRequestKeyspace(t.Context(), meta)
 			require.NoError(t, err)
 			require.Same(t, ks, acquired)
 			acquired.release()

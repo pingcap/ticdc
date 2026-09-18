@@ -153,7 +153,7 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 	select {
 	case <-ctx.Done():
 		// Cancellation bypasses the worker pool. If delivery fails, the deadline
-		// carried by the original request still bounds server work.
+		// carried by the original request still expires queued work and responses.
 		_ = c.mc.SendCommand(messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreTopic,
 			&messaging.SchemaStoreRequest{RequestID: req.RequestID, Operation: messaging.SchemaStoreCancelRequest}))
 		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())

@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -248,14 +247,11 @@ func writeUpperBoundMeta(db *pebble.DB, upperBound UpperBoundMeta) {
 }
 
 func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*BasicDatabaseInfo, error) {
-	return loadDatabasesInKVSnapWithEncryption(context.Background(), snap, gcTs, nil, 0)
+	return loadDatabasesInKVSnapWithEncryption(snap, gcTs, nil, 0)
 }
 
 // loadDatabasesInKVSnapWithEncryption decrypts and loads databases from snapshot if encryption is enabled
-func loadDatabasesInKVSnapWithEncryption(ctx context.Context, snap *pebble.Snapshot, gcTs uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) (map[int64]*BasicDatabaseInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
+func loadDatabasesInKVSnapWithEncryption(snap *pebble.Snapshot, gcTs uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) (map[int64]*BasicDatabaseInfo, error) {
 	databaseMap := make(map[int64]*BasicDatabaseInfo)
 
 	startKey, err := schemaInfoKey(gcTs, 0)
@@ -275,9 +271,6 @@ func loadDatabasesInKVSnapWithEncryption(ctx context.Context, snap *pebble.Snaps
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
 		value := snapIter.Value()
 
 		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
@@ -308,11 +301,10 @@ func loadTablesInKVSnapWithEncryption(
 	keyspaceID uint32,
 ) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	return loadTablesInKVSnapWithEncryptionAndCallback(
-		context.Background(), snap, gcTs, databaseMap, encMgr, keyspaceID, nil)
+		snap, gcTs, databaseMap, encMgr, keyspaceID, nil)
 }
 
 func loadTablesInKVSnapWithEncryptionAndCallback(
-	ctx context.Context,
 	snap *pebble.Snapshot,
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
@@ -320,9 +312,6 @@ func loadTablesInKVSnapWithEncryptionAndCallback(
 	keyspaceID uint32,
 	onTable func(schemaName string, tableInfo *model.TableInfo),
 ) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
 
@@ -343,12 +332,6 @@ func loadTablesInKVSnapWithEncryptionAndCallback(
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
-		failpoint.Inject("onScanPhysicalTable", func() {
-			failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/onScanPhysicalTable")
-		})
 		value := snapIter.Value()
 		value, err = decryptValueIfNeeded(snapIter.Key(), value, encMgr, keyspaceID)
 		if err != nil {
@@ -383,9 +366,6 @@ func loadTablesInKVSnapWithEncryptionAndCallback(
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
 			for _, partition := range tableInfo.Partition.Definitions {
-				if err := ctx.Err(); err != nil {
-					return nil, nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-				}
 				partitionInfo[partition.ID] = nil
 			}
 			partitionsInKVSnap[tableInfo.ID] = partitionInfo
@@ -987,7 +967,6 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 // table metadata, while the versioned store keeps the physical ID so that the
 // DDL extractors can match the per-partition DDL history correctly.
 func loadPhysicalTableTraitsAtTs(
-	ctx context.Context,
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
 	snapVersion uint64,
@@ -997,17 +976,11 @@ func loadPhysicalTableTraitsAtTs(
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
 ) (physicalTableTraits, error) {
-	if err := ctx.Err(); err != nil {
-		return physicalTableTraits{}, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	store := newEmptyVersionedTableInfoStore(physicalTableID)
 	if err := addTableInfoFromKVSnap(store, gcTs, storageSnap, encMgr, keyspaceID); err != nil {
 		return physicalTableTraits{}, err
 	}
 	for _, version := range ddlHistory {
-		if err := ctx.Err(); err != nil {
-			return physicalTableTraits{}, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
 		ddlEvent := readPersistedDDLEventWithEncryption(storageSnap, version, encMgr, keyspaceID)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
@@ -1020,7 +993,6 @@ func loadPhysicalTableTraitsAtTs(
 }
 
 func loadAllPhysicalTablesAtTs(
-	ctx context.Context,
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
 	snapVersion uint64,
@@ -1028,19 +1000,16 @@ func loadAllPhysicalTablesAtTs(
 	encMgr encryption.EncryptionManager,
 	keyspaceID uint32,
 ) ([]commonEvent.Table, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	// Replay all DDLs to reconstruct the table metadata before applying the
 	// table filter to the final physical table list.
-	databaseMap, err := loadDatabasesInKVSnapWithEncryption(ctx, storageSnap, gcTs, encMgr, keyspaceID)
+	databaseMap, err := loadDatabasesInKVSnapWithEncryption(storageSnap, gcTs, encMgr, keyspaceID)
 	if err != nil {
 		return nil, err
 	}
 
 	tableTraits := make(map[int64]physicalTableTraits)
 	tableMap, partitionMap, err := loadTablesInKVSnapWithEncryptionAndCallback(
-		ctx, storageSnap, gcTs, databaseMap, encMgr, keyspaceID,
+		storageSnap, gcTs, databaseMap, encMgr, keyspaceID,
 		func(_ string, tableInfo *model.TableInfo) {
 			tableTraits[tableInfo.ID] = physicalTableTraitsFromTiDBTableInfo(tableInfo, tableFilter)
 		})
@@ -1072,9 +1041,6 @@ func loadAllPhysicalTablesAtTs(
 	tablesDDLHistory := make(map[int64][]uint64)
 	tableTriggerDDLHistory := make([]uint64, 0)
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
 		ddlValue := snapIter.Value()
 		ddlValue, err = decryptValueIfNeeded(snapIter.Key(), ddlValue, encMgr, keyspaceID)
 		if err != nil {
@@ -1109,12 +1075,6 @@ func loadAllPhysicalTablesAtTs(
 		zap.Int("partitionMapLen", len(partitionMap)))
 	tables := make([]commonEvent.Table, 0)
 	for tableID, tableInfo := range tableMap {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-		}
-		failpoint.Inject("onFilterPhysicalTable", func() {
-			failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/onFilterPhysicalTable")
-		})
 		if _, ok := databaseMap[tableInfo.SchemaID]; !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", tableInfo.SchemaID),
@@ -1138,7 +1098,7 @@ func loadAllPhysicalTablesAtTs(
 		ddlHistory := tablesDDLHistory[physicalTableID]
 		if !ok || len(ddlHistory) > 0 {
 			traits, err = loadPhysicalTableTraitsAtTs(
-				ctx, storageSnap, gcTs, snapVersion, physicalTableID, ddlHistory,
+				storageSnap, gcTs, snapVersion, physicalTableID, ddlHistory,
 				tableFilter, encMgr, keyspaceID)
 			if err != nil {
 				return nil, err
@@ -1162,9 +1122,6 @@ func loadAllPhysicalTablesAtTs(
 		splitable := traits.splitable
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
-				if err := ctx.Err(); err != nil {
-					return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-				}
 				tables = append(tables, commonEvent.Table{
 					SchemaID:  tableInfo.SchemaID,
 					TableID:   partitionID,
@@ -1189,8 +1146,5 @@ func loadAllPhysicalTablesAtTs(
 	}
 	log.Info("loadAllPhysicalTablesAtTs",
 		zap.Int("tableLen", len(tables)))
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	return tables, nil
 }

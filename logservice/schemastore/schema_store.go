@@ -299,7 +299,7 @@ func (s *keyspaceSchemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 
 // TODO: use notify instead of sleep
 // waitResolvedTs will wait until the schemaStore resolved ts is greater than or equal to ts.
-func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64, ts uint64, logInterval time.Duration) bool {
+func (s *keyspaceSchemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) bool {
 	start := time.Now()
 	lastLogTime := time.Now()
 	var done <-chan struct{}
@@ -316,8 +316,6 @@ func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64,
 			return true
 		}
 		select {
-		case <-ctx.Done():
-			return false
 		case <-done:
 			return false
 		case <-ticker.C:
@@ -381,13 +379,6 @@ func (s *schemaStore) Name() string {
 // acquireKeyspaceSchemaStore returns a store with its lifecycle read lock held.
 // The caller must call store.release when it no longer accesses the store.
 func (s *schemaStore) acquireKeyspaceSchemaStore(keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
-	return s.acquireKeyspaceSchemaStoreWithContext(context.Background(), keyspaceMeta)
-}
-
-func (s *schemaStore) acquireKeyspaceSchemaStoreWithContext(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	s.keyspaceLocker.RLock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	if ok && !store.acquire() {
@@ -397,6 +388,8 @@ func (s *schemaStore) acquireKeyspaceSchemaStoreWithContext(ctx context.Context,
 	if ok {
 		return store, nil
 	}
+
+	ctx := context.Background()
 
 	if err := s.RegisterKeyspace(ctx, keyspaceMeta); err != nil {
 		return nil, err
@@ -439,7 +432,7 @@ func (s *schemaStore) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *schemaStore) Close(_ context.Context) error {
+func (s *schemaStore) Close(ctx context.Context) error {
 	if s.mc != nil {
 		s.mc.DeRegisterHandler(messaging.SchemaStoreTopic)
 	}
@@ -501,7 +494,7 @@ func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, sna
 	}
 	defer store.release()
 
-	if !store.waitResolvedTs(context.Background(), 0, snapTs, 10*time.Second) {
+	if !store.waitResolvedTs(0, snapTs, 10*time.Second) {
 		return nil, errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 	}
 	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
@@ -514,7 +507,7 @@ func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID in
 	}
 	defer store.release()
 
-	if !store.waitResolvedTs(context.Background(), tableID, startTs, 5*time.Second) {
+	if !store.waitResolvedTs(tableID, startTs, 5*time.Second) {
 		return errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 	}
 	metrics.SchemaStoreResolvedRegisterTableGauge.Inc()
@@ -548,7 +541,7 @@ func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int
 	defer func() {
 		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
-	if !store.waitResolvedTs(context.Background(), tableID, ts, 2*time.Second) {
+	if !store.waitResolvedTs(tableID, ts, 2*time.Second) {
 		return nil, errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 	}
 	return store.dataStorage.getTableInfo(tableID, ts)
@@ -642,25 +635,8 @@ func (s *schemaStore) RegisterKeyspace(
 	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 ) error {
-	lifetimeCtx := s.requestCtx
-	if lifetimeCtx == nil {
-		lifetimeCtx = context.Background()
-	}
-	return s.registerKeyspace(ctx, lifetimeCtx, keyspaceMeta)
-}
-
-func (s *schemaStore) registerKeyspace(ctx, lifetimeCtx context.Context, keyspaceMeta common.KeyspaceMeta) error {
-	if err := ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
-	if s.requestCtx != nil && s.requestCtx.Err() != nil {
-		return errors.ErrSchemaStoreRequestFailed.GenWithStack("schema store is closed")
-	}
-	if err := ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
 	// If the keyspace has already been registered
 	// No need to register again
 	if _, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]; ok {
@@ -676,11 +652,7 @@ func (s *schemaStore) registerKeyspace(ctx, lifetimeCtx context.Context, keyspac
 		return err
 	}
 
-	storeCtx, cancel := context.WithCancel(lifetimeCtx)
-	// Initialization follows the request; after success the keyspace only follows
-	// the service lifetime. Stopping the callback transfers that ownership.
-	stopInitCancellation := context.AfterFunc(ctx, cancel)
-	defer stopInitCancellation()
+	storeCtx, cancel := context.WithCancel(ctx)
 	// The schema store initialization needs two guarantees:
 	// 1. the snapshot at gcSafePoint is still readable;
 	// 2. the DDL history after that snapshot is not GC'ed before the local
@@ -746,11 +718,6 @@ func (s *schemaStore) registerKeyspace(ctx, lifetimeCtx context.Context, keyspac
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
 		}
 		return err
-	}
-	if !stopInitCancellation() || ctx.Err() != nil {
-		_ = store.close()
-		_ = closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper)
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
 	}
 	store.dataStorage.run()
 	store.runWg.Add(1)
