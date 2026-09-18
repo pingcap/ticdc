@@ -2210,6 +2210,10 @@ func TestExchangeDMLRouting(t *testing.T) {
 						Query: job.Query, SchemaName: "normal_db", TableName: "nt", ExtraSchemaName: "partition_db", ExtraTableName: "pt",
 						DispatcherID: mock.id, Epoch: 1, Seq: 2,
 						BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{normal.TableID, partitionID, common.DDLSpanTableID}},
+						// The schema store describes the state of the physical table that
+						// fetched the event, so the collector can apply it without knowing
+						// the DDL type.
+						TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: tc.physical, Kind: commonEvent.TableStateUpdated},
 					}
 					// A remote DDL carries the same table identity as a local DDL.
 					if !local {
@@ -2249,25 +2253,68 @@ func TestExchangeDMLRouting(t *testing.T) {
 	}
 }
 
-func TestExchangeCacheGuard(t *testing.T) {
-	old := &common.TableInfo{TableName: common.TableName{TableID: 100}}
-	next := &common.TableInfo{TableName: common.TableName{TableID: 200}}
+func TestUpdateTableInfoByDDLStateChange(t *testing.T) {
+	current := &common.TableInfo{TableName: common.TableName{TableID: 100}}
+	updated := &common.TableInfo{TableName: common.TableName{TableID: 101}}
+	unrelated := &common.TableInfo{TableName: common.TableName{TableID: 200}}
+
 	for _, tc := range []struct {
-		name    string
-		blocked *commonEvent.InfluencedTables
+		name string
+		ddl  *commonEvent.DDLEvent
+		// stored is the table info the dispatcher must cache after the DDL.
+		// nil means the cached table info must stay unchanged.
+		stored *common.TableInfo
 	}{
-		{"missing", nil},
-		{"database", &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeDB, SchemaID: 1}},
-		{"other span", &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{201, 202}}},
+		{
+			name: "updated state replaces the cached table info",
+			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated}},
+			stored: updated,
+		},
+		{
+			name: "updated state for another physical table is ignored",
+			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 102, Kind: commonEvent.TableStateUpdated}},
+		},
+		{
+			name: "unchanged state keeps the cached table info",
+			ddl: &commonEvent.DDLEvent{TableInfo: unrelated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUnchanged}},
+		},
+		{
+			name: "deleted state keeps the cached table info",
+			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateDeleted}},
+		},
+		{
+			name: "updated state without table info is ignored",
+			ddl: &commonEvent.DDLEvent{FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated}},
+		},
+		{
+			name:   "event without state keeps the legacy identity check",
+			ddl:    &commonEvent.DDLEvent{TableInfo: current, FinishedTs: 10},
+			stored: current,
+		},
+		{
+			name: "event without state for another table is ignored",
+			ddl:  &commonEvent.DDLEvent{TableInfo: unrelated, FinishedTs: 10},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := newMockDispatcher(common.NewDispatcherID(), 0)
 			mock.tableSpan = &heartbeatpb.TableSpan{TableID: 101}
 			stat := newDispatcherStatForTest(mock, nil)
-			stat.tableInfo.Store(old)
-			stat.updateTableInfoByDDL(&commonEvent.DDLEvent{Type: byte(model.ActionExchangeTablePartition), TableInfo: next, BlockedTables: tc.blocked, FinishedTs: 10})
-			require.Same(t, old, stat.tableInfo.Load())
+			stat.tableInfo.Store(current)
+
+			stat.updateTableInfoByDDL(tc.ddl)
+
 			require.Equal(t, uint64(10), stat.tableInfoVersion.Load())
+			if tc.stored == nil {
+				require.Same(t, current, stat.tableInfo.Load())
+			} else {
+				require.Same(t, tc.stored, stat.tableInfo.Load())
+			}
 		})
 	}
 }

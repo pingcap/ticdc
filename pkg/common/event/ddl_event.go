@@ -33,6 +33,33 @@ const (
 
 var _ Event = &DDLEvent{}
 
+// TableStateChangeKind describes how a DDL changes the schema state of one
+// physical table.
+type TableStateChangeKind uint8
+
+const (
+	// TableStateUnchanged means the DDL does not change the table's schema.
+	TableStateUnchanged TableStateChangeKind = iota
+	// TableStateUpdated means the DDL changes the table's schema. The post-DDL
+	// table info is carried by DDLEvent.TableInfo.
+	TableStateUpdated
+	// TableStateDeleted means the DDL deletes the table.
+	TableStateDeleted
+)
+
+// TableStateChange describes the post-DDL state of the physical table that
+// fetched the DDL event. The schema store attaches it to events fetched for
+// one table dispatcher, so the receiver can update the dispatcher's cached
+// schema without knowing the DDL type. It stays nil for table trigger events.
+type TableStateChange struct {
+	// PhysicalTableID is the physical table ID of the dispatcher that fetched
+	// the event.
+	PhysicalTableID int64 `json:"physical_table_id"`
+	// Kind is the state transition. When it is TableStateUpdated,
+	// DDLEvent.TableInfo is the post-DDL table info of PhysicalTableID.
+	Kind TableStateChangeKind `json:"kind"`
+}
+
 type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      int                 `json:"version"`
@@ -67,6 +94,11 @@ type DDLEvent struct {
 	// MultipleTableInfos holds information for multiple versions of a table.
 	// The first entry always represents the current table information.
 	MultipleTableInfos []*common.TableInfo `json:"-"`
+
+	// TableStateChange is set when the schema store fetches the event for one
+	// physical table dispatcher. It is nil for table trigger events and for
+	// events produced by a schema store that does not attach the state yet.
+	TableStateChange *TableStateChange `json:"table_state_change,omitempty"`
 
 	BlockedTables *InfluencedTables `json:"blocked_tables"`
 	// BlockedTableNames is used by downstream adapters to get the names of tables that should block this DDL.
@@ -568,6 +600,9 @@ func NewRoutedDDLEvent(
 		BlockedTableNames:  blockedTableNames,
 		// The following fields do not participate in table route name rewriting,
 		// so the routed event keeps the original values from the source event.
+		// TableStateChange carries no name; its TableInfo is DDLEvent.TableInfo,
+		// which is already routed above.
+		TableStateChange:  d.TableStateChange,
 		BlockedTables:     d.BlockedTables,
 		NeedDroppedTables: d.NeedDroppedTables,
 		NeedAddedTables:   d.NeedAddedTables,

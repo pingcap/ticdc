@@ -446,7 +446,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
-		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, tableID)
+		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -894,13 +894,47 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
-// for the corresponding dispatcher.
-// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
 	}
-	return handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	return handler
+}
+
+// NOTE: tableID is only used in fetchTableDDLEvents to fetch rename tables DDL
+// for the corresponding dispatcher.
+// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	return getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+}
+
+// buildTableDDLEvent builds the DDL event fetched for one physical table
+// dispatcher and attaches the state of that table after the DDL.
+//
+// extractTableInfoFunc is the single source of truth for how a DDL changes a
+// physical table: it drives both the versioned table info store and the table
+// state carried by the event. When it returns a table info, the event carries
+// that info as DDLEvent.TableInfo, so the event collector can replace the
+// dispatcher's cached table info with the event's own table info without
+// knowing the DDL type.
+func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	handler := getDDLHandler(rawEvent)
+	ddlEvent, ok, err := handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	tableInfo, deleted := handler.extractTableInfoFunc(rawEvent, tableID)
+	change := &commonEvent.TableStateChange{PhysicalTableID: tableID}
+	switch {
+	case tableInfo != nil:
+		change.Kind = commonEvent.TableStateUpdated
+		ddlEvent.TableInfo = tableInfo
+	case deleted:
+		change.Kind = commonEvent.TableStateDeleted
+	default:
+		change.Kind = commonEvent.TableStateUnchanged
+	}
+	ddlEvent.TableStateChange = change
+	return ddlEvent, true, nil
 }
