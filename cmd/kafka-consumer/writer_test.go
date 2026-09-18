@@ -31,6 +31,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// drainResolvePipeline waits until everything submitted to the resolve pipeline
+// reached the sink.
+func drainResolvePipeline(t *testing.T, w *writer) {
+	t.Helper()
+	resume := w.pipeline.pause(context.Background())
+	resume()
+}
+
+// newTestWriter builds a writer whose resolve pipeline is running, so tests
+// exercise the same path the consumer runs.
+func newTestWriter(t *testing.T, w *writer) *writer {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.pipeline = newPipeline(w)
+	w.pipeline.run(ctx)
+	t.Cleanup(w.pipeline.stop)
+	t.Cleanup(cancel)
+	return w
+}
+
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	t.Helper()
 
@@ -38,7 +59,11 @@ func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	s := sinkmock.NewMockSink(ctrl)
 	ddls := make([]string, 0)
 
-	s.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	// Behave like a sink that applies immediately: the resolve pipeline waits for
+	// the flush callback before it acknowledges a batch.
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		event.PostFlush()
+	}).AnyTimes()
 	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
 		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
 			ddls = append(ddls, ddl.Query)
@@ -60,12 +85,12 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	//    watermark catching up.
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
 		},
 		mysqlSink: s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
@@ -99,10 +124,10 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
@@ -152,10 +177,10 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `test`.`t2` LIKE `test`.`t1`",
@@ -196,10 +221,10 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -289,12 +314,12 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   0,
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:  []*partitionProgress{p},
 		mysqlSink:   s,
 		eventRouter: eventRouter,
 		protocol:    config.ProtocolOpen,
-	}
+	})
 
 	for _, item := range []struct {
 		message *codeccommon.DMLMessage
@@ -311,6 +336,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
+	// The resolve pipeline applies events off the read loop, so drain it before
+	// checking what the sink received.
+	drainResolvePipeline(t, w)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
 	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
 }
@@ -358,7 +386,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	unrelatedGroup := util.NewEventsGroup(1, unrelatedTableID)
 	require.NoError(t, unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other")))
 
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			{
 				partition: 0,
@@ -377,7 +405,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 		},
 		mysqlSink:              s,
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-	}
+	})
 	w.partitionTableAccessor.Add("test", "members")
 
 	err := w.flushDDLEvent(context.Background(), &commonEvent.DDLEvent{
@@ -413,13 +441,13 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		watermark:   20,
 		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:      []*partitionProgress{progress},
 		mysqlSink:       s,
 		protocol:        config.ProtocolOpen,
 		maxBatchSize:    64,
 		maxMessageBytes: 1,
-	}
+	})
 
 	needCommit, err := w.WriteMessage(ctx, &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
@@ -440,14 +468,14 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			progress,
 			{partition: 1, watermark: 5},
 		},
 		eventRouter: eventRouter,
 		protocol:    config.ProtocolOpen,
-	}
+	})
 
 	message := newDMLMessageForWriterTest(10)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, kafka.Offset(10)))
@@ -464,12 +492,12 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, true)
 	require.NoError(t, err)
 
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
 		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-	}
+	})
 
 	ddl := &commonEvent.DDLEvent{
 		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
@@ -523,12 +551,12 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 			require.NoError(t, err)
 
-			w := &writer{
+			w := newTestWriter(t, &writer{
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,
 				partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-			}
+			})
 
 			w.partitionTableAccessor.Add("target", "src")
 			ddl := &commonEvent.DDLEvent{

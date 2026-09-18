@@ -241,10 +241,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	if o.enableParallelResolve {
-		w.pipeline = newPipeline(w)
-		log.Info("resolve pipeline enabled")
-	}
+	w.pipeline = newPipeline(w)
 	return w
 }
 
@@ -259,7 +256,7 @@ type pendingCommit struct {
 // takeCommittableMessages returns the resolved messages whose events are known
 // to be applied, and forgets them. It is only called by the read loop.
 func (w *writer) takeCommittableMessages() []*kafka.Message {
-	if w.pipeline == nil || len(w.pendingCommits) == 0 {
+	if len(w.pendingCommits) == 0 {
 		return nil
 	}
 	applied := w.pipeline.appliedWatermark()
@@ -277,18 +274,13 @@ func (w *writer) takeCommittableMessages() []*kafka.Message {
 }
 
 func (w *writer) run(ctx context.Context) error {
-	if w.pipeline != nil {
-		w.pipeline.run(ctx)
-	}
+	w.pipeline.run(ctx)
 	return w.mysqlSink.Run(ctx)
 }
 
 // stopPipeline waits for the resolve pipeline to return, so the spill store is
 // not released while a resolve is still in flight.
 func (w *writer) stopPipeline() {
-	if w.pipeline == nil {
-		return
-	}
 	w.pipeline.stop()
 }
 
@@ -317,10 +309,8 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	// The DDL flush uses the sink itself, so the resolve pipeline has to be
 	// quiesced first: otherwise it could submit events of the blocked tables
 	// after the DDL was executed.
-	if w.pipeline != nil {
-		resume := w.pipeline.pause(ctx)
-		defer resume()
-	}
+	resume := w.pipeline.pause(ctx)
+	defer resume()
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
 	start := time.Now()
@@ -568,10 +558,8 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 // return error if flush messages failed.
 func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
 	w.maybeLogStats()
-	if w.pipeline != nil {
-		if err := w.pipeline.err(); err != nil {
-			return false, err
-		}
+	if err := w.pipeline.err(); err != nil {
+		return false, err
 	}
 
 	var (
@@ -595,17 +583,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		newWatermark := progress.decoder.NextResolvedEvent()
 		progress.updateWatermark(newWatermark, offset)
 		w.publishWatermark()
-		if w.pipeline != nil {
-			// The offset may only be committed once the events up to this
-			// watermark reached the downstream, so record it as pending.
-			w.pendingCommits = append(w.pendingCommits, pendingCommit{
-				message:   message,
-				watermark: newWatermark,
-			})
-			w.pipeline.request()
-			return false, nil
-		}
-		needFlush = true
+		// The offset may only be committed once the events up to this watermark
+		// reached the downstream, so record it as pending.
+		w.pendingCommits = append(w.pendingCommits, pendingCommit{
+			message:   message,
+			watermark: newWatermark,
+		})
+		w.pipeline.request()
+		return false, nil
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
 		// Consider that DDL a, b, c received from partition-0, the latest DDL is c,
@@ -702,11 +687,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		return w.Write(ctx, messageType)
 	}
 	if !wasDraining && w.getSpillStore().ShouldDrain() {
-		if w.pipeline != nil {
-			w.pipeline.request()
-		} else if err := w.flushDMLEventsByWatermark(ctx); err != nil {
-			return false, err
-		}
+		w.pipeline.request()
 	}
 	return false, nil
 }
@@ -766,11 +747,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) (boo
 
 	if messageType == common.MessageTypeResolved {
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		if w.pipeline != nil {
-			w.pipeline.request()
-		} else if err := w.flushDMLEventsByWatermark(ctx); err != nil {
-			return false, err
-		}
+		w.pipeline.request()
 	}
 
 	w.ddlList = ddlList
