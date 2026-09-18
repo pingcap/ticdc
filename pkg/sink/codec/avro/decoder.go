@@ -410,9 +410,10 @@ func avroData2Columns(
 		data[colName] = value
 
 		tiCol := &timodel.ColumnInfo{
-			ID:    int64(idx),
-			Name:  ast.NewCIStr(colName),
-			State: timodel.StatePublic,
+			ID:     int64(idx),
+			Offset: idx,
+			Name:   ast.NewCIStr(colName),
+			State:  timodel.StatePublic,
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
@@ -445,16 +446,19 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	for _, col := range columns {
 		if _, ok := keyMap[col.Name.O]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name: col.Name,
+				Name:   col.Name,
+				Offset: col.Offset,
 			})
 		}
 	}
 	tidbTableInfo.Indices = []*timodel.IndexInfo{{
 		Primary: true,
+		Unique:  true,
 		Name:    ast.NewCIStr("primary"),
 		Columns: indexColumns,
 		State:   timodel.StatePublic,
 	}}
+	commonType.SetHandleKeyFlags(tidbTableInfo)
 	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
 

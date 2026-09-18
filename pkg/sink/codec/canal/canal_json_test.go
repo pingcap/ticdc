@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -1476,4 +1477,47 @@ func TestTableInfoFromMessageKeepsPrimaryKeyAsRowLocator(t *testing.T) {
 	require.NotNil(t, pkCol)
 	require.Equal(t, "id", pkCol.Name.O)
 	require.Equal(t, 1, pkCol.Offset)
+}
+
+// TestTableInfoFromMessageLocatesRowByPrimaryKey checks the contract between the
+// decoder and the MySQL sink: the sink builds the WHERE clause of an UPDATE from
+// the table info handle key, so a composite primary key must resolve to all of
+// its columns. Before the handle flags and column offsets were fixed, the
+// alphabetically first column (s_data here, because the decoder sorts columns by
+// name) was used instead, which made every UPDATE scan the whole table.
+func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
+	tableIDAllocator.Clean()
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
+	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:  "test",
+			Table:   "stock",
+			PKNames: []string{"s_i_id", "s_w_id"},
+			MySQLType: map[string]string{
+				"s_data":     "varchar(50)",
+				"s_i_id":     "int",
+				"s_quantity": "int",
+				"s_w_id":     "int",
+			},
+		},
+		Extensions: &tidbExtension{CommitTs: 100},
+	})
+
+	columns := tableInfo.GetColumns()
+	preValues := make([]interface{}, 0, len(columns))
+	postValues := make([]interface{}, 0, len(columns))
+	for _, column := range columns {
+		preValues = append(preValues, "pre_"+column.Name.O)
+		postValues = append(postValues, "post_"+column.Name.O)
+	}
+
+	change := sqlmodel.NewRowChange(
+		&tableInfo.TableName, nil, preValues, postValues, tableInfo, tableInfo, nil)
+	sql, args := change.GenSQL(sqlmodel.DMLUpdate)
+
+	require.Contains(t, sql, "WHERE `s_i_id` = ? AND `s_w_id` = ?")
+	require.Equal(t, []interface{}{"pre_s_i_id", "pre_s_w_id"}, args[len(args)-2:])
 }

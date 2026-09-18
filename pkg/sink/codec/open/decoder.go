@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -397,9 +396,7 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	columns := newTiColumns(rawColumns)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns)
-	if len(tableInfo.Indices) != 0 {
-		tableInfo.PKIsHandle = true
-	}
+	commonType.SetHandleKeyFlags(tableInfo)
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 
@@ -428,6 +425,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		raw := pair.column
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
+		col.Offset = int(nextColumnID)
 		col.Name = ast.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
@@ -478,39 +476,27 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 }
 
 func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
-	indices := make([]*timodel.IndexInfo, 0, 1)
+	indices := make([]*timodel.IndexInfo, 0, 2)
+	primaryColumns := make([]*timodel.IndexColumn, 0, 2)
 	multiColumns := make([]*timodel.IndexColumn, 0, 2)
 
-	// make columns sorted by id, to make indices for different row in table be same
-	sort.Slice(columns, func(i, j int) bool {
-		return columns[i].ID < columns[j].ID
-	})
-
 	for idx, col := range columns {
-		if mysql.HasPriKeyFlag(col.GetFlag()) {
-			indexColumns := make([]*timodel.IndexColumn, 0)
-			indexColumns = append(indexColumns, &timodel.IndexColumn{
+		switch {
+		case mysql.HasPriKeyFlag(col.GetFlag()):
+			primaryColumns = append(primaryColumns, &timodel.IndexColumn{
 				Name:   col.Name,
 				Offset: idx,
 			})
+		case mysql.HasUniKeyFlag(col.GetFlag()):
 			indices = append(indices, &timodel.IndexInfo{
-				ID:      1,
-				Name:    ast.NewCIStr("primary"),
-				Columns: indexColumns,
-				Primary: true,
-				Unique:  true,
-			})
-		} else if mysql.HasUniKeyFlag(col.GetFlag()) {
-			indexColumns := make([]*timodel.IndexColumn, 0)
-			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name:   col.Name,
-				Offset: idx,
-			})
-			indices = append(indices, &timodel.IndexInfo{
-				ID:      1 + int64(len(indices)),
-				Name:    ast.NewCIStr(col.Name.O + "_idx"),
-				Columns: indexColumns,
-				Unique:  true,
+				ID:   1 + int64(len(indices)),
+				Name: ast.NewCIStr(col.Name.O + "_idx"),
+				Columns: []*timodel.IndexColumn{{
+					Name:   col.Name,
+					Offset: idx,
+				}},
+				Unique: true,
+				State:  timodel.StatePublic,
 			})
 		}
 		if mysql.HasMultipleKeyFlag(col.GetFlag()) {
@@ -520,6 +506,18 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
+	// One primary index over the whole key: one index per primary key column
+	// would make the row locator look like a set of single column keys.
+	if len(primaryColumns) != 0 {
+		indices = append(indices, &timodel.IndexInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("primary"),
+			Columns: primaryColumns,
+			Primary: true,
+			Unique:  true,
+			State:   timodel.StatePublic,
+		})
+	}
 	// if there are multiple multi-column indices, consider as one.
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
@@ -527,6 +525,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			Name:    ast.NewCIStr("multi_idx"),
 			Columns: multiColumns,
 			Unique:  false,
+			State:   timodel.StatePublic,
 		})
 	}
 	return indices

@@ -502,6 +502,36 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return ti.HasPKOrNotNullUK
 }
 
+// SetHandleKeyFlags records how the primary key is stored as the row handle,
+// mirroring TiDB's table info: a single integer primary key column is the row
+// handle (PKIsHandle), any other primary key is a common handle. Callers that
+// locate a row by the handle key - the MySQL sink's WHERE clause for example -
+// read the key from these flags, so a composite primary key must not be reported
+// as PKIsHandle: doing so makes them fall back to a single column of the table.
+func SetHandleKeyFlags(tableInfo *model.TableInfo) {
+	var primary *model.IndexInfo
+	for _, index := range tableInfo.Indices {
+		if index.Primary {
+			primary = index
+			break
+		}
+	}
+	if primary == nil {
+		return
+	}
+
+	if len(primary.Columns) == 1 {
+		name := primary.Columns[0].Name.L
+		for _, column := range tableInfo.Columns {
+			if column.Name.L == name && mysql.IsIntegerType(column.GetType()) {
+				tableInfo.PKIsHandle = true
+				return
+			}
+		}
+	}
+	tableInfo.IsCommonHandle = true
+}
+
 func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	// If the table has primary key, it is eligible.
 	// the PKIsHandle can not handle all primary key cases, for example:

@@ -190,6 +190,6 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	columns := newTiColumns(msg)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-	setHandleKeyFlags(tableInfo)
+	commonType.SetHandleKeyFlags(tableInfo)
 	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }

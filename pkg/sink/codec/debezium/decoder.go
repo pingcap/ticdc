@@ -362,7 +362,9 @@ func queryTableInfoFromPayload(
 		Columns: indexColumns,
 		Unique:  true,
 		Primary: true,
+		State:   timodel.StatePublic,
 	})
+	commonType.SetHandleKeyFlags(tidbTableInfo)
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 	return result
 }
