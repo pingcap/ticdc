@@ -199,3 +199,19 @@ type Decoder interface {
 	// NextDDLEvent returns the next DDL event if exists
 	NextDDLEvent() *commonEvent.DDLEvent
 }
+
+// SchemaStateDecoder is implemented by decoders that can hand out a second
+// decoder sharing the schema state they learned from the DDLs they decoded.
+//
+// The read loop decodes the Kafka stream with one decoder while the spill
+// restore decodes spilled payloads on the resolve pipeline. The two must not
+// share an input cursor, because a codec decoder holds the cursor of the input
+// it is decoding, but the restore needs the table info the read loop decoded
+// from an earlier DDL: a payload names its table info by version, and only the
+// decoder that saw the DDL can resolve it.
+type SchemaStateDecoder interface {
+	// NewRestoreDecoder returns a decoder that shares the schema state of this
+	// decoder and has an input cursor of its own. Callers use it to restore
+	// spilled payloads only, never to decode the stream itself.
+	NewRestoreDecoder() Decoder
+}

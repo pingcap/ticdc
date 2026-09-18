@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -486,6 +487,10 @@ func TestSchemaFile(t *testing.T) {
 func TestSchemaFileGenFilePath(t *testing.T) {
 	t.Parallel()
 
+	// The checksums below are the names already written schema files carry, so a
+	// change to the checksum changes where the files of an upgraded changefeed
+	// live. A schema file without columns must keep marshalling its columns as []
+	// rather than null for that reason.
 	dbSchemaFile := &SchemaFile{
 		Schema:       "schema1",
 		Version:      defaultSchemaFileVersion,
@@ -539,4 +544,21 @@ func TestSchemaFileChecksum(t *testing.T) {
 		newChecksum := newSchemaFile.Checksum()
 		require.Equal(t, checksum1, newChecksum)
 	}
+}
+
+// TestTableInfoLocatesRowByPrimaryKey checks the table info rebuilt from a schema
+// file: a composite primary key must stay the handle key, because that is what
+// the MySQL sink locates rows by.
+func TestTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	schemaFile := &SchemaFile{
+		Schema: "test",
+		Table:  "t",
+		Columns: []TableCol{
+			{Name: "a", Tp: "int", IsPK: "true"},
+			{Name: "b", Tp: "int", IsPK: "true"},
+			{Name: "c", Tp: "varchar"},
+		},
+	}
+
+	codecCommon.RequireRowLocatorByPrimaryKey(t, schemaFile.TableInfo(), "a", "b")
 }

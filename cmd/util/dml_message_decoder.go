@@ -13,29 +13,45 @@
 
 package util
 
-import codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+import (
+	"sync"
+
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+)
 
 // DMLMessageDataFactory creates data shared by DML messages decoded from one
 // input. It is called lazily when the decoder first returns a DML message.
-type DMLMessageDataFactory func(codeccommon.Decoder, []byte, []byte) *codeccommon.DMLMessageData
+type DMLMessageDataFactory func(codecCommon.Decoder, []byte, []byte) *codecCommon.DMLMessageData
 
 // DMLMessageDecoder attaches spill data to DML messages as they are decoded.
 // It keeps raw input only until EventsGroup has written it to the spill file.
 type DMLMessageDecoder struct {
-	codeccommon.Decoder
+	codecCommon.Decoder
 
 	key, value []byte
-	data       *codeccommon.DMLMessageData
+	data       *codecCommon.DMLMessageData
 	factory    DMLMessageDataFactory
-	restorer   *codeccommon.DMLMessageRestorer
+	restorer   *codecCommon.DMLMessageRestorer
 	share      bool
 	position   int64
+
+	// restoreDecoderFactory builds the decoder of the restore path, and
+	// restoreDecoder is the instance it built. A codec decoder holds the cursor
+	// of the input it is decoding: the read loop writes an input into Decoder and
+	// reads it back, so a spilled payload must not be restored with Decoder when
+	// the resolve pipeline restores it on another goroutine. The restore decoder
+	// is built on first use, and restoreMu serializes the restores of the resolve
+	// pipeline and of a DDL flush.
+	restoreDecoderFactory func() (codecCommon.Decoder, error)
+	restoreMu             sync.Mutex
+	restoreDecoder        codecCommon.Decoder
 }
 
 // NewDMLMessageDecoder wraps a decoder with the standard raw-message restorer.
-func NewDMLMessageDecoder(decoder codeccommon.Decoder) *DMLMessageDecoder {
+func NewDMLMessageDecoder(decoder codecCommon.Decoder) *DMLMessageDecoder {
 	d := NewDMLMessageDecoderWithDataFactory(decoder,
-		func(decoder codeccommon.Decoder, key, value []byte) *codeccommon.DMLMessageData {
+		func(decoder codecCommon.Decoder, key, value []byte) *codecCommon.DMLMessageData {
 			return NewDMLMessageData(decoder, key, value)
 		})
 	d.share = true
@@ -45,9 +61,24 @@ func NewDMLMessageDecoder(decoder codeccommon.Decoder) *DMLMessageDecoder {
 // NewDMLMessageDecoderWithDataFactory is for decoders such as CSV whose
 // restore decoder must be constructed from the input value.
 func NewDMLMessageDecoderWithDataFactory(
-	decoder codeccommon.Decoder, factory DMLMessageDataFactory,
+	decoder codecCommon.Decoder, factory DMLMessageDataFactory,
 ) *DMLMessageDecoder {
 	return &DMLMessageDecoder{Decoder: decoder, factory: factory}
+}
+
+// NewDMLMessageDecoderWithRestoreFactory wraps a decoder whose spilled payloads
+// are restored with a decoder of their own, built by the factory on the first
+// restore. Master restored payloads in the read loop, so the restore could reuse
+// the decoder that decoded the input; the resolve pipeline restores on its own
+// goroutine while the read loop keeps decoding, and one codec decoder keeps the
+// cursor of the input it decodes, so the restore path needs its own.
+func NewDMLMessageDecoderWithRestoreFactory(
+	decoder codecCommon.Decoder, restoreDecoderFactory func() (codecCommon.Decoder, error),
+) *DMLMessageDecoder {
+	d := NewDMLMessageDecoderWithDataFactory(decoder, nil)
+	d.share = true
+	d.restoreDecoderFactory = restoreDecoderFactory
+	return d
 }
 
 // SetSourcePosition records broker-specific source metadata, such as a Kafka
@@ -57,7 +88,7 @@ func (d *DMLMessageDecoder) SetSourcePosition(position int64) {
 	d.position = position
 }
 
-// AddKeyValue implements codeccommon.Decoder.
+// AddKeyValue implements codecCommon.Decoder.
 func (d *DMLMessageDecoder) AddKeyValue(key, value []byte) {
 	d.Decoder.AddKeyValue(key, value)
 	d.SetRawMessage(key, value)
@@ -71,8 +102,8 @@ func (d *DMLMessageDecoder) SetRawMessage(key, value []byte) {
 	d.data = nil
 }
 
-// NextDMLMessage implements codeccommon.Decoder.
-func (d *DMLMessageDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+// NextDMLMessage implements codecCommon.Decoder.
+func (d *DMLMessageDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	message := d.Decoder.NextDMLMessage()
 	if message != nil {
 		d.attachDMLMessage(message)
@@ -80,9 +111,9 @@ func (d *DMLMessageDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 	return message
 }
 
-func (d *DMLMessageDecoder) attachDMLMessage(message *codeccommon.DMLMessage) {
+func (d *DMLMessageDecoder) attachDMLMessage(message *codecCommon.DMLMessage) {
 	if d.data == nil {
-		d.data = d.factory(d.Decoder, d.key, d.value)
+		d.data = d.newDMLMessageData()
 		if d.share {
 			if d.restorer == nil {
 				d.restorer = d.data.Restorer
@@ -95,18 +126,48 @@ func (d *DMLMessageDecoder) attachDMLMessage(message *codeccommon.DMLMessage) {
 	d.data.AttachDMLMessage(message)
 }
 
+// newDMLMessageData builds the spill data of the input that is being decoded.
+// The restore closure it installs is called wherever the payload is resolved,
+// which is not necessarily the goroutine that decoded the input.
+func (d *DMLMessageDecoder) newDMLMessageData() *codecCommon.DMLMessageData {
+	if d.restoreDecoderFactory == nil {
+		return d.factory(d.Decoder, d.key, d.value)
+	}
+	return codecCommon.NewDMLMessageData(d.key, d.value, d.restorePayload)
+}
+
+// restorePayload decodes one spilled payload with the decoder of the restore
+// path, built on first use and kept for the next payload.
+func (d *DMLMessageDecoder) restorePayload(data []byte) ([]*codecCommon.DMLMessage, error) {
+	key, value, err := unmarshalDMLMessageData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	d.restoreMu.Lock()
+	defer d.restoreMu.Unlock()
+	if d.restoreDecoder == nil {
+		decoder, err := d.restoreDecoderFactory()
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrSpillFileOp, err, "create DML restore decoder")
+		}
+		d.restoreDecoder = decoder
+	}
+	return restoreDMLMessages(d.restoreDecoder, key, value)
+}
+
 // AttachCachedDMLMessage attaches data to a materialized DML message from
 // Simple's DDL cache. It has no raw row payload to restore.
-func (d *DMLMessageDecoder) AttachCachedDMLMessage(message *codeccommon.DMLMessage) {
-	data := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+func (d *DMLMessageDecoder) AttachCachedDMLMessage(message *codecCommon.DMLMessage) {
+	data := codecCommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		})
 	data.SourcePosition = d.position
 	data.AttachDMLMessage(message)
 }
 
 // Unwrap returns the decoder that produces protocol messages.
-func (d *DMLMessageDecoder) Unwrap() codeccommon.Decoder {
+func (d *DMLMessageDecoder) Unwrap() codecCommon.Decoder {
 	return d.Decoder
 }

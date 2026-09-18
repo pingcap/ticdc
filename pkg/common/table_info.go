@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -500,6 +501,28 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 		return true
 	}
 	return ti.HasPKOrNotNullUK
+}
+
+// SetHandleKeyFlags records how the primary key is stored as the row handle,
+// mirroring TiDB's table info: a single integer primary key column is the row
+// handle (PKIsHandle), any other primary key is a common handle. Callers that
+// locate a row by the handle key - the MySQL sink's WHERE clause for example -
+// read the key from these flags, so a composite primary key must not be reported
+// as PKIsHandle: doing so makes them fall back to a single column of the table.
+func SetHandleKeyFlags(tableInfo *model.TableInfo) {
+	primary := tables.FindPrimaryIndex(tableInfo)
+	if primary == nil {
+		return
+	}
+
+	if len(primary.Columns) == 1 {
+		column := model.FindColumnInfo(tableInfo.Columns, primary.Columns[0].Name.L)
+		if column != nil && mysql.IsIntegerType(column.GetType()) {
+			tableInfo.PKIsHandle = true
+			return
+		}
+	}
+	tableInfo.IsCommonHandle = true
 }
 
 func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {

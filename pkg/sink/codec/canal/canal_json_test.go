@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -1234,6 +1235,7 @@ func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 	tableIDAllocator.Clean()
 	dec := &decoder{
+		tableInfoMu:    new(sync.RWMutex),
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}
@@ -1415,4 +1417,64 @@ func TestRowKey(t *testing.T) {
 	expectedRowKey := tablecodec.EncodeRowKeyWithHandle(tableInfo.TableName.TableID, kv.IntHandle(1))
 	expected := base64.StdEncoding.EncodeToString(expectedRowKey)
 	require.Equal(t, expected, tidb_ext.Rowkey)
+}
+
+// TestTableInfoFromMessageLocatesRowByPrimaryKey checks the contract between the
+// decoder and the MySQL sink: the sink builds the WHERE clause of an UPDATE from
+// the table info handle key, so a composite primary key must resolve to all of
+// its columns. Before the handle flags and column offsets were fixed, the
+// alphabetically first column (s_data here, because the decoder sorts columns by
+// name) was used instead, which made every UPDATE scan the whole table.
+func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
+	tableIDAllocator.Clean()
+	dec := &decoder{
+		tableInfoMu:    new(sync.RWMutex),
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
+	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:  "test",
+			Table:   "stock",
+			PKNames: []string{"s_i_id", "s_w_id"},
+			MySQLType: map[string]string{
+				"s_data":     "varchar(50)",
+				"s_i_id":     "int",
+				"s_quantity": "int",
+				"s_w_id":     "int",
+			},
+		},
+		Extensions: &tidbExtension{CommitTs: 100},
+	})
+
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
+}
+
+// TestRestoreDecoderSharesTableInfo pins the schema state sharing of the spill
+// restore: the read loop's decoder stores the table info of the DDLs it decoded,
+// and the restore decoder, which never sees those DDLs, resolves the table info
+// a spilled DML message names.
+func TestRestoreDecoderSharesTableInfo(t *testing.T) {
+	dec, err := NewDecoder(t.Context(), common.NewConfig(config.ProtocolCanalJSON), nil)
+	require.NoError(t, err)
+	read := dec.(*decoder)
+
+	key := tableKey{schema: "test", table: "t", ddlCommitTs: 10}
+	tableInfo := &commonType.TableInfo{
+		TableName: commonType.TableName{Schema: "test", Table: "t", TableID: 1},
+		UpdateTS:  10,
+	}
+	read.tableInfoCache[key] = tableInfo
+
+	restore := read.NewRestoreDecoder().(*decoder)
+	require.NotSame(t, read, restore, "the restore decodes with a cursor of its own")
+	require.Equal(t, tableInfo, restore.tableInfoCache[key], "the restore shares the table info")
+	require.Same(t, read.tableInfoMu, restore.tableInfoMu, "the schema state lock is shared")
+
+	// A table id the read loop allocated for a DDL blocks the tables of the DDL
+	// for the restore as well.
+	read.tableInfoMu.Lock()
+	read.ddlCommitTs[tableNameKey{schema: "test", table: "t"}] = []uint64{10}
+	read.tableInfoMu.Unlock()
+	require.Equal(t, []uint64{10}, restore.ddlCommitTs[tableNameKey{schema: "test", table: "t"}])
 }

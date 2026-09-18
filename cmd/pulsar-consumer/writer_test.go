@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -81,7 +81,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, *ddls)
 	require.Empty(t, w.ddlList)
@@ -127,12 +127,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -173,12 +173,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, *ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -256,7 +256,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -291,7 +291,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		protocol:   config.ProtocolCanalJSON,
 	}
 
-	for _, message := range []*codeccommon.DMLMessage{
+	for _, message := range []*codecCommon.DMLMessage{
 		newDMLMessageForWriterTest(20),
 		newDMLMessageForWriterTest(10),
 		newDMLMessageForWriterTest(20),
@@ -300,7 +300,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}
 
 	p.watermark = 20
-	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	needCommit, err := w.Write(ctx, codecCommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
@@ -372,7 +372,7 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 			{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)},
 		},
 		protocol:               config.ProtocolCanalJSON,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
 	}
 
 	ddl := &commonEvent.DDLEvent{
@@ -446,7 +446,7 @@ func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	require.Len(t, resolved, 0)
 
 	progress.watermark = 100
-	needCommit, err = w.Write(ctx, codeccommon.MessageTypeResolved)
+	needCommit, err = w.Write(ctx, codecCommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
 	require.Equal(t, 2, decoder.addKeyValueCount)
@@ -476,19 +476,19 @@ func (d *deferredDMLDecoder) AddKeyValue(_, value []byte) {
 	d.pending = true
 }
 
-func (d *deferredDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
+func (d *deferredDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
 	d.hasNextCount++
-	return codeccommon.MessageTypeRow, d.pending
+	return codecCommon.MessageTypeRow, d.pending
 }
 
 func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *deferredDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	d.nextDMLMessageCount++
 	d.pending = false
-	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	return codecCommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 		d.toDMLEventCount++
 		return d.row
 	})
@@ -498,8 +498,8 @@ func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+func newDMLMessageForWriterTest(commitTs uint64) *codecCommon.DMLMessage {
+	return codecCommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			StartTs:         commitTs - 1,
@@ -513,10 +513,10 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	})
 }
 
-func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+func attachDMLMessageDataForWriterTest(message *codecCommon.DMLMessage) *codecCommon.DMLMessage {
+	messageData := codecCommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)
