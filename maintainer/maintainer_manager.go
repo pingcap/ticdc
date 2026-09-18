@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,6 +33,12 @@ import (
 const (
 	defaultManagerHeartbeatInterval = 200 * time.Millisecond
 )
+
+// NodeResourceUsageProvider exposes exact process-wide counters used by the
+// scheduler. Implementations must not depend on Prometheus metric collection.
+type NodeResourceUsageProvider interface {
+	EventStoreWriteBytes() uint64
+}
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
 // start a Manager when the ticdc server is startup. It responsible for:
@@ -52,6 +59,9 @@ type Manager struct {
 	heartbeatCh chan struct{}
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
 	node *managerNodeState
+	// nodeResourceUsage is the cluster snapshot shared by every local maintainer.
+	nodeResourceUsage     *replica.NodeResourceUsageTracker
+	resourceUsageProvider NodeResourceUsageProvider
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
 	writeGate   *writelease.Gate
@@ -66,6 +76,7 @@ func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 	nodeLiveness *liveness.Liveness,
+	resourceUsageProvider NodeResourceUsageProvider,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	heartbeatCh := make(chan struct{}, 1)
@@ -73,14 +84,17 @@ func NewMaintainerManager(
 	if !ok {
 		writeGate = writelease.NewGate()
 	}
+	nodeResourceUsage := replica.NewNodeResourceUsageTracker()
 	m := &Manager{
-		mc:          mc,
-		nodeInfo:    nodeInfo,
-		msgCh:       make(chan *messaging.TargetMessage, 1024),
-		heartbeatCh: heartbeatCh,
-		node:        newManagerNodeState(nodeLiveness),
-		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
-		writeGate:   writeGate,
+		mc:                    mc,
+		nodeInfo:              nodeInfo,
+		msgCh:                 make(chan *messaging.TargetMessage, 1024),
+		heartbeatCh:           heartbeatCh,
+		node:                  newManagerNodeState(nodeLiveness),
+		nodeResourceUsage:     nodeResourceUsage,
+		resourceUsageProvider: resourceUsageProvider,
+		maintainers:           newManagerMaintainerSet(conf, nodeInfo, heartbeatCh, nodeResourceUsage),
+		writeGate:             writeGate,
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)

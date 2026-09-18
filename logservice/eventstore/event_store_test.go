@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1691,11 +1692,63 @@ func TestEventStoreKVEntryCount(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
+	writeBytesBefore := store.EventStoreWriteBytes()
 	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
+	require.Greater(t, store.EventStoreWriteBytes(), writeBytesBefore)
 
 	for i, metric := range entryMetrics {
 		require.Equal(t, before[i]+1, testutil.ToFloat64(metric))
 	}
+}
+
+func TestEventStoreWriteBytesOnlyCountsCommittedBatches(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	events := []eventWithCallback{{
+		subID:   1,
+		tableID: 1,
+		kvs: []common.RawKVEntry{{
+			OpType:  common.OpTypePut,
+			StartTs: 1,
+			CRTs:    2,
+			Key:     []byte("key"),
+			Value:   []byte("value"),
+		}},
+		callback: func() {},
+	}}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	readOnlyDir := t.TempDir()
+	db, err := pebble.Open(readOnlyDir, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	db, err = pebble.Open(readOnlyDir, &pebble.Options{ReadOnly: true})
+	require.NoError(t, err)
+	defer db.Close()
+
+	writeBytesBefore := store.EventStoreWriteBytes()
+	metricWriteBytesBefore := testutil.ToFloat64(metrics.EventStoreWriteBytes)
+	batchSizeBefore := &dto.Metric{}
+	require.NoError(t, metrics.EventStoreWriteBatchSizeHist.Write(batchSizeBefore))
+	require.ErrorIs(t, store.writeEvents(db, events, encoder, nil, nil), pebble.ErrReadOnly)
+	require.Equal(t, writeBytesBefore, store.EventStoreWriteBytes())
+	require.Equal(t, metricWriteBytesBefore, testutil.ToFloat64(metrics.EventStoreWriteBytes))
+	batchSizeAfter := &dto.Metric{}
+	require.NoError(t, metrics.EventStoreWriteBatchSizeHist.Write(batchSizeAfter))
+	require.Equal(t, batchSizeBefore.GetHistogram(), batchSizeAfter.GetHistogram())
+
+	require.NoError(t, store.writeEvents(store.dbs[0], events, encoder, nil, nil))
+	writtenBytes := store.EventStoreWriteBytes() - writeBytesBefore
+	require.Positive(t, writtenBytes)
+	require.Equal(t, metricWriteBytesBefore+float64(writtenBytes), testutil.ToFloat64(metrics.EventStoreWriteBytes))
+	require.NoError(t, metrics.EventStoreWriteBatchSizeHist.Write(batchSizeAfter))
+	require.Equal(t, batchSizeBefore.GetHistogram().GetSampleCount()+1, batchSizeAfter.GetHistogram().GetSampleCount())
+	require.Equal(t, batchSizeBefore.GetHistogram().GetSampleSum()+float64(writtenBytes), batchSizeAfter.GetHistogram().GetSampleSum())
 }
 
 func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testing.T) {

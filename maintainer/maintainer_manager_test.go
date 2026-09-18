@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -103,7 +104,8 @@ func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
 
 	testutil.SetUpTestServices(t)
 	selfNode := node.NewInfo("", "")
-	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode, nil)
+	maintainers := newManagerMaintainerSet(
+		config.NewDefaultSchedulerConfig(), selfNode, nil, replica.NewNodeResourceUsageTracker())
 	t.Cleanup(maintainers.closeAll)
 	return maintainers
 }
@@ -325,7 +327,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	schedulerConf.AddTableBatchSize = 1000
 	schedulerConf.CheckBalanceInterval = 0
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -553,7 +555,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		return nil
 	})
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -699,7 +701,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	schedulerConf := config.NewDefaultSchedulerConfig()
 	schedulerConf.AddTableBatchSize = 1000
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, fixedNodeResourceUsageProvider(0))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
