@@ -47,7 +47,7 @@ func consumerTopics(o *option) []string {
 // consumer client itself.
 func kafkaOptions(o *option) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{kgo.SeedBrokers(o.address...)}
-	if len(o.ca) != 0 {
+	if len(o.ca) != 0 || len(o.cert) != 0 || len(o.key) != 0 {
 		tlsConfig, err := newTLSConfig(o)
 		if err != nil {
 			return nil, err
@@ -61,19 +61,20 @@ func kafkaOptions(o *option) ([]kgo.Opt, error) {
 }
 
 // newTLSConfig builds the SSL setup the librdkafka options used to describe:
-// the given CA file, plus the client certificate when one is configured.
+// the given CA file, plus the client certificate when one is configured. A
+// configuration without a CA file uses the system roots.
 func newTLSConfig(o *option) (*tls.Config, error) {
-	pem, err := os.ReadFile(o.ca)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, errors.Errorf("no certificate found in %s", o.ca)
-	}
-	tlsConfig := &tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS12,
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if len(o.ca) != 0 {
+		pem, err := os.ReadFile(o.ca)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, errors.Errorf("no certificate found in %s", o.ca)
+		}
+		tlsConfig.RootCAs = pool
 	}
 	if len(o.cert) != 0 || len(o.key) != 0 {
 		certificate, err := tls.LoadX509KeyPair(o.cert, o.key)
@@ -133,6 +134,20 @@ func getPartitionNum(o *option) (int32, error) {
 type consumer struct {
 	client *kgo.Client
 	writer *writer
+
+	// committedOffsets is the highest offset handed to the group coordinator for
+	// each topic-partition. A commit replaces the stored offset instead of taking
+	// its maximum, and a resolved message can be committed after records that
+	// follow it, so the read loop must not send a commit that moves an offset
+	// backwards: the group would replay records after a restart. Only the read
+	// loop touches the map.
+	committedOffsets map[topicPartition]int64
+}
+
+// topicPartition identifies one partition of one topic.
+type topicPartition struct {
+	topic     string
+	partition int32
 }
 
 // newConsumer creates a consumer client. Offsets are committed from the read
@@ -159,8 +174,9 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 		log.Panic("create kafka consumer failed", zap.Error(err))
 	}
 	return &consumer{
-		writer: newWriter(ctx, o),
-		client: client,
+		writer:           newWriter(ctx, o),
+		client:           client,
+		committedOffsets: make(map[topicPartition]int64),
 	}
 }
 
@@ -216,9 +232,15 @@ func (c *consumer) readMessage(ctx context.Context) error {
 // asynchronous, the read loop does not wait for the coordinator, which is what
 // the librdkafka consumer did as well.
 func (c *consumer) commitMessage(ctx context.Context, record *kgo.Record) {
+	tp := topicPartition{topic: record.Topic, partition: record.Partition}
+	offset := record.Offset + 1
+	if offset <= c.committedOffsets[tp] {
+		return
+	}
+	c.committedOffsets[tp] = offset
 	offsets := map[string]map[int32]kgo.EpochOffset{
 		record.Topic: {
-			record.Partition: {Epoch: record.LeaderEpoch, Offset: record.Offset + 1},
+			record.Partition: {Epoch: record.LeaderEpoch, Offset: offset},
 		},
 	}
 	c.client.CommitOffsets(ctx, offsets,
