@@ -44,7 +44,7 @@ func (p *syncProducer) SendMessage(ctx context.Context, topic string, partitionN
 
 func (p *syncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *codecCommon.Message) error {
 	records := make([]*kgo.Record, 0, partitionNum)
-	for i := 0; i < int(partitionNum); i++ {
+	for i := range int(partitionNum) {
 		records = append(records, &kgo.Record{
 			Topic:     topic,
 			Partition: int32(i),

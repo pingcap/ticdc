@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 )
@@ -54,16 +54,16 @@ func TestSharedClientLifecycle(t *testing.T) {
 
 	require.Same(t, factory.client, asyncProducer.client)
 	require.Same(t, factory.client, syncProducer.client)
-	require.NoError(t, syncProducer.SendMessage(t.Context(), topic, 0, &codeccommon.Message{Value: []byte("sync")}))
+	require.NoError(t, syncProducer.SendMessage(t.Context(), topic, 0, &codecCommon.Message{Value: []byte("sync")}))
 
 	syncProducer.Close()
-	require.NoError(t, asyncProducer.AsyncSend(t.Context(), topic, 0, &codeccommon.Message{Value: []byte("value")}))
+	require.NoError(t, asyncProducer.AsyncSend(t.Context(), topic, 0, &codecCommon.Message{Value: []byte("value")}))
 	require.Eventually(t, func() bool {
 		return asyncProducer.client.BufferedProduceRecords() == 0
 	}, time.Second, time.Millisecond)
 
 	asyncProducer.Close()
-	topics, err := adminClient.GetTopicsMeta(context.Background(), []string{topic}, false)
+	topics, err := adminClient.GetTopicsMeta(t.Context(), []string{topic}, false)
 	require.NoError(t, err)
 	require.Contains(t, topics, topic)
 
