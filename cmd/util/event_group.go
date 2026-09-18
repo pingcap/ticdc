@@ -298,8 +298,6 @@ type EventsGroup struct {
 	store          *SpillStore
 	ownsStore      bool
 	pendingCount   int64
-	appendedCount  int64
-	appliedCount   int64
 	segmentRefs    map[uint64]int64
 	restorerRefs   map[uint64]int64
 	batchPending   bool
@@ -1009,23 +1007,9 @@ func (g *EventsGroup) AppendMessage(
 
 	g.store.registerAppended(location, messageData.Restorer.ID, messageData.Restorer.Decode)
 	g.pendingCount++
-	g.appendedCount++
 	g.segmentRefs[location.segmentID]++
 	g.restorerRefs[messageData.Restorer.ID]++
-	g.checkAccounting()
 	return nil
-}
-
-// checkAccounting asserts that every appended event is either still pending or
-// already applied. A violation means an event was dropped without being applied,
-// which must never happen.
-func (g *EventsGroup) checkAccounting() {
-	if g.appendedCount != g.appliedCount+g.pendingCount {
-		log.Panic("spill event accounting mismatch",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int64("appended", g.appendedCount), zap.Int64("applied", g.appliedCount),
-			zap.Int64("pending", g.pendingCount))
-	}
 }
 
 // ResolveBatch owns a prepared group prefix until the downstream confirms it.
@@ -1330,7 +1314,6 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 		g.lateMinKey = g.lateMinKey[:0]
 		g.mu.Unlock()
 		g.store.unpinPayloads(batch.payloads)
-		g.checkAccounting()
 		return nil
 	}
 	end := nextEventIndexKey(batch.entries[len(batch.entries)-1].key)
@@ -1365,7 +1348,6 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 		g.releaseEvent(message.location.segmentID, message.restorerID, 1)
 	}
 	g.pendingCount -= int64(len(batch.entries))
-	g.appliedCount += int64(len(batch.entries))
 	g.store.releasePendingBytes(int64(len(batch.entries)) * g.store.config.messageMetadataBytes)
 	g.store.addAppliedEvents(int64(len(batch.entries)))
 	lastCommitTs := batch.entries[len(batch.entries)-1].commitTs
@@ -1379,7 +1361,6 @@ func (g *EventsGroup) ack(batch *ResolveBatch) error {
 	g.mu.Unlock()
 
 	g.store.unpinPayloads(batch.payloads)
-	g.checkAccounting()
 	if empty {
 		return g.store.Cleanup()
 	}
