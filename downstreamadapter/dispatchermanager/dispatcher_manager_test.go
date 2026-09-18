@@ -25,19 +25,20 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,7 +96,11 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 func createTestManager(t *testing.T) *DispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	testSink := newDispatcherManagerTestSink(t, common.BlackHoleSinkType)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	manager := &DispatcherManager{
+		ctx:                     ctx,
+		cancel:                  cancel,
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
@@ -190,86 +195,6 @@ func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
 			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
 		})
 	}
-}
-
-type bootstrapSchemaStoreForTest struct{}
-
-func (s *bootstrapSchemaStoreForTest) Name() string { return "bootstrap-schema-store-for-test" }
-
-func (s *bootstrapSchemaStoreForTest) Run(ctx context.Context) error { return nil }
-
-func (s *bootstrapSchemaStoreForTest) Close(ctx context.Context) error { return nil }
-
-func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
-	keyspaceMeta common.KeyspaceMeta,
-	snapTs uint64,
-	filter filter.Filter,
-) ([]event.Table, error) {
-	return nil, nil
-}
-
-func (s *bootstrapSchemaStoreForTest) RegisterTable(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-	startTs uint64,
-) error {
-	return nil
-}
-
-func (s *bootstrapSchemaStoreForTest) UnregisterTable(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-) error {
-	return nil
-}
-
-func (s *bootstrapSchemaStoreForTest) GetTableInfo(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-	ts uint64,
-) (*common.TableInfo, error) {
-	return &common.TableInfo{
-		TableName: common.TableName{
-			Schema:  "test",
-			Table:   "t",
-			TableID: tableID,
-		},
-	}, nil
-}
-
-func (s *bootstrapSchemaStoreForTest) GetTableDDLEventState(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-) (schemastore.DDLEventState, error) {
-	return schemastore.DDLEventState{}, nil
-}
-
-func (s *bootstrapSchemaStoreForTest) FetchTableDDLEvents(
-	keyspaceMeta common.KeyspaceMeta,
-	dispatcherID common.DispatcherID,
-	tableID int64,
-	tableFilter filter.Filter,
-	start uint64,
-	end uint64,
-) ([]event.DDLEvent, error) {
-	return nil, nil
-}
-
-func (s *bootstrapSchemaStoreForTest) FetchTableTriggerDDLEvents(
-	keyspaceMeta common.KeyspaceMeta,
-	dispatcherID common.DispatcherID,
-	tableFilter filter.Filter,
-	start uint64,
-	limit int,
-) ([]event.DDLEvent, uint64, error) {
-	return nil, 0, nil
-}
-
-func (s *bootstrapSchemaStoreForTest) RegisterKeyspace(
-	ctx context.Context,
-	keyspaceMeta common.KeyspaceMeta,
-) error {
-	return nil
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
@@ -544,7 +469,21 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 
 func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	manager := createTestManager(t)
-	appcontext.SetService(appcontext.SchemaStore, &bootstrapSchemaStoreForTest{})
+	serverID := node.NewID()
+	mc := messaging.NewMessageCenter(context.Background(), serverID, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
+	mc.Run(context.Background())
+	t.Cleanup(mc.Close)
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, serverID)))
+	tableInfo := common.WrapTableInfo("test", &model.TableInfo{ID: 11, Name: ast.NewCIStr("t")})
+	tableInfoData, err := tableInfo.Marshal()
+	require.NoError(t, err)
+	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
+		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
+			&messaging.SchemaStoreResponse{RequestID: req.RequestID, TableInfos: []messaging.SchemaStoreTableInfo{{TableID: 11, TableInfo: tableInfoData}}}))
+	})
+
 	heartbeatCollector := &HeartBeatCollector{}
 	heartbeatCollector.isClosed.Store(true)
 	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)

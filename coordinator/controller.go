@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -37,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -793,7 +793,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	}
 
 	// Register keyspace
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	schemaStore := client.GetSchemaStoreClient()
 	registeredKeyspace := make(map[string]struct{})
 	for id := range allChangefeeds {
 		if _, ok := registeredKeyspace[id.Keyspace()]; ok {

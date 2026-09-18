@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,10 +22,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"go.uber.org/zap"
 )
@@ -157,7 +157,7 @@ func (d *EventDispatcher) Remove() {
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
 // It will return after the bootstrap event is sent, or when shouldStop asks it
 // to stop because the local write path has been fenced.
-func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
+func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -174,30 +174,29 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 	}
 	start := time.Now()
 	ts := d.GetStartTs()
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	currentTables := make([]*common.TableInfo, 0, len(tables))
 	meta := common.KeyspaceMeta{
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
-	for _, table := range tables {
-		err := schemaStore.RegisterTable(meta, table, ts)
-		if err != nil {
-			log.Warn("register table to schemaStore failed",
-				zap.Int64("tableID", table),
-				zap.Uint64("startTs", ts),
-				zap.Error(err),
-			)
-			continue
+	currentTables, err := client.GetSchemaStoreClient().GetTableInfos(ctx, meta, tables, ts)
+	if err != nil {
+		storeBootstrapState(&d.BootstrapState, BootstrapNotStarted)
+		if ctx.Err() != nil || shouldStop() {
+			return false
 		}
-		tableInfo, err := schemaStore.GetTableInfo(meta, table, ts)
-		if err != nil {
-			log.Warn("get table info failed, just ignore",
-				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
-				zap.Error(err))
-			continue
-		}
-		currentTables = append(currentTables, tableInfo)
+		log.Error("get table infos from schema store failed",
+			zap.Stringer("changefeed", d.sharedInfo.changefeedID),
+			zap.Any("keyspace", meta),
+			zap.Int("tables", len(tables)),
+			zap.Uint64("startTs", ts),
+			zap.Error(err))
+		d.HandleError(err)
+		return false
+	}
+
+	if len(currentTables) == 0 {
+		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+		return true
 	}
 
 	log.Info("start to send bootstrap messages",

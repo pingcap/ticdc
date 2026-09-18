@@ -21,6 +21,10 @@ import (
 
 // errors
 var (
+	ErrSchemaStoreRequestFailed = errors.Normalize(
+		"schema store request failed",
+		errors.RFCCodeText("CDC:ErrSchemaStoreRequestFailed"),
+	)
 	// kv related errors
 	ErrChangeFeedNotExists = errors.Normalize(
 		"changefeed not exists, %s",

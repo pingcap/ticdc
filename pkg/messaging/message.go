@@ -103,6 +103,8 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+	TypeSchemaStoreRequest                 IOType = 49
+	TypeSchemaStoreResponse                IOType = 50
 
 	// Node drain related
 	TypeNodeHeartbeatRequest            IOType = 42
@@ -196,6 +198,10 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
+	case TypeSchemaStoreRequest:
+		return "SchemaStoreRequest"
+	case TypeSchemaStoreResponse:
+		return "SchemaStoreResponse"
 	case TypeNodeHeartbeatRequest:
 		return "NodeHeartbeatRequest"
 	case TypeSetNodeLivenessRequest:
@@ -398,6 +404,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
+	case TypeSchemaStoreRequest:
+		m = &SchemaStoreRequest{}
+	case TypeSchemaStoreResponse:
+		m = &SchemaStoreResponse{}
 	case TypeNodeHeartbeatRequest:
 		m = &heartbeatpb.NodeHeartbeat{}
 	case TypeSetNodeLivenessRequest:
@@ -520,6 +530,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
+	case *SchemaStoreRequest:
+		ioType = TypeSchemaStoreRequest
+	case *SchemaStoreResponse:
+		ioType = TypeSchemaStoreResponse
 	case *heartbeatpb.NodeHeartbeat:
 		ioType = TypeNodeHeartbeatRequest
 	case *heartbeatpb.SetNodeLivenessRequest:

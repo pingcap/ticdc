@@ -31,10 +31,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -1407,8 +1409,16 @@ func TestStoppedWhenMoving(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetTaskSizeByNodeID("node2"))
 }
 
+// Bootstrap tests register a client for their local message center.
+func setUpBootstrapTestServices(t *testing.T) {
+	t.Helper()
+	id := testutil.SetUpTestServices(t)
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, id)))
+}
+
 func TestFinishBootstrap(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1435,7 +1445,7 @@ func TestFinishBootstrap(t *testing.T) {
 			},
 		},
 	)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 	dispatcherID2 := common.NewDispatcherID()
 	require.False(t, s.bootstrapped)
 	msg, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
@@ -1544,7 +1554,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 		// Each subtest restores bootstrap state from a dropped-table snapshot and checks that
 		// no maintainer task/operator is recreated for the stale create request.
 		t.Run(tc.name, func(t *testing.T) {
-			testutil.SetUpTestServices(t)
+			setUpBootstrapTestServices(t)
 			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
@@ -1565,7 +1575,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 			// that has already been dropped before failover recovery starts.
 			schemaStore := eventservice.NewMockSchemaStore()
 			schemaStore.SetTables(nil)
-			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+			schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 			droppedDispatcherID := common.NewDispatcherID()
 			droppedSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
@@ -1688,7 +1698,7 @@ func TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove(t
 	env := newMergeBootstrapTestEnv(t)
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(nil)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	responses := env.bootstrapResponses(
 		nil,
@@ -2025,7 +2035,7 @@ type mergeBootstrapTestEnv struct {
 func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 	t.Helper()
 
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeID := node.ID("node1")
 	nodeManager.GetAliveNodes()[nodeID] = &node.Info{ID: nodeID}
@@ -2059,7 +2069,7 @@ func newMergeBootstrapTestEnv(t *testing.T) *mergeBootstrapTestEnv {
 			SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
 		},
 	})
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	midKey := appendNew(totalSpan.StartKey, 'a')
@@ -2165,7 +2175,7 @@ func TestFinishBootstrapSkipsMergeOperatorForDroppedTable(t *testing.T) {
 
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(nil)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
 		[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
@@ -2301,7 +2311,7 @@ func TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup(
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	setUpBootstrapTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -2333,7 +2343,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			{TableID: 1, SchemaID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}},
 			{TableID: 2, SchemaID: 2, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t2"}, Splitable: true},
 		})
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+	schemaStore.RegisterMessageHandler(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter))
 
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	totalSpan2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)

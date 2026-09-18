@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -459,8 +460,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 
-	mockSchemaStore := eventservice.NewMockSchemaStore()
-	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, info.ID)))
 
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
@@ -526,13 +527,14 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc1, info.ID)))
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	node1 := startMaintainerNode(ctx, info, mc1, nodeManager, lis1)
 	t.Cleanup(node1.stop)
 
@@ -656,13 +658,14 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc1, info.ID)))
+	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc1)
 	mNode := startMaintainerNode(ctx, info, mc1, nodeManager, lis)
 	defer mNode.stop()
 

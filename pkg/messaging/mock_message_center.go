@@ -13,19 +13,30 @@
 
 package messaging
 
-import "github.com/pingcap/ticdc/pkg/node"
+import (
+	"context"
+
+	"github.com/pingcap/ticdc/pkg/node"
+)
 
 var _ MessageCenter = &mockMessageCenter{}
 
 // mockMessageCenter is a mock implementation of the MessageCenter interface
 type mockMessageCenter struct {
-	messageCh chan *TargetMessage
+	messageCh   chan *TargetMessage
+	localRouter *router
 }
 
 func NewMockMessageCenter() *mockMessageCenter {
 	return &mockMessageCenter{
 		messageCh: make(chan *TargetMessage, 100),
 	}
+}
+
+// EnableLocalDispatch routes commands with registered handlers locally. Other
+// commands remain available through GetMessageChannel for assertions.
+func (m *mockMessageCenter) EnableLocalDispatch() {
+	m.localRouter = newRouter()
 }
 
 func (m *mockMessageCenter) GetMessageChannel() chan *TargetMessage {
@@ -41,14 +52,28 @@ func (m *mockMessageCenter) SendEvent(event *TargetMessage) error {
 }
 
 func (m *mockMessageCenter) SendCommand(command *TargetMessage) error {
+	if m.localRouter != nil {
+		m.localRouter.mu.RLock()
+		handler := m.localRouter.handlers[command.Topic]
+		m.localRouter.mu.RUnlock()
+		if handler != nil {
+			return handler(context.Background(), command)
+		}
+	}
 	m.messageCh <- command
 	return nil
 }
 
 func (m *mockMessageCenter) RegisterHandler(topic string, handler MessageHandler) {
+	if m.localRouter != nil {
+		m.localRouter.registerHandler(topic, handler)
+	}
 }
 
 func (m *mockMessageCenter) DeRegisterHandler(topic string) {
+	if m.localRouter != nil {
+		m.localRouter.deRegisterHandler(topic)
+	}
 }
 
 func (m *mockMessageCenter) AddTarget(id node.ID, epoch uint64, addr string) {
