@@ -826,3 +826,34 @@ func (d *singleResolvedDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 func (d *singleResolvedDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
+
+// TestAppendDDLIgnoresReplay pins the DDL replay filter: the upstream dispatches
+// a DDL once per dispatcher, so the same DDL reaches the topic more than once,
+// and executing it twice fails downstream with "table already exists", while a
+// replayed DML only writes the same rows again.
+func TestAppendDDLIgnoresReplay(t *testing.T) {
+	w := newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	}
+	w.appendDDL(ddl)
+	w.appendDDL(ddl)
+	require.Len(t, w.ddlList, 1, "the second copy of the DDL is a replay")
+
+	// A DDL of the same table at a later commit ts is a new DDL, not a replay.
+	next := *ddl
+	next.Query = "ALTER TABLE `test`.`t` ADD COLUMN `c` INT"
+	next.FinishedTs = 20
+	w.appendDDL(&next)
+	require.Len(t, w.ddlList, 2)
+}

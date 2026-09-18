@@ -114,6 +114,12 @@ type writer struct {
 	progresses         []*partitionProgress
 	ddlList            []*event.DDLEvent
 	ddlWithMaxCommitTs map[int64]uint64
+	// ddlSeen records the last DDL seen per schema and table. The upstream
+	// dispatches a DDL once per dispatcher, so the same DDL reaches the topic
+	// more than once, and a replayed DDL fails downstream ("table already
+	// exists"): the duplicate is skipped. Replayed DML needs no filter because
+	// the sink writes rows idempotently.
+	ddlSeen map[ddlReplayKey]seenDDL
 
 	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
@@ -471,12 +477,40 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	return tableIDs
 }
 
+// ddlReplayKey identifies the schema and table a DDL belongs to, which is what
+// a replayed DDL repeats.
+type ddlReplayKey struct {
+	schema string
+	table  string
+}
+
+// seenDDL is the last DDL of a schema and table, kept to recognize its replay.
+type seenDDL struct {
+	commitTs uint64
+	query    string
+}
+
 // appendDDL enqueues a DDL event to be flushed later.
 //
 // DDLs may be received out of commit-ts order (e.g. due to MQ delivery or buffering), so Write() sorts
 // ddlList by commit-ts before executing. ddlWithMaxCommitTs is a guard against per-table commit-ts
 // regressions: executing an older DDL after a newer one may corrupt downstream schema/DML ordering.
 func (w *writer) appendDDL(ddl *event.DDLEvent) {
+	// The same DDL can reach the topic once per dispatcher, and executing it
+	// twice fails, unlike a replayed DML that writes the same rows again. Ignore
+	// the exact DDL that was seen for this schema and table before.
+	key := ddlReplayKey{schema: ddl.GetSchemaName(), table: ddl.GetTableName()}
+	if last, ok := w.ddlSeen[key]; ok && last.commitTs == ddl.GetCommitTs() && last.query == ddl.Query {
+		log.Info("ignore the DDL that was already applied",
+			zap.String("schema", key.schema), zap.String("table", key.table),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query))
+		return
+	}
+	if w.ddlSeen == nil {
+		w.ddlSeen = make(map[ddlReplayKey]seenDDL)
+	}
+	w.ddlSeen[key] = seenDDL{commitTs: ddl.GetCommitTs(), query: ddl.Query}
+
 	// If commitTs goes backwards for a blocked table, ignore this DDL instead of applying it out of order.
 	tableIDs := w.getBlockTableIDs(ddl)
 	for tableID := range tableIDs {
