@@ -92,6 +92,61 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
+
+	stats pipelineStats
+}
+
+const statsLogInterval = 30 * time.Second
+
+// pipelineStats accumulates per-stage progress between windowed summary logs.
+// Counters are atomic because the stages are split across goroutines once the
+// read loop no longer performs the resolve itself.
+type pipelineStats struct {
+	lastLog time.Time
+
+	ingestMessages  atomic.Int64
+	flushedMessages atomic.Int64
+	flushEvents     atomic.Int64
+	flushCalls      atomic.Int64
+	restoreNanos    atomic.Int64
+	applyWaitNanos  atomic.Int64
+}
+
+// maybeLogStats emits a windowed summary of ingest, spill restore and
+// downstream apply progress, so a throughput drop can be attributed to a stage
+// without attaching a profiler.
+func (w *writer) maybeLogStats() {
+	interval := time.Since(w.stats.lastLog)
+	if interval < statsLogInterval {
+		return
+	}
+	w.stats.lastLog = time.Now()
+
+	var (
+		ingest      = w.stats.ingestMessages.Swap(0)
+		flushed     = w.stats.flushedMessages.Swap(0)
+		flushEvents = w.stats.flushEvents.Swap(0)
+		flushCalls  = w.stats.flushCalls.Swap(0)
+		restore     = time.Duration(w.stats.restoreNanos.Swap(0))
+		applyWait   = time.Duration(w.stats.applyWaitNanos.Swap(0))
+		spill       = w.getSpillStore().Stats()
+	)
+	log.Info("kafka consumer pipeline stats",
+		zap.Duration("interval", interval),
+		zap.Int64("ingestMessages", ingest),
+		zap.Float64("ingestPerSecond", float64(ingest)/interval.Seconds()),
+		zap.Int64("flushedMessages", flushed),
+		zap.Float64("flushedPerSecond", float64(flushed)/interval.Seconds()),
+		zap.Int64("flushEvents", flushEvents),
+		zap.Int64("flushCalls", flushCalls),
+		zap.Duration("restoreTime", restore),
+		zap.Float64("restoreDuty", restore.Seconds()/interval.Seconds()),
+		zap.Duration("applyWaitTime", applyWait),
+		zap.Float64("applyWaitDuty", applyWait.Seconds()/interval.Seconds()),
+		zap.Int64("appliedEvents", spill.AppliedEventCount),
+		zap.Int64("pendingBytes", spill.PendingBytes),
+		zap.Int("livePayloads", spill.LivePayloads),
+		zap.Int("liveSegments", spill.LiveSegments))
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -106,6 +161,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
 		spillStore:             util.NewSpillStore(),
 	}
+	w.stats.lastLog = time.Now()
 	var (
 		db  *sql.DB
 		err error
@@ -212,14 +268,20 @@ func (w *writer) flushEventsFromGroups(
 	total := 0
 	prepared := make([]*util.ResolveBatch, 0, len(groups))
 	flush := func() error {
-		if err := w.flushDMLBatch(ctx, batchEvents, fields...); err != nil {
+		applyStart := time.Now()
+		err := w.flushDMLBatch(ctx, batchEvents, fields...)
+		w.stats.applyWaitNanos.Add(int64(time.Since(applyStart)))
+		if err != nil {
 			return err
 		}
 		for _, batch := range prepared {
+			w.stats.flushedMessages.Add(int64(len(batch.Messages)))
 			if err := batch.Ack(); err != nil {
 				return err
 			}
 		}
+		w.stats.flushCalls.Add(1)
+		w.stats.flushEvents.Add(int64(len(batchEvents)))
 		total += len(batchEvents)
 		batchEvents = nil
 		prepared = prepared[:0]
@@ -241,7 +303,9 @@ func (w *writer) flushEventsFromGroups(
 				MaxBytes:    limit.MaxBytes - batchBytes,
 				MaxMessages: limit.MaxMessages - batchMessages,
 			}
+			restoreStart := time.Now()
 			batch, hasMore, err := group.PrepareResolve(resolveTs, remaining)
+			w.stats.restoreNanos.Add(int64(time.Since(restoreStart)))
 			if err != nil {
 				return 0, err
 			}
@@ -396,6 +460,8 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
 func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
+	w.maybeLogStats()
+
 	var (
 		partition = message.TopicPartition.Partition
 		offset    = message.TopicPartition.Offset
@@ -504,6 +570,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 				zap.Int("maxBatchSize", w.maxBatchSize), zap.Int("actualBatchSize", counter),
 				zap.Int32("partition", partition), zap.Any("offset", offset))
 		}
+		w.stats.ingestMessages.Add(int64(counter))
 	default:
 		log.Panic("unknown message type", zap.Any("messageType", messageType),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
