@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,11 +24,112 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
 
+<<<<<<< HEAD
+=======
+func TestBigintSchemaDefaultPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		value      string
+		unsigned   bool
+		stringMode bool
+		expected   string
+	}{
+		{value: "9007199254740993", expected: "9007199254740993"},
+		{value: "9223372036854775807", expected: "9223372036854775807"},
+		{value: "-9223372036854775808", expected: "-9223372036854775808"},
+		{value: "9007199254740993", unsigned: true, expected: "9007199254740993"},
+		{value: "18446744073709551615", unsigned: true, expected: "-1"},
+		{value: "18446744073709551615", unsigned: true, stringMode: true, expected: "18446744073709551615"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			col := &timodel.ColumnInfo{FieldType: *types.NewFieldType(mysql.TypeLonglong)}
+			if tc.unsigned {
+				col.AddFlag(mysql.UnsignedFlag)
+			}
+			require.NoError(t, col.SetDefaultValue(tc.value))
+			codec := &dbzCodec{config: common.NewConfig(config.ProtocolDebezium)}
+			var expected any = json.Number(tc.expected)
+			if tc.stringMode {
+				codec.config.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+				expected = tc.expected
+			}
+			buf := new(bytes.Buffer)
+			writer := util.BorrowJSONWriter(buf)
+			codec.writeDebeziumFieldSchema(writer, col)
+			util.ReturnJSONWriter(writer)
+
+			dec := json.NewDecoder(buf)
+			dec.UseNumber()
+			var schema map[string]any
+			require.NoError(t, dec.Decode(&schema))
+			require.Equal(t, expected, schema["default"])
+
+			// Missing row values use the column default and must preserve it too.
+			rows := chunk.NewChunkWithCapacity([]*types.FieldType{&col.FieldType}, 1)
+			rows.AppendNull(0)
+			row := rows.GetRow(0)
+			buf.Reset()
+			writer = util.BorrowJSONWriter(buf)
+			writer.WriteObject(func() {
+				require.NoError(t, codec.writeDebeziumFieldValue(writer, &row, 0, col))
+			})
+			util.ReturnJSONWriter(writer)
+			dec = json.NewDecoder(buf)
+			dec.UseNumber()
+			var payload map[string]any
+			require.NoError(t, dec.Decode(&payload))
+			require.Equal(t, expected, payload[col.Name.O])
+		})
+	}
+}
+
+func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int primary key)`)
+	sourceDDL := helper.DDL2Event(`rename table test.table1 to test.table2`)
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`",
+		"target_db",
+		"new_target_table",
+		"target_db",
+		"old_target_table",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table"),
+		nil,
+		nil,
+	)
+
+	keyBuf := bytes.NewBuffer(nil)
+	valueBuf := bytes.NewBuffer(nil)
+	err := codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
+	require.NoError(t, err)
+
+	require.Contains(t, keyBuf.String(), "\"databaseName\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"db\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"table\":\"new_target_table\"")
+	require.Contains(t, valueBuf.String(), "\"id\":\"\\\"target_db\\\".\\\"old_target_table\\\",\\\"target_db\\\".\\\"new_target_table\\\"\"")
+}
+
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 func TestDDLEvent(t *testing.T) {
 	codec := &dbzCodec{
 		config:    common.NewConfig(config.ProtocolDebezium),

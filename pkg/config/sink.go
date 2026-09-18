@@ -1169,6 +1169,25 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+<<<<<<< HEAD
+=======
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+	// DecimalHandlingMode selects double (default) or string for Debezium JSON decimals.
+	DecimalHandlingMode *string `toml:"decimal-handling-mode" json:"decimal-handling-mode,omitempty"`
+	// BigintUnsignedHandlingMode selects long (default) or string for Debezium JSON unsigned bigints.
+	BigintUnsignedHandlingMode *string `toml:"bigint-unsigned-handling-mode" json:"bigint-unsigned-handling-mode,omitempty"`
+	// BinaryHandlingMode selects bytes, base64 (default), base64-url-safe, or hex for Debezium JSON binary columns.
+	BinaryHandlingMode *string `toml:"binary-handling-mode" json:"binary-handling-mode,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
+>>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text
