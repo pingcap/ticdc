@@ -15,68 +15,112 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
-func getPartitionNum(o *option) (int32, error) {
-	configMap := &kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(o.address, ","),
+// consumerTopics is the configured topic list, without the blank entries a
+// trailing comma leaves behind.
+func consumerTopics(o *option) []string {
+	topics := make([]string, 0, 1)
+	for _, topic := range strings.Split(o.topic, ",") {
+		if topic = strings.TrimSpace(topic); topic != "" {
+			topics = append(topics, topic)
+		}
 	}
+	return topics
+}
+
+// kafkaOptions builds the options shared by the metadata lookup and the
+// consumer client itself.
+func kafkaOptions(o *option) ([]kgo.Opt, error) {
+	opts := []kgo.Opt{kgo.SeedBrokers(o.address...)}
 	if len(o.ca) != 0 {
-		_ = configMap.SetKey("security.protocol", "SSL")
-		_ = configMap.SetKey("ssl.ca.location", o.ca)
-		_ = configMap.SetKey("ssl.key.location", o.key)
-		_ = configMap.SetKey("ssl.certificate.location", o.cert)
+		tlsConfig, err := newTLSConfig(o)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
-	admin, err := kafka.NewAdminClient(configMap)
+	if level, err := zapcore.ParseLevel(logLevel); err == nil && level == zapcore.DebugLevel {
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
+	}
+	return opts, nil
+}
+
+// newTLSConfig builds the SSL setup the librdkafka options used to describe:
+// the given CA file, plus the client certificate when one is configured.
+func newTLSConfig(o *option) (*tls.Config, error) {
+	pem, err := os.ReadFile(o.ca)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, errors.Errorf("no certificate found in %s", o.ca)
+	}
+	tlsConfig := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}
+	if len(o.cert) != 0 || len(o.key) != 0 {
+		certificate, err := tls.LoadX509KeyPair(o.cert, o.key)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
+	return tlsConfig, nil
+}
+
+// getPartitionNum asks the cluster for the partition number of every consumed
+// topic, retrying while the topic is not there yet.
+func getPartitionNum(o *option) (int32, error) {
+	opts, err := kafkaOptions(o)
+	if err != nil {
+		return 0, err
+	}
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	defer admin.Close()
+	defer client.Close()
+	admin := kadm.NewClient(client)
 
-	topics := strings.Split(o.topic, ",")
 	maxPartitionNum := int32(0)
-	timeout := 3000
-	for _, topic := range topics {
-		topic = strings.TrimSpace(topic)
-		if topic == "" {
-			continue
-		}
+	for _, topic := range consumerTopics(o) {
 		found := false
-		for i := 0; i <= 30; i++ {
-			resp, err := admin.GetMetadata(&topic, false, timeout)
-			if err != nil {
-				var kafkaErr kafka.Error
-				if errors.As(err, &kafkaErr) && kafkaErr.Code() == kafka.ErrTransport {
-					log.Info("retry get partition number", zap.String("topic", topic), zap.Int("retryTime", i), zap.Int("timeout", timeout))
-					timeout += 100
-					continue
+		for i := range 31 {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			metadata, err := admin.Metadata(ctx, topic)
+			cancel()
+			if err == nil {
+				if detail, ok := metadata.Topics[topic]; ok && detail.Err == nil {
+					numPartitions := int32(len(detail.Partitions))
+					log.Info("get partition number of topic",
+						zap.String("topic", topic),
+						zap.Int32("partitionNum", numPartitions))
+					if numPartitions > maxPartitionNum {
+						maxPartitionNum = numPartitions
+					}
+					found = true
+					break
 				}
-				return 0, errors.Trace(err)
 			}
-
-			topicDetail, ok := resp.Topics[topic]
-			if ok && topicDetail.Error.Code() == kafka.ErrNoError {
-				numPartitions := int32(len(topicDetail.Partitions))
-				log.Info("get partition number of topic",
-					zap.String("topic", topic),
-					zap.Int32("partitionNum", numPartitions))
-				if numPartitions > maxPartitionNum {
-					maxPartitionNum = numPartitions
-				}
-				found = true
-				break
-			}
-			log.Info("retry get partition number", zap.String("topic", topic))
-			time.Sleep(1 * time.Second)
+			log.Info("retry get partition number", zap.String("topic", topic), zap.Int("retryTime", i))
+			time.Sleep(time.Second)
 		}
 		if !found {
 			return 0, errors.Errorf("get partition number(%s) timeout", topic)
@@ -89,43 +133,32 @@ func getPartitionNum(o *option) (int32, error) {
 }
 
 type consumer struct {
-	client *kafka.Consumer
+	client *kgo.Client
 	writer *writer
 }
 
-// newConsumer will create a consumer client.
+// newConsumer creates a consumer client. Offsets are committed from the read
+// loop only, the client never commits on its own, and a group without committed
+// offsets starts from the first message of every assigned partition, which are
+// the librdkafka settings the consumer used before.
 func newConsumer(ctx context.Context, o *option) *consumer {
-	configMap := &kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(o.address, ","),
-		"group.id":          o.groupID,
-		// Start reading from the first message of each assigned
-		// partition if there are no previously committed offsets
-		// for this group.
-		"auto.offset.reset": "earliest",
-		// Whether we store offsets automatically.
-		"enable.auto.offset.store": false,
-		"enable.auto.commit":       false,
-	}
-	if len(o.ca) != 0 {
-		_ = configMap.SetKey("security.protocol", "SSL")
-		_ = configMap.SetKey("ssl.ca.location", o.ca)
-		_ = configMap.SetKey("ssl.key.location", o.key)
-		_ = configMap.SetKey("ssl.certificate.location", o.cert)
-	}
-	if level, err := zapcore.ParseLevel(logLevel); err == nil && level == zapcore.DebugLevel {
-		if err = configMap.SetKey("debug", "all"); err != nil {
-			log.Error("set kafka debug log failed", zap.Error(err))
-		}
-	}
-	client, err := kafka.NewConsumer(configMap)
+	opts, err := kafkaOptions(o)
 	if err != nil {
 		log.Panic("create kafka consumer failed", zap.Error(err))
 	}
-
-	topics := strings.Split(o.topic, ",")
-	err = client.SubscribeTopics(topics, nil)
+	opts = append(opts,
+		kgo.ConsumerGroup(o.groupID),
+		kgo.ConsumeTopics(consumerTopics(o)...),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+		// Keep the eager range assignment the librdkafka default used, so a
+		// consumer group that still has a member on the old client keeps
+		// working while it rolls.
+		kgo.Balancers(kgo.RangeBalancer()),
+	)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
-		log.Panic("subscribe topics failed", zap.Strings("topics", topics), zap.Error(err))
+		log.Panic("create kafka consumer failed", zap.Error(err))
 	}
 	return &consumer{
 		writer: newWriter(ctx, o),
@@ -134,11 +167,7 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 }
 
 func (c *consumer) readMessage(ctx context.Context) error {
-	defer func() {
-		if err := c.client.Close(); err != nil {
-			log.Warn("close kafka consumer failed", zap.Error(err))
-		}
-	}()
+	defer c.client.Close()
 	for {
 		select {
 		case <-ctx.Done():
@@ -146,37 +175,66 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		default:
 		}
-		msg, err := c.client.ReadMessage(-1)
-		if err != nil {
-			log.Error("read message failed, just continue to retry", zap.Error(err))
-			continue
+
+		fetches := c.client.PollFetches(ctx)
+		if err := ctx.Err(); err != nil {
+			log.Info("consumer exist: context cancelled")
+			return errors.Trace(err)
 		}
-		needCommit, err := c.writer.WriteMessage(ctx, msg)
-		if err != nil {
-			return err
+		// A fetch can carry records and errors at the same time, so a failed
+		// partition is only logged: whatever did arrive is still processed.
+		for _, fetchErr := range fetches.Errors() {
+			log.Error("read message failed, just continue to retry",
+				zap.String("topic", fetchErr.Topic), zap.Int32("partition", fetchErr.Partition),
+				zap.Error(fetchErr.Err))
 		}
-		if needCommit {
-			c.commitMessage(msg)
+
+		var writeErr error
+		fetches.EachRecord(func(record *kgo.Record) {
+			if writeErr != nil {
+				return
+			}
+			needCommit, err := c.writer.WriteMessage(ctx, record)
+			if err != nil {
+				writeErr = err
+				return
+			}
+			if needCommit {
+				c.commitMessage(ctx, record)
+			}
+		})
+		if writeErr != nil {
+			return writeErr
 		}
 		// Resolved messages of the parallel resolve path are committed once
 		// their events reached the downstream.
 		for _, pending := range c.writer.takeCommittableMessages() {
-			c.commitMessage(pending)
+			c.commitMessage(ctx, pending)
 		}
 	}
 }
 
-func (c *consumer) commitMessage(msg *kafka.Message) {
-	topicPartition, err := c.client.CommitMessage(msg)
-	if err != nil {
-		log.Error("commit message failed, just continue",
-			zap.String("topic", *msg.TopicPartition.Topic), zap.Int32("partition", msg.TopicPartition.Partition),
-			zap.Any("offset", msg.TopicPartition.Offset), zap.Error(err))
-		return
+// commitMessage marks the offset after the message as processed. The commit is
+// asynchronous, the read loop does not wait for the coordinator, which is what
+// the librdkafka consumer did as well.
+func (c *consumer) commitMessage(ctx context.Context, record *kgo.Record) {
+	offsets := map[string]map[int32]kgo.EpochOffset{
+		record.Topic: {
+			record.Partition: {Epoch: record.LeaderEpoch, Offset: record.Offset + 1},
+		},
 	}
-	log.Debug("commit message success",
-		zap.String("topic", topicPartition[0].String()), zap.Int32("partition", topicPartition[0].Partition),
-		zap.Any("offset", topicPartition[0].Offset))
+	c.client.CommitOffsets(ctx, offsets,
+		func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+			if err != nil {
+				log.Error("commit message failed, just continue",
+					zap.String("topic", record.Topic), zap.Int32("partition", record.Partition),
+					zap.Int64("offset", record.Offset), zap.Error(err))
+				return
+			}
+			log.Debug("commit message success",
+				zap.String("topic", record.Topic), zap.Int32("partition", record.Partition),
+				zap.Int64("offset", record.Offset))
+		})
 }
 
 // Run the consumer, read data and write to the downstream target.

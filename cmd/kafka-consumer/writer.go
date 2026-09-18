@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -38,6 +37,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -45,7 +45,7 @@ import (
 type partitionProgress struct {
 	partition       int32
 	watermark       uint64
-	watermarkOffset kafka.Offset
+	watermarkOffset int64
 
 	// mu guards eventsGroup: the resolve pipeline snapshots the groups while the
 	// read loop keeps appending to them.
@@ -93,7 +93,7 @@ func newPartitionProgress(partition int32, decoder common.Decoder) *partitionPro
 	}
 }
 
-func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Offset) {
+func (p *partitionProgress) updateWatermark(newWatermark uint64, offset int64) {
 	if newWatermark >= p.watermark {
 		p.watermark = newWatermark
 		p.watermarkOffset = offset
@@ -247,18 +247,18 @@ func newWriter(ctx context.Context, o *option) *writer {
 // spill store is temporary, so committing its offset earlier would skip those
 // events when the consumer restarts.
 type pendingCommit struct {
-	message   *kafka.Message
+	message   *kgo.Record
 	watermark uint64
 }
 
 // takeCommittableMessages returns the resolved messages whose events are known
 // to be applied, and forgets them. It is only called by the read loop.
-func (w *writer) takeCommittableMessages() []*kafka.Message {
+func (w *writer) takeCommittableMessages() []*kgo.Record {
 	if len(w.pendingCommits) == 0 {
 		return nil
 	}
 	applied := w.pipeline.appliedWatermark()
-	messages := make([]*kafka.Message, 0, len(w.pendingCommits))
+	messages := make([]*kgo.Record, 0, len(w.pendingCommits))
 	remaining := w.pendingCommits[:0]
 	for _, pending := range w.pendingCommits {
 		if pending.watermark <= applied {
@@ -521,15 +521,15 @@ func (w *writer) publishedWatermark() uint64 {
 // WriteMessage is to decode kafka message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
+func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, error) {
 	w.maybeLogStats()
 	if err := w.pipeline.err(); err != nil {
 		return false, err
 	}
 
 	var (
-		partition = message.TopicPartition.Partition
-		offset    = message.TopicPartition.Offset
+		partition = message.Partition
+		offset    = message.Offset
 	)
 
 	progress := w.progresses[partition]
@@ -788,7 +788,7 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kafka.Offset) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -815,7 +815,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 	}
 }
 
-func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset kafka.Offset) *common.DMLMessage {
+func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset int64) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
 		w.checkPartition(row, partition, offset)
@@ -826,7 +826,7 @@ func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition
 func (w *writer) appendMessage2Group(
 	message *common.DMLMessage,
 	progress *partitionProgress,
-	offset kafka.Offset,
+	offset int64,
 ) error {
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
@@ -853,7 +853,7 @@ func (w *writer) appendMessage2Group(
 	group := progress.group(tableID, func() *util.EventsGroup {
 		group := util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
 		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
-			return w.messageWithPartitionCheck(message, progress.partition, kafka.Offset(sourcePosition))
+			return w.messageWithPartitionCheck(message, progress.partition, sourcePosition)
 		})
 		return group
 	})
