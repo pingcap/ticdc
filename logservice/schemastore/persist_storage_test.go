@@ -4952,20 +4952,20 @@ func TestBuildTableDDLEventTableStateChange(t *testing.T) {
 			eventTableInfoID: 301,
 		},
 		{
-			name:             "truncate table deletes the old physical table",
+			name:             "truncate table does not update the old physical table",
 			rawEvent:         truncateTable(),
 			physicalTableID:  300,
-			kind:             commonEvent.TableStateDeleted,
+			kind:             commonEvent.TableStateUnchanged,
 			eventTableInfoID: 301,
 		},
 		{
-			name: "drop table deletes the table state",
+			name: "drop table does not update the table state",
 			rawEvent: &PersistedDDLEvent{
 				Type: byte(model.ActionDropTable), SchemaID: 100, SchemaName: "test", TableName: "t1", TableID: 300,
 				TableInfo: tableInfo,
 			},
 			physicalTableID:  300,
-			kind:             commonEvent.TableStateDeleted,
+			kind:             commonEvent.TableStateUnchanged,
 			eventTableInfoID: 300,
 		},
 	} {

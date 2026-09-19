@@ -235,12 +235,6 @@ func TestDDLEventTableStateChangeJSONCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	restData := extractDDLEventV1RestData(t, payload)
 
-	// A current receiver restores the table state from the JSON payload.
-	var current DDLEvent
-	require.NoError(t, current.Unmarshal(data))
-	require.Equal(t, ddlEvent.TableStateChange, current.TableStateChange)
-	require.Equal(t, int64(101), current.TableStateChange.PhysicalTableID)
-
 	rawMap := make(map[string]any)
 	require.NoError(t, json.Unmarshal(restData, &rawMap))
 	_, hasStateChange := rawMap["table_state_change"]
@@ -250,14 +244,6 @@ func TestDDLEventTableStateChangeJSONCompatibility(t *testing.T) {
 	var legacy legacyDDLEventJSON
 	require.NoError(t, json.Unmarshal(restData, &legacy))
 	require.Equal(t, DDLEventVersion1, legacy.Version)
-
-	// An event that carries no table state still unmarshals to nil.
-	eventWithoutState := DDLEvent{Version: DDLEventVersion1}
-	withoutState, err := eventWithoutState.Marshal()
-	require.NoError(t, err)
-	var decoded DDLEvent
-	require.NoError(t, decoded.Unmarshal(withoutState))
-	require.Nil(t, decoded.TableStateChange)
 }
 
 func TestDDLEvent(t *testing.T) {

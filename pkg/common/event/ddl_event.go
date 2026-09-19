@@ -43,8 +43,6 @@ const (
 	// TableStateUpdated means the DDL changes the table's schema. The post-DDL
 	// table info is carried by DDLEvent.TableInfo.
 	TableStateUpdated
-	// TableStateDeleted means the DDL deletes the table.
-	TableStateDeleted
 )
 
 // TableStateChange describes the post-DDL state of the physical table that

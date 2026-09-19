@@ -952,16 +952,14 @@ func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, 
 	if err != nil || !ok {
 		return ddlEvent, ok, err
 	}
-	tableInfo, deleted := handler.extractTableInfoFunc(rawEvent, tableID)
-	change := &commonEvent.TableStateChange{PhysicalTableID: tableID}
-	switch {
-	case tableInfo != nil:
+	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
+	change := &commonEvent.TableStateChange{
+		PhysicalTableID: tableID,
+		Kind:            commonEvent.TableStateUnchanged,
+	}
+	if tableInfo != nil {
 		change.Kind = commonEvent.TableStateUpdated
 		ddlEvent.TableInfo = tableInfo
-	case deleted:
-		change.Kind = commonEvent.TableStateDeleted
-	default:
-		change.Kind = commonEvent.TableStateUnchanged
 	}
 	ddlEvent.TableStateChange = change
 	return ddlEvent, true, nil

@@ -503,14 +503,6 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 	if change.Kind != commonEvent.TableStateUpdated {
 		return
 	}
-	if ddl.TableInfo == nil {
-		log.Error("updated table state does not carry table info",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Int64("physicalTableID", change.PhysicalTableID),
-			zap.Uint64("commitTs", ddl.FinishedTs))
-		return
-	}
 
 	d.tableInfo.Store(ddl.TableInfo)
 }

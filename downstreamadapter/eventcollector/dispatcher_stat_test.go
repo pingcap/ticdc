@@ -2288,20 +2288,6 @@ func TestUpdateTableInfoByDDLStateChange(t *testing.T) {
 			},
 		},
 		{
-			name: "deleted state keeps the cached table info",
-			ddl: &commonEvent.DDLEvent{
-				TableInfo: updated, FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateDeleted},
-			},
-		},
-		{
-			name: "updated state without table info is ignored",
-			ddl: &commonEvent.DDLEvent{
-				FinishedTs:       10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated},
-			},
-		},
-		{
 			name:   "event without state keeps the legacy identity check",
 			ddl:    &commonEvent.DDLEvent{TableInfo: current, FinishedTs: 10},
 			stored: current,
