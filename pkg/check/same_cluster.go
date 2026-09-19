@@ -155,10 +155,11 @@ type tablePattern struct {
 	table  namePattern
 }
 
-// routeRuleToCheck is a parsed dispatch rule which has a target.
+// routeRuleToCheck pairs one matcher with its dispatch rule target.
+// Dispatch rules with multiple matchers are expanded during parsing.
 type routeRuleToCheck struct {
 	rawMatchers      []string
-	matchers         []tablePattern
+	matcher          tablePattern
 	schema           targetName
 	schemaExpression string
 }
@@ -192,12 +193,13 @@ func parseRouteRules(rules []*config.DispatchRule, caseSensitive bool) ([]routeR
 			continue
 		}
 		route := routeRuleToCheck{rawMatchers: rule.Matcher, schemaExpression: rule.TargetSchema}
+		matchers := make([]tablePattern, 0, len(rule.Matcher))
 		for _, matcher := range rule.Matcher {
 			pattern, err := parseRulePattern("dispatch rule matcher", matcher, caseSensitive)
 			if err != nil {
 				return nil, err
 			}
-			route.matchers = append(route.matchers, pattern)
+			matchers = append(matchers, pattern)
 		}
 		var reason string
 		var ok bool
@@ -212,7 +214,10 @@ func parseRouteRules(rules []*config.DispatchRule, caseSensitive bool) ([]routeR
 		route.schema.literal = normalizeName(route.schema.literal, caseSensitive)
 		route.schema.prefix = normalizeName(route.schema.prefix, caseSensitive)
 		route.schema.suffix = normalizeName(route.schema.suffix, caseSensitive)
-		parsed = append(parsed, route)
+		for _, matcher := range matchers {
+			route.matcher = matcher
+			parsed = append(parsed, route)
+		}
 	}
 	return parsed, nil
 }
@@ -343,13 +348,9 @@ func parseTargetExpression(expr, placeholder string) (targetName, string, bool) 
 // verifyFilterRulesCovered rejects filter rules which no dispatch rule with a target would route:
 // such a table keeps its own name and is replicated into itself.
 func verifyFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck) error {
-	matchers := make([]tablePattern, 0, len(routes))
-	for _, route := range routes {
-		matchers = append(matchers, route.matchers...)
-	}
 	for _, filter := range filters {
-		covered := slices.ContainsFunc(matchers, func(matcher tablePattern) bool {
-			return filter.schema.covers(matcher.schema) && filter.table.covers(matcher.table)
+		covered := slices.ContainsFunc(routes, func(route routeRuleToCheck) bool {
+			return filter.schema.covers(route.matcher.schema) && filter.table.covers(route.matcher.table)
 		})
 		if !covered {
 			return errors.ErrInvalidReplicaConfig.FastGen("allow-same-cluster requires every filter rule to be routed to another table, but filter rule %q is not covered by any dispatch rule matcher", filter.raw)
@@ -362,21 +363,26 @@ func verifyFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck)
 // the runtime router and filter do for database DDL.
 func verifySchemaTargets(filters []tablePattern, routes []routeRuleToCheck) error {
 	for _, route := range routes {
-		for _, matcher := range route.matchers {
-			for _, source := range filters {
-				for _, target := range filters {
-					schema, ok := findNameWitness(source.schema, matcher.schema, target.schema, route.schema)
-					if ok {
-						return errors.ErrInvalidReplicaConfig.FastGen(
-							"allow-same-cluster requires database isolation, but the dispatch rule matching %v "+
-								"routes schema %q to %q, which the filter replicates",
-							route.rawMatchers, schema, route.schema.apply(schema))
-					}
-				}
-			}
+		if schema, ok := route.findCapturedSchema(filters); ok {
+			return errors.ErrInvalidReplicaConfig.FastGen(
+				"allow-same-cluster requires database isolation, but the dispatch rule matching %v "+
+					"routes schema %q to %q, which the filter replicates",
+				route.rawMatchers, schema, route.schema.apply(schema))
 		}
 	}
 	return nil
+}
+
+// findCapturedSchema finds a source schema whose routed target also belongs to the filter.
+func (r routeRuleToCheck) findCapturedSchema(filters []tablePattern) (string, bool) {
+	for _, source := range filters {
+		for _, target := range filters {
+			if schema, ok := findNameWitness(source.schema, r.matcher.schema, target.schema, r.schema); ok {
+				return schema, true
+			}
+		}
+	}
+	return "", false
 }
 
 // verifySchemaRoutingConsistent requires identical target-schema expressions wherever two routes
@@ -388,22 +394,25 @@ func verifySchemaRoutingConsistent(filters []tablePattern, routes []routeRuleToC
 			if left.schemaExpression == right.schemaExpression {
 				continue
 			}
-			for _, leftMatcher := range left.matchers {
-				for _, rightMatcher := range right.matchers {
-					for _, source := range filters {
-						schema, ok := findNameWitness(source.schema, leftMatcher.schema, rightMatcher.schema, targetName{hasVariable: true})
-						if ok {
-							return errors.ErrInvalidReplicaConfig.FastGen(
-								"allow-same-cluster does not support different target-schema expressions %q and %q "+
-									"for routes matching source schema %q",
-								left.schemaExpression, right.schemaExpression, schema)
-						}
-					}
-				}
+			if schema, ok := findSharedSourceSchema(filters, left.matcher.schema, right.matcher.schema); ok {
+				return errors.ErrInvalidReplicaConfig.FastGen(
+					"allow-same-cluster does not support different target-schema expressions %q and %q "+
+						"for routes matching source schema %q",
+					left.schemaExpression, right.schemaExpression, schema)
 			}
 		}
 	}
 	return nil
+}
+
+// findSharedSourceSchema intersects two schema matchers within the replicated source range.
+func findSharedSourceSchema(filters []tablePattern, left, right namePattern) (string, bool) {
+	for _, source := range filters {
+		if schema, ok := findNameWitness(source.schema, left, right, targetName{hasVariable: true}); ok {
+			return schema, true
+		}
+	}
+	return "", false
 }
 
 // findNameWitness finds one source name whose routed target is captured again.

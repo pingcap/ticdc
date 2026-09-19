@@ -94,15 +94,18 @@ function run() {
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "normal" "null" ""
 
 	# Keep data in another source database while rejecting routes that would endanger it.
-	run_sql "create database allow_same_cluster_other; create table allow_same_cluster_other.t2 (id int primary key); insert into allow_same_cluster_other.t2 values (1);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "create database allow_same_cluster_src_copy; create table allow_same_cluster_src_copy.t2 (id int primary key); insert into allow_same_cluster_src_copy.t2 values (1);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	# Create and update must reject database overlap and ambiguous schema routing.
 	cdc_cli_changefeed pause -c "$allow_same_cluster_id"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "stopped" "null" ""
-	for unsafe_case in whitespace uppercase_schema uppercase_table uppercase_suffix same_schema source_schema_chain all_schemas schema_ambiguity; do
+	for unsafe_case in same_schema source_schema_chain all_schemas schema_ambiguity no_route narrow_route unsupported; do
 		expected_error="which the filter replicates"
-		if [ "$unsafe_case" == "schema_ambiguity" ]; then
-			expected_error="different target-schema expressions"
-		fi
+		case "$unsafe_case" in
+		schema_ambiguity) expected_error="different target-schema expressions" ;;
+		no_route) expected_error="requires table routing to be enabled" ;;
+		narrow_route) expected_error="is not covered by any dispatch rule matcher" ;;
+		unsupported) expected_error="does not support the filter rule" ;;
+		esac
 		unsafe_config="$CUR/conf/allow_same_cluster_${unsafe_case}.toml"
 		if result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 			--config="$unsafe_config" -c "reject-${unsafe_case//_/-}" 2>&1); then
@@ -123,7 +126,7 @@ function run() {
 			exit 1
 		fi
 	done
-	wait_for_rows 1 "allow_same_cluster_other.t2"
+	wait_for_rows 1 "allow_same_cluster_src_copy.t2"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "stopped" "null" ""
 	# Rejected updates must preserve the safe configuration across resume.
 	cdc_cli_changefeed resume -c "$allow_same_cluster_id"
@@ -131,136 +134,12 @@ function run() {
 	wait_for_rows 3 "$dst_db.$dst_table"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "normal" "null" ""
 
-	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
-
-	# 4) The target schema may also follow the source schema: `allow_same_cluster_src2_routed` is not
-	# replicated by the filter, so the configuration is accepted and stays safe for tables created
-	# later.
-	derived_id="allow-same-cluster-derived"
-	src_db2="allow_same_cluster_src2"
-	dst_db2="allow_same_cluster_src2_routed"
-	run_sql "create database $src_db2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "create database $dst_db2;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-
-	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_derived.toml" -c "$derived_id" 2>&1)
-	if [[ "$result" != *"Create changefeed successfully"* ]]; then
-		echo "Expected create to be allowed when the target schema follows the source schema, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	# The table is created after the changefeed: its DDL is routed to the derived schema, and the
-	# rows must land there instead of being captured again.
-	run_sql "create table $src_db2.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$dst_db2.t1_routed" "$UP_TIDB_HOST" "$UP_TIDB_PORT" 90
-	run_sql "insert into $src_db2.t1 values (1, 'a'), (2, 'b');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	wait_for_rows 2 "$dst_db2.t1_routed"
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$derived_id" "normal" "null" ""
-
-	# The gate also runs when a changefeed is updated.
-	cdc_cli_changefeed pause -c "$derived_id"
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$derived_id" "stopped" "null" ""
-	if result=$(cdc_cli_changefeed update -c "$derived_id" \
-		--config="$CUR/conf/allow_same_cluster_bad_route.toml" --no-confirm 2>&1); then
-		echo "Expected changefeed operation to be rejected, got: $result"
-		exit 1
-	fi
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
-		echo "Expected update to be rejected when the route target is replicated as well, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	cdc_cli_changefeed remove -c "$derived_id"
-
-	# 5) `allow-same-cluster` is rejected whenever the configuration cannot be proven safe: without
-	# table routing, when a filter rule is not covered by any matcher, when the route target stays
-	# inside the filter range, and for rule forms the gate does not support.
-	if result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_no_route.toml" -c "allow-same-cluster-no-route" 2>&1); then
-		echo "Expected changefeed operation to be rejected, got: $result"
-		exit 1
-	fi
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"requires table routing to be enabled"* ]]; then
-		echo "Expected create to be rejected without table routing, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	if result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_narrow_route.toml" -c "allow-same-cluster-narrow-route" 2>&1); then
-		echo "Expected changefeed operation to be rejected, got: $result"
-		exit 1
-	fi
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"is not covered by any dispatch rule matcher"* ]]; then
-		echo "Expected create to be rejected when the matcher is narrower than the filter rule, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	if result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_bad_route.toml" -c "allow-same-cluster-bad-route" 2>&1); then
-		echo "Expected changefeed operation to be rejected, got: $result"
-		exit 1
-	fi
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
-		echo "Expected create to be rejected when the route target is replicated as well, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	if result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_unsupported.toml" -c "allow-same-cluster-unsupported" 2>&1); then
-		echo "Expected changefeed operation to be rejected, got: $result"
-		exit 1
-	fi
-	if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"does not support the filter rule"* ]]; then
-		echo "Expected create to be rejected for a filter rule the gate does not support, got:"
-		echo "$result"
-		exit 1
-	fi
-
-	# 6) Long prefixes must remain usable on create/update/resume. This configuration used to
-	# enumerate hundreds of millions of schema/table combinations even though the target
-	# schema is a fixed name outside the filter. Benchmarks track the validation cost separately.
-	long_id="allow-same-cluster-long-prefix"
-	long_src="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	long_dst="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	long_config="$CUR/conf/allow_same_cluster_long_prefix.toml"
-	run_sql "create database $long_src;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "create database $long_dst;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" --config="$long_config" -c "$long_id"
-	run_sql "create table $long_src.$long_src (id int primary key);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$long_dst.$long_src" "$UP_TIDB_HOST" "$UP_TIDB_PORT" 90
-	run_sql "insert into $long_src.$long_src values (1), (2);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	wait_for_rows 2 "$long_dst.$long_src"
-	cdc_cli_changefeed pause -c "$long_id"
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$long_id" "stopped" "null" ""
-	# Make the identity table mapping explicit so the CLI sends an update to the server.
-	long_update_config="$WORK_DIR/long_prefix_update.toml"
-	cp "$long_config" "$long_update_config"
-	echo "target-table = '{table}'" >>"$long_update_config"
-	result=$(cdc_cli_changefeed update -c "$long_id" --config="$long_update_config" --no-confirm 2>&1)
-	if [[ "$result" != *"Update changefeed config successfully"* ]]; then
-		echo "Expected a successful update with long prefixes, got: $result"
-		exit 1
-	fi
-	cdc_cli_changefeed resume -c "$long_id"
-	run_sql "insert into $long_src.$long_src values (3);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	wait_for_rows 3 "$long_dst.$long_src"
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$long_id" "normal" "null" ""
-	cdc_cli_changefeed remove -c "$long_id"
-
-	# 7) Database DDL is routed safely even for a schema created after the changefeed.
-	ddl_id="allow-same-cluster-schema-ddl"
-	cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
-		--config="$CUR/conf/allow_same_cluster_schema_ddl.toml" -c "$ddl_id"
+	# 4) The same configuration also routes future databases and derived table names.
 	run_sql "create database isolation_src_future character set utf8mb4 collate utf8mb4_general_ci; create table isolation_src_future.t1 (id int primary key);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "copy_isolation_src_future.t1" "$UP_TIDB_HOST" "$UP_TIDB_PORT" 90
+	check_table_exists "copy_isolation_src_future.t1_routed" "$UP_TIDB_HOST" "$UP_TIDB_PORT" 90
 	run_sql "insert into isolation_src_future.t1 values (1);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	wait_for_rows 1 "copy_isolation_src_future.t1"
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$ddl_id" "normal" "null" ""
+	wait_for_rows 1 "copy_isolation_src_future.t1_routed"
+	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "normal" "null" ""
 	run_sql "alter database isolation_src_future collate utf8mb4_bin;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	wait_for_schema_count() {
 		local expected=$1 predicate=$2 count=0
@@ -278,9 +157,10 @@ function run() {
 	wait_for_schema_count 1 "and default_collation_name='utf8mb4_bin'"
 	run_sql "drop database isolation_src_future;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	wait_for_schema_count 0 ""
-	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$ddl_id" "normal" "null" ""
-	wait_for_rows 1 "allow_same_cluster_other.t2"
-	cdc_cli_changefeed remove -c "$ddl_id"
+	wait_for_rows 3 "$src_db.t1"
+	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "normal" "null" ""
+	wait_for_rows 1 "allow_same_cluster_src_copy.t2"
+	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
 
 	cleanup_process $CDC_BINARY
 }

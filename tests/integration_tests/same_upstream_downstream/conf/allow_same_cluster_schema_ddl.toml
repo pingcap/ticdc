@@ -1,9 +1,0 @@
-allow-same-cluster = true
-
-[filter]
-rules = ['isolation_src*.*']
-
-[[sink.dispatchers]]
-matcher = ['isolation_src*.*']
-target-schema = 'copy_{schema}'
-target-table = '{table}'

@@ -233,6 +233,31 @@ func TestValidateSameClusterRouting(t *testing.T) {
 		},
 
 		{
+			name:        "all matchers in one route contribute to coverage",
+			allowSame:   true,
+			filterRules: []string{"a.t1", "b.t2"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"a.t1", "b.t2"}, TargetSchema: "copy_{schema}"}},
+		},
+		{
+			name:        "a later matcher routes back into a source schema",
+			allowSame:   true,
+			filterRules: []string{"a.t1", "b.t2", "copy_b.t3"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"a.t1", "b.t2", "copy_b.t3"}, TargetSchema: "copy_{schema}"},
+			},
+			wantError: "requires database isolation",
+		},
+		{
+			name:        "a later matcher conflicts with another schema route",
+			allowSame:   true,
+			filterRules: []string{"a.t1", "b.t2"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"a.t1", "b.t2"}, TargetSchema: "dst1"},
+				{Matcher: []string{"other.*", "b.other"}, TargetSchema: "dst2"},
+			},
+			wantError: "different target-schema expressions",
+		},
+		{
 			name:        "negated filter rules are not supported",
 			allowSame:   true,
 			filterRules: []string{"src.*", "!src.tmp"},

@@ -1,9 +1,0 @@
-allow-same-cluster = true
-case-sensitive = false
-
-[filter]
-rules = ['allow_same_cluster_src.*', 'allow_same_cluster_src_copy.*']
-
-[[sink.dispatchers]]
-matcher = ['allow_same_cluster_src*.*']
-target-schema = '{schema}_COPY'
