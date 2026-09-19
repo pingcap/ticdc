@@ -23,7 +23,6 @@ require (
 	github.com/bradleyjkemp/grpc-tools v0.2.5
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/cockroachdb/pebble v1.1.4-0.20250120151818-5dd133a1e6fb
-	github.com/confluentinc/confluent-kafka-go/v2 v2.3.0
 	github.com/coreos/go-semver v0.3.1
 	github.com/fatih/color v1.18.0
 	github.com/gavv/monotime v0.0.0-20190418164738-30dba4353424
@@ -45,7 +44,7 @@ require (
 	github.com/integralist/go-findroot v0.0.0-20160518114804-ac90681525dc
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.19.0
+	github.com/klauspost/compress v1.19.2
 	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.9.1
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
@@ -336,6 +335,9 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/twmb/franz-go v1.21.7
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/twmb/murmur3 v1.1.6 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
