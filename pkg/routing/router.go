@@ -45,6 +45,28 @@ func (k TableKey) Equal(other TableKey) bool {
 	return k.Schema == other.Schema && k.Table == other.Table
 }
 
+// normalized returns the key used for table identity comparisons under the
+// changefeed's case sensitivity. A case-insensitive changefeed treats `T` and `t`
+// as the same table, so conflict detection and admission tracking must match
+// rule matching; a case-sensitive changefeed keeps them distinct.
+func (k TableKey) normalized(caseSensitive bool) TableKey {
+	return TableKey{
+		Schema: normalizeIdentifier(k.Schema, caseSensitive),
+		Table:  normalizeIdentifier(k.Table, caseSensitive),
+	}
+}
+
+// normalizeIdentifier lower-cases a schema or table identifier unless the
+// changefeed is case-sensitive. Identifiers that name a physical table must use
+// one rule everywhere, because rule matching, statement rewriting, and conflict
+// detection all depend on whether `T` and `t` are the same table.
+func normalizeIdentifier(name string, caseSensitive bool) string {
+	if caseSensitive {
+		return name
+	}
+	return strings.ToLower(name)
+}
+
 // RouteBinding records one source-to-target route mapping.
 type RouteBinding struct {
 	Source TableKey
@@ -66,6 +88,8 @@ func NewRouteBinding(schema, table, targetSchema, targetTable string) RouteBindi
 }
 
 func (b RouteBinding) routed() bool {
+	// Spelling matters: a case-only mapping still changes the statement sent
+	// downstream, so compare the names exactly here.
 	return !b.Source.Equal(b.Target)
 }
 
@@ -81,6 +105,10 @@ type rule struct {
 type Router struct {
 	changefeedID common.ChangeFeedID
 	rules        []rule
+	// caseSensitive makes rule matching, and therefore table identity in the
+	// rewritten statements, case-sensitive. Range variable aliases stay
+	// case-insensitive, like SQL identifiers.
+	caseSensitive bool
 }
 
 // HasTableRoute returns whether the router contains any table route rule.
@@ -120,8 +148,9 @@ func NewRouter(
 	}
 
 	return Router{
-		changefeedID: changefeedID,
-		rules:        routingRules,
+		changefeedID:  changefeedID,
+		rules:         routingRules,
+		caseSensitive: caseSensitive,
 	}, nil
 }
 
@@ -245,6 +274,11 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	}
 
 	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
+	if targetSchema == "" {
+		return RouteBinding{}, errors.ErrTableRoutingFailed.GenWithStack(
+			"target schema is empty for source %s.%s with target-schema expression %q",
+			originSchema, originTable, rule.targetSchemaExpr)
+	}
 	if originTable == "" {
 		return NewRouteBinding(originSchema, originTable, targetSchema, originTable), nil
 	}
@@ -359,6 +393,7 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.
+// Placeholder-like text in source names is preserved literally.
 // If expr is empty, returns defaultValue (typically sourceSchema for schema expressions,
 // sourceTable for table expressions).
 func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) string {
@@ -366,10 +401,10 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 		return defaultValue
 	}
 
-	result := expr
-	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
-	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
-	return result
+	return strings.NewReplacer(
+		SchemaPlaceholder, sourceSchema,
+		TablePlaceholder, sourceTable,
+	).Replace(expr)
 }
 
 // ValidateNoStaticRouteConflict checks whether the given table names would produce
@@ -393,7 +428,7 @@ func ValidateNoStaticRouteConflict(
 	for _, tableNames := range tableNameGroups {
 		capacity += len(tableNames)
 	}
-	registry := NewTargetTableRegistry(changefeedID, capacity)
+	registry := NewTargetTableRegistry(changefeedID, caseSensitive, capacity)
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
 			binding, err := router.Route(tableName.Schema, tableName.Table)

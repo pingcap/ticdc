@@ -14,6 +14,7 @@
 package event
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -124,25 +125,32 @@ func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
+// qualifyColumnName resolves a table qualifier to its source schema by walking
+// the SELECT scopes from the innermost outward. pkg/routing's tableRenameVisitor
+// applies the same rules to routed targets; keep both in sync
+// (TestRewriteParserBackedDDLQueryRangeVariableResolution pins the case list).
 func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
 		return
 	}
 
-	scope := n.scopes[len(n.scopes)-1]
 	tableKey := strings.ToLower(c.Table.O)
-	if _, ok := scope.aliases[tableKey]; ok {
-		return
+	// Resolve correlated references from the innermost SELECT outward.
+	for _, scope := range slices.Backward(n.scopes) {
+		if _, ok := scope.aliases[tableKey]; ok {
+			return
+		}
+		if _, ok := scope.ambiguousTables[tableKey]; ok {
+			return
+		}
+		if schema, ok := scope.tableByName[tableKey]; ok {
+			if schema != "" {
+				c.Schema = ast.NewCIStr(schema)
+				n.changed = true
+			}
+			return
+		}
 	}
-	if _, ok := scope.ambiguousTables[tableKey]; ok {
-		return
-	}
-	schema, ok := scope.tableByName[tableKey]
-	if !ok {
-		return
-	}
-	c.Schema = ast.NewCIStr(schema)
-	n.changed = true
 }
 
 func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {
@@ -173,7 +181,7 @@ func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSele
 			return
 		}
 		tableName, ok := v.Source.(*ast.TableName)
-		if !ok || tableName.Schema.O == "" || tableName.Name.O == "" {
+		if !ok || tableName.Name.O == "" {
 			return
 		}
 		tableKey := strings.ToLower(tableName.Name.O)
