@@ -1169,6 +1169,12 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// DecimalHandlingMode selects double (default) or string for Debezium JSON decimals.
+	DecimalHandlingMode *string `toml:"decimal-handling-mode" json:"decimal-handling-mode,omitempty"`
+	// BigintUnsignedHandlingMode selects long (default) or string for Debezium JSON unsigned bigints.
+	BigintUnsignedHandlingMode *string `toml:"bigint-unsigned-handling-mode" json:"bigint-unsigned-handling-mode,omitempty"`
+	// BinaryHandlingMode selects bytes, base64 (default), base64-url-safe, or hex for Debezium JSON binary columns.
+	BinaryHandlingMode *string `toml:"binary-handling-mode" json:"binary-handling-mode,omitempty"`
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text

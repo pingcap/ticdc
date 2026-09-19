@@ -42,6 +42,54 @@ function check_schema_registry_subject() {
 	return 1
 }
 
+function run_handling_modes() {
+	local mode database topic sink_uri config_file diff_config
+	for mode in default precise string; do
+		database="debezium_avro_$mode"
+		topic="ticdc-debezium-avro-handling-$mode-$RANDOM"
+		config_file="$WORK_DIR/handling-$mode.toml"
+		diff_config="$WORK_DIR/diff-$mode.toml"
+		sink_uri="kafka://127.0.0.1:9092/$topic?protocol=debezium-avro&enable-tidb-extension=true&avro-enable-watermark=true&partition-num=1"
+		cat >"$config_file" <<EOF
+[filter]
+rules = ['$database.*']
+EOF
+		if [ "$mode" != "default" ]; then
+			cat >>"$config_file" <<EOF
+[sink.kafka-config.codec-config]
+avro-decimal-handling-mode = "precise"
+avro-bigint-unsigned-handling-mode = "string"
+EOF
+		fi
+		if [ "$mode" = "string" ]; then
+			# Verify URI overrides in both the producer and consumer.
+			sed -i 's/avro-bigint-unsigned-handling-mode = "string"/avro-bigint-unsigned-handling-mode = "long"/' "$config_file"
+			sink_uri="$sink_uri&avro-decimal-handling-mode=string&avro-bigint-unsigned-handling-mode=string"
+		fi
+		sed "s/debezium_avro_modes/$database/g" "$CUR/data/handling_modes.sql" >"$WORK_DIR/handling-$mode.sql"
+		if [ "$mode" = "default" ]; then
+			# Avro long accepts unsigned BIGINT only within the signed range.
+			sed -i -e 's/18446744073709551615/9223372036854775807/g' \
+				-e 's/9223372036854775808/9007199254740993/g' "$WORK_DIR/handling-$mode.sql"
+		fi
+
+		cdc_cli_changefeed create -c "debezium-avro-$mode" --sink-uri="$sink_uri" \
+			--config="$config_file" --schema-registry="$schema_registry_uri"
+		run_kafka_consumer "$WORK_DIR" "$sink_uri" "$config_file" "$schema_registry_uri" "-$mode"
+		run_sql_file "$WORK_DIR/handling-$mode.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+		kafka_dump --topic "$topic" --schema-registry-uri "$schema_registry_uri" \
+			--timeout 90s --until-table handling_modes --until-count 6 >"$WORK_DIR/handling-$mode.jsonl"
+		python3 "$CUR/check_handling_modes.py" "$WORK_DIR/handling-$mode.jsonl" "$mode"
+		check_table_exists "$database.handling_modes" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 200
+		sed -e "s/test[.][?][*]/$database.*/" \
+			-e "s|debezium_avro/output|debezium_avro/output-$mode|" \
+			"$CUR/conf/diff_config.toml" >"$diff_config"
+		check_sync_diff "$WORK_DIR" "$diff_config"
+		cdc_cli_changefeed remove -c "debezium-avro-$mode"
+		cleanup_process cdc_kafka_consumer
+	done
+}
+
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
@@ -76,6 +124,10 @@ function run() {
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
 	check_schema_registry_subject "$TOPIC_NAME-key" "tp_accountKey"
 	check_schema_registry_subject "$TOPIC_NAME-value" "tp_accountEnvelope"
+
+	cdc_cli_changefeed remove -c "$changefeed_id"
+	cleanup_process cdc_kafka_consumer
+	run_handling_modes
 
 	cleanup_process "$CDC_BINARY"
 }
