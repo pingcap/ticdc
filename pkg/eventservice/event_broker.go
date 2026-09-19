@@ -1109,8 +1109,7 @@ func (c *eventBroker) requestPrepare(d *dispatcherStat) {
 	}
 
 	d.scanMu.Lock()
-	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
-		d.scanState = dispatcherScanRemoved
+	if d.isRemoved.Load() {
 		d.scanPending = false
 		d.scanMu.Unlock()
 		return
@@ -1159,8 +1158,8 @@ func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
 	}
 
 	d.scanMu.Lock()
-	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
-		d.scanState = dispatcherScanRemoved
+	if d.isRemoved.Load() {
+		d.scanPending = false
 		d.schemaBlockedUntilTs = 0
 		d.scanMu.Unlock()
 		return
@@ -1188,8 +1187,7 @@ func (c *eventBroker) finishScan(
 	schemaBlockedUntilTs uint64,
 ) {
 	d.scanMu.Lock()
-	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
-		d.scanState = dispatcherScanRemoved
+	if d.isRemoved.Load() {
 		d.scanPending = false
 		d.schemaBlockedUntilTs = 0
 		d.scanMu.Unlock()

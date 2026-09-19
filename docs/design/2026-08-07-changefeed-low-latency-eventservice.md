@@ -134,10 +134,11 @@ Each dispatcher has one `dispatcherScanState`, protected by `scanMu`:
 | `dispatcherScanQueued` | A task is waiting in a scan worker queue. |
 | `dispatcherScanRunning` | A scan worker owns the dispatcher. |
 | `dispatcherScanSchemaBlocked` | Progress is waiting for SchemaStore to advance. |
-| `dispatcherScanRemoved` | The dispatcher is removed; this state is terminal for that dispatcher instance. |
 
 `scanPending`, protected by the same mutex, records one coalesced follow-up
 received while preparation or a low-latency scan is running.
+`isRemoved` is the terminal dispatcher lifecycle flag. It is independent of
+`dispatcherScanState`, and workers reject queued tasks after it is set.
 
 The main transitions are:
 
@@ -164,8 +165,8 @@ or updating one dispatcher concurrently.
 An interrupted scan is prepared again. All scheduling requests, including a
 dispatcher reset, enter the preparation queue, so only a preparation worker can
 submit work to the bounded scan queue. Removing or resetting a dispatcher marks
-the old dispatcher state as `Removed`; a reset creates a new dispatcher state
-starting from `Idle`.
+the old dispatcher as removed; a reset creates a new dispatcher state starting
+from `Idle`.
 
 ### Schema-blocked retry and active scans
 
