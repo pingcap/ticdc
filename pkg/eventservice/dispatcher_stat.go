@@ -42,11 +42,9 @@ const (
 )
 
 // dispatcherScanState serializes scan preparation and execution for one dispatcher.
-// Notifications enqueue preparation from Idle; internal requests can enqueue a
-// scan directly and fall back to preparation when the scan queue is full. A
-// prepare worker changes PrepareQueued -> Preparing and either completes a
-// no-scan fast path or changes Preparing -> Queued before handing the task to
-// a scan worker.
+// Scheduling requests enqueue preparation from Idle. A prepare worker changes
+// PrepareQueued -> Preparing and either completes a no-scan fast path or changes
+// Preparing -> Queued before handing the task to a scan worker.
 // The scan worker changes Queued -> Running. Notifications received while
 // Preparing, or while a low-latency scan is Running, set scanPending, and
 // completion queues one coalesced preparation. A scan stopped by SchemaStore

@@ -1181,49 +1181,6 @@ func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
 	}
 }
 
-// requestScan is used by EventBroker-owned control paths that can enqueue a
-// scan directly. If the bounded scan queue is full, preparation owns the retry
-// so the request is neither dropped nor allowed to block the caller.
-func (c *eventBroker) requestScan(d *dispatcherStat) {
-	span := d.info.GetTableSpan()
-	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		return
-	}
-
-	d.scanMu.Lock()
-	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
-		d.scanState = dispatcherScanRemoved
-		d.scanPending = false
-		d.scanMu.Unlock()
-		return
-	}
-	if d.scanState != dispatcherScanIdle {
-		if d.scanState == dispatcherScanPreparing ||
-			(d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning) {
-			d.scanPending = true
-		}
-		d.scanMu.Unlock()
-		return
-	}
-	d.scanState = dispatcherScanQueued
-	d.scanMu.Unlock()
-
-	select {
-	case c.taskChan[d.scanWorkerIndex] <- d:
-		return
-	default:
-	}
-
-	d.scanMu.Lock()
-	if d.scanState == dispatcherScanQueued && !d.isRemoved.Load() {
-		d.scanState = dispatcherScanPrepareQueued
-		d.scanMu.Unlock()
-		c.prepareTaskQueue[d.scanWorkerIndex].push(d)
-		return
-	}
-	d.scanMu.Unlock()
-}
-
 func (c *eventBroker) finishScan(
 	d *dispatcherStat,
 	interrupted bool,
@@ -1644,7 +1601,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 
-	c.requestScan(newStat)
+	c.requestPrepare(newStat)
 
 	return nil
 }

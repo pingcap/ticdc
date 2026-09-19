@@ -147,7 +147,6 @@ stateDiagram-v2
     Idle --> PrepareQueued: EventStore notification
     PrepareQueued --> Preparing: preparation worker begins
     Preparing --> Queued: preparation finds data to scan
-    Idle --> Queued: internal request
     Queued --> Running: worker begins
     Preparing --> PrepareQueued: pending notification after preparation
     Running --> PrepareQueued: pending low-latency notification or interruption
@@ -162,10 +161,11 @@ Preparation and scan execution have distinct ownership states. This keeps the
 EventStore callback outside both operations while preventing them from checking
 or updating one dispatcher concurrently.
 
-An interrupted scan is prepared again. When a direct internal enqueue finds the
-worker queue full, it falls back to `PrepareQueued` rather than dropping the
-request. Removing or resetting a dispatcher marks the old dispatcher state as
-`Removed`; a reset creates a new dispatcher state starting from `Idle`.
+An interrupted scan is prepared again. All scheduling requests, including a
+dispatcher reset, enter the preparation queue, so only a preparation worker can
+submit work to the bounded scan queue. Removing or resetting a dispatcher marks
+the old dispatcher state as `Removed`; a reset creates a new dispatcher state
+starting from `Idle`.
 
 ### Schema-blocked retry and active scans
 
