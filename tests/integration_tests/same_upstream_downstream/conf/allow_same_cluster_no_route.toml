@@ -4,3 +4,7 @@ allow-same-cluster = true
 
 [filter]
 rules = ['allow_same_cluster_src.*']
+
+# Updates merge into the existing config; explicitly remove the previous routes.
+[sink]
+dispatchers = []

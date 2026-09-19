@@ -98,6 +98,7 @@ function run() {
 	# Create and update must reject database overlap and ambiguous schema routing.
 	cdc_cli_changefeed pause -c "$allow_same_cluster_id"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "stopped" "null" ""
+	original_config=$(cdc_cli_changefeed query -c "$allow_same_cluster_id" | sed '/^Command to ticdc/d' | jq -eS '.config')
 	for unsafe_case in same_schema source_schema_chain all_schemas schema_ambiguity no_route narrow_route unsupported; do
 		expected_error="which the filter replicates"
 		case "$unsafe_case" in
@@ -123,6 +124,11 @@ function run() {
 		fi
 		if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"$expected_error"* ]]; then
 			echo "Expected update to reject $unsafe_case, got: $result"
+			exit 1
+		fi
+		current_config=$(cdc_cli_changefeed query -c "$allow_same_cluster_id" | sed '/^Command to ticdc/d' | jq -eS '.config')
+		if [ "$current_config" != "$original_config" ]; then
+			echo "Rejected update changed the configuration for $unsafe_case"
 			exit 1
 		fi
 	done
