@@ -14,12 +14,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"strconv"
 	"strings"
 
-	"github.com/IBM/sarama"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func main() {
@@ -37,32 +39,37 @@ func main() {
 	}
 
 	value := strconv.Itoa(*maxMessageBytes)
-	config := sarama.NewConfig()
-	config.ClientID = "ticdc-integration-test-kafka-topic"
-	admin, err := sarama.NewClusterAdmin(strings.Split(*brokers, ","), config)
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
+		kgo.ClientID("ticdc-integration-test-kafka-topic"),
+	)
 	if err != nil {
 		log.Fatalf("create Kafka admin client: %v", err)
 	}
-	defer func() {
-		if err := admin.Close(); err != nil {
-			log.Printf("close Kafka admin client: %v", err)
-		}
-	}()
+	defer client.Close()
+	admin := kadm.NewClient(client)
+	ctx := context.Background()
 
-	configEntries := map[string]*string{"max.message.bytes": &value}
 	if *alter {
-		if err := admin.AlterConfig(sarama.TopicResource, *topic, configEntries, false); err != nil {
+		// Preserve the full-state AlterConfigs behavior of the original tool.
+		responses, err := admin.AlterTopicConfigsState(ctx, []kadm.AlterConfig{
+			{Name: "max.message.bytes", Value: &value},
+		}, *topic)
+		if err != nil {
 			log.Fatalf("alter Kafka topic %s: %v", *topic, err)
+		}
+		response, err := responses.On(*topic, nil)
+		if err != nil {
+			log.Fatalf("alter Kafka topic %s: %v", *topic, err)
+		}
+		if response.Err != nil {
+			log.Fatalf("alter Kafka topic %s: %v (%s)", *topic, response.Err, response.ErrMessage)
 		}
 		return
 	}
 
-	detail := &sarama.TopicDetail{
-		NumPartitions:     1,
-		ReplicationFactor: 1,
-		ConfigEntries:     configEntries,
-	}
-	if err := admin.CreateTopic(*topic, detail, false); err != nil {
+	configEntries := map[string]*string{"max.message.bytes": &value}
+	if _, err := admin.CreateTopic(ctx, 1, 1, configEntries, *topic); err != nil {
 		log.Fatalf("create Kafka topic %s: %v", *topic, err)
 	}
 }
