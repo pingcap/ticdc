@@ -21,9 +21,11 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,20 +39,20 @@ func TestSameClusterRoutingRuntimeSemantics(t *testing.T) {
 		targetSchema        string
 		targetTable         string
 		sourceSchema        string
-		wantCaptured        bool
+		wantSchemaCaptured  bool
 		caseInsensitiveOnly bool
 	}{
 		{
 			name: "leading spaces", filterRules: []string{" src.*"},
-			matcher: " src.*", targetSchema: "src", wantCaptured: true,
+			matcher: " src.*", targetSchema: "src", wantSchemaCaptured: true,
 		},
 		{
 			name: "trailing spaces", filterRules: []string{"src.t1 "},
-			matcher: "src.t1 ", targetSchema: "src", wantCaptured: true,
+			matcher: "src.t1 ", targetSchema: "src", wantSchemaCaptured: true,
 		},
 		{
 			name: "surrounding tabs", filterRules: []string{"\tsrc.t1\t"},
-			matcher: "\tsrc.t1\t", targetSchema: "src", wantCaptured: true,
+			matcher: "\tsrc.t1\t", targetSchema: "src", wantSchemaCaptured: true,
 		},
 		{
 			name: "safe route with padded filter", filterRules: []string{" \tsrc.t1\t "},
@@ -66,27 +68,27 @@ func TestSameClusterRoutingRuntimeSemantics(t *testing.T) {
 		},
 		{
 			name: "uppercase target schema", filterRules: []string{"src.*"},
-			matcher: "src.*", targetSchema: "SRC", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "src.*", targetSchema: "SRC", wantSchemaCaptured: true, caseInsensitiveOnly: true,
 		},
 		{
 			name: "uppercase target table", filterRules: []string{"src.t1"},
-			matcher: "src.t1", targetTable: "T1", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "src.t1", targetTable: "T1", wantSchemaCaptured: true,
 		},
 		{
 			name: "target schema prefix", filterRules: []string{"src.*", "copy_src.*"},
-			matcher: "*.*", targetSchema: "COPY_{schema}", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "*.*", targetSchema: "COPY_{schema}", wantSchemaCaptured: true, caseInsensitiveOnly: true,
 		},
 		{
 			name: "target schema suffix", filterRules: []string{"src.*", "src_copy.*"},
-			matcher: "*.*", targetSchema: "{schema}_COPY", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "*.*", targetSchema: "{schema}_COPY", wantSchemaCaptured: true, caseInsensitiveOnly: true,
 		},
 		{
 			name: "target table prefix", filterRules: []string{"src.t1", "src.copy_t1"},
-			matcher: "src.*", targetTable: "COPY_{table}", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "src.*", targetTable: "COPY_{table}", wantSchemaCaptured: true,
 		},
 		{
 			name: "target table suffix", filterRules: []string{"src.t1", "src.t1_copy"},
-			matcher: "src.*", targetTable: "{table}_COPY", wantCaptured: true, caseInsensitiveOnly: true,
+			matcher: "src.*", targetTable: "{table}_COPY", wantSchemaCaptured: true,
 		},
 		{
 			name: "safe mixed case target", filterRules: []string{"src.*"},
@@ -115,8 +117,15 @@ func TestSameClusterRoutingRuntimeSemantics(t *testing.T) {
 					TableName: common.TableName{Schema: schema, Table: "t1"},
 				})
 				require.NoError(t, err)
-				captured := !f.ShouldIgnoreTable(routed.GetTargetSchemaName(), routed.GetTargetTableName())
-				require.Equal(t, tc.wantCaptured && !(caseSensitive && tc.caseInsensitiveOnly), captured)
+				// Table renaming cannot exclude database DDL from the source schema range.
+				ddl, err := router.ApplyToDDLEvent(&event.DDLEvent{
+					Type: byte(model.ActionDropSchema), SchemaName: schema,
+					Query: "DROP DATABASE " + common.QuoteName(schema),
+				})
+				require.NoError(t, err)
+				require.Equal(t, routed.GetTargetSchemaName(), ddl.GetTargetSchemaName())
+				captured := !f.ShouldDiscardDDL(ddl.GetTargetSchemaName(), "", model.ActionDropSchema, nil)
+				require.Equal(t, tc.wantSchemaCaptured && !(caseSensitive && tc.caseInsensitiveOnly), captured)
 
 				err = check.ValidateSameClusterRouting(cfg)
 				if captured {

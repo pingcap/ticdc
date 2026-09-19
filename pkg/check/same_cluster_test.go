@@ -89,19 +89,42 @@ func TestValidateSameClusterRouting(t *testing.T) {
 			wantError: "which the filter replicates",
 		},
 		{
-			name:        "a literal target table outside the filter is allowed",
+			name:        "a different target table in the source schema is rejected",
 			allowSame:   true,
 			filterRules: []string{"src.t1"},
 			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.t1"}, TargetSchema: "src", TargetTable: "t1_bak"}},
+			wantError:   "requires database isolation",
 		},
 		{
-			name:        "a derived target table outside the filter is allowed",
+			name:        "a derived target table in another source schema is rejected",
 			allowSame:   true,
 			filterRules: []string{"src.*", "dst.t1"},
 			dispatch: []*config.DispatchRule{
 				{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_routed"},
 				{Matcher: []string{"dst.t1"}, TargetSchema: "dst2"},
 			},
+			wantError: "requires database isolation",
+		},
+		{
+			name:        "matching schemas with a disjoint literal target table",
+			allowSame:   true,
+			filterRules: []string{"src.a*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.a*"}, TargetTable: "b"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "matching schemas with a disjoint derived target table",
+			allowSame:   true,
+			filterRules: []string{"src.a*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.a*"}, TargetTable: "b{table}"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "both dimensions match a literal target",
+			allowSame:   true,
+			filterRules: []string{"src.a*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.a*"}, TargetSchema: "src", TargetTable: "a_copy"}},
+			wantError:   "which the filter replicates",
 		},
 		{
 			name:        "the target keeps the source name",
@@ -143,6 +166,72 @@ func TestValidateSameClusterRouting(t *testing.T) {
 			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{TABLE}"}},
 			wantError:   "does not support the target table",
 		},
+		{
+			name:        "database DDL can delete another source table",
+			allowSame:   true,
+			filterRules: []string{"a.t1", "b.t2"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"a.t1"}, TargetSchema: "b", TargetTable: "t1_copy"},
+				{Matcher: []string{"b.t2"}, TargetSchema: "c", TargetTable: "t2_copy"},
+			},
+			wantError: "requires database isolation",
+		},
+		{
+			name:        "all schemas with only one replicated table name",
+			allowSame:   true,
+			filterRules: []string{"*.orders"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"*.orders"}, TargetSchema: "{schema}_backup", TargetTable: "orders_copy"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "database DDL also matches an unreplicated table rule",
+			allowSame:   true,
+			filterRules: []string{"src.t1"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.t1"}, TargetSchema: "dst"},
+				{Matcher: []string{"src.other"}, TargetSchema: "src"},
+			},
+			wantError: "requires database isolation",
+		},
+		{
+			name:        "different tables cannot route database DDL to different schemas",
+			allowSame:   true,
+			filterRules: []string{"src.t1", "src.t2"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.t1"}, TargetSchema: "dst1"},
+				{Matcher: []string{"src.t2"}, TargetSchema: "dst2"},
+			},
+			wantError: "different target-schema expressions",
+		},
+		{
+			name:        "runtime schema targets are compared without case folding",
+			allowSame:   true,
+			filterRules: []string{"src.t1", "src.t2"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.t1"}, TargetSchema: "DST"},
+				{Matcher: []string{"src.t2"}, TargetSchema: "dst"},
+			},
+			wantError: "different target-schema expressions",
+		},
+		{
+			name:        "different target tables may share a target schema",
+			allowSame:   true,
+			filterRules: []string{"src.t1", "src.t2"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.t1"}, TargetSchema: "dst", TargetTable: "t1_copy"},
+				{Matcher: []string{"src.t2"}, TargetSchema: "dst", TargetTable: "t2_copy"},
+			},
+		},
+		{
+			name:        "schema matchers may overlap outside the source filter",
+			allowSame:   true,
+			filterRules: []string{"foo.t1", "bar.t1"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"f*.t1"}, TargetSchema: "dst1"},
+				{Matcher: []string{"*r.t1"}, TargetSchema: "dst2"},
+			},
+		},
+
 		{
 			name:        "negated filter rules are not supported",
 			allowSame:   true,

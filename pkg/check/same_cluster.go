@@ -21,19 +21,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// This file validates the `allow-same-cluster` configuration: it decides whether a changefeed which
-// may replicate into its own cluster can capture the writes of its own sink.
+// This file validates database isolation for `allow-same-cluster`. Every replicated table must
+// be routed, and every target schema must stay outside the schemas selected by the filter.
+// Database DDL matches schema names even when a filter or matcher names only specific tables.
+// Consequently, changing only the table name cannot isolate a changefeed from its own writes.
 //
-// Let S be the tables the filter replicates and route(t) the target name of the routing rules.
-// The changefeed is safe exactly when route(S) ∩ S = ∅, that is when no replicated table is routed
-// to a table which the filter replicates as well. The decision here is exact for the supported
-// pattern class (see parseNamePattern): it lists the table names which can witness such a pair and
-// verifies every candidate against the filter rules and the matcher, so a configuration is rejected
-// only when a witness exists. Patterns outside the supported class are rejected as unsupported
-// instead of being approximated.
-//
-// The check reasons about the patterns instead of the tables which exist at that moment, so it
-// covers tables created later as well.
+// Validation reasons about patterns to cover future databases and tables. Unsupported patterns
+// are rejected. Rules overlapping on a source schema must use the same target-schema expression
+// so database DDL has an unambiguous target, including rules whose table matchers are disjoint.
 
 const (
 	schemaPlaceholder = "{schema}"
@@ -44,8 +39,8 @@ const (
 )
 
 // ValidateSameClusterRouting rejects a changefeed which may replicate into its own cluster unless
-// its routing rules place every replicated table outside the filter. It is the static counterpart of
-// IsSameUpstreamDownstream: the flag is only safe when this validation passes, so it is evaluated
+// its routing rules place every replicated table outside the source schema range. It is the static
+// counterpart of IsSameUpstreamDownstream: the flag is only safe when this validation passes, so it is evaluated
 // where the flag takes effect, on the configuration which is actually in use.
 func ValidateSameClusterRouting(cfg *config.ChangefeedConfig) error {
 	if cfg == nil || !cfg.AllowSameCluster {
@@ -54,34 +49,33 @@ func ValidateSameClusterRouting(cfg *config.ChangefeedConfig) error {
 	if !cfg.SinkConfig.TableRouteEnabled() {
 		return errors.ErrInvalidReplicaConfig.FastGenByArgs("allow-same-cluster requires table routing to be enabled")
 	}
-	var dispatch []*config.DispatchRule
-	if cfg.SinkConfig != nil {
-		dispatch = cfg.SinkConfig.DispatchRules
-	}
-	return validateRouting(cfg.Filter, dispatch, cfg.CaseSensitive)
+	return validateRouting(cfg.Filter, cfg.SinkConfig.DispatchRules, cfg.CaseSensitive)
 }
 
 // validateRouting checks the routing rules against the filter rules.
 func validateRouting(filter *config.FilterConfig, dispatch []*config.DispatchRule, caseSensitive bool) error {
-	normalize := func(name string) string {
-		if caseSensitive {
-			return name
-		}
-		return strings.ToLower(name)
-	}
-
-	filters, err := parseFilterRules(effectiveFilterRules(filter), normalize)
+	filters, err := parseFilterRules(effectiveFilterRules(filter), caseSensitive)
 	if err != nil {
 		return err
 	}
-	routes, err := parseRouteRules(dispatch, normalize)
+	routes, err := parseRouteRules(dispatch, caseSensitive)
 	if err != nil {
 		return err
 	}
 	if err := verifyFilterRulesCovered(filters, routes); err != nil {
 		return err
 	}
-	return verifyRouteTargets(filters, routes)
+	if err := verifySchemaTargets(filters, routes); err != nil {
+		return err
+	}
+	return verifySchemaRoutingConsistent(filters, routes)
+}
+
+func normalizeName(name string, caseSensitive bool) string {
+	if caseSensitive {
+		return name
+	}
+	return strings.ToLower(name)
 }
 
 // namePatternKind classifies the supported pattern forms.
@@ -161,20 +155,12 @@ type tablePattern struct {
 	table  namePattern
 }
 
-func (p tablePattern) matches(schema, table string) bool {
-	return p.schema.matches(schema) && p.table.matches(table)
-}
-
 // routeRuleToCheck is a parsed dispatch rule which has a target.
 type routeRuleToCheck struct {
-	rawMatchers []string
-	matchers    []tablePattern
-	schema      targetName
-	table       targetName
-}
-
-func (r routeRuleToCheck) target(schema, table string) (string, string) {
-	return r.schema.apply(schema), r.table.apply(table)
+	rawMatchers      []string
+	matchers         []tablePattern
+	schema           targetName
+	schemaExpression string
 }
 
 // effectiveFilterRules returns the filter rules which are in effect. It mirrors
@@ -186,10 +172,10 @@ func effectiveFilterRules(cfg *config.FilterConfig) []string {
 	return cfg.Rules
 }
 
-func parseFilterRules(rules []string, normalize func(string) string) ([]tablePattern, error) {
+func parseFilterRules(rules []string, caseSensitive bool) ([]tablePattern, error) {
 	parsed := make([]tablePattern, 0, len(rules))
 	for _, rule := range rules {
-		pattern, err := parseRulePattern("filter rule", rule, normalize)
+		pattern, err := parseRulePattern("filter rule", rule, caseSensitive)
 		if err != nil {
 			return nil, err
 		}
@@ -198,16 +184,16 @@ func parseFilterRules(rules []string, normalize func(string) string) ([]tablePat
 	return parsed, nil
 }
 
-func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string) ([]routeRuleToCheck, error) {
+func parseRouteRules(rules []*config.DispatchRule, caseSensitive bool) ([]routeRuleToCheck, error) {
 	parsed := make([]routeRuleToCheck, 0, len(rules))
 	for _, rule := range rules {
 		// Rules without a target keep the table name and are ignored by the router.
 		if rule == nil || (rule.TargetSchema == "" && rule.TargetTable == "") {
 			continue
 		}
-		route := routeRuleToCheck{rawMatchers: rule.Matcher}
+		route := routeRuleToCheck{rawMatchers: rule.Matcher, schemaExpression: rule.TargetSchema}
 		for _, matcher := range rule.Matcher {
-			pattern, err := parseRulePattern("dispatch rule matcher", matcher, normalize)
+			pattern, err := parseRulePattern("dispatch rule matcher", matcher, caseSensitive)
 			if err != nil {
 				return nil, err
 			}
@@ -218,16 +204,14 @@ func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string
 		if route.schema, reason, ok = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); !ok {
 			return nil, unsupportedError("target schema of the dispatch rule matching "+strings.Join(rule.Matcher, ","), rule.TargetSchema, reason)
 		}
-		if route.table, reason, ok = parseTargetExpression(rule.TargetTable, tablePlaceholder); !ok {
+		if _, reason, ok = parseTargetExpression(rule.TargetTable, tablePlaceholder); !ok {
 			return nil, unsupportedError("target table of the dispatch rule matching "+strings.Join(rule.Matcher, ","), rule.TargetTable, reason)
 		}
 		// Normalize literal text after parsing so placeholder names remain case sensitive.
 		// The runtime filter normalizes the entire substituted target before matching it.
-		for _, target := range []*targetName{&route.schema, &route.table} {
-			target.literal = normalize(target.literal)
-			target.prefix = normalize(target.prefix)
-			target.suffix = normalize(target.suffix)
-		}
+		route.schema.literal = normalizeName(route.schema.literal, caseSensitive)
+		route.schema.prefix = normalizeName(route.schema.prefix, caseSensitive)
+		route.schema.suffix = normalizeName(route.schema.suffix, caseSensitive)
 		parsed = append(parsed, route)
 	}
 	return parsed, nil
@@ -235,17 +219,17 @@ func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string
 
 // parseRulePattern parses a `schema.table` pattern into its two parts. It rejects, instead of
 // approximating, the patterns which this decision cannot handle.
-func parseRulePattern(kind, pattern string, normalize func(string) string) (tablePattern, error) {
+func parseRulePattern(kind, pattern string, caseSensitive bool) (tablePattern, error) {
 	// Match table-filter's rule preprocessing without trimming inside quoted names.
 	schemaPart, tablePart, ok := splitRulePattern(strings.Trim(pattern, " \t"))
 	if !ok {
 		return tablePattern{}, unsupportedError(kind, pattern, "expected a `schema.table` pattern")
 	}
-	schema, reason, ok := parseNamePattern(normalize(schemaPart))
+	schema, reason, ok := parseNamePattern(normalizeName(schemaPart, caseSensitive))
 	if !ok {
 		return tablePattern{}, unsupportedError(kind, pattern, "schema pattern "+reason)
 	}
-	table, reason, ok := parseNamePattern(normalize(tablePart))
+	table, reason, ok := parseNamePattern(normalizeName(tablePart, caseSensitive))
 	if !ok {
 		return tablePattern{}, unsupportedError(kind, pattern, "table pattern "+reason)
 	}
@@ -374,68 +358,71 @@ func verifyFilterRulesCovered(filters []tablePattern, routes []routeRuleToCheck)
 	return nil
 }
 
-// witness is a replicated table whose routed target is replicated as well.
-type witness struct {
-	schema, table             string
-	targetSchema, targetTable string
-}
-
-// verifyRouteTargets rejects a dispatch rule which can route a replicated table to a table which the
-// filter replicates as well. It searches for a witness of such a pair and reports the witness.
-func verifyRouteTargets(filters []tablePattern, routes []routeRuleToCheck) error {
+// verifySchemaTargets considers all schema matches, regardless of the table part, just like
+// the runtime router and filter do for database DDL.
+func verifySchemaTargets(filters []tablePattern, routes []routeRuleToCheck) error {
 	for _, route := range routes {
 		for _, matcher := range route.matchers {
-			if found, ok := findWitness(filters, route, matcher); ok {
-				return errors.ErrInvalidReplicaConfig.FastGen("allow-same-cluster requires route targets to stay outside the filter, but the dispatch rule matching %v routes table %s.%s to %s.%s, which the filter replicates", route.rawMatchers, found.schema, found.table, found.targetSchema, found.targetTable)
+			for _, source := range filters {
+				for _, target := range filters {
+					schema, ok := findNameWitness(source.schema, matcher.schema, target.schema, route.schema)
+					if ok {
+						return errors.ErrInvalidReplicaConfig.FastGen(
+							"allow-same-cluster requires database isolation, but the dispatch rule matching %v "+
+								"routes schema %q to %q, which the filter replicates",
+							route.rawMatchers, schema, route.schema.apply(schema))
+					}
+				}
 			}
 		}
 	}
 	return nil
 }
 
-// findWitness looks for a table matched by one filter rule, routed by the given matcher, and
-// captured again by another filter rule after routing.
-func findWitness(filters []tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
-	for _, source := range filters {
-		for _, target := range filters {
-			if found, ok := witnessForPair(source, target, route, matcher); ok {
-				return found, true
+// verifySchemaRoutingConsistent requires identical target-schema expressions wherever two routes
+// overlap on a source schema. The runtime router compares all matching schema targets, including
+// rules shadowed at table level, and compares their original spelling even in case insensitive mode.
+func verifySchemaRoutingConsistent(filters []tablePattern, routes []routeRuleToCheck) error {
+	for i, left := range routes {
+		for _, right := range routes[i+1:] {
+			if left.schemaExpression == right.schemaExpression {
+				continue
+			}
+			for _, leftMatcher := range left.matchers {
+				for _, rightMatcher := range right.matchers {
+					for _, source := range filters {
+						schema, ok := findNameWitness(source.schema, leftMatcher.schema, rightMatcher.schema, targetName{hasVariable: true})
+						if ok {
+							return errors.ErrInvalidReplicaConfig.FastGen(
+								"allow-same-cluster does not support different target-schema expressions %q and %q "+
+									"for routes matching source schema %q",
+								left.schemaExpression, right.schemaExpression, schema)
+						}
+					}
+				}
 			}
 		}
 	}
-	return witness{}, false
+	return nil
 }
 
-// witnessForPair verifies every candidate table for one pair of filter rules.
-func witnessForPair(source, target tablePattern, route routeRuleToCheck, matcher tablePattern) (witness, bool) {
-	for _, schema := range candidateNames(source.schema, matcher.schema, target.schema, route.schema) {
-		for _, table := range candidateNames(source.table, matcher.table, target.table, route.table) {
-			if found, ok := verifyWitness(source, target, route, matcher, schema, table); ok {
-				return found, true
-			}
+// findNameWitness finds one source name whose routed target is captured again.
+func findNameWitness(source, matcher, capture namePattern, target targetName) (string, bool) {
+	if !target.hasVariable && !capture.matches(target.literal) {
+		return "", false
+	}
+	for _, name := range candidateNames(source, matcher, capture, target) {
+		if source.matches(name) && matcher.matches(name) && capture.matches(target.apply(name)) {
+			return name, true
 		}
 	}
-	return witness{}, false
-}
-
-// verifyWitness returns the witness when the candidate table is matched by the source rule and the
-// matcher, and its routed target is matched by the target rule.
-func verifyWitness(source, target tablePattern, route routeRuleToCheck, matcher tablePattern, schema, table string) (witness, bool) {
-	if !source.matches(schema, table) || !matcher.matches(schema, table) {
-		return witness{}, false
-	}
-	targetSchema, targetTable := route.target(schema, table)
-	if !target.matches(targetSchema, targetTable) {
-		return witness{}, false
-	}
-	return witness{schema: schema, table: table, targetSchema: targetSchema, targetTable: targetTable}, true
+	return "", false
 }
 
 // candidateNames lists the names which can satisfy the source rule, the matcher and the target rule
-// at the same time. Every candidate is verified afterwards, so extra names cost nothing, while the
-// generated set stays complete: it contains the literal text of each pattern, the head or tail the
-// pattern requires, every combination of a head with a tail, and the names where the substitution
-// completes a pattern.
+// at the same time. Every candidate is verified before use. The set contains the literal text of
+// each pattern, the head or tail the pattern requires, every combination of a head with a tail,
+// and the names where the substitution completes a pattern.
 func candidateNames(source, matcher, capture namePattern, target targetName) []string {
 	atoms := slices.Concat(
 		atomsOf(source, "", ""),
@@ -494,8 +481,8 @@ func atomsOf(p namePattern, prefix, suffix string) []string {
 // prefixesOf returns every non-empty prefix of text, shortest first.
 func prefixesOf(text string) []string {
 	prefixes := make([]string, 0, len(text))
-	for length := 1; length <= len(text); length++ {
-		prefixes = append(prefixes, text[:length])
+	for end := range len(text) {
+		prefixes = append(prefixes, text[:end+1])
 	}
 	return prefixes
 }
@@ -503,7 +490,7 @@ func prefixesOf(text string) []string {
 // suffixesOf returns every non-empty suffix of text, longest first.
 func suffixesOf(text string) []string {
 	suffixes := make([]string, 0, len(text))
-	for start := 0; start < len(text); start++ {
+	for start := range len(text) {
 		suffixes = append(suffixes, text[start:])
 	}
 	return suffixes
