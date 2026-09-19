@@ -74,8 +74,8 @@ func newDispatcherTaskQueue() *dispatcherTaskQueue {
 
 func (q *dispatcherTaskQueue) push(task scanTask) {
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.queue.Push(task)
-	q.mu.Unlock()
 }
 
 func (q *dispatcherTaskQueue) pop() (scanTask, bool) {
@@ -1132,49 +1132,6 @@ func (c *eventBroker) requestPrepare(d *dispatcherStat) {
 	d.scanMu.Unlock()
 }
 
-// requestScan is used by EventBroker-owned control paths that can enqueue a
-// scan directly. If the bounded scan queue is full, preparation owns the retry
-// so the request is neither dropped nor allowed to block the caller.
-func (c *eventBroker) requestScan(d *dispatcherStat) {
-	span := d.info.GetTableSpan()
-	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		return
-	}
-
-	d.scanMu.Lock()
-	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
-		d.scanState = dispatcherScanRemoved
-		d.scanPending = false
-		d.scanMu.Unlock()
-		return
-	}
-	if d.scanState != dispatcherScanIdle {
-		if d.scanState == dispatcherScanPreparing ||
-			(d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning) {
-			d.scanPending = true
-		}
-		d.scanMu.Unlock()
-		return
-	}
-	d.scanState = dispatcherScanQueued
-	d.scanMu.Unlock()
-
-	select {
-	case c.taskChan[d.scanWorkerIndex] <- d:
-		return
-	default:
-	}
-
-	d.scanMu.Lock()
-	if d.scanState == dispatcherScanQueued && !d.isRemoved.Load() {
-		d.scanState = dispatcherScanPrepareQueued
-		d.scanMu.Unlock()
-		c.prepareTaskQueue[d.scanWorkerIndex].push(d)
-		return
-	}
-	d.scanMu.Unlock()
-}
-
 func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
 	if !d.beginPrepare() {
 		return
@@ -1222,6 +1179,49 @@ func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
 		return
 	case c.taskChan[d.scanWorkerIndex] <- d:
 	}
+}
+
+// requestScan is used by EventBroker-owned control paths that can enqueue a
+// scan directly. If the bounded scan queue is full, preparation owns the retry
+// so the request is neither dropped nor allowed to block the caller.
+func (c *eventBroker) requestScan(d *dispatcherStat) {
+	span := d.info.GetTableSpan()
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+		return
+	}
+
+	d.scanMu.Lock()
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
+		d.scanPending = false
+		d.scanMu.Unlock()
+		return
+	}
+	if d.scanState != dispatcherScanIdle {
+		if d.scanState == dispatcherScanPreparing ||
+			(d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning) {
+			d.scanPending = true
+		}
+		d.scanMu.Unlock()
+		return
+	}
+	d.scanState = dispatcherScanQueued
+	d.scanMu.Unlock()
+
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- d:
+		return
+	default:
+	}
+
+	d.scanMu.Lock()
+	if d.scanState == dispatcherScanQueued && !d.isRemoved.Load() {
+		d.scanState = dispatcherScanPrepareQueued
+		d.scanMu.Unlock()
+		c.prepareTaskQueue[d.scanWorkerIndex].push(d)
+		return
+	}
+	d.scanMu.Unlock()
 }
 
 func (c *eventBroker) finishScan(

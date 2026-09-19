@@ -55,12 +55,21 @@ const (
 type dispatcherScanState uint8
 
 const (
+	// dispatcherScanIdle means no preparation or scan task is outstanding.
 	dispatcherScanIdle dispatcherScanState = iota
+	// dispatcherScanPrepareQueued means one task is waiting in the preparation queue.
 	dispatcherScanPrepareQueued
+	// dispatcherScanPreparing means a prepare worker owns the dispatcher and is
+	// checking whether a real scan is needed.
 	dispatcherScanPreparing
+	// dispatcherScanQueued means a real scan task is waiting in the bounded scan queue.
 	dispatcherScanQueued
+	// dispatcherScanRunning means a scan worker owns the dispatcher.
 	dispatcherScanRunning
+	// dispatcherScanSchemaBlocked means a low-latency dispatcher is waiting for
+	// SchemaStore to advance before it can be prepared again.
 	dispatcherScanSchemaBlocked
+	// dispatcherScanRemoved is terminal and rejects further scheduling.
 	dispatcherScanRemoved
 )
 
@@ -158,8 +167,12 @@ type dispatcherStat struct {
 	lastReceivedHeartbeatTime atomic.Int64
 
 	// Scan task related. scanMu protects scanState, scanPending, and schemaBlockedUntilTs.
-	scanMu               sync.Mutex
-	scanState            dispatcherScanState
+	scanMu    sync.Mutex
+	scanState dispatcherScanState
+	// scanPending records one coalesced request to prepare another scan after the
+	// current stage finishes. It is separate from scanState because a request can
+	// become pending while either preparation or scan execution owns the dispatcher;
+	// keeping it orthogonal avoids separate PreparingPending and RunningPending states.
 	scanPending          bool
 	schemaBlockedUntilTs uint64
 
