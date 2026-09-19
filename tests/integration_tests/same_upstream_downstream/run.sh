@@ -96,6 +96,28 @@ function run() {
 
 	wait_for_rows 2 "$dst_db.$dst_table"
 
+	# Create and update must reject self replication hidden by padding or mixed case targets.
+	cdc_cli_changefeed pause -c "$allow_same_cluster_id"
+	for unsafe_case in whitespace uppercase_schema uppercase_table uppercase_suffix; do
+		unsafe_config="$CUR/conf/allow_same_cluster_${unsafe_case}.toml"
+		result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+			--config="$unsafe_config" -c "reject-${unsafe_case//_/-}" 2>&1 || true)
+		if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
+			echo "Expected create to reject $unsafe_case, got: $result"
+			exit 1
+		fi
+		result=$(cdc_cli_changefeed update -c "$allow_same_cluster_id" \
+			--config="$unsafe_config" --no-confirm 2>&1 || true)
+		if [[ "$result" != *"CDC:ErrInvalidReplicaConfig"* ]] || [[ "$result" != *"which the filter replicates"* ]]; then
+			echo "Expected update to reject $unsafe_case, got: $result"
+			exit 1
+		fi
+	done
+	# The rejected updates must preserve the safe configuration across resume.
+	cdc_cli_changefeed resume -c "$allow_same_cluster_id"
+	run_sql "insert into $src_db.t1 values (3, 'c');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	wait_for_rows 3 "$dst_db.$dst_table"
+
 	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
 
 	# 5) The target schema may also follow the source schema: `allow_same_cluster_src2_routed` is not

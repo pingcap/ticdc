@@ -221,6 +221,13 @@ func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string
 		if route.table, reason, ok = parseTargetExpression(rule.TargetTable, tablePlaceholder); !ok {
 			return nil, unsupportedError("target table of the dispatch rule matching "+strings.Join(rule.Matcher, ","), rule.TargetTable, reason)
 		}
+		// Normalize literal text after parsing so placeholder names remain case sensitive.
+		// The runtime filter normalizes the entire substituted target before matching it.
+		for _, target := range []*targetName{&route.schema, &route.table} {
+			target.literal = normalize(target.literal)
+			target.prefix = normalize(target.prefix)
+			target.suffix = normalize(target.suffix)
+		}
 		parsed = append(parsed, route)
 	}
 	return parsed, nil
@@ -229,7 +236,8 @@ func parseRouteRules(rules []*config.DispatchRule, normalize func(string) string
 // parseRulePattern parses a `schema.table` pattern into its two parts. It rejects, instead of
 // approximating, the patterns which this decision cannot handle.
 func parseRulePattern(kind, pattern string, normalize func(string) string) (tablePattern, error) {
-	schemaPart, tablePart, ok := splitRulePattern(pattern)
+	// Match table-filter's rule preprocessing without trimming inside quoted names.
+	schemaPart, tablePart, ok := splitRulePattern(strings.Trim(pattern, " \t"))
 	if !ok {
 		return tablePattern{}, unsupportedError(kind, pattern, "expected a `schema.table` pattern")
 	}

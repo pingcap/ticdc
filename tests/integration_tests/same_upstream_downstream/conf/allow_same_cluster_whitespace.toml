@@ -1,0 +1,8 @@
+allow-same-cluster = true
+
+[filter]
+rules = [" \tallow_same_cluster_src.*\t "]
+
+[[sink.dispatchers]]
+matcher = [" \tallow_same_cluster_src.*\t "]
+target-schema = 'allow_same_cluster_src'

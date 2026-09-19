@@ -130,6 +130,20 @@ func TestValidateSameClusterRouting(t *testing.T) {
 			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "DST", TargetTable: "{table}"}},
 		},
 		{
+			name:        "normalization does not accept an uppercase schema placeholder",
+			allowSame:   true,
+			filterRules: []string{"src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst_{SCHEMA}"}},
+			wantError:   "does not support the target schema",
+		},
+		{
+			name:        "normalization does not accept an uppercase table placeholder",
+			allowSame:   true,
+			filterRules: []string{"src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{TABLE}"}},
+			wantError:   "does not support the target table",
+		},
+		{
 			name:        "negated filter rules are not supported",
 			allowSame:   true,
 			filterRules: []string{"src.*", "!src.tmp"},
