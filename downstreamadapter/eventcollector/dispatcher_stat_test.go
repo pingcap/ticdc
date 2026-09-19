@@ -2267,29 +2267,39 @@ func TestUpdateTableInfoByDDLStateChange(t *testing.T) {
 	}{
 		{
 			name: "updated state replaces the cached table info",
-			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated}},
+			ddl: &commonEvent.DDLEvent{
+				TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated},
+			},
 			stored: updated,
 		},
 		{
 			name: "updated state for another physical table is ignored",
-			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 102, Kind: commonEvent.TableStateUpdated}},
+			ddl: &commonEvent.DDLEvent{
+				TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 102, Kind: commonEvent.TableStateUpdated},
+			},
 		},
 		{
 			name: "unchanged state keeps the cached table info",
-			ddl: &commonEvent.DDLEvent{TableInfo: unrelated, FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUnchanged}},
+			ddl: &commonEvent.DDLEvent{
+				TableInfo: unrelated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUnchanged},
+			},
 		},
 		{
 			name: "deleted state keeps the cached table info",
-			ddl: &commonEvent.DDLEvent{TableInfo: updated, FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateDeleted}},
+			ddl: &commonEvent.DDLEvent{
+				TableInfo: updated, FinishedTs: 10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateDeleted},
+			},
 		},
 		{
 			name: "updated state without table info is ignored",
-			ddl: &commonEvent.DDLEvent{FinishedTs: 10,
-				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated}},
+			ddl: &commonEvent.DDLEvent{
+				FinishedTs:       10,
+				TableStateChange: &commonEvent.TableStateChange{PhysicalTableID: 101, Kind: commonEvent.TableStateUpdated},
+			},
 		},
 		{
 			name:   "event without state keeps the legacy identity check",
