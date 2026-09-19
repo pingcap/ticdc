@@ -23,6 +23,8 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/config"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
@@ -172,4 +174,32 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abcd"
 	o.keyspace = "ks"
 	require.NotNil(t, o.run(cmd))
+}
+
+func TestSameClusterUpdateConfigs(t *testing.T) {
+	confDir := "../../../tests/integration_tests/same_upstream_downstream/conf"
+	for _, tc := range []struct{ name, want string }{
+		{"same_schema", "requires database isolation"},
+		{"source_schema_chain", "requires database isolation"},
+		{"all_schemas", "requires database isolation"},
+		{"schema_ambiguity", "different target-schema expressions"},
+		{"no_route", "requires table routing to be enabled"},
+		{"narrow_route", "is not covered by any dispatch rule matcher"},
+		{"unsupported", "does not support the filter rule"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replica := config.GetDefaultReplicaConfig()
+			require.NoError(t, util.StrictDecodeFile(filepath.Join(confDir, "allow_same_cluster.toml"), "test", replica))
+			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			cmd := NewCmdCli()
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			o.addFlags(cmd)
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + filepath.Join(confDir, "allow_same_cluster_"+tc.name+".toml")}))
+			updated, err := o.applyChanges(oldInfo, cmd)
+			require.NoError(t, err)
+			info := &config.ChangeFeedInfo{Config: updated.Config.ToInternalReplicaConfig()}
+			require.ErrorContains(t, check.ValidateSameClusterRouting(info.ToChangefeedConfig()), tc.want)
+			require.Equal(t, v2.ToAPIReplicaConfig(replica), oldInfo.Config)
+		})
+	}
 }

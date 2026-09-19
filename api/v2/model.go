@@ -206,6 +206,9 @@ type ReplicaConfig struct {
 	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
 	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
 	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops.
+	AllowSameCluster *bool `json:"allow_same_cluster,omitempty"`
 	// EnableActiveActive enables active-active replication mode on top of BDR.
 	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
 	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
@@ -268,6 +271,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.BDRMode != nil {
 		res.BDRMode = c.BDRMode
+	}
+	if c.AllowSameCluster != nil {
+		res.AllowSameCluster = c.AllowSameCluster
 	}
 	if c.EnableActiveActive != nil {
 		res.EnableActiveActive = c.EnableActiveActive
@@ -666,6 +672,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:       cloned.EnableSyncPoint,
 		EnableTableMonitor:    cloned.EnableTableMonitor,
 		BDRMode:               cloned.BDRMode,
+		AllowSameCluster:      cloned.AllowSameCluster,
 		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 

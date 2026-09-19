@@ -922,6 +922,13 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// The coordinator owns this info. Validate a copy so rejected updates cannot change it.
+	oldCfInfo, err = oldCfInfo.Clone()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	var configUpdated, sinkURIUpdated bool
 	if updateCfConfig.TargetTs != 0 {
 		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {

@@ -1,0 +1,14 @@
+allow-same-cluster = true
+
+[filter]
+rules = ['allow_same_cluster_src.t1', 'allow_same_cluster_src.t2']
+
+[[sink.dispatchers]]
+matcher = ['allow_same_cluster_src.t1']
+target-schema = 'allow_same_cluster_dst'
+target-table = 't1'
+
+[[sink.dispatchers]]
+matcher = ['allow_same_cluster_src.t2']
+target-schema = 'allow_same_cluster_dst2'
+target-table = 't2'
