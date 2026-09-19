@@ -20,15 +20,20 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
-const defaultCaptureRemoveTTL = 10
+const (
+	defaultCaptureRemoveTTL     = 10
+	writeFencedCaptureRemoveTTL = max(writelease.P2PLeaseDuration, writelease.EtcdProofDuration)
+)
 
 // GlobalReactorState represents a global state which stores all key-value pairs in ETCD
 type GlobalReactorState struct {
@@ -47,6 +52,9 @@ type GlobalReactorState struct {
 
 	captureRemoveTTL int
 	toRemoveCaptures map[config.CaptureID]time.Time
+	// writeFencedReplacements contains deleted captures for which a different
+	// current-protocol capture has registered the same address.
+	writeFencedReplacements map[config.CaptureID]struct{}
 }
 
 // NewGlobalState creates a new global state.
@@ -56,13 +64,14 @@ func NewGlobalState(clusterID string, captureSessionTTL int) *GlobalReactorState
 		captureRemoveTTL = defaultCaptureRemoveTTL
 	}
 	return &GlobalReactorState{
-		ClusterID:        clusterID,
-		Owner:            map[string]struct{}{},
-		Captures:         make(map[config.CaptureID]*config.CaptureInfo),
-		Upstreams:        make(map[config.UpstreamID]*config.UpstreamInfo),
-		Changefeeds:      make(map[common.ChangeFeedID]*ChangefeedReactorState),
-		captureRemoveTTL: captureRemoveTTL,
-		toRemoveCaptures: make(map[config.CaptureID]time.Time),
+		ClusterID:               clusterID,
+		Owner:                   map[string]struct{}{},
+		Captures:                make(map[config.CaptureID]*config.CaptureInfo),
+		Upstreams:               make(map[config.UpstreamID]*config.UpstreamInfo),
+		Changefeeds:             make(map[common.ChangeFeedID]*ChangefeedReactorState),
+		captureRemoveTTL:        captureRemoveTTL,
+		toRemoveCaptures:        make(map[config.CaptureID]time.Time),
+		writeFencedReplacements: make(map[config.CaptureID]struct{}),
 	}
 }
 
@@ -80,15 +89,29 @@ func NewGlobalStateForTest(clusterID string) *GlobalReactorState {
 // UpdatePendingChange implements the ReactorState interface
 func (s *GlobalReactorState) UpdatePendingChange() {
 	for c, t := range s.toRemoveCaptures {
-		if time.Since(t) >= time.Duration(s.captureRemoveTTL)*time.Second {
-			log.Info("remote capture offline", zap.Any("info", s.Captures[c]), zap.String("role", s.Role))
-			delete(s.Captures, c)
-			if s.onCaptureRemoved != nil {
-				s.onCaptureRemoved(c)
-			}
-			delete(s.toRemoveCaptures, c)
+		removeTTL := time.Duration(s.captureRemoveTTL) * time.Second
+		reason := "capture remove TTL expired"
+		if _, ok := s.writeFencedReplacements[c]; ok {
+			removeTTL = writeFencedCaptureRemoveTTL
+			reason = "same-address replacement observed after write-lease expiry"
+		}
+		if time.Since(t) >= removeTTL {
+			s.removeCapture(c, reason)
 		}
 	}
+}
+
+func (s *GlobalReactorState) removeCapture(captureID config.CaptureID, reason string) {
+	log.Info("remote capture offline",
+		zap.Any("info", s.Captures[captureID]),
+		zap.String("role", s.Role),
+		zap.String("reason", reason))
+	delete(s.Captures, captureID)
+	if s.onCaptureRemoved != nil {
+		s.onCaptureRemoved(captureID)
+	}
+	delete(s.toRemoveCaptures, captureID)
+	delete(s.writeFencedReplacements, captureID)
 }
 
 // Update implements the ReactorState interface
@@ -109,8 +132,16 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		return nil
 	case etcd.CDCKeyTypeCapture:
 		if value == nil {
-			log.Info("remote capture offline detected", zap.Any("info", s.Captures[k.CaptureID]), zap.String("role", s.Role))
+			captureInfo := s.Captures[k.CaptureID]
+			log.Info("remote capture offline detected", zap.Any("info", captureInfo), zap.String("role", s.Role))
+			if captureInfo != nil && captureInfo.ID == k.CaptureID && captureInfo.WriteStopped {
+				s.removeCapture(k.CaptureID, "capture reported writes stopped")
+				return nil
+			}
 			s.toRemoveCaptures[k.CaptureID] = time.Now()
+			if s.hasWriteFencedReplacement(k.CaptureID, captureInfo) {
+				s.writeFencedReplacements[k.CaptureID] = struct{}{}
+			}
 			return nil
 		}
 
@@ -123,6 +154,8 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		log.Info("remote capture online", zap.Any("info", newCaptureInfo), zap.String("role", s.Role))
 		// A fresh online event supersedes any pending delayed removal for the same capture.
 		delete(s.toRemoveCaptures, k.CaptureID)
+		delete(s.writeFencedReplacements, k.CaptureID)
+		s.markWriteFencedReplacements(k.CaptureID, &newCaptureInfo)
 		if s.onCaptureAdded != nil {
 			s.onCaptureAdded(k.CaptureID, newCaptureInfo.AdvertiseAddr)
 		}
@@ -168,6 +201,47 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 			zap.String("role", s.Role))
 	}
 	return nil
+}
+
+func (s *GlobalReactorState) markWriteFencedReplacements(
+	newCaptureID config.CaptureID,
+	newCaptureInfo *config.CaptureInfo,
+) {
+	for oldCaptureID := range s.toRemoveCaptures {
+		if isWriteFencedReplacement(oldCaptureID, s.Captures[oldCaptureID], newCaptureID, newCaptureInfo) {
+			s.writeFencedReplacements[oldCaptureID] = struct{}{}
+		}
+	}
+}
+
+func (s *GlobalReactorState) hasWriteFencedReplacement(
+	oldCaptureID config.CaptureID,
+	oldCaptureInfo *config.CaptureInfo,
+) bool {
+	for newCaptureID, newCaptureInfo := range s.Captures {
+		if isWriteFencedReplacement(oldCaptureID, oldCaptureInfo, newCaptureID, newCaptureInfo) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWriteFencedReplacement(
+	oldCaptureID config.CaptureID,
+	oldCaptureInfo *config.CaptureInfo,
+	newCaptureID config.CaptureID,
+	newCaptureInfo *config.CaptureInfo,
+) bool {
+	return oldCaptureInfo != nil && newCaptureInfo != nil &&
+		oldCaptureID != newCaptureID &&
+		oldCaptureInfo.ID == oldCaptureID &&
+		newCaptureInfo.ID == newCaptureID &&
+		oldCaptureInfo.AdvertiseAddr != "" &&
+		oldCaptureInfo.AdvertiseAddr == newCaptureInfo.AdvertiseAddr &&
+		oldCaptureInfo.WriteLeaseProtocolVersion == heartbeatpb.CurrentWriteLeaseProtocolVersion &&
+		newCaptureInfo.WriteLeaseProtocolVersion == heartbeatpb.CurrentWriteLeaseProtocolVersion &&
+		!newCaptureInfo.WriteStopped &&
+		newCaptureInfo.StartTimestamp >= oldCaptureInfo.StartTimestamp
 }
 
 // GetPatches implements the ReactorState interface

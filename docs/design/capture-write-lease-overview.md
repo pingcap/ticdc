@@ -151,30 +151,47 @@ therefore does not permanently block its local changefeeds, and the cluster
 switches to dual-proof admission automatically after all captures are ready.
 
 The safety implication is explicit: while legacy captures are present, the
-cluster does not have P2P isolation protection. Admission safety relies on the
-etcd proof and `captureRemoveTTL` until all active captures support P2P.
+cluster does not have P2P isolation protection. Admission safety still relies
+on the mandatory etcd proof. Legacy or capability-unknown registrations retain
+the conservative `captureRemoveTTL` replacement path.
 
-## 5. `captureRemoveTTL` and replacement admission
+## 5. Capture removal and replacement admission
 
-`captureRemoveTTL` is not an etcd lease and does not control when the old
-process exits. It is the delay between another CDC node observing deletion of a
-capture key and publishing that capture's removal to schedulers:
+Capture removal is not an etcd lease and does not control when the old process
+exits. After observing deletion of a capture key, another CDC node selects one
+of three removal paths:
+
+1. A capture that successfully closes every local module publishes
+   `write-stopped=true` under its existing session lease before deleting the
+   key. Observers remove this capture immediately on deletion.
+2. If a different capture ID with the same address and a non-older start time
+   registers, and both registrations advertise the current write-lease
+   protocol, observers wait only the five-second write-proof bound from the
+   old key's deletion observation.
+3. Missing, legacy, mismatched, or ambiguous evidence keeps the conservative
+   delay:
 
 ```text
 captureRemoveTTL = max(captureSessionTTL / 2, 10s)
 ```
 
-With the default `captureSessionTTL = 10s`, `captureRemoveTTL = 10s`. During
-this delay:
+The graceful marker is written with an etcd transaction that verifies the key
+is still attached to the capture's own session lease. A slow shutdown therefore
+cannot recreate an expired registration. If any module fails to close, the
+marker write fails, or the registration has changed, shutdown still deletes the
+key but observers use one of the bounded fallback paths.
+
+With the default `captureSessionTTL = 10s`, the conservative delay is ten
+seconds. During any non-zero delay:
 
 - The old capture remains in the node view and is not immediately replaced.
 - A re-registration of the same capture cancels the pending removal.
-- Only after the delay expires is node removal published, after which a
+- Only after the selected delay expires is node removal published, after which a
   replacement may be scheduled.
 
 The local proof creates an upper bound for when the old writer stops admitting
-new work. `captureRemoveTTL` creates a later lower bound for when a replacement
-can begin.
+new work. The selected removal path creates a matching or later lower bound for
+when a replacement can begin.
 
 ## 6. Why new-write admission does not overlap
 
@@ -182,7 +199,8 @@ Define:
 
 ```text
 Le   = maximum local etcd proof lifetime = 5s
-R    = captureRemoveTTL                  >= 10s
+Lf   = maximum write-proof lifetime      = 5s
+R    = conservative captureRemoveTTL     >= 10s
 td   = linearizable deletion time of the old capture key
 tobs = time another CDC node observes the deletion, tobs >= td
 ```
@@ -195,26 +213,32 @@ oldEtcdProofValidUntil < td + 5s
 oldLastAdmission       < td + 5s
 ```
 
-A replacement must wait `R` after observing the deletion:
+A same-address, current-protocol replacement must wait `Lf` after observing the
+deletion:
 
 ```text
-newFirstAdmission >= tobs + R >= td + 10s
+newFirstAdmission >= tobs + Lf >= td + 5s
 ```
 
 Therefore:
 
 ```text
-oldLastAdmission < td + 5s < td + 10s <= tobs + R <= newFirstAdmission
+oldLastAdmission < td + 5s <= tobs + Lf <= newFirstAdmission
 ```
 
 ![Write admission safety proof](../media/capture-write-lease-safety-proof.svg)
 
+The conservative path waits `R`, so it retains the wider inequality shown in
+the diagram. The graceful path needs no timer: every local writer and sink has
+already closed before the marker is published, and marker publication precedes
+key deletion.
+
 The proof depends on four conditions: every real downstream side effect passes
-through a transport gate; all replacements pass through `captureRemoveTTL`;
-capture-key deletion is observed with etcd linearizability; and the local
-monotonic clock advances normally. MySQL, Kafka, Pulsar, Cloud Storage, and Redo
-all implement the same gate contract, so asynchronous queues are not an
-unbounded gap in the proof.
+through a transport gate; the shortened path is used only for registrations
+that explicitly advertise the current protocol; capture-key deletion is
+observed with etcd linearizability; and the local monotonic clock advances
+normally. MySQL, Kafka, Pulsar, Cloud Storage, and Redo all implement the same
+gate contract, so asynchronous queues are not an unbounded admission gap.
 
 ### Example
 
@@ -228,10 +252,14 @@ access to the downstream system:
    operation, send, file publication, or metadata mutation.
 3. With defaults, the session lease expires around `t0+10s` and the capture key
    is deleted.
-4. Other nodes observe the deletion and wait another ten seconds before
-   publishing node removal and scheduling a replacement.
-5. The replacement's first actual write is normally later than `t0+20s`, about
-   fifteen seconds after the old writer stopped admitting new operations.
+4. If no qualifying same-address registration or graceful marker exists, other
+   nodes wait another ten seconds before publishing node removal and scheduling
+   a replacement.
+5. On that conservative path, the replacement's first actual write is normally
+   later than `t0+20s`, about fifteen seconds after the old writer stopped
+   admitting new operations. A qualifying same-address restart can reduce the
+   post-deletion delay to five seconds without crossing the old admission
+   bound.
 
 Detection and scheduling may add wall-clock delay, but they cannot reverse the
 ordering established by the inequalities above.
@@ -260,10 +288,11 @@ downstream protocol changes and per-write network RTTs.
 ## 8. Implementation entry points
 
 - Gate and proof state: [`pkg/writelease/write_gate.go`](../../pkg/writelease/write_gate.go)
-- etcd TTL watchdog and local fence: [`server/server.go`](../../server/server.go)
+- etcd TTL watchdog, local fence, and graceful marker: [`server/server.go`](../../server/server.go)
 - P2P, mixed-version mode, and witness: [`coordinator/capture_write_lease.go`](../../coordinator/capture_write_lease.go)
 - Capture heartbeat and capability handling: [`maintainer/maintainer_manager_node.go`](../../maintainer/maintainer_manager_node.go)
-- Replacement barrier: [`pkg/orchestrator/reactor_state.go`](../../pkg/orchestrator/reactor_state.go)
+- Capture metadata and replacement policy: [`pkg/config/capture.go`](../../pkg/config/capture.go),
+  [`pkg/orchestrator/reactor_state.go`](../../pkg/orchestrator/reactor_state.go)
 - Common sink gate: [`downstreamadapter/sink/write_gate.go`](../../downstreamadapter/sink/write_gate.go)
 - Transport-owned final checks: `downstreamadapter/sink/{mysql,kafka,pulsar,cloudstorage,redo}`,
   `pkg/sink/mysql`, and `pkg/redo/writer`
