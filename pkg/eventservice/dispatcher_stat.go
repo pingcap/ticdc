@@ -42,23 +42,32 @@ const (
 )
 
 // dispatcherScanState serializes scan preparation and execution for one dispatcher.
-// An EventStore notification claims Idle -> Running for inline preparation. If
-// data must be read, preparation changes Running or RunningPending -> Queued,
-// and a worker changes Queued -> Running. Internal requests enqueue directly
-// from Idle. In low-latency mode, a request received while Running changes it
-// to RunningPending, and completion queues one coalesced continuation. A scan
-// stopped by SchemaStore changes to SchemaBlocked and is queued again after the
-// schema frontier advances. Queue-full fallback restores Idle, except that a
-// schema retry remains SchemaBlocked. Removed is terminal for this dispatcherStat.
+// Scheduling requests enqueue preparation from Idle. A prepare worker changes
+// PrepareQueued -> Preparing and either completes a no-scan fast path or changes
+// Preparing -> Queued before handing the task to a scan worker.
+// The scan worker changes Queued -> Running. Notifications received while
+// Preparing, or while a low-latency scan is Running, set scanPending, and
+// completion queues one coalesced preparation. A scan stopped by SchemaStore
+// changes to SchemaBlocked and is prepared again after the schema frontier
+// advances. isRemoved is the terminal lifecycle flag and is independent of the
+// current scan state.
 type dispatcherScanState uint8
 
 const (
+	// dispatcherScanIdle means no preparation or scan task is outstanding.
 	dispatcherScanIdle dispatcherScanState = iota
+	// dispatcherScanPrepareQueued means one task is waiting in the preparation queue.
+	dispatcherScanPrepareQueued
+	// dispatcherScanPreparing means a prepare worker owns the dispatcher and is
+	// checking whether a real scan is needed.
+	dispatcherScanPreparing
+	// dispatcherScanQueued means a real scan task is waiting in the bounded scan queue.
 	dispatcherScanQueued
+	// dispatcherScanRunning means a scan worker owns the dispatcher.
 	dispatcherScanRunning
-	dispatcherScanRunningPending
+	// dispatcherScanSchemaBlocked means a low-latency dispatcher is waiting for
+	// SchemaStore to advance before it can be prepared again.
 	dispatcherScanSchemaBlocked
-	dispatcherScanRemoved
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -154,9 +163,14 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related. scanMu protects scanState and schemaBlockedUntilTs.
-	scanMu               sync.Mutex
-	scanState            dispatcherScanState
+	// Scan task related. scanMu protects scanState, scanPending, and schemaBlockedUntilTs.
+	scanMu    sync.Mutex
+	scanState dispatcherScanState
+	// scanPending records one coalesced request to prepare another scan after the
+	// current stage finishes. It is separate from scanState because a request can
+	// become pending while either preparation or scan execution owns the dispatcher;
+	// keeping it orthogonal avoids separate PreparingPending and RunningPending states.
+	scanPending          bool
 	schemaBlockedUntilTs uint64
 
 	// activeScanMu protects activeScan and serializes scan registration with
@@ -245,12 +259,27 @@ func (a *dispatcherStat) beginScan() bool {
 	return true
 }
 
+func (a *dispatcherStat) beginPrepare() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState != dispatcherScanPrepareQueued {
+		return false
+	}
+	a.scanState = dispatcherScanPreparing
+	return true
+}
+
 func (a *dispatcherStat) isScanBusy() bool {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
-	return a.scanState == dispatcherScanQueued ||
+	if a.isRemoved.Load() {
+		return false
+	}
+	return a.scanState == dispatcherScanPrepareQueued ||
+		a.scanState == dispatcherScanPreparing ||
+		a.scanState == dispatcherScanQueued ||
 		a.scanState == dispatcherScanRunning ||
-		a.scanState == dispatcherScanRunningPending
+		a.scanPending
 }
 
 func (a *dispatcherStat) isHandshaked() bool {
@@ -282,7 +311,7 @@ func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Contex
 func (a *dispatcherStat) markRemoved() {
 	a.isRemoved.Store(true)
 	a.scanMu.Lock()
-	a.scanState = dispatcherScanRemoved
+	a.scanPending = false
 	a.schemaBlockedUntilTs = 0
 	a.scanMu.Unlock()
 

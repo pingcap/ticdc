@@ -278,6 +278,9 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 
 // collectPendingTaskMetrics collects metrics about pending tasks
 func (mc *metricsCollector) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
+	for _, queue := range mc.broker.prepareTaskQueue {
+		snapshot.pendingTaskCount += queue.len()
+	}
 	for _, ch := range mc.broker.taskChan {
 		snapshot.pendingTaskCount += len(ch)
 	}
