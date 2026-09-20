@@ -14,9 +14,11 @@
 package debezium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -98,6 +100,110 @@ func (s *debeziumSuite) requireDebeziumJSONEq(dbzOutput []byte, tiCDCOutput []by
 
 	if diff := cmp.Diff(objDbzOutput, objTiCDCOutput, compareOpt); diff != "" {
 		s.Failf("JSON is not equal", "Diff (-debezium, +ticdc):\n%s", diff)
+	}
+}
+
+func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[string]any {
+	t.Helper()
+	fields, ok := schema["fields"].([]any)
+	require.True(t, ok, "schema has no fields: %v", schema)
+	for _, value := range fields {
+		field, ok := value.(map[string]any)
+		require.True(t, ok, "invalid schema field: %v", value)
+		if field["field"] == name {
+			return field
+		}
+	}
+	require.FailNow(t, "schema field not found", "field: %s", name)
+	return nil
+}
+
+func TestDebeziumNumericStringHandling(t *testing.T) {
+	const decimalValue = "12345678901234567890123456789012345.123456789012345678901234567890"
+	helper := NewSQLTestHelper(t, "numeric_precision", `create table numeric_precision (
+		id bigint unsigned primary key default 18446744073709551615,
+		signed_value bigint default 9223372036854775807,
+		amount decimal(65,30) default `+decimalValue+`,
+		nullable_amount decimal(65,30)
+	)`)
+	defer helper.Close()
+
+	insert := helper.helper.DML2Event("test", "numeric_precision", "insert into numeric_precision () values ()")
+	update, _ := helper.helper.DML2UpdateEvent("test", "numeric_precision",
+		"insert into numeric_precision (id) values (18446744073709551614)",
+		"update numeric_precision set signed_value = -9223372036854775808, amount = -"+decimalValue+" where id = 18446744073709551614")
+	deleted := helper.helper.DML2DeleteEvent("test", "numeric_precision",
+		"insert into numeric_precision (id) values (18446744073709551613)",
+		"delete from numeric_precision where id = 18446744073709551613")
+
+	for _, event := range []*commonEvent.DMLEvent{insert, update, deleted} {
+		row, ok := event.GetNextRow()
+		require.True(t, ok)
+		for _, disableSchema := range []bool{false, true} {
+			cfg := common.NewConfig(config.ProtocolDebezium)
+			cfg.EnableTiDBExtension = true
+			cfg.TimeZone = time.UTC
+			cfg.DebeziumDisableSchema = disableSchema
+			cfg.DebeziumDecimalHandlingMode = common.DecimalHandlingModeString
+			cfg.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+			encoder := NewBatchEncoder(cfg, "dbserver1")
+			require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", &commonEvent.RowEvent{
+				TableInfo:      helper.tableInfo,
+				CommitTs:       1,
+				Event:          row,
+				ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			}))
+			messages := encoder.Build()
+			require.Len(t, messages, 1)
+
+			var key, value map[string]any
+			dec := json.NewDecoder(bytes.NewReader(messages[0].Key))
+			dec.UseNumber()
+			require.NoError(t, dec.Decode(&key))
+			dec = json.NewDecoder(bytes.NewReader(messages[0].Value))
+			dec.UseNumber()
+			require.NoError(t, dec.Decode(&value))
+			payload := value["payload"].(map[string]any)
+			for _, field := range []string{"before", "after"} {
+				data, ok := payload[field].(map[string]any)
+				if !ok {
+					continue
+				}
+				expectedRow := row.Row
+				if field == "before" {
+					expectedRow = row.PreRow
+				}
+				require.Equal(t, strconv.FormatUint(expectedRow.GetUint64(0), 10), data["id"])
+				require.Equal(t, key["payload"].(map[string]any)["id"], data["id"])
+				require.Equal(t, json.Number(strconv.FormatInt(expectedRow.GetInt64(1), 10)), data["signed_value"])
+				require.Equal(t, expectedRow.GetMyDecimal(2).String(), data["amount"])
+				require.Nil(t, data["nullable_amount"])
+			}
+			if disableSchema {
+				require.NotContains(t, key, "schema")
+				require.NotContains(t, value, "schema")
+				continue
+			}
+
+			keyField := schemaFieldsByName(t, key["schema"].(map[string]any), "id")
+			require.Equal(t, "string", keyField["type"])
+			require.Equal(t, "18446744073709551615", keyField["default"])
+			afterSchema := schemaFieldsByName(t, value["schema"].(map[string]any), "after")
+			amountField := schemaFieldsByName(t, afterSchema, "amount")
+			require.Equal(t, "string", amountField["type"])
+			require.Equal(t, decimalValue, amountField["default"])
+			signedField := schemaFieldsByName(t, afterSchema, "signed_value")
+			require.Equal(t, "int64", signedField["type"])
+			require.Equal(t, json.Number("9223372036854775807"), signedField["default"])
+
+			decoder := NewDecoder(cfg, 0, nil)
+			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			change, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
+			decoded.PostFlush()
+		}
 	}
 }
 
