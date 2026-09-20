@@ -766,6 +766,17 @@ func (w *writer) appendMessage2Group(
 		})
 		progress.eventsGroup[tableID] = group
 	}
+	// Keep rows at the same commit ts: one transaction can contain multiple rows.
+	if commitTs < group.HighWatermark {
+		log.Warn("DML event commit ts is below table high watermark, ignore it",
+			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		return nil
+	}
 	if messageData, _ := message.SpillData(); messageData != nil {
 		messageData.SourcePosition = int64(offset)
 	}
@@ -783,21 +794,11 @@ func (w *writer) appendMessage2Group(
 			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
 		return nil
 	}
-	if commitTs >= group.HighWatermark {
-		log.Debug("DML event append to the group",
-			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType))
-		return nil
-	}
-	log.Warn("DML event commit ts fallback, append it and sort before flush",
-		zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-		zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+	log.Debug("DML event append to the group",
+		zap.Int32("partition", group.Partition), zap.Any("offset", offset),
+		zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-		zap.Stringer("eventType", message.RowType),
-		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		zap.Stringer("eventType", message.RowType))
 	return nil
 }
 
