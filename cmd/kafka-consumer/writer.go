@@ -20,7 +20,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -35,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -42,7 +42,7 @@ import (
 type partitionProgress struct {
 	partition       int32
 	watermark       uint64
-	watermarkOffset kafka.Offset
+	watermarkOffset int64
 
 	eventsGroup map[int64]*util.EventsGroup
 	decoder     *util.DMLMessageDecoder
@@ -60,7 +60,7 @@ func newPartitionProgress(partition int32, decoder common.Decoder) *partitionPro
 	}
 }
 
-func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Offset) {
+func (p *partitionProgress) updateWatermark(newWatermark uint64, offset int64) {
 	if newWatermark >= p.watermark {
 		p.watermark = newWatermark
 		p.watermarkOffset = offset
@@ -395,14 +395,14 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 // WriteMessage is to decode kafka message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
+func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, error) {
 	var (
-		partition = message.TopicPartition.Partition
-		offset    = message.TopicPartition.Offset
+		partition = message.Partition
+		offset    = message.Offset
 	)
 
 	progress := w.progresses[partition]
-	progress.decoder.SetSourcePosition(int64(offset))
+	progress.decoder.SetSourcePosition(offset)
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := progress.decoder.HasNext()
@@ -653,7 +653,7 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kafka.Offset) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -680,7 +680,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 	}
 }
 
-func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset kafka.Offset) *common.DMLMessage {
+func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset int64) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
 		w.checkPartition(row, partition, offset)
@@ -691,7 +691,7 @@ func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition
 func (w *writer) appendMessage2Group(
 	message *common.DMLMessage,
 	progress *partitionProgress,
-	offset kafka.Offset,
+	offset int64,
 ) error {
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
@@ -719,12 +719,12 @@ func (w *writer) appendMessage2Group(
 	if group == nil {
 		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
 		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
-			return w.messageWithPartitionCheck(message, progress.partition, kafka.Offset(sourcePosition))
+			return w.messageWithPartitionCheck(message, progress.partition, sourcePosition)
 		})
 		progress.eventsGroup[tableID] = group
 	}
 	if messageData, _ := message.SpillData(); messageData != nil {
-		messageData.SourcePosition = int64(offset)
+		messageData.SourcePosition = offset
 	}
 	if err := group.AppendMessage(message); err != nil {
 		return err
