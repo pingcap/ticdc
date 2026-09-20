@@ -27,6 +27,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -292,9 +295,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}
 
 	for _, message := range []*codeccommon.DMLMessage{
-		newDMLMessageForWriterTest(20),
-		newDMLMessageForWriterTest(10),
-		newDMLMessageForWriterTest(20),
+		newDMLMessageForWriterTest(20, 1),
+		newDMLMessageForWriterTest(10, 2),
+		newDMLMessageForWriterTest(20, 3),
 	} {
 		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), p))
 	}
@@ -356,7 +359,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol: config.ProtocolCanalJSON,
 	}
 
-	message := newDMLMessageForWriterTest(10)
+	message := newDMLMessageForWriterTest(10, 1)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress))
 
 	require.NotNil(t, progress.eventsGroup[1])
@@ -394,8 +397,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
 	progress := w.progresses[0]
-	first := newDMLMessageForWriterTest(200)
-	second := newDMLMessageForWriterTest(100)
+	first := newDMLMessageForWriterTest(200, 1)
+	second := newDMLMessageForWriterTest(100, 1)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress))
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress))
 
@@ -498,17 +501,40 @@ func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+func newDMLMessageForWriterTest(commitTs uint64, key int64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		column := &timodel.ColumnInfo{
+			ID:        1,
+			Name:      ast.NewCIStr("id"),
+			Offset:    0,
+			State:     timodel.StatePublic,
+			FieldType: *types.NewFieldType(mysql.TypeLonglong),
+		}
+		info := &timodel.TableInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("t"),
+			Columns: []*timodel.ColumnInfo{column},
+			Indices: []*timodel.IndexInfo{{
+				ID:      1,
+				Name:    ast.NewCIStr("primary"),
+				Columns: []*timodel.IndexColumn{{Name: column.Name, Offset: 0}},
+				Primary: true,
+				Unique:  true,
+				State:   timodel.StatePublic,
+			}},
+		}
+		common.SetHandleKeyFlags(info)
+		tableInfo := common.NewTableInfo4Decoder("test", info)
+		rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+		rows.AppendInt64(0, key)
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			StartTs:         commitTs - 1,
 			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
-			},
+			Length:          1,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			Rows:            rows,
+			TableInfo:       tableInfo,
 		}
 	})
 }

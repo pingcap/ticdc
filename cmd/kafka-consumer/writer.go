@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -280,12 +281,64 @@ func (w *writer) flushEventsFromGroups(
 	return total, nil
 }
 
-// flushDMLBatch writes a batch of events to the sink and waits until all of them
-// are flushed. Events of the same table with different commit-ts stay in the
-// same batch, so the sink batch merger can keep batching rows across
-// transactions. Replayed row mutations are removed while the messages are
-// merged into events, so the merger never sees a duplicate row.
+type tableDMLBatchState struct {
+	tableInfo    *commonType.TableInfo
+	conflictKeys map[uint64]struct{}
+}
+
+// flushDMLBatch writes compatible events to the sink together. The CDC
+// event-service path gives the sink schema-consistent events with exact row
+// kinds. MQ formats can omit a before-image and materialize an update as an
+// insert, so one consumer batch also disallows reused sink conflict keys. The
+// sink can still batch transactions that touch different keys.
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	tables := make(map[int64]*tableDMLBatchState)
+	start := 0
+	for i, dml := range events {
+		if appendToDMLBatch(tables, dml) {
+			continue
+		}
+		if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
+			return err
+		}
+		clear(tables)
+		start = i
+		appendToDMLBatch(tables, dml)
+	}
+	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
+}
+
+func appendToDMLBatch(tables map[int64]*tableDMLBatchState, dml *event.DMLEvent) bool {
+	tableID := dml.GetTableID()
+	state := tables[tableID]
+	keys := causality.ConflictKeys(dml)
+	if state == nil {
+		if keys == nil {
+			keys = make(map[uint64]struct{})
+		}
+		tables[tableID] = &tableDMLBatchState{
+			tableInfo:    dml.TableInfo,
+			conflictKeys: keys,
+		}
+		return true
+	}
+	if !state.tableInfo.HasSameColumnSchema(dml.TableInfo) {
+		return false
+	}
+	for key := range keys {
+		if _, conflict := state.conflictKeys[key]; conflict {
+			return false
+		}
+	}
+	for key := range keys {
+		state.conflictKeys[key] = struct{}{}
+	}
+	return true
+}
+
+func (w *writer) flushDMLBatchAndWait(
+	ctx context.Context, events []*event.DMLEvent, fields ...zap.Field,
+) error {
 	if len(events) == 0 {
 		return nil
 	}
