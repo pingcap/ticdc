@@ -593,6 +593,7 @@ func TestIsEligible(t *testing.T) {
 	// test with forceReplicate = false
 	f, err := NewFilter(cfg, "UTC", true, false)
 	require.NoError(t, err)
+	require.False(t, f.IsForceReplicateEnabled())
 	filterImpl := f.(*filter)
 	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithPK)))
 	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithUK)))
@@ -604,6 +605,7 @@ func TestIsEligible(t *testing.T) {
 	// test with forceReplicate = true
 	f, err = NewFilter(cfg, "UTC", true, true)
 	require.NoError(t, err)
+	require.True(t, f.IsForceReplicateEnabled())
 	filterImpl = f.(*filter)
 	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithPK)))
 	require.True(t, filterImpl.IsEligibleTable(common.WrapTableInfo("test", tiWithUK)))
