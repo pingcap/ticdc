@@ -128,7 +128,9 @@ func TestSameClusterRoutingRuntimeSemantics(t *testing.T) {
 				require.Equal(t, tc.wantSchemaCaptured && !(caseSensitive && tc.caseInsensitiveOnly), captured)
 
 				err = check.ValidateSameClusterRouting(cfg)
-				if captured {
+				// TiDB resolves schema identifiers case insensitively even when the
+				// in-memory filter does not capture the target's original spelling.
+				if tc.wantSchemaCaptured {
 					require.ErrorContains(t, err, "which the filter replicates")
 					require.True(t, errors.ErrInvalidReplicaConfig.Equal(err))
 				} else {

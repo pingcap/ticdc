@@ -80,6 +80,18 @@ function run() {
 	run_sql "create table $src_db.t1 (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "create table $dst_db.$dst_table (id int primary key, v varchar(16));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
+	# Exercise TiDB identifier lookup: an uppercase target writes into the lowercase
+	# source database even when the TiCDC filter is case sensitive.
+	lower_case_table_names=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -N \
+		-e "select @@lower_case_table_names")
+	if [ "$lower_case_table_names" != "2" ]; then
+		echo "Expected TiDB lower_case_table_names=2, got: $lower_case_table_names"
+		exit 1
+	fi
+	run_sql "insert into ALLOW_SAME_CLUSTER_SRC.t1 values (0, 'case_alias');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	wait_for_rows 1 "$src_db.t1"
+	run_sql "delete from $src_db.t1 where id = 0;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
 		--config="$CUR/conf/allow_same_cluster.toml" -c "$allow_same_cluster_id" 2>&1)
 	if [[ "$result" != *"Create changefeed successfully"* ]]; then
@@ -99,7 +111,7 @@ function run() {
 	cdc_cli_changefeed pause -c "$allow_same_cluster_id"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "stopped" "null" ""
 	original_config=$(cdc_cli_changefeed query -c "$allow_same_cluster_id" | sed '/^Command to ticdc/d' | jq -eS '.config')
-	for unsafe_case in same_schema source_schema_chain all_schemas schema_ambiguity no_route narrow_route unsupported; do
+	for unsafe_case in same_schema case_sensitive source_schema_chain all_schemas schema_ambiguity no_route narrow_route unsupported; do
 		expected_error="which the filter replicates"
 		case "$unsafe_case" in
 		schema_ambiguity) expected_error="different target-schema expressions" ;;
@@ -167,6 +179,16 @@ function run() {
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "normal" "null" ""
 	wait_for_rows 1 "allow_same_cluster_src_copy.t2"
 	cdc_cli_changefeed remove -c "$allow_same_cluster_id"
+
+	# Case sensitive filtering still permits routes into a separate schema.
+	case_sensitive_id="allow-same-cluster-case-sensitive"
+	sed 's/case-sensitive = false/case-sensitive = true/' "$CUR/conf/allow_same_cluster.toml" >"$WORK_DIR/case_sensitive_safe.toml"
+	cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+		--config="$WORK_DIR/case_sensitive_safe.toml" -c "$case_sensitive_id"
+	run_sql "insert into $src_db.t1 values (4, 'd');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	wait_for_rows 4 "$dst_db.$dst_table"
+	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$case_sensitive_id" "normal" "null" ""
+	cdc_cli_changefeed remove -c "$case_sensitive_id"
 
 	cleanup_process $CDC_BINARY
 }

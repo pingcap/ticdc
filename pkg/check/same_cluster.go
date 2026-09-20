@@ -373,11 +373,25 @@ func verifySchemaTargets(filters []tablePattern, routes []routeRuleToCheck) erro
 	return nil
 }
 
-// findCapturedSchema finds a source schema whose routed target also belongs to the filter.
+// findCapturedSchema checks target overlap using TiDB's case insensitive identifier lookup.
+// Folding is local to this isolation check: route coverage and schema routing consistency
+// must still use the configured filter semantics.
 func (r routeRuleToCheck) findCapturedSchema(filters []tablePattern) (string, bool) {
+	matcher := r.matcher.schema
+	matcher.value = strings.ToLower(matcher.value)
+	target := r.schema
+	target.literal = strings.ToLower(target.literal)
+	target.prefix = strings.ToLower(target.prefix)
+	target.suffix = strings.ToLower(target.suffix)
 	for _, source := range filters {
-		for _, target := range filters {
-			if schema, ok := findNameWitness(source.schema, r.matcher.schema, target.schema, r.schema); ok {
+		// A case sensitive matcher that cannot select this source never routes its DDL.
+		if _, ok := findNameWitness(source.schema, r.matcher.schema, namePattern{kind: patternAny}, targetName{hasVariable: true}); !ok {
+			continue
+		}
+		source.schema.value = strings.ToLower(source.schema.value)
+		for _, capture := range filters {
+			capture.schema.value = strings.ToLower(capture.schema.value)
+			if schema, ok := findNameWitness(source.schema, matcher, capture.schema, target); ok {
 				return schema, true
 			}
 		}

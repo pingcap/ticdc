@@ -309,3 +309,99 @@ func TestValidateSameClusterRouting(t *testing.T) {
 		})
 	}
 }
+
+func TestSameClusterSchemaIsolationCaseSensitive(t *testing.T) {
+	cases := []struct {
+		name        string
+		filterRules []string
+		dispatch    []*config.DispatchRule
+		wantError   string
+	}{
+		{
+			name:        "literal target aliases source",
+			filterRules: []string{"src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "SRC"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "mixed case source aliases target",
+			filterRules: []string{"Src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"Src.*"}, TargetSchema: "src"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "literal target overlaps prefix filter",
+			filterRules: []string{"src*.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src*.*"}, TargetSchema: "SRC_COPY"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "literal target overlaps suffix filter",
+			filterRules: []string{"*src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"*src.*"}, TargetSchema: "COPY_SRC"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "derived prefix overlaps source range",
+			filterRules: []string{"src.*", "copy_*.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"*.*"}, TargetSchema: "COPY_{schema}"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "derived suffix overlaps source range",
+			filterRules: []string{"src.*", "*_copy.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"*.*"}, TargetSchema: "{schema}_COPY"}},
+			wantError:   "requires database isolation",
+		},
+		{
+			name:        "safe mixed case derived target",
+			filterRules: []string{"Src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"Src.*"}, TargetSchema: "Copy_{schema}"}},
+		},
+		{
+			name:        "schema coverage remains case sensitive",
+			filterRules: []string{"src.*"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"SRC.*"}, TargetSchema: "dst"}},
+			wantError:   "is not covered by any dispatch rule matcher",
+		},
+		{
+			name:        "table coverage remains case sensitive",
+			filterRules: []string{"src.t1"},
+			dispatch:    []*config.DispatchRule{{Matcher: []string{"src.T1"}, TargetSchema: "dst"}},
+			wantError:   "is not covered by any dispatch rule matcher",
+		},
+		{
+			name:        "unmatched schema route remains inactive",
+			filterRules: []string{"src.*"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.*"}, TargetSchema: "dst"},
+				{Matcher: []string{"SRC.*"}, TargetSchema: "src"},
+			},
+		},
+		{
+			name:        "schema target consistency preserves original spelling",
+			filterRules: []string{"src.*"},
+			dispatch: []*config.DispatchRule{
+				{Matcher: []string{"src.*"}, TargetSchema: "dst"},
+				{Matcher: []string{"src.t1"}, TargetSchema: "DST"},
+			},
+			wantError: "different target-schema expressions",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.ChangefeedConfig{
+				AllowSameCluster: true,
+				CaseSensitive:    true,
+				Filter:           &config.FilterConfig{Rules: tc.filterRules},
+				SinkConfig:       &config.SinkConfig{DispatchRules: tc.dispatch},
+			}
+			err := ValidateSameClusterRouting(cfg)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
