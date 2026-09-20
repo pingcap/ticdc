@@ -510,22 +510,13 @@ func compositeKeyRowEvent(t *testing.T) *commonEvent.RowEvent {
 	}
 	tableInfo := commonType.NewTableInfo4Decoder("test", tidbTableInfo)
 
-	event := commonEvent.NewDMLEvent(
-		commonType.NewDispatcherID(), tableInfo.TableName.TableID, 1, 2, tableInfo)
-	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-	rows.AppendRow(chunk.MutRowFromValues(int64(1), int64(2), "x").ToRow())
-	event.SetRows(rows)
-	event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
-	event.RowKeys = append(event.RowKeys, []byte("row-key"))
-	event.Length = 1
-	event.TableInfoVersion = tableInfo.GetUpdateTS()
-
-	row, ok := event.GetNextRow()
-	require.True(t, ok)
-	event.Rewind()
+	row := commonEvent.RowChange{
+		RowType: commonType.RowTypeInsert,
+		Row:     chunk.MutRowFromValues(int64(1), int64(2), "x").ToRow(),
+	}
 	return &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       event.CommitTs,
+		CommitTs:       2,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
