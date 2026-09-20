@@ -640,9 +640,8 @@ func TestRewriteParserBackedDDLQueryRangeVariableResolution(t *testing.T) {
 	}
 }
 
-// TestRewriteParserBackedDDLQueryCaseSensitiveBinding covers the router's
-// case-sensitive mode: physical table names stay distinct, while aliases are
-// still matched case-insensitively.
+// TestRewriteParserBackedDDLQueryCaseSensitiveBinding separates case-sensitive
+// route matching from TiDB's case-insensitive SQL reference binding.
 func TestRewriteParserBackedDDLQueryCaseSensitiveBinding(t *testing.T) {
 	t.Parallel()
 
@@ -662,18 +661,18 @@ func TestRewriteParserBackedDDLQueryCaseSensitiveBinding(t *testing.T) {
 		return newQuery
 	}
 
-	t.Run("tables differing only by case stay distinct", func(t *testing.T) {
+	t.Run("schema qualifiers distinguish same-named tables", func(t *testing.T) {
 		t.Parallel()
-		newQuery := rewrite(t, "CREATE TABLE routed AS SELECT Orders.id, orders.id FROM source_db.Orders, other_db.orders")
+		newQuery := rewrite(t, "CREATE TABLE routed AS SELECT SOURCE_DB.orders.id, OTHER_DB.ORDERS.id FROM source_db.Orders, other_db.orders")
 		require.Contains(t, newQuery, "`target_db`.`Orders_r`.`id`")
 		require.Contains(t, newQuery, "`other_target`.`orders_r`.`id`")
 	})
 
-	t.Run("reference case must match", func(t *testing.T) {
+	t.Run("reference reuses the FROM table route regardless of case", func(t *testing.T) {
 		t.Parallel()
 		newQuery := rewrite(t, "CREATE TABLE routed AS SELECT orders.id FROM source_db.Orders")
-		require.Contains(t, newQuery, "`orders`.`id`")
-		require.NotContains(t, newQuery, "`target_db`.`Orders_r`.`id`")
+		require.Contains(t, newQuery, "`target_db`.`Orders_r`.`id`")
+		require.NotContains(t, newQuery, "`orders`.`id`")
 	})
 }
 

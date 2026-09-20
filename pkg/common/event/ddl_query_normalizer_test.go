@@ -67,6 +67,8 @@ func TestCorrelatedColumns(t *testing.T) {
 		{"local table shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM other_db.orders WHERE orders.id = 1)", "WHERE `other_db`.`orders`.`id`=1"},
 		{"unqualified local table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
 		{"CTE shadows outer", "SELECT * FROM source_db.orders WHERE EXISTS (WITH orders AS (SELECT 1 AS id) SELECT 1 FROM orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
+		{"CTE definition skips consumer table", "SELECT t.id FROM source_db.t WHERE EXISTS (WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id)", "WITH `c` AS (SELECT `source_db`.`t`.`id` AS `id`)"},
+		{"CTE on union retains outer table", "SELECT t.id FROM source_db.t WHERE EXISTS (WITH c AS (SELECT t.id AS id) SELECT id FROM c UNION SELECT id FROM c)", "WITH `c` AS (SELECT `source_db`.`t`.`id` AS `id`)"},
 		{"ambiguous local table", "SELECT * FROM source_db.orders WHERE EXISTS (SELECT 1 FROM a.orders JOIN b.orders WHERE orders.id = 1)", "WHERE `orders`.`id`=1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

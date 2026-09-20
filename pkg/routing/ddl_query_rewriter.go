@@ -223,8 +223,9 @@ func (c *cteScopes) contains(table *ast.TableName) bool {
 // positional bookkeeping is needed. References are rewritten through the SELECT
 // scope chain:
 //
-//   - `db`.`table`.`col` and `db`.`table`.* name a physical table directly and
-//     are routed directly.
+//   - Both schema-qualified and table-qualified columns and wildcards reuse
+//     the route of their FROM table. SQL name binding is case-insensitive,
+//     independently of the route matcher configuration.
 //   - `table`.`col` and `table`.* resolve to a range variable. The innermost
 //     SELECT wins; when it does not declare the name, the search continues in
 //     the enclosing SELECT. An alias, a CTE name, or an ambiguous declaration
@@ -251,6 +252,8 @@ type tableRenameVisitor struct {
 	defaultSchema string
 	// scope is the innermost SELECT scope being visited.
 	scope *selectScope
+	// withScopes saves the consuming queries while visiting their CTE definitions.
+	withScopes []*selectScope
 	// bindings are table-qualified references, resolved after the whole walk.
 	bindings []pendingBinding
 	// routed records whether any name changed.
@@ -271,21 +274,18 @@ type selectScope struct {
 	// physical tables declared in outer scopes.
 	aliases map[string]struct{}
 	// tables maps a normalized unaliased physical table name to its routed name.
-	tables map[string]commonEvent.SchemaTableName
+	tables map[TableKey]commonEvent.SchemaTableName
 	// ambiguousTables holds physical table names declared more than once in this
 	// scope; their qualifiers cannot be bound to a single table.
-	ambiguousTables map[string]struct{}
+	ambiguousTables map[TableKey]struct{}
 }
 
-// pendingBinding is one table-qualified reference: a column such as `t`.`c`, or
-// a wildcard such as `t`.*. Schema-qualified references are rewritten
-// immediately and never become pending.
+// pendingBinding is a column or wildcard qualifier, resolved after FROM tables
+// have been collected. source is lower-cased according to TiDB SQL name binding;
+// an empty schema denotes an unqualified range variable.
 type pendingBinding struct {
-	scope *selectScope
-	// aliasKey is lower-cased, like every alias and CTE key.
-	aliasKey string
-	// tableKey follows the router's case sensitivity for physical table names.
-	tableKey string
+	scope    *selectScope
+	source   TableKey
 	column   *ast.ColumnName
 	wildcard *ast.WildCardField
 }
@@ -308,6 +308,11 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		v.collectWildCards(n.Fields)
 	case *ast.SetOprStmt, *ast.SetOprSelectList:
 		v.enterScope()
+	case *ast.WithClause:
+		// CTE definitions see the query's outer scopes, but not its FROM.
+		// Keep CTE name visibility in v.ctes independent of this table scope.
+		v.withScopes = append(v.withScopes, v.scope)
+		v.scope = v.scope.parent
 	case *ast.TableSource:
 		v.collectTable(n)
 	}
@@ -318,14 +323,11 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		return in, true
 	}
 	if c, ok := in.(*ast.ColumnName); ok {
-		if c.Schema.O != "" {
-			v.rewriteColumnName(c)
-		} else if c.Table.O != "" {
+		if c.Table.O != "" {
 			v.bindings = append(v.bindings, pendingBinding{
-				scope:    v.scope,
-				aliasKey: c.Table.L,
-				tableKey: v.tableKey(c.Table.O),
-				column:   c,
+				scope:  v.scope,
+				source: TableKey{Schema: c.Schema.L, Table: c.Table.L},
+				column: c,
 			})
 		}
 		return in, true
@@ -341,6 +343,9 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	switch in.(type) {
 	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
 		v.leaveScope()
+	case *ast.WithClause:
+		v.scope = v.withScopes[len(v.withScopes)-1]
+		v.withScopes = v.withScopes[:len(v.withScopes)-1]
 	}
 	return in, true
 }
@@ -365,21 +370,6 @@ func (v *tableRenameVisitor) renameTable(t *ast.TableName) {
 	v.routed = v.routed || binding.routed()
 }
 
-// qualifiedTarget routes a schema-qualified table reference
-// (`db`.`table`.`col` or `db`.`table`.*) and reports whether it moved.
-func (v *tableRenameVisitor) qualifiedTarget(schema, table string) (commonEvent.SchemaTableName, bool) {
-	binding, err := v.router.Route(schema, table)
-	if err != nil {
-		v.err = err
-		return commonEvent.SchemaTableName{}, false
-	}
-	if !binding.routed() {
-		return commonEvent.SchemaTableName{}, false
-	}
-	v.routed = true
-	return schemaTableName(binding.Target), true
-}
-
 func schemaTableName(key TableKey) commonEvent.SchemaTableName {
 	return commonEvent.SchemaTableName{SchemaName: key.Schema, TableName: key.Table}
 }
@@ -388,8 +378,8 @@ func (v *tableRenameVisitor) enterScope() {
 	v.scope = &selectScope{
 		parent:          v.scope,
 		aliases:         make(map[string]struct{}),
-		tables:          make(map[string]commonEvent.SchemaTableName),
-		ambiguousTables: make(map[string]struct{}),
+		tables:          make(map[TableKey]commonEvent.SchemaTableName),
+		ambiguousTables: make(map[TableKey]struct{}),
 	}
 }
 
@@ -406,9 +396,8 @@ func (v *tableRenameVisitor) addRangeVariable(name string) {
 	v.scope.aliases[name] = struct{}{}
 }
 
-// collectWildCards rewrites the schema-qualified wildcards of one SELECT field
-// list and records the rest. WildCardField nodes are not visited by ast.Visitor,
-// so they are read from the field list.
+// collectWildCards records qualified wildcards of one SELECT field list.
+// WildCardField nodes are not visited by ast.Visitor, so they are read here.
 func (v *tableRenameVisitor) collectWildCards(fields *ast.FieldList) {
 	if fields == nil || v.scope == nil {
 		return
@@ -418,17 +407,10 @@ func (v *tableRenameVisitor) collectWildCards(fields *ast.FieldList) {
 		if wildcard == nil || wildcard.Table.O == "" {
 			continue
 		}
-		if wildcard.Schema.O != "" {
-			if target, ok := v.qualifiedTarget(wildcard.Schema.O, wildcard.Table.O); ok {
-				wildcard.Schema = ast.NewCIStr(target.SchemaName)
-				wildcard.Table = ast.NewCIStr(target.TableName)
-			}
-			continue
-		}
+
 		v.bindings = append(v.bindings, pendingBinding{
 			scope:    v.scope,
-			aliasKey: wildcard.Table.L,
-			tableKey: v.tableKey(wildcard.Table.O),
+			source:   TableKey{Schema: wildcard.Schema.L, Table: wildcard.Table.L},
 			wildcard: wildcard,
 		})
 	}
@@ -456,23 +438,30 @@ func (v *tableRenameVisitor) collectTable(table *ast.TableSource) {
 		v.err = err
 		return
 	}
-	key := v.tableKey(sourceTable.Name.O)
-	if _, exists := v.scope.tables[key]; exists {
-		delete(v.scope.tables, key)
-		v.scope.ambiguousTables[key] = struct{}{}
-		return
+	// Index both qualified and unqualified names. Two same-named tables from
+	// different schemas only make the unqualified name ambiguous.
+	source := binding.Source.normalized(false)
+	keys := []TableKey{{Table: source.Table}}
+	if source.Schema != "" {
+		keys = append(keys, source)
 	}
-	if _, ambiguous := v.scope.ambiguousTables[key]; ambiguous {
-		return
+	for _, key := range keys {
+		if _, exists := v.scope.tables[key]; exists {
+			delete(v.scope.tables, key)
+			v.scope.ambiguousTables[key] = struct{}{}
+			continue
+		}
+		if _, ambiguous := v.scope.ambiguousTables[key]; !ambiguous {
+			v.scope.tables[key] = schemaTableName(binding.Target)
+		}
 	}
-	v.scope.tables[key] = schemaTableName(binding.Target)
 }
 
 // resolveBindings rewrites the collected table-qualified references. It runs
 // after the whole statement is visited, so every scope is complete.
 func (v *tableRenameVisitor) resolveBindings() {
 	for _, binding := range v.bindings {
-		target, ok := resolveRangeVariable(binding.scope, binding.aliasKey, binding.tableKey)
+		target, ok := resolveRangeVariable(binding.scope, binding.source)
 		if !ok {
 			continue
 		}
@@ -486,44 +475,22 @@ func (v *tableRenameVisitor) resolveBindings() {
 	}
 }
 
-// resolveRangeVariable returns the routed name of the table a table-qualified
-// reference denotes. The search starts at the reference's own SELECT and walks
-// outward, so a correlated reference resolves to the enclosing table. An alias,
-// a CTE name, or an ambiguous declaration stops the search. aliasKey is matched
-// case-insensitively; tableKey follows the router's case sensitivity.
-func resolveRangeVariable(scope *selectScope, aliasKey, tableKey string) (commonEvent.SchemaTableName, bool) {
+// resolveRangeVariable returns the routed name of the FROM table denoted by a
+// qualifier. SQL name binding is always case-insensitive. Unqualified aliases,
+// CTE names and ambiguous declarations stop the search through outer scopes.
+func resolveRangeVariable(scope *selectScope, source TableKey) (commonEvent.SchemaTableName, bool) {
 	for s := scope; s != nil; s = s.parent {
-		if _, ok := s.aliases[aliasKey]; ok {
+		if source.Schema == "" {
+			if _, ok := s.aliases[source.Table]; ok {
+				return commonEvent.SchemaTableName{}, false
+			}
+		}
+		if _, ok := s.ambiguousTables[source]; ok {
 			return commonEvent.SchemaTableName{}, false
 		}
-		if _, ok := s.ambiguousTables[tableKey]; ok {
-			return commonEvent.SchemaTableName{}, false
-		}
-		if target, ok := s.tables[tableKey]; ok {
+		if target, ok := s.tables[source]; ok {
 			return target, true
 		}
 	}
 	return commonEvent.SchemaTableName{}, false
-}
-
-// rewriteColumnName rewrites a schema-qualified column reference
-// (e.g. `db`.`t`.`col`) so it keeps pointing at the routed table.
-func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
-	if c == nil || c.Schema.O == "" || c.Table.O == "" {
-		return
-	}
-	target, ok := v.qualifiedTarget(c.Schema.O, c.Table.O)
-	if !ok {
-		return
-	}
-	c.Schema = ast.NewCIStr(target.SchemaName)
-	c.Table = ast.NewCIStr(target.TableName)
-}
-
-// tableKey normalizes an unqualified physical table name. Table names follow the
-// router's case sensitivity, so a case-sensitive router keeps `T` and `t`
-// distinct. Aliases are not normalized here: they are matched through their
-// lower-cased form, like SQL identifiers.
-func (v *tableRenameVisitor) tableKey(name string) string {
-	return normalizeIdentifier(name, v.router.caseSensitive)
 }

@@ -57,9 +57,8 @@ func (k TableKey) normalized(caseSensitive bool) TableKey {
 }
 
 // normalizeIdentifier lower-cases a schema or table identifier unless the
-// changefeed is case-sensitive. Identifiers that name a physical table must use
-// one rule everywhere, because rule matching, statement rewriting, and conflict
-// detection all depend on whether `T` and `t` are the same table.
+// changefeed is case-sensitive. SQL reference binding always uses the
+// case-insensitive form, independently of route matching and admission.
 func normalizeIdentifier(name string, caseSensitive bool) string {
 	if caseSensitive {
 		return name
@@ -105,10 +104,6 @@ type rule struct {
 type Router struct {
 	changefeedID common.ChangeFeedID
 	rules        []rule
-	// caseSensitive makes rule matching, and therefore table identity in the
-	// rewritten statements, case-sensitive. Range variable aliases stay
-	// case-insensitive, like SQL identifiers.
-	caseSensitive bool
 }
 
 // HasTableRoute returns whether the router contains any table route rule.
@@ -148,9 +143,8 @@ func NewRouter(
 	}
 
 	return Router{
-		changefeedID:  changefeedID,
-		rules:         routingRules,
-		caseSensitive: caseSensitive,
+		changefeedID: changefeedID,
+		rules:        routingRules,
 	}, nil
 }
 

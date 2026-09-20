@@ -78,6 +78,8 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 type createViewSelectNormalizer struct {
 	changed bool
 	scopes  []createViewSelectScope
+	// withScopes holds consuming query scopes hidden from their CTE definitions.
+	withScopes []createViewSelectScope
 }
 
 type createViewSelectScope struct {
@@ -112,6 +114,15 @@ func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
 	switch v := in.(type) {
 	case *ast.SelectStmt:
 		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
+	case *ast.SetOprStmt, *ast.SetOprSelectList:
+		// A WITH on a set operation owns an empty scope. Hiding it must not
+		// accidentally hide the enclosing query's correlated tables.
+		n.scopes = append(n.scopes, createViewSelectScope{})
+	case *ast.WithClause:
+		// CTE definitions can reference outer queries, but cannot see the
+		// FROM tables of the query consuming this WITH clause.
+		n.withScopes = append(n.withScopes, n.scopes[len(n.scopes)-1])
+		n.scopes = n.scopes[:len(n.scopes)-1]
 	case *ast.ColumnName:
 		n.qualifyColumnName(v)
 	}
@@ -119,8 +130,12 @@ func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
 }
 
 func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
-	if _, ok := in.(*ast.SelectStmt); ok {
+	switch in.(type) {
+	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
 		n.scopes = n.scopes[:len(n.scopes)-1]
+	case *ast.WithClause:
+		n.scopes = append(n.scopes, n.withScopes[len(n.withScopes)-1])
+		n.withScopes = n.withScopes[:len(n.withScopes)-1]
 	}
 	return in, true
 }

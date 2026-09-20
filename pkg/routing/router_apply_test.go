@@ -1038,3 +1038,91 @@ func TestCorrelatedView(t *testing.T) {
 	helper.Tk().MustExec(routed.Query)
 	helper.Tk().MustQuery("SELECT * FROM target_db.v_r").Check(testkit.Rows("1"))
 }
+
+func TestViewRoutingReferenceCase(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	tk := helper.Tk()
+	tk.MustExec("CREATE DATABASE source_db")
+	tk.MustExec("CREATE DATABASE target_db")
+	tk.MustExec("CREATE TABLE source_db.orders (id INT PRIMARY KEY)")
+	tk.MustExec("INSERT INTO source_db.orders VALUES (7)")
+	tk.MustExec("CREATE TABLE target_db.orders_r LIKE source_db.orders")
+	tk.MustExec("INSERT INTO target_db.orders_r SELECT * FROM source_db.orders")
+	for _, caseSensitive := range []bool{true, false} {
+		mode := "insensitive"
+		if caseSensitive {
+			mode = "sensitive"
+		}
+		router := newTestRouter(t, caseSensitive, []*config.DispatchRule{{
+			Matcher: []string{"source_db.orders", "source_db.v"}, TargetSchema: "target_db", TargetTable: "{table}_r",
+		}})
+		for _, reference := range []string{"source_db.ORDERS.id", "SOURCE_DB.orders.id", "ORDERS.id", "source_db.ORDERS.*", "ORDERS.*"} {
+			t.Run(reference+"/"+mode, func(t *testing.T) {
+				ddl := helper.DDL2Event("CREATE VIEW source_db.v AS SELECT " + reference + " FROM source_db.orders")
+				tk.MustQuery("SELECT * FROM source_db.v").Check(testkit.Rows("7"))
+				routed, err := router.ApplyToDDLEvent(ddl)
+				require.NoError(t, err)
+				require.Contains(t, routed.Query, "SELECT `target_db`.`orders_r`.")
+				tk.MustExec(routed.Query)
+				tk.MustQuery("SELECT * FROM target_db.v_r").Check(testkit.Rows("7"))
+				tk.MustExec("DROP VIEW target_db.v_r")
+				tk.MustExec("DROP VIEW source_db.v")
+			})
+		}
+	}
+}
+
+func TestViewCTECorrelatedScope(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	tk := helper.Tk()
+	for _, schema := range []string{"source_db", "other_db", "target_db", "other_target"} {
+		tk.MustExec("CREATE DATABASE " + schema)
+	}
+	for _, table := range []string{"source_db.t", "target_db.t_r"} {
+		tk.MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		tk.MustExec("INSERT INTO " + table + " VALUES (1), (2)")
+	}
+	for _, table := range []string{"other_db.t", "other_target.t_r"} {
+		tk.MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		tk.MustExec("INSERT INTO " + table + " VALUES (1)")
+	}
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+		{Matcher: []string{"other_db.*"}, TargetSchema: "other_target", TargetTable: "{table}_r"},
+	})
+	for _, tc := range []struct{ name, body string }{
+		{"table", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+		{"alias", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t AS t JOIN c ON c.id = t.id"},
+		{"nested", "WITH c AS (WITH d AS (SELECT t.id AS id) SELECT id FROM d) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+		{"union", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id UNION ALL SELECT 1 FROM c WHERE id = 1"},
+		{"recursive", "WITH RECURSIVE c(id) AS (SELECT t.id UNION ALL SELECT id + 1 FROM c WHERE id < 1) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ddl := helper.DDL2Event("CREATE VIEW source_db.v AS SELECT t.id FROM source_db.t WHERE EXISTS (" + tc.body + ")")
+			tk.MustQuery("SELECT * FROM source_db.v ORDER BY id").Check(testkit.Rows("1"))
+			tk.MustExec("DROP VIEW source_db.v")
+			normalized, err := event.NormalizeCreateViewQueryWithStoredSelect(ddl.Query, ddl.TableInfo.View.SelectStmt, "source_db")
+			require.NoError(t, err)
+			for _, mode := range []string{"normalize", "route", "normalize then route"} {
+				t.Run(mode, func(t *testing.T) {
+					copyDDL := *ddl
+					view := "source_db.v"
+					if mode != "route" {
+						copyDDL.Query = normalized
+					}
+					if mode != "normalize" {
+						routed, err := router.ApplyToDDLEvent(&copyDDL)
+						require.NoError(t, err)
+						copyDDL = *routed
+						view = "target_db.v_r"
+					}
+					tk.MustExec(copyDDL.Query)
+					tk.MustQuery("SELECT * FROM " + view + " ORDER BY id").Check(testkit.Rows("1"))
+					tk.MustExec("DROP VIEW " + view)
+				})
+			}
+		})
+	}
+}
