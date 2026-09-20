@@ -156,10 +156,9 @@ func (c *cteScopes) contains(table *ast.TableName) bool {
 
 // scope holds SQL visibility, independently of the AST traversal stack.
 type scope struct {
-	parent    *scope
-	aliases   map[string]struct{}
-	tables    map[Name]*tableBinding
-	ambiguous map[Name]struct{}
+	parent *scope
+	// A present nil entry blocks outer lookup for aliases, CTEs and ambiguous names.
+	tables map[Name]*tableBinding
 }
 
 type pendingReference struct {
@@ -180,7 +179,7 @@ type binder struct {
 }
 
 func (v *binder) enterScope() {
-	v.scope = &scope{parent: v.scope, aliases: make(map[string]struct{}), tables: make(map[Name]*tableBinding), ambiguous: make(map[Name]struct{})}
+	v.scope = &scope{parent: v.scope, tables: make(map[Name]*tableBinding)}
 }
 
 func (v *binder) Enter(in ast.Node) (ast.Node, bool) {
@@ -214,8 +213,7 @@ func (v *binder) Enter(in ast.Node) (ast.Node, bool) {
 					// Capture only preceding FROM items. Later declarations and
 					// this derived table's own alias are not visible inside it.
 					visible = &scope{
-						parent: consumer.parent, aliases: maps.Clone(consumer.aliases),
-						tables: maps.Clone(consumer.tables), ambiguous: maps.Clone(consumer.ambiguous),
+						parent: consumer.parent, tables: maps.Clone(consumer.tables),
 					}
 				}
 			}
@@ -267,7 +265,7 @@ func (v *binder) collectTable(node *ast.TableSource) {
 		return
 	}
 	if node.AsName.O != "" {
-		v.scope.aliases[node.AsName.L] = struct{}{}
+		v.scope.tables[Name{Table: node.AsName.L}] = nil
 		return
 	}
 	source, ok := node.Source.(*ast.TableName)
@@ -275,7 +273,7 @@ func (v *binder) collectTable(node *ast.TableSource) {
 		return
 	}
 	if v.ctes.contains(source) {
-		v.scope.aliases[source.Name.L] = struct{}{}
+		v.scope.tables[Name{Table: source.Name.L}] = nil
 		return
 	}
 	table := v.declare(source)
@@ -286,9 +284,8 @@ func (v *binder) collectTable(node *ast.TableSource) {
 	}
 	for _, key := range keys {
 		if _, exists := v.scope.tables[key]; exists {
-			delete(v.scope.tables, key)
-			v.scope.ambiguous[key] = struct{}{}
-		} else if _, ambiguous := v.scope.ambiguous[key]; !ambiguous {
+			v.scope.tables[key] = nil
+		} else {
 			v.scope.tables[key] = table
 		}
 	}
@@ -296,14 +293,6 @@ func (v *binder) collectTable(node *ast.TableSource) {
 
 func resolve(s *scope, name Name) *tableBinding {
 	for ; s != nil; s = s.parent {
-		if name.Schema == "" {
-			if _, alias := s.aliases[name.Table]; alias {
-				return nil
-			}
-		}
-		if _, ambiguous := s.ambiguous[name]; ambiguous {
-			return nil
-		}
 		if table, ok := s.tables[name]; ok {
 			return table
 		}
