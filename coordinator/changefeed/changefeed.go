@@ -245,6 +245,24 @@ func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
 }
 
+// AdvanceCheckpointTs advances only the checkpoint in the in-memory status.
+// It is used during maintainer handoff, where the stopping owner can report a
+// newer committed checkpoint after the next owner epoch has been persisted.
+func (c *Changefeed) AdvanceCheckpointTs(checkpointTs uint64) bool {
+	for {
+		status := c.status.Load()
+		if status == nil || checkpointTs <= status.CheckpointTs {
+			return false
+		}
+
+		updated := *status
+		updated.CheckpointTs = checkpointTs
+		if c.status.CompareAndSwap(status, &updated) {
+			return true
+		}
+	}
+}
+
 // GetStatusForResume returns a deep copy of the changefeed status without errors.
 func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 	status := c.status.Load()

@@ -410,6 +410,24 @@ func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
 	}
 }
 
+// AcceptsMoveOriginStopStatus reports whether status is the terminal report
+// currently expected from the old owner of an in-flight maintainer move.
+func (oc *Controller) AcceptsMoveOriginStopStatus(
+	id common.ChangeFeedID,
+	from node.ID,
+	status *heartbeatpb.MaintainerStatus,
+) bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	op, ok := oc.operators[id]
+	if !ok {
+		return false
+	}
+	moveOp, ok := op.OP.(*MoveMaintainerOperator)
+	return ok && moveOp.acceptsOriginStopStatus(from, status)
+}
+
 // OnNodeRemoved is called when a node is offline,
 // the controller will mark all maintainers on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
