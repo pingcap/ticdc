@@ -37,7 +37,7 @@ func TestPullerDebugAPI(t *testing.T) {
 	provider.EXPECT().GetPullerDebugInfo(options).Return(logpuller.PullerDebugInfo{
 		SlowSubscriptions: []logpuller.PullerSubscriptionDebugInfo{{
 			SubscriptionID: 1,
-			SlowRegions: []logpuller.PullerRegionDebugInfo{{
+			SlowRegions: []logpuller.PullerRegionDebugSummary{{
 				RegionID: 11,
 			}},
 		}},
@@ -45,6 +45,11 @@ func TestPullerDebugAPI(t *testing.T) {
 	response := performPullerDebugRequest(
 		router, "/debug/puller?subscription_limit=2&region_limit=3")
 	require.Equal(t, http.StatusOK, response.Code)
+	require.Contains(t, response.Body.String(), `"initialized"`)
+	require.NotContains(t, response.Body.String(), `"phase"`)
+	require.NotContains(t, response.Body.String(), `"store_address"`)
+	require.NotContains(t, response.Body.String(), `"worker_id"`)
+	require.NotContains(t, response.Body.String(), `"request_created_at"`)
 	var info logpuller.PullerDebugInfo
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &info))
 	require.Equal(t, logpuller.SubscriptionID(1),
@@ -55,7 +60,9 @@ func TestPullerDebugAPI(t *testing.T) {
 		logpuller.SubscriptionID(1), uint64(11)).
 		Return(logpuller.PullerRegionDebugDetail{
 			SubscriptionID: 1,
-			Region:         logpuller.PullerRegionDebugInfo{RegionID: 11},
+			Region: logpuller.PullerRegionDebugInfo{
+				PullerRegionDebugSummary: logpuller.PullerRegionDebugSummary{RegionID: 11},
+			},
 		}, true)
 	response = performPullerDebugRequest(
 		router, "/debug/puller/subscriptions/1/regions/11")

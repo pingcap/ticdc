@@ -49,17 +49,17 @@ type PullerDebugInfo struct {
 
 // PullerSubscriptionDebugInfo reports one subscription and its slowest Regions.
 type PullerSubscriptionDebugInfo struct {
-	SubscriptionID       SubscriptionID          `json:"subscription_id,string"`
-	KeyspaceID           uint32                  `json:"keyspace_id"`
-	TableID              int64                   `json:"table_id,string"`
-	ResolvedTs           uint64                  `json:"resolved_ts,string"`
-	ResolvedTsLagMillis  int64                   `json:"resolved_ts_lag_ms"`
-	Initialized          bool                    `json:"initialized"`
-	LockedRegions        int                     `json:"locked_regions"`
-	InitializedRegions   int                     `json:"initialized_regions"`
-	UninitializedRegions int                     `json:"uninitialized_regions"`
-	UncoveredRanges      int                     `json:"uncovered_ranges"`
-	SlowRegions          []PullerRegionDebugInfo `json:"slow_regions"`
+	SubscriptionID       SubscriptionID             `json:"subscription_id,string"`
+	KeyspaceID           uint32                     `json:"keyspace_id"`
+	TableID              int64                      `json:"table_id,string"`
+	ResolvedTs           uint64                     `json:"resolved_ts,string"`
+	ResolvedTsLagMillis  int64                      `json:"resolved_ts_lag_ms"`
+	Initialized          bool                       `json:"initialized"`
+	LockedRegions        int                        `json:"locked_regions"`
+	InitializedRegions   int                        `json:"initialized_regions"`
+	UninitializedRegions int                        `json:"uninitialized_regions"`
+	UncoveredRanges      int                        `json:"uncovered_ranges"`
+	SlowRegions          []PullerRegionDebugSummary `json:"slow_regions"`
 }
 
 // PullerRegionDebugDetail identifies the subscription that owns one Region.
@@ -71,14 +71,20 @@ type PullerRegionDebugDetail struct {
 	Region         PullerRegionDebugInfo `json:"region"`
 }
 
-// PullerRegionDebugInfo reports the current local state of one locked Region.
+// PullerRegionDebugSummary reports the RangeLock state of one locked Region.
+type PullerRegionDebugSummary struct {
+	RegionID        uint64    `json:"region_id,string"`
+	ResolvedTs      uint64    `json:"resolved_ts,string"`
+	ResolvedTsLagMs int64     `json:"resolved_ts_lag_ms"`
+	Initialized     bool      `json:"initialized"`
+	CreatedAt       time.Time `json:"created_at"`
+	AgeMillis       int64     `json:"age_ms"`
+}
+
+// PullerRegionDebugInfo reports the current local state and worker details of
+// one locked Region.
 type PullerRegionDebugInfo struct {
-	RegionID         uint64     `json:"region_id,string"`
-	ResolvedTs       uint64     `json:"resolved_ts,string"`
-	ResolvedTsLagMs  int64      `json:"resolved_ts_lag_ms"`
-	Initialized      bool       `json:"initialized"`
-	CreatedAt        time.Time  `json:"created_at"`
-	AgeMillis        int64      `json:"age_ms"`
+	PullerRegionDebugSummary
 	StoreAddress     string     `json:"store_address,omitempty"`
 	WorkerID         uint64     `json:"worker_id,string,omitempty"`
 	Phase            string     `json:"phase"`
@@ -117,7 +123,7 @@ func (h *pullerSlowSubscriptionHeap) Pop() any {
 	return last
 }
 
-type pullerSlowRegionHeap []PullerRegionDebugInfo
+type pullerSlowRegionHeap []PullerRegionDebugSummary
 
 func (h pullerSlowRegionHeap) Len() int { return len(h) }
 func (h pullerSlowRegionHeap) Less(i, j int) bool {
@@ -128,7 +134,7 @@ func (h pullerSlowRegionHeap) Less(i, j int) bool {
 }
 func (h pullerSlowRegionHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *pullerSlowRegionHeap) Push(value any) {
-	*h = append(*h, value.(PullerRegionDebugInfo))
+	*h = append(*h, value.(PullerRegionDebugSummary))
 }
 func (h *pullerSlowRegionHeap) Pop() any {
 	old := *h
@@ -222,7 +228,7 @@ func (s *subscriptionClient) debugSubscription(
 		ResolvedTs:          resolvedTs,
 		ResolvedTsLagMillis: debugTsLag(resolvedTs, now),
 		Initialized:         span.initialized.Load(),
-		SlowRegions:         []PullerRegionDebugInfo{},
+		SlowRegions:         []PullerRegionDebugSummary{},
 	}
 	slowRegions := &pullerSlowRegionHeap{}
 	stats := span.rangeLock.IterAll(func(regionID uint64, state *regionlock.LockedRangeState) {
@@ -243,11 +249,6 @@ func (s *subscriptionClient) debugSubscription(
 		}
 		return info.SlowRegions[i].ResolvedTs < info.SlowRegions[j].ResolvedTs
 	})
-	for i := range info.SlowRegions {
-		if tracked, ok := s.debugTrackedRegion(span.subID, info.SlowRegions[i].RegionID); ok {
-			applyTrackedRegion(&info.SlowRegions[i], tracked)
-		}
-	}
 	return info
 }
 
@@ -308,7 +309,7 @@ func addSlowDebugSubscription(
 
 func addSlowDebugRegion(
 	regions *pullerSlowRegionHeap,
-	region PullerRegionDebugInfo,
+	region PullerRegionDebugSummary,
 	limit int,
 ) {
 	if regions.Len() < limit {
@@ -329,16 +330,15 @@ func debugRegionInfo(
 	regionID uint64,
 	state *regionlock.LockedRangeState,
 	now time.Time,
-) PullerRegionDebugInfo {
+) PullerRegionDebugSummary {
 	resolvedTs := state.ResolvedTs.Load()
-	return PullerRegionDebugInfo{
+	return PullerRegionDebugSummary{
 		RegionID:        regionID,
 		ResolvedTs:      resolvedTs,
 		ResolvedTsLagMs: debugTsLag(resolvedTs, now),
 		Initialized:     state.Initialized.Load(),
 		CreatedAt:       state.Created,
 		AgeMillis:       max(int64(0), now.Sub(state.Created).Milliseconds()),
-		Phase:           "scheduling_or_recovering",
 	}
 }
 
@@ -347,13 +347,15 @@ func debugLockedRangeStatistic(
 	now time.Time,
 ) PullerRegionDebugInfo {
 	return PullerRegionDebugInfo{
-		RegionID:        stat.RegionID,
-		ResolvedTs:      stat.ResolvedTs,
-		ResolvedTsLagMs: debugTsLag(stat.ResolvedTs, now),
-		Initialized:     stat.Initialized,
-		CreatedAt:       stat.Created,
-		AgeMillis:       max(int64(0), now.Sub(stat.Created).Milliseconds()),
-		Phase:           "scheduling_or_recovering",
+		PullerRegionDebugSummary: PullerRegionDebugSummary{
+			RegionID:        stat.RegionID,
+			ResolvedTs:      stat.ResolvedTs,
+			ResolvedTsLagMs: debugTsLag(stat.ResolvedTs, now),
+			Initialized:     stat.Initialized,
+			CreatedAt:       stat.Created,
+			AgeMillis:       max(int64(0), now.Sub(stat.Created).Milliseconds()),
+		},
+		Phase: "scheduling_or_recovering",
 	}
 }
 

@@ -109,9 +109,7 @@ func TestPullerDebugInfo(t *testing.T) {
 	require.Equal(t, uint64(11), slowest.SlowRegions[0].RegionID)
 	require.Equal(t, int64(8*time.Second/time.Millisecond),
 		slowest.SlowRegions[0].ResolvedTsLagMs)
-	require.Equal(t, "tikv-1:20160", slowest.SlowRegions[0].StoreAddress)
-	require.Equal(t, uint64(9), slowest.SlowRegions[0].WorkerID)
-	require.Equal(t, "streaming", slowest.SlowRegions[0].Phase)
+	require.True(t, slowest.SlowRegions[0].Initialized)
 	require.False(t, slowest.SlowRegions[0].CreatedAt.IsZero())
 
 	detail, found := client.GetPullerDebugRegion(slowSpan.subID, 12)
