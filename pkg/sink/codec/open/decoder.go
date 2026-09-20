@@ -442,7 +442,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.SetCharset("binary")
 			col.SetCollate("binary")
 		}
-		if isNullable(raw.Flag) {
+		if !isNullable(raw.Flag) {
 			col.AddFlag(mysql.NotNullFlag)
 		}
 		if isGenerated(raw.Flag) {

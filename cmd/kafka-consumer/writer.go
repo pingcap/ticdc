@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"math"
 	"sort"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -265,21 +267,42 @@ func (w *writer) flushEventsFromGroups(
 }
 
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
-	// Decoded events for one table can carry different column schemas even
-	// without a DDL (for example, full rows and key-only rows). Wait before a
-	// schema change so the asynchronous writer cannot batch incompatible rows.
+	// Decoded events can carry different column schemas. Avro can also carry
+	// consecutive after-images for the same key. Complete the preceding batch before
+	// submitting an incompatible event to the sink's cross-event merger.
 	tableInfos := make(map[int64]*commonType.TableInfo)
+	tableKeys := make(map[int64]map[uint64]struct{})
 	start := 0
 	for i, e := range events {
 		tableID := e.GetTableID()
-		if previous, ok := tableInfos[tableID]; ok && !previous.HasSameColumnSchema(e.TableInfo) {
+		previous := tableInfos[tableID]
+		conflict := previous != nil && !previous.HasSameColumnSchema(e.TableInfo)
+		var keys map[uint64]struct{}
+		// Limit the cross-event key barrier to Avro. Tables without a handle
+		// key use ordered per-row SQL in the sink.
+		if w.protocol == config.ProtocolAvro && e.TableInfo.HasPKOrNotNullUK {
+			keys = causality.ConflictKeys(e)
+			for key := range keys {
+				if _, ok := tableKeys[tableID][key]; ok {
+					conflict = true
+					break
+				}
+			}
+		}
+		if conflict {
 			if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
 				return err
 			}
 			clear(tableInfos)
+			clear(tableKeys)
 			start = i
 		}
 		tableInfos[tableID] = e.TableInfo
+		if tableKeys[tableID] == nil {
+			tableKeys[tableID] = keys
+		} else {
+			maps.Copy(tableKeys[tableID], keys)
+		}
 	}
 	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
 }

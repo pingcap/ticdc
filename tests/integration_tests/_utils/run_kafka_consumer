@@ -17,7 +17,7 @@ pwd=$pwd
 echo "[$(date)] <<<<<< START kafka consumer in $TEST_NAME case >>>>>>"
 cd $workdir
 
-downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&enable-ddl-ts=false"
+downstream_uri="mysql://root@127.0.0.1:3306/?enable-ddl-ts=false"
 
 # some consumer may require `consumer_replica_config`, set it separately
 if [ "$consumer_replica_config" != "" ] && [ "$schema_registry_uri" != "" ]; then
