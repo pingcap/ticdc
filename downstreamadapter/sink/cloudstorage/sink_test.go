@@ -129,11 +129,14 @@ func TestBasicFunctionality(t *testing.T) {
 
 	cloudStorageSink.AddDMLEvent(dmlEvent)
 
-	time.Sleep(5 * time.Second)
+	ddlEvent2.DispatcherID = dmlEvent.DispatcherID
+	ddlEvent2.FinishedTs = dmlEvent.CommitTs + 1
+	err = cloudStorageSink.FlushDMLBeforeBlock(ddlEvent2)
+	require.NoError(t, err)
 
 	ddlEvent2.PostFlush()
 
-	require.Equal(t, count.Load(), int64(3))
+	require.Equal(t, int64(3), count.Load())
 }
 
 func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
