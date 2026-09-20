@@ -181,6 +181,60 @@ func TestEventServiceBasic(t *testing.T) {
 	}
 }
 
+func TestEventServiceDispatcherCount(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	es := &eventService{
+		mc:          messaging.NewMockMessageCenter(),
+		eventStore:  newMockEventStore(100),
+		schemaStore: NewMockSchemaStore(),
+		brokers:     make(map[uint64]*eventBroker),
+		tz:          time.UTC,
+	}
+	defer es.Close(ctx)
+	require.Zero(t, es.GetDispatcherCount())
+
+	// Heartbeats may read the count while registration creates another broker.
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				es.GetDispatcherCount()
+			}
+		}
+	}()
+	defer func() { close(done); wg.Wait() }()
+
+	ordinary := newMockDispatcherInfoForTest(t)
+	es.registerDispatcher(ctx, ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	// Repeated registration replaces an entry without increasing the count.
+	es.registerDispatcher(ctx, ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+
+	ddl := newMockDispatcherInfoForTest(t)
+	ddl.clusterID = ordinary.clusterID + 1
+	ddl.span = common.KeyspaceDDLSpan(0)
+	es.registerDispatcher(ctx, ddl)
+	require.Equal(t, 2, es.GetDispatcherCount())
+	es.registerDispatcher(ctx, ddl)
+	require.Equal(t, 2, es.GetDispatcherCount())
+
+	es.deregisterDispatcher(ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	es.deregisterDispatcher(ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	es.deregisterDispatcher(ddl)
+	require.Zero(t, es.GetDispatcherCount())
+}
+
 func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	es := &eventService{}
 

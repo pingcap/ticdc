@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -75,7 +76,8 @@ type eventService struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	// clusterID -> eventBroker
-	brokers map[uint64]*eventBroker
+	brokers   map[uint64]*eventBroker
+	brokersMu sync.RWMutex
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
@@ -160,11 +162,29 @@ func (s *eventService) Run(ctx context.Context) error {
 
 func (s *eventService) Close(_ context.Context) error {
 	log.Info("event service is closing")
+	s.brokersMu.RLock()
+	brokers := make([]*eventBroker, 0, len(s.brokers))
 	for _, c := range s.brokers {
+		brokers = append(brokers, c)
+	}
+	s.brokersMu.RUnlock()
+	for _, c := range brokers {
 		c.close()
 	}
 	log.Info("event service is closed")
 	return nil
+}
+
+// GetDispatcherCount returns the number of dispatchers registered in all local
+// event brokers, including table trigger dispatchers.
+func (s *eventService) GetDispatcherCount() int {
+	s.brokersMu.RLock()
+	defer s.brokersMu.RUnlock()
+	count := 0
+	for _, broker := range s.brokers {
+		count += int(broker.dispatcherCount.Load())
+	}
+	return count
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -207,11 +227,13 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	clusterID := info.GetClusterID()
+	s.brokersMu.Lock()
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
+	s.brokersMu.Unlock()
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)
@@ -222,7 +244,9 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 
 func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}
@@ -231,7 +255,9 @@ func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}
@@ -241,7 +267,9 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}
@@ -250,7 +278,9 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 
 func (s *eventService) handleCongestionControl(from node.ID, m *event.CongestionControl) {
 	clusterID := m.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}

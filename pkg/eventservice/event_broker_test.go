@@ -654,6 +654,7 @@ func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	info := newMockDispatcherInfoForTest(t)
 	err := broker.addDispatcher(info)
 	require.Error(t, err)
+	require.Zero(t, broker.dispatcherCount.Load())
 
 	_, ok := es.spansMap.Load(info.GetTableSpan())
 	require.False(t, ok)
@@ -1073,6 +1074,7 @@ func TestCURDDispatcher(t *testing.T) {
 	// Case 1: Add and get a dispatcher.
 	err := broker.addDispatcher(dispInfo)
 	require.Nil(t, err)
+	require.Equal(t, int64(1), broker.dispatcherCount.Load())
 	disp := broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	// Check changefeedStatus after adding a dispatcher
@@ -1087,6 +1089,7 @@ func TestCURDDispatcher(t *testing.T) {
 	dispInfo.epoch = 2
 	err = broker.resetDispatcher(dispInfo)
 	require.Nil(t, err)
+	require.Equal(t, int64(1), broker.dispatcherCount.Load())
 	disp = broker.getDispatcher(dispInfo.GetID()).Load()
 	require.NotNil(t, disp)
 	require.Equal(t, disp.id, dispInfo.GetID())
@@ -1099,6 +1102,7 @@ func TestCURDDispatcher(t *testing.T) {
 
 	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
+	require.Zero(t, broker.dispatcherCount.Load())
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
 	// Check changefeedStatus after removing the only dispatcher

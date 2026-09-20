@@ -85,3 +85,15 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, response, decoded)
 }
+
+func TestNodeHeartbeatDispatcherCountIOTypeRoundTrip(t *testing.T) {
+	heartbeat := &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42,
+		EventBrokerDispatcherCount: 7,
+	}
+	data, err := heartbeat.Marshal()
+	require.NoError(t, err)
+	decoded, err := decodeIOType(TypeNodeHeartbeatRequest, data)
+	require.NoError(t, err)
+	require.Equal(t, heartbeat, decoded)
+}

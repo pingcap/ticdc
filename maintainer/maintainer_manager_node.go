@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -26,6 +27,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
+
+type eventBrokerDispatcherCounter interface {
+	GetDispatcherCount() int
+}
 
 // managerNodeState owns node-scoped state shared by all local maintainers.
 type managerNodeState struct {
@@ -78,9 +83,10 @@ func newNodeEpoch() uint64 {
 	return nodeEpoch
 }
 
-// sendNodeHeartbeat reports node-scoped liveness and dispatcher drain target to
-// coordinator. It is the authoritative acknowledgement channel for node-level
-// drain state, including cases where no changefeed maintainer exists locally.
+// sendNodeHeartbeat reports node-scoped liveness, dispatcher drain target, and
+// the local event broker dispatcher count to coordinator. It is the authoritative
+// acknowledgement channel for node-level drain state, including cases where no
+// changefeed maintainer exists locally.
 func (m *Manager) sendNodeHeartbeat(force bool) {
 	if !m.isBootstrap() {
 		return
@@ -113,6 +119,9 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		WriteLeaseRequestSeq:        requestSeq,
 		WriteLeaseProtocolVersion:   heartbeatpb.CurrentWriteLeaseProtocolVersion,
 		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
+	}
+	if counter, ok := appcontext.TryGetService[eventBrokerDispatcherCounter](appcontext.EventService); ok {
+		hb.EventBrokerDispatcherCount = uint32(counter.GetDispatcherCount())
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {

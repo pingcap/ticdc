@@ -155,6 +155,43 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	require.Equal(t, epoch, c.drainSession.epoch)
 }
 
+func TestDrainNodeWaitsForEventBrokerDispatchers(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Positive(t, remaining)
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
+
+	// A zero count before STOPPING must not authorize completion.
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_DRAINING, NodeEpoch: 1,
+	})
+	drainController.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
+		Applied: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 1,
+	})
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Positive(t, remaining)
+
+	// Maintainer progress is already zero, but the broker still serves dispatchers.
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 1,
+		EventBrokerDispatcherCount: 3,
+	})
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 3, remaining)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Zero(t, remaining)
+}
+
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
@@ -1172,11 +1209,10 @@ func setTargetStoppingObserved(
 	drainController *drain.Controller,
 	target node.ID,
 ) {
-	resp := &heartbeatpb.SetNodeLivenessResponse{
-		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch: 1,
-	}
-	drainController.ObserveSetNodeLivenessResponse(target, resp)
+	})
 }
 
 func drainMessageChannel(ch chan *messaging.TargetMessage) {

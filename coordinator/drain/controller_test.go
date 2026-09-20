@@ -126,6 +126,48 @@ func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	c.mu.Unlock()
 }
 
+func TestDrainControllerEventBrokerDispatcherCount(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("n1")
+	_, observed := c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	c.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
+		Applied: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42,
+	})
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42,
+		EventBrokerDispatcherCount: 2,
+	})
+	count, observed := c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_ALIVE, NodeEpoch: 43,
+	})
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	// A delayed zero from the previous process must not authorize completion.
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42,
+	})
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	// Missing fields from older captures preserve their existing drain behavior.
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 43,
+	})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+}
+
 func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	c := NewController(mc)

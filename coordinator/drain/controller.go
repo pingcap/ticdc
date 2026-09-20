@@ -64,6 +64,10 @@ type nodeState struct {
 	lastSeen    time.Time
 	nodeEpoch   uint64
 	liveness    heartbeatpb.NodeLiveness
+
+	// Only a STOPPING heartbeat from the current node epoch can authorize completion.
+	eventBrokerDispatcherCount         int
+	eventBrokerDispatcherCountObserved bool
 }
 
 type drainTargetSchedulerGate struct {
@@ -185,6 +189,11 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
+	st := c.ensureNodeStateLocked(nodeID)
+	if hb.NodeEpoch == st.nodeEpoch && hb.Liveness == heartbeatpb.NodeLiveness_STOPPING {
+		st.eventBrokerDispatcherCount = int(hb.GetEventBrokerDispatcherCount())
+		st.eventBrokerDispatcherCountObserved = true
+	}
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
 
@@ -413,6 +422,19 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 		return false, false, false
 	}
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
+}
+
+// GetEventBrokerDispatcherCount returns the count from a STOPPING heartbeat in
+// the current node epoch. Older nodes omit the field and report the protobuf
+// default zero, preserving their existing drain behavior.
+func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok {
+		return 0, false
+	}
+	return st.eventBrokerDispatcherCount, st.eventBrokerDispatcherCountObserved
 }
 
 // GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.

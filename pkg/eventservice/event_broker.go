@@ -82,6 +82,9 @@ type eventBroker struct {
 
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
+	// Count registrations before publishing them, and remove them from the count
+	// only after deleting the registry entry. Includes table trigger dispatchers.
+	dispatcherCount atomic.Int64
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
@@ -1314,7 +1317,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
+		c.dispatcherCount.Inc()
+		if _, loaded := c.tableTriggerDispatchers.Swap(id, dispatcherPtr); loaded {
+			c.dispatcherCount.Dec()
+		}
 		c.metricsCollector.metricDispatcherCount.Inc()
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
@@ -1380,7 +1386,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		return err
 	}
-	c.dispatchers.Store(id, dispatcherPtr)
+	c.dispatcherCount.Inc()
+	if _, loaded := c.dispatchers.Swap(id, dispatcherPtr); loaded {
+		c.dispatcherCount.Dec()
+	}
 	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
@@ -1418,11 +1427,16 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 			zap.Error(err))
 	}
 
+	var removed bool
 	if isTableTriggerDispatcher {
-		c.tableTriggerDispatchers.Delete(id)
+		removed = c.tableTriggerDispatchers.CompareAndDelete(id, statPtr)
 	} else {
-		c.dispatchers.Delete(id)
+		removed = c.dispatchers.CompareAndDelete(id, statPtr)
 	}
+	if !removed {
+		return
+	}
+	defer c.dispatcherCount.Dec()
 
 	stat.changefeedStat.removeDispatcher(id)
 	c.metricsCollector.metricDispatcherCount.Dec()
