@@ -291,6 +291,12 @@ type EventsGroup struct {
 	// HighWatermark is the largest received DML commit ts, including pending rows.
 	HighWatermark uint64
 
+	// seenRows remembers the row mutations of the commit-ts boundary currently
+	// being merged, so a replayed copy of any of them can be dropped. It is
+	// indexed by dmlRowHash, and every bucket entry is compared by the full
+	// encoded key, so a hash collision cannot drop a legitimately different row.
+	seenRows map[uint64][]seenDMLRow
+
 	// indexCursor is the first logical key not acknowledged by the downstream.
 	indexCursor []byte
 	// indexCleanupStart begins the acknowledged prefix not yet deleted from Pebble.
@@ -1180,35 +1186,9 @@ func (g *EventsGroup) Cleanup() error {
 	return nil
 }
 
-// DMLMessagesToEvents materializes messages and merges compatible adjacent
-// messages before they are handed to the downstream sink.
-func DMLMessagesToEvents(messages []*codeccommon.DMLMessage) []*commonEvent.DMLEvent {
-	events := make([]*commonEvent.DMLEvent, 0, len(messages))
-	for _, message := range messages {
-		events = appendOrMergeDMLEvent(events, message.ToDMLEvent())
-	}
-	return events
-}
-
-func appendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	if len(events) == 0 || !sameDMLTransaction(events[len(events)-1], row) {
-		return append(events, row)
-	}
-
-	last := events[len(events)-1]
-	lastRowTypeCount := len(last.RowTypes)
-	rowRowTypeCount := len(row.RowTypes)
-	last.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-	last.RowTypes = append(last.RowTypes, row.RowTypes...)
-	last.RowKeys = appendOptionalDMLValues(last.RowKeys, row.RowKeys, lastRowTypeCount, rowRowTypeCount)
-	last.Checksum = appendOptionalDMLValues(last.Checksum, row.Checksum, lastRowTypeCount, rowRowTypeCount)
-	last.Length += row.Length
-	last.ApproximateSize += row.ApproximateSize
-	last.PostTxnEnqueued = append(last.PostTxnEnqueued, row.PostTxnEnqueued...)
-	last.PostTxnFlushed = append(last.PostTxnFlushed, row.PostTxnFlushed...)
-	return events
-}
-
+// sameDMLTransaction reports whether two events describe the same transaction of
+// the same table with the same column schema. MessagesToEvents merges such events
+// into one event.
 func sameDMLTransaction(last, row *commonEvent.DMLEvent) bool {
 	return last != nil && row != nil && last.CommitTs == row.CommitTs &&
 		last.GetTableID() == row.GetTableID() &&

@@ -467,7 +467,10 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		if batch == nil {
 			break
 		}
-		events := util.DMLMessagesToEvents(batch.Messages)
+		events, err := group.MessagesToEvents(batch.Messages)
+		if err != nil {
+			return err
+		}
 		if len(events) != 0 {
 			fields := []zap.Field{zap.Int64("tableID", tableID)}
 			if events[0].TableInfo != nil {

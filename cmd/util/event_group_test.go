@@ -221,7 +221,7 @@ func newMergeTestDMLMessage(event *commonEvent.DMLEvent) *codeccommon.DMLMessage
 		event.GetCommitTs(), event.RowTypes[0], func() *commonEvent.DMLEvent { return event })
 }
 
-func TestAppendOrMergeDMLEvent(t *testing.T) {
+func TestEventsGroupMessagesToEventsMerge(t *testing.T) {
 	t.Run("merge compatible events", func(t *testing.T) {
 		tableInfo := newMergeTestTableInfo(1, 10, 1)
 		first := newMergeTestDMLEvent(100, tableInfo, 1)
@@ -234,10 +234,8 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
 		second.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
 
-		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
-			newMergeTestDMLMessage(first),
-			newMergeTestDMLMessage(second),
-		})
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
 
 		require.Len(t, events, 1)
 		require.Same(t, first, events[0])
@@ -254,10 +252,8 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		first := newMergeTestDMLEvent(100, tableInfo, 1)
 		second := newMergeTestDMLEvent(101, tableInfo, 2)
 
-		events := DMLMessagesToEvents([]*codeccommon.DMLMessage{
-			newMergeTestDMLMessage(first),
-			newMergeTestDMLMessage(second),
-		})
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
 
 		require.Len(t, events, 2)
 	})
@@ -275,10 +271,262 @@ func TestAppendOrMergeDMLEvent(t *testing.T) {
 		messages, err := group.GetAllMessages()
 		require.NoError(t, err)
 		require.Len(t, messages, 2)
-		events := DMLMessagesToEvents(messages)
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
 
 		require.Len(t, events, 1)
 		require.Equal(t, 2, events[0].Rows.NumRows())
+	})
+}
+
+// newDedupTestTableInfo builds a two column table whose primary key is the
+// handle key, so row mutations can be identified by it.
+func newDedupTestTableInfo() *common.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLonglong)
+	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	valueFieldType := types.NewFieldType(mysql.TypeLonglong)
+	return common.WrapTableInfo("test", &model.TableInfo{
+		ID:         1,
+		Name:       ast.NewCIStr("t"),
+		PKIsHandle: true,
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Offset: 0, Name: ast.NewCIStr("id"), State: model.StatePublic, FieldType: *idFieldType},
+			{ID: 2, Offset: 1, Name: ast.NewCIStr("c"), State: model.StatePublic, FieldType: *valueFieldType},
+		},
+	})
+}
+
+// dedupTestRow is one physical row image: the handle key value and a payload
+// value.
+type dedupTestRow struct {
+	key   int64
+	value int64
+}
+
+// newDedupTestFragment builds one Kafka fragment of one transaction. For an
+// update every pair of rows is the pre-image and the row image.
+func newDedupTestFragment(
+	commitTs uint64, tableInfo *common.TableInfo, rowType common.RowType, rows ...dedupTestRow,
+) *commonEvent.DMLEvent {
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), len(rows))
+	rowTypes := make([]common.RowType, 0, len(rows))
+	for _, row := range rows {
+		chk.AppendInt64(0, row.key)
+		chk.AppendInt64(1, row.value)
+		rowTypes = append(rowTypes, rowType)
+	}
+	// Length counts mutations, while RowTypes has one entry per physical row.
+	mutations := len(rows)
+	if rowType == common.RowTypeUpdate {
+		mutations /= 2
+	}
+	return &commonEvent.DMLEvent{
+		DispatcherID:     common.DispatcherID{Low: 1},
+		PhysicalTableID:  tableInfo.TableName.TableID,
+		StartTs:          commitTs - 1,
+		CommitTs:         commitTs,
+		Length:           int32(mutations),
+		RowTypes:         rowTypes,
+		Rows:             chk,
+		TableInfo:        tableInfo,
+		TableInfoVersion: tableInfo.GetUpdateTS(),
+	}
+}
+
+// dedupRowMutation is one row mutation read back from a merged event.
+type dedupRowMutation struct {
+	rowType common.RowType
+	key     int64
+	value   int64
+}
+
+// readDedupRowMutations reads every mutation through GetNextRow, the API the sink
+// uses, so the test also covers RowTypes and Checksum staying aligned with the
+// rows that were kept.
+func readDedupRowMutations(event *commonEvent.DMLEvent) []dedupRowMutation {
+	mutations := make([]dedupRowMutation, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		image := row.Row
+		if row.RowType == common.RowTypeDelete {
+			image = row.PreRow
+		}
+		mutations = append(mutations, dedupRowMutation{
+			rowType: row.RowType,
+			key:     image.GetInt64(0),
+			value:   image.GetInt64(1),
+		})
+	}
+	return mutations
+}
+
+// mergeFragments merges fragments through one events group, the way a
+// consumer merges the messages of one table.
+func mergeFragments(t *testing.T, fragments ...*commonEvent.DMLEvent) ([]*commonEvent.DMLEvent, error) {
+	t.Helper()
+	messages := make([]*codeccommon.DMLMessage, 0, len(fragments))
+	for _, fragment := range fragments {
+		messages = append(messages, newMergeTestDMLMessage(fragment))
+	}
+	return NewEventsGroup(0, 1).MessagesToEvents(messages)
+}
+
+func TestEventsGroupMessagesToEventsDropReplayedRows(t *testing.T) {
+	tableInfo := newDedupTestTableInfo()
+
+	t.Run("drop replay and keep its callbacks", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		replay := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		var enqueued, flushed []int
+		first.AddPostEnqueueFunc(func() { enqueued = append(enqueued, 1) })
+		replay.AddPostEnqueueFunc(func() { enqueued = append(enqueued, 2) })
+		first.AddPostFlushFunc(func() { flushed = append(flushed, 1) })
+		replay.AddPostFlushFunc(func() { flushed = append(flushed, 2) })
+
+		events, err := mergeFragments(t, first, replay)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Same(t, first, events[0])
+		require.Equal(t, []dedupRowMutation{{rowType: common.RowTypeInsert, key: 1, value: 1}},
+			readDedupRowMutations(events[0]))
+		require.Equal(t, int32(1), events[0].Length)
+
+		events[0].PostFlush()
+		require.Equal(t, []int{1, 2}, enqueued)
+		require.Equal(t, []int{1, 2}, flushed)
+	})
+
+	t.Run("drop only the replayed mutations of a fragment", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		partial := newDedupTestFragment(100, tableInfo, common.RowTypeInsert,
+			dedupTestRow{key: 1, value: 1}, dedupTestRow{key: 2, value: 2})
+
+		events, err := mergeFragments(t, first, partial)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Equal(t, []dedupRowMutation{
+			{rowType: common.RowTypeInsert, key: 1, value: 1},
+			{rowType: common.RowTypeInsert, key: 2, value: 2},
+		}, readDedupRowMutations(events[0]))
+		require.Equal(t, int32(2), events[0].Length)
+	})
+
+	t.Run("drop a replayed update", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeUpdate,
+			dedupTestRow{key: 1, value: 1}, dedupTestRow{key: 1, value: 2})
+		replay := newDedupTestFragment(100, tableInfo, common.RowTypeUpdate,
+			dedupTestRow{key: 1, value: 1}, dedupTestRow{key: 1, value: 2})
+
+		events, err := mergeFragments(t, first, replay)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Equal(t, []dedupRowMutation{{rowType: common.RowTypeUpdate, key: 1, value: 2}},
+			readDedupRowMutations(events[0]))
+		require.Equal(t, int32(1), events[0].Length)
+		require.Equal(t, 2, events[0].Rows.NumRows())
+	})
+
+	t.Run("keep every row of a multi-row transaction", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeInsert,
+			dedupTestRow{key: 1, value: 1}, dedupTestRow{key: 2, value: 2})
+		second := newDedupTestFragment(100, tableInfo, common.RowTypeInsert,
+			dedupTestRow{key: 3, value: 3})
+
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Equal(t, []dedupRowMutation{
+			{rowType: common.RowTypeInsert, key: 1, value: 1},
+			{rowType: common.RowTypeInsert, key: 2, value: 2},
+			{rowType: common.RowTypeInsert, key: 3, value: 3},
+		}, readDedupRowMutations(events[0]))
+	})
+
+	t.Run("keep delete and insert of the same handle key", func(t *testing.T) {
+		deleted := newDedupTestFragment(100, tableInfo, common.RowTypeDelete, dedupTestRow{key: 1, value: 1})
+		inserted := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		replayedDelete := newDedupTestFragment(100, tableInfo, common.RowTypeDelete, dedupTestRow{key: 1, value: 1})
+		replayedInsert := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+
+		events, err := mergeFragments(t, deleted, inserted, replayedDelete, replayedInsert)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Equal(t, []dedupRowMutation{
+			{rowType: common.RowTypeDelete, key: 1, value: 1},
+			{rowType: common.RowTypeInsert, key: 1, value: 1},
+		}, readDedupRowMutations(events[0]))
+	})
+
+	t.Run("keep the same mutation of a later transaction", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		second := newDedupTestFragment(101, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
+
+		require.Len(t, events, 2)
+	})
+
+	t.Run("keep a lower commit-ts arriving after a higher one", func(t *testing.T) {
+		// Out of order transactions are still applied: de-duplication must not
+		// filter anything by a commit-ts watermark.
+		higher := newDedupTestFragment(101, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		lower := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+
+		events, err := mergeFragments(t, higher, lower)
+		require.NoError(t, err)
+
+		require.Len(t, events, 2)
+		for _, event := range events {
+			require.Equal(t, []dedupRowMutation{{rowType: common.RowTypeInsert, key: 1, value: 1}},
+				readDedupRowMutations(event))
+		}
+	})
+
+	t.Run("keep rows when the table has no handle key", func(t *testing.T) {
+		noHandleKey := newMergeTestTableInfo(1, 10, 2)
+		first := newDedupTestFragment(100, noHandleKey, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		second := newDedupTestFragment(100, noHandleKey, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+
+		events, err := mergeFragments(t, first, second)
+		require.NoError(t, err)
+
+		require.Len(t, events, 1)
+		require.Equal(t, 2, events[0].Rows.NumRows())
+		require.Equal(t, int32(2), events[0].Length)
+	})
+}
+
+func TestEventsGroupMessagesToEventsRejectConflictingReplay(t *testing.T) {
+	tableInfo := newDedupTestTableInfo()
+
+	t.Run("insert", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 1})
+		conflict := newDedupTestFragment(100, tableInfo, common.RowTypeInsert, dedupTestRow{key: 1, value: 2})
+
+		events, err := mergeFragments(t, first, conflict)
+		require.ErrorContains(t, err, "carries a different row image")
+		require.Empty(t, events)
+	})
+
+	t.Run("update pre-image", func(t *testing.T) {
+		first := newDedupTestFragment(100, tableInfo, common.RowTypeUpdate,
+			dedupTestRow{key: 1, value: 1}, dedupTestRow{key: 1, value: 2})
+		conflict := newDedupTestFragment(100, tableInfo, common.RowTypeUpdate,
+			dedupTestRow{key: 1, value: 9}, dedupTestRow{key: 1, value: 2})
+
+		events, err := mergeFragments(t, first, conflict)
+		require.ErrorContains(t, err, "carries a different row image")
+		require.Empty(t, events)
 	})
 }
 

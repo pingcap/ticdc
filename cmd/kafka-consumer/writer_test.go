@@ -15,7 +15,9 @@ package main
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/golang/mock/gomock"
@@ -589,6 +591,60 @@ func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codecco
 	)
 	messageData.AttachDMLMessage(message)
 	return message
+}
+
+func TestFlushDMLBatchSubmitsSameTableEventsInOneBatch(t *testing.T) {
+	// Events of the same table with different commit-ts must reach the sink in one
+	// batch, so the sink can batch rows across transactions. Flushing each table
+	// separately would still work, but it would silently disable that batching.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	var mu sync.Mutex
+	submitted := make([]*commonEvent.DMLEvent, 0, 2)
+	submittedAll := make(chan struct{})
+	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
+		mu.Lock()
+		submitted = append(submitted, event)
+		all := len(submitted) == 2
+		mu.Unlock()
+		if all {
+			close(submittedAll)
+		}
+	}).Times(2)
+
+	w := &writer{mysqlSink: s}
+	events := []*commonEvent.DMLEvent{
+		newFlushTestDMLEvent(1, 100),
+		newFlushTestDMLEvent(1, 101),
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.flushDMLBatch(ctx, events) }()
+
+	// Both events must be in flight before any of them is allowed to finish.
+	select {
+	case <-submittedAll:
+	case <-ctx.Done():
+		require.Fail(t, "events of the same table were not submitted in one batch")
+	}
+
+	mu.Lock()
+	flushing := append([]*commonEvent.DMLEvent(nil), submitted...)
+	mu.Unlock()
+	for _, event := range flushing {
+		event.PostFlush()
+	}
+	require.NoError(t, <-done)
+}
+
+func newFlushTestDMLEvent(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+	return &commonEvent.DMLEvent{
+		PhysicalTableID: tableID,
+		CommitTs:        commitTs,
+		StartTs:         commitTs - 1,
+	}
 }
 
 type singleDMLDecoder struct {

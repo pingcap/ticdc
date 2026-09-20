@@ -261,7 +261,11 @@ func (w *writer) flushEventsFromGroups(
 			if batch != nil {
 				preparedAny = true
 				prepared = append(prepared, batch)
-				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
+				events, err := group.MessagesToEvents(batch.Messages)
+				if err != nil {
+					return 0, err
+				}
+				batchEvents = append(batchEvents, events...)
 				batchMessages += len(batch.Messages)
 				batchBytes += batch.ResolvedBytes
 			}
@@ -276,28 +280,12 @@ func (w *writer) flushEventsFromGroups(
 	return total, nil
 }
 
+// flushDMLBatch writes a batch of events to the sink and waits until all of them
+// are flushed. Events of the same table with different commit-ts stay in the
+// same batch, so the sink batch merger can keep batching rows across
+// transactions. Replayed row mutations are removed while the messages are
+// merged into events, so the merger never sees a duplicate row.
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
-	// MQ delivery can replay DML at an unclosed commit-ts boundary. The sink's
-	// cross-event merger requires a non-replayed change stream, whereas its
-	// per-event SQL path can retry duplicate-key errors. Keep one event per
-	// table in flight; rows within each event still use batch DML.
-	tables := make(map[int64]struct{})
-	start := 0
-	for i, e := range events {
-		tableID := e.GetTableID()
-		if _, exists := tables[tableID]; exists {
-			if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
-				return err
-			}
-			clear(tables)
-			start = i
-		}
-		tables[tableID] = struct{}{}
-	}
-	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
-}
-
-func (w *writer) flushDMLBatchAndWait(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
 	if len(events) == 0 {
 		return nil
 	}
