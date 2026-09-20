@@ -581,7 +581,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) error {
 	)
 
 	progress := w.progresses[partition]
-	progress.decoder.SetSourcePosition(int64(offset))
+	progress.decoder.SetSourcePosition(offset)
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := progress.decoder.HasNext()
@@ -927,7 +927,7 @@ func (w *writer) appendMessage2Group(
 		return group
 	})
 	if messageData, _ := message.SpillData(); messageData != nil {
-		messageData.SourcePosition = int64(offset)
+		messageData.SourcePosition = offset
 	}
 	if err := group.AppendMessage(message); err != nil {
 		return err

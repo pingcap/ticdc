@@ -79,7 +79,7 @@ func newTLSConfig(o *option) (*tls.Config, error) {
 	if len(o.cert) != 0 || len(o.key) != 0 {
 		certificate, err := tls.LoadX509KeyPair(o.cert, o.key)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{certificate}
 	}
@@ -95,7 +95,7 @@ func getPartitionNum(o *option) (int32, error) {
 	}
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 	defer client.Close()
 	admin := kadm.NewClient(client)
@@ -122,11 +122,11 @@ func getPartitionNum(o *option) (int32, error) {
 			time.Sleep(time.Second)
 		}
 		if !found {
-			return 0, errors.Errorf("get partition number(%s) timeout", topic)
+			return 0, errors.ErrKafkaAdminAPI.GenWithStackByArgs("get partition number", topic)
 		}
 	}
 	if maxPartitionNum == 0 {
-		return 0, errors.Errorf("get partition number(%s) timeout", o.topic)
+		return 0, errors.ErrKafkaAdminAPI.GenWithStackByArgs("get partition number", o.topic)
 	}
 	return maxPartitionNum, nil
 }
@@ -183,22 +183,16 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 func (c *consumer) readMessage(ctx context.Context) error {
 	defer c.client.Close()
 	for {
-		select {
-		case <-ctx.Done():
-			log.Info("consumer exist: context cancelled")
-			return errors.Trace(ctx.Err())
-		default:
-		}
-
 		fetches := c.client.PollFetches(ctx)
 		if err := ctx.Err(); err != nil {
-			log.Info("consumer exist: context cancelled")
-			return errors.Trace(err)
+			return err
 		}
-		// A fetch can carry records and errors at the same time, so a failed
-		// partition is only logged: whatever did arrive is still processed.
+		if fetches.IsClientClosed() {
+			return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+		}
+		// A fetch can contain both errors and records from healthy partitions.
 		for _, fetchErr := range fetches.Errors() {
-			log.Error("read message failed, just continue to retry",
+			log.Error("read message failed, will retry",
 				zap.String("topic", fetchErr.Topic), zap.Int32("partition", fetchErr.Partition),
 				zap.Error(fetchErr.Err))
 		}
