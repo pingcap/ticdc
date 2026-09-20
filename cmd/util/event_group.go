@@ -288,7 +288,8 @@ type EventsGroup struct {
 	resolvedTs     uint64
 	appliedTs      uint64
 	postRestore    func(*codeccommon.DMLMessage, int64) *codeccommon.DMLMessage
-	HighWatermark  uint64
+	// HighWatermark is the largest received DML commit ts, including pending rows.
+	HighWatermark uint64
 
 	// indexCursor is the first logical key not acknowledged by the downstream.
 	indexCursor []byte

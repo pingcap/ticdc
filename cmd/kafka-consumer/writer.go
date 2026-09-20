@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"maps"
 	"math"
 	"sort"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -94,6 +92,7 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
+	avroSchemas            *avroTableSchemas
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -148,6 +147,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	w.initAvroTableSchemas(ctx, cfg)
 	return w
 }
 
@@ -164,6 +164,9 @@ func (w *writer) getSpillStore() *util.SpillStore {
 
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
+	if w.avroSchemas != nil {
+		cleanupErr = w.avroSchemas.db.Close()
+	}
 	for _, progress := range w.progresses {
 		for _, group := range progress.eventsGroup {
 			_ = group.Cleanup()
@@ -201,7 +204,14 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 			zap.Any("tables", tableIDs))
 	}
-	return w.mysqlSink.WriteBlockEvent(ddl)
+	if err := w.mysqlSink.WriteBlockEvent(ddl); err != nil {
+		return err
+	}
+	if w.avroSchemas != nil {
+		clear(w.avroSchemas.tables)
+		w.avroSchemas.version = max(w.avroSchemas.version, ddl.GetCommitTs())
+	}
+	return nil
 }
 
 func (w *writer) flushEventsFromGroups(
@@ -267,42 +277,22 @@ func (w *writer) flushEventsFromGroups(
 }
 
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
-	// Decoded events can carry different column schemas. Avro can also carry
-	// consecutive after-images for the same key. Complete the preceding batch before
-	// submitting an incompatible event to the sink's cross-event merger.
-	tableInfos := make(map[int64]*commonType.TableInfo)
-	tableKeys := make(map[int64]map[uint64]struct{})
+	// MQ delivery can replay DML at an unclosed commit-ts boundary. The sink's
+	// cross-event merger requires a non-replayed change stream, whereas its
+	// per-event SQL path can retry duplicate-key errors. Keep one event per
+	// table in flight; rows within each event still use batch DML.
+	tables := make(map[int64]struct{})
 	start := 0
 	for i, e := range events {
 		tableID := e.GetTableID()
-		previous := tableInfos[tableID]
-		conflict := previous != nil && !previous.HasSameColumnSchema(e.TableInfo)
-		var keys map[uint64]struct{}
-		// Limit the cross-event key barrier to Avro. Tables without a handle
-		// key use ordered per-row SQL in the sink.
-		if w.protocol == config.ProtocolAvro && e.TableInfo.HasPKOrNotNullUK {
-			keys = causality.ConflictKeys(e)
-			for key := range keys {
-				if _, ok := tableKeys[tableID][key]; ok {
-					conflict = true
-					break
-				}
-			}
-		}
-		if conflict {
+		if _, exists := tables[tableID]; exists {
 			if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
 				return err
 			}
-			clear(tableInfos)
-			clear(tableKeys)
+			clear(tables)
 			start = i
 		}
-		tableInfos[tableID] = e.TableInfo
-		if tableKeys[tableID] == nil {
-			tableKeys[tableID] = keys
-		} else {
-			maps.Copy(tableKeys[tableID], keys)
-		}
+		tables[tableID] = struct{}{}
 	}
 	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
 }
@@ -766,23 +756,13 @@ func (w *writer) appendMessage2Group(
 		})
 		progress.eventsGroup[tableID] = group
 	}
-	// Keep rows at the same commit ts: one transaction can contain multiple rows.
-	if commitTs < group.HighWatermark {
-		log.Warn("DML event commit ts is below table high watermark, ignore it",
-			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType),
-			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
-		return nil
-	}
 	if messageData, _ := message.SpillData(); messageData != nil {
 		messageData.SourcePosition = int64(offset)
 	}
 	if err := group.AppendMessage(message); err != nil {
 		return err
 	}
+
 	if commitTs < progress.watermark {
 		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),

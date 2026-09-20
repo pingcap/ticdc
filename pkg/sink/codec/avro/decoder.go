@@ -51,13 +51,20 @@ type decoder struct {
 	config *common.Config
 	topic  string
 
-	upstreamTiDB *sql.DB
+	upstreamTiDB      *sql.DB
+	tableInfoProvider func(string, string) (*commonType.TableInfo, error)
 
 	schemaM schemamanager.SchemaManager
 	codecs  *lru.Cache
 
 	key   []byte
 	value []byte
+}
+
+// SetTableInfoProvider supplies the complete schema at the consumer's DDL boundary.
+// It is called when materializing a DML event, not when receiving a message.
+func (d *decoder) SetTableInfoProvider(provider func(string, string) (*commonType.TableInfo, error)) {
+	d.tableInfoProvider = provider
 }
 
 // NewDecoder return an avro decoder
@@ -194,7 +201,16 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
+	var tableInfo *commonType.TableInfo
+	if d.tableInfoProvider != nil {
+		schema, table := schemaAndTableName(valueSchema)
+		var err error
+		tableInfo, err = d.tableInfoProvider(schema, table)
+		if err != nil {
+			log.Panic("load avro table schema failed", zap.Error(err))
+		}
+	}
+	event, err := assembleEventWithTableInfo(keyMap, valueMap, valueSchema, isDelete, hasValue, tableInfo)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -233,7 +249,16 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
+		checksumEvent := event
+		if tableInfo != nil {
+			checksumEvent, err = assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
+			if err != nil {
+				log.Panic("assemble checksum event failed", zap.Error(err))
+			}
+			checksumEvent.Checksum = event.Checksum
+			defer checksumEvent.PostFlush()
+		}
+		if err = common.VerifyChecksum(checksumEvent, d.upstreamTiDB); err != nil {
 			return nil
 		}
 	}
@@ -265,6 +290,12 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
 	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
+) (*commonEvent.DMLEvent, error) {
+	return assembleEventWithTableInfo(keyMap, valueMap, schema, isDelete, hasValue, nil)
+}
+
+func assembleEventWithTableInfo(
+	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool, tableInfo *commonType.TableInfo,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
@@ -299,8 +330,32 @@ func assembleEvent(
 		commitTs = o.(int64)
 	}
 
+	if tableInfo != nil {
+		// Key schemas describe the row locator, not a different table layout.
+		// Missing non-key values in a legacy delete occupy NULL slots; only the
+		// key columns participate in the sink's DELETE predicate.
+		columns = make([]*timodel.ColumnInfo, len(tableInfo.GetColumns()))
+		columnNames := make(map[string]struct{}, len(columns))
+		for i, col := range tableInfo.GetColumns() {
+			columnNames[col.Name.O] = struct{}{}
+			columns[i] = col.Clone()
+			if hasValue && !col.IsGenerated() {
+				if _, ok := data[col.Name.O]; !ok {
+					return nil, errors.ErrCodecDecode.GenWithStack("avro value is missing column " + col.Name.O)
+				}
+			}
+		}
+		for name := range data {
+			if _, ok := columnNames[name]; !ok {
+				return nil, errors.ErrCodecDecode.GenWithStack("avro column not found in table schema: " + name)
+			}
+		}
+	}
 	event := new(commonEvent.DMLEvent)
 	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	if tableInfo != nil {
+		event.TableInfo.UpdateTS = tableInfo.UpdateTS
+	}
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
@@ -322,7 +377,7 @@ func assembleEvent(
 	} else if hasBefore {
 		common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
 	} else {
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
