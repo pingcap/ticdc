@@ -15,8 +15,13 @@
 package avro
 
 import (
+	"encoding/binary"
+	"hash/crc32"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
@@ -62,13 +67,54 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 		map[string]any{"name": "c", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
 	}
-	columns, _, err := avroData2Columns(map[string]any{
-		"a": int64(1), "b": int64(2), "c": int64(3),
-	}, fields)
-	require.NoError(t, err)
+	for _, primaryKeys := range [][]string{{"a", "b"}, {"b"}} {
+		t.Run(strings.Join(primaryKeys, ","), func(t *testing.T) {
+			columns, _, err := avroData2Columns(map[string]any{
+				"a": int64(1), "b": int64(2), "c": int64(3),
+			}, fields)
+			require.NoError(t, err)
+			keyMap := make(map[string]any, len(primaryKeys))
+			for _, key := range primaryKeys {
+				keyMap[key] = nil
+			}
 
-	tableInfo := newTableInfo("test", "t", columns, map[string]any{"a": nil, "b": nil})
-	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "a", "b")
+			tableInfo := newTableInfo("test", "t", columns, keyMap)
+			require.Equal(t, primaryKeys, tableInfo.GetPrimaryKeyColumnNames())
+			require.True(t, tableInfo.HasPKOrNotNullUK)
+			common.RequireRowLocatorByPrimaryKey(t, tableInfo, primaryKeys...)
+		})
+	}
+}
+
+func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	checksum := crc32.ChecksumIEEE(binary.LittleEndian.AppendUint64(nil, 42))
+	mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("select tidb_row_checksum() from test.t where id = 42").
+		WillReturnRows(sqlmock.NewRows([]string{"checksum"}).AddRow(checksum))
+	mock.ExpectClose()
+
+	dec := &decoder{upstreamTiDB: db}
+	event := dec.assembleDMLEventFromDecoded(
+		map[string]any{"id": int64(42)},
+		map[string]any{
+			"id": int64(42), tidbCommitTs: int64(100),
+			tidbRowLevelChecksum: strconv.FormatUint(uint64(checksum), 10),
+		},
+		map[string]any{
+			"namespace": "default.test", "name": "t",
+			"fields": []any{
+				map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+			},
+		}, false, true, 0)
+	require.NotNil(t, event)
+	t.Cleanup(event.PostFlush)
 }
 
 // TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator checks the empty key

@@ -445,6 +445,7 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	indexColumns := make([]*timodel.IndexColumn, 0)
 	for _, col := range columns {
 		if _, ok := keyMap[col.Name.O]; ok {
+			col.AddFlag(mysql.PriKeyFlag)
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   col.Name,
 				Offset: col.Offset,
