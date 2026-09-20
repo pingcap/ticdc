@@ -182,8 +182,7 @@ func TestEventServiceBasic(t *testing.T) {
 }
 
 func TestEventServiceDispatcherCount(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 	es := &eventService{
 		mc:          messaging.NewMockMessageCenter(),
@@ -198,9 +197,7 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 	// Heartbeats may read the count while registration creates another broker.
 	done := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-done:
@@ -209,7 +206,7 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 				es.GetDispatcherCount()
 			}
 		}
-	}()
+	})
 	defer func() { close(done); wg.Wait() }()
 
 	ordinary := newMockDispatcherInfoForTest(t)
