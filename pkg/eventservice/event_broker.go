@@ -122,8 +122,7 @@ type eventBroker struct {
 	// large transaction spill cleanup needs another attempt.
 	pendingLargeTxnCleanup sync.Map
 
-	// scanTaskQueues are unbounded so scheduling never blocks EventStore callbacks.
-	// Dispatcher state coalesces repeated requests into at most one queued task.
+	// scanTaskQueues are unbounded so scheduling never waits for worker capacity.
 	scanTaskQueues []*scanTaskQueue
 
 	// messageCh is used to receive message from the scanWorker,
@@ -1078,11 +1077,11 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
-		c.prepareScanFromNotify(d)
+		c.requestScanFromNotify(d)
 	}
 }
 
-func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
+func (c *eventBroker) requestScanFromNotify(d *dispatcherStat) {
 	span := d.info.GetTableSpan()
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		return
@@ -1090,28 +1089,27 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 
 	d.scanMu.Lock()
 	if d.isRemoved.Load() {
-		d.scanPending = false
 		d.scanMu.Unlock()
 		return
 	}
 	if d.scanState == dispatcherScanIdle {
-		d.scanState = dispatcherScanPreparing
+		// Claim the dispatcher execution ownership before checking the scan range.
+		// This keeps the no-event fast path out of the scan worker queue while
+		// serializing it with worker scans and low-latency continuations.
+		d.scanState = dispatcherScanRunning
 		d.scanMu.Unlock()
-		c.prepareScan(d)
+		c.prepareScanFromNotify(d)
 		return
 	}
-	// A queued task reads the latest dispatcher state, so notifications received
-	// before it starts need no extra work item. Notifications received while an
-	// inline preparation is running, or while a low-latency scan is running,
-	// request one coalesced continuation.
-	if d.scanState == dispatcherScanPreparing ||
-		(d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning) {
-		d.scanPending = true
+	// Coalesce notifications received while a low-latency scan attempt owns the
+	// dispatcher into one continuation, which finishScan enqueues afterward.
+	if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
+		d.scanState = dispatcherScanRunningPending
 	}
 	d.scanMu.Unlock()
 }
 
-func (c *eventBroker) prepareScan(d *dispatcherStat) {
+func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 	if d.isRemoved.Load() {
 		c.finishScan(d, false, false, 0)
 		return
@@ -1136,24 +1134,18 @@ func (c *eventBroker) prepareScan(d *dispatcherStat) {
 
 	d.scanMu.Lock()
 	if d.isRemoved.Load() {
-		d.scanPending = false
 		d.schemaBlockedUntilTs = 0
 		d.scanMu.Unlock()
 		return
 	}
-	if d.scanState != dispatcherScanPreparing {
+	if d.scanState != dispatcherScanRunning && d.scanState != dispatcherScanRunningPending {
 		d.scanMu.Unlock()
 		return
 	}
 	d.scanState = dispatcherScanQueued
-	d.scanPending = false
 	d.schemaBlockedUntilTs = 0
 	d.scanMu.Unlock()
 
-	c.enqueueScan(d)
-}
-
-func (c *eventBroker) enqueueScan(d *dispatcherStat) {
 	c.scanTaskQueues[d.scanWorkerIndex].push(d)
 }
 
@@ -1164,21 +1156,20 @@ func (c *eventBroker) requestScan(d *dispatcherStat) {
 	}
 
 	d.scanMu.Lock()
+	defer d.scanMu.Unlock()
 	if d.isRemoved.Load() {
-		d.scanPending = false
-		d.scanMu.Unlock()
 		return
 	}
 	if d.scanState == dispatcherScanIdle {
-		d.scanState = dispatcherScanQueued
-		d.scanMu.Unlock()
-		c.enqueueScan(d)
-		return
+		c.enqueueScanLocked(d)
+	} else if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
+		d.scanState = dispatcherScanRunningPending
 	}
-	if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
-		d.scanPending = true
-	}
-	d.scanMu.Unlock()
+}
+
+func (c *eventBroker) enqueueScanLocked(d *dispatcherStat) {
+	d.scanState = dispatcherScanQueued
+	c.scanTaskQueues[d.scanWorkerIndex].push(d)
 }
 
 func (c *eventBroker) finishScan(
@@ -1188,40 +1179,36 @@ func (c *eventBroker) finishScan(
 	schemaBlockedUntilTs uint64,
 ) {
 	d.scanMu.Lock()
+	defer d.scanMu.Unlock()
 	if d.isRemoved.Load() {
-		d.scanPending = false
 		d.schemaBlockedUntilTs = 0
-		d.scanMu.Unlock()
 		return
 	}
-	if d.scanState != dispatcherScanPreparing && d.scanState != dispatcherScanRunning {
-		d.scanMu.Unlock()
+	if d.scanState != dispatcherScanRunning && d.scanState != dispatcherScanRunningPending {
 		return
 	}
 
+	if interrupted {
+		d.schemaBlockedUntilTs = 0
+		c.enqueueScanLocked(d)
+		return
+	}
 	if d.changefeedStat.lowLatencyMode && schemaBlocked {
 		d.scanState = dispatcherScanSchemaBlocked
-		d.scanPending = false
 		d.schemaBlockedUntilTs = schemaBlockedUntilTs
-		d.scanMu.Unlock()
 		bucket := c.getSchemaBlockedDispatcherBucket(d)
 		bucket.dispatchers.Store(d, struct{}{})
 		bucket.dirty.Store(true)
 		return
 	}
-	if interrupted || d.scanPending {
-		d.scanState = dispatcherScanQueued
-		d.scanPending = false
+	if d.scanState == dispatcherScanRunningPending {
 		d.schemaBlockedUntilTs = 0
-		d.scanMu.Unlock()
-		c.enqueueScan(d)
+		c.enqueueScanLocked(d)
 		return
 	}
 
 	d.scanState = dispatcherScanIdle
-	d.scanPending = false
 	d.schemaBlockedUntilTs = 0
-	d.scanMu.Unlock()
 }
 
 func (c *eventBroker) getSchemaBlockedDispatcherBucket(d *dispatcherStat) *schemaBlockedDispatcherBucket {
@@ -1289,21 +1276,17 @@ func (c *eventBroker) scanSchemaBlockedDispatchers(lastSchemaResolvedTs map[comm
 		bucket.dispatchers.Range(func(key, _ any) bool {
 			d := key.(*dispatcherStat)
 			d.scanMu.Lock()
+			defer d.scanMu.Unlock()
 			if d.isRemoved.Load() || d.scanState != dispatcherScanSchemaBlocked {
-				d.scanMu.Unlock()
 				bucket.dispatchers.Delete(d)
 				return true
 			}
 			if ddlState.ResolvedTs <= d.schemaBlockedUntilTs {
-				d.scanMu.Unlock()
 				return true
 			}
-			d.scanState = dispatcherScanQueued
-			d.scanPending = false
+			c.enqueueScanLocked(d)
 			d.schemaBlockedUntilTs = 0
-			d.scanMu.Unlock()
 			bucket.dispatchers.Delete(d)
-			c.enqueueScan(d)
 			return true
 		})
 		return true

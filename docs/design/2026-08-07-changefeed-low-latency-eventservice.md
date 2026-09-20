@@ -99,23 +99,19 @@ mode. EventStore uses this value in two ways:
 
 ### EventService scan scheduling
 
-When EventStore reports a new resolved-ts, its callback updates the latest
-dispatcher frontier and checks inline whether a real EventStore read is
-necessary. If no row event needs to be read, it sends progress without
-occupying the scan worker queue. This keeps the common no-scan path out of a
-shared scheduling queue and preserves sync-point and resolved-event ordering.
+When EventStore reports a new resolved-ts, EventService first checks whether a
+real EventStore read is necessary. If no row event needs to be read, it can
+send progress without occupying the scan worker queue. This fast path also
+preserves the ordering of sync-point and resolved events.
 
-If a real scan is required, EventService puts it into the scan worker's
-unbounded FIFO and returns immediately, so EventStore callbacks never wait for
-scan workers. State coalescing limits the queue to at most one entry per
-dispatcher.
+If a low-latency dispatcher receives another scan request while one attempt is
+running, EventService records one pending continuation. Multiple notifications
+are coalesced into that single continuation, so the dispatcher promptly checks
+the newest frontier without adding one task per notification. Throughput mode
+keeps its existing behavior and does not create this continuation.
 
-Notifications received while inline preparation is running record one pending
-continuation. Notifications received after a task is queued are folded into
-that task, which reads the latest dispatcher frontier. A low-latency dispatcher
-also records one continuation while a scan is running. Interrupted scans and
-schema retries use the same reliable scan enqueue path, so they do not lose
-their scheduling signal or require another notification.
+All scan scheduling paths enqueue into an unbounded per-worker FIFO, so they do
+not block waiting for worker capacity or drop a scheduling request.
 
 ### Dispatcher scan state machine
 
@@ -124,38 +120,35 @@ Each dispatcher has one `dispatcherScanState`, protected by `scanMu`:
 | State | Meaning |
 | --- | --- |
 | `dispatcherScanIdle` | No preparation or scan task is outstanding. |
-| `dispatcherScanPreparing` | An EventStore callback is checking whether a real scan is needed. |
 | `dispatcherScanQueued` | A task is waiting in a scan worker queue. |
-| `dispatcherScanRunning` | A scan worker owns the dispatcher. |
+| `dispatcherScanRunning` | One goroutine owns scan preparation or execution. |
+| `dispatcherScanRunningPending` | A low-latency request arrived while the dispatcher was running. |
 | `dispatcherScanSchemaBlocked` | Progress is waiting for SchemaStore to advance. |
-
-`scanPending`, protected by the same mutex, records one coalesced follow-up
-received while preparation or a low-latency scan is running.
-`isRemoved` is the terminal dispatcher lifecycle flag. It is independent of
-`dispatcherScanState`, and workers reject queued tasks after it is set.
 
 The main transitions are:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Preparing: EventStore notification
-    Preparing --> Queued: preparation finds data to scan
+    Idle --> Running: EventStore notification claims preparation
+    Running --> Queued: preparation finds data to scan
+    Idle --> Queued: internal request
     Queued --> Running: worker begins
-    Preparing --> Queued: pending notification after preparation
-    Running --> Queued: pending low-latency notification or interruption
-    Preparing --> SchemaBlocked: low-latency preparation reaches schema frontier
+    Running --> RunningPending: low-latency request arrives
+    RunningPending --> Queued: current attempt finishes
     Running --> SchemaBlocked: low-latency scan reaches schema frontier
+    RunningPending --> SchemaBlocked: low-latency scan reaches schema frontier
     SchemaBlocked --> Queued: SchemaStore advances
-    Preparing --> Idle: preparation finishes with no pending work
     Running --> Idle: attempt finishes with no pending work
 ```
 
-Preparation and scan execution have distinct ownership states, preventing them
-from checking or updating one dispatcher concurrently. An interrupted scan is
-queued again, and a reset enters the same scan enqueue path. Removing or
-resetting a dispatcher marks the old dispatcher as removed; workers reject its
-queued tasks after that flag is set.
+The `Running` state deliberately covers both inline preparation and worker
+execution. This gives both paths the same ownership rule and prevents them
+from checking or updating one dispatcher concurrently.
+
+An interrupted scan is queued again. Removing or resetting a dispatcher sets
+its independent `isRemoved` lifecycle flag; queued workers reject it after the
+flag is set. A reset creates a new dispatcher state starting from `Idle`.
 
 ### Schema-blocked retry and active scans
 
@@ -170,9 +163,9 @@ scan range and acquired the required quota. Fast-path progress updates and
 other no-scan attempts do not create an active-scan lifecycle. Dispatcher
 removal cancels a real active scan before cleanup.
 
-For operational diagnostics, preparation and scan tasks that are queued or
-running are all reported as busy. This makes slow-dispatcher logs reflect the
-scheduler state before a worker starts the actual EventStore scan.
+For operational diagnostics, queued, running, and running-pending dispatchers
+are all reported as busy. This makes slow-dispatcher logs reflect the scheduler
+state even before a worker starts the actual EventStore scan.
 
 ## Compatibility
 
@@ -183,8 +176,8 @@ so both modes can run on the same captures.
 Throughput changefeeds retain their configured LogPuller batching interval,
 200 ms dispatcher heartbeat, delayed first heartbeat, periodic Maintainer
 reporting, and existing scan scheduling behavior. Both modes continue to use
-the same scan worker concurrency, scan limits, memory quotas, and event
-ordering rules.
+the same unbounded worker queues, scan limits, memory quotas, and event ordering
+rules.
 
 ## Existing test coverage
 
@@ -217,8 +210,8 @@ ordering rules.
   `TestThroughputModeDoesNotContinueScanRequestWhileRunning` compare the two
   scheduling modes.
 - `TestLowLatencyScanContinuationIsQueued`, `TestInterruptedScanIsQueuedAgain`,
-  and `TestNotifyEnqueuesWithoutBlockingOrDuplicatingTask` cover reliable
-  unbounded queueing and notification coalescing.
+  and `TestNotifyEnqueuesWithoutBlockingOrDuplicatingTask` cover unbounded
+  queueing and notification coalescing.
 - `TestRunningNotifyParksAtSchemaBlock`,
   `TestLowLatencySchemaBlockedRetriesWithoutNotify`,
   `TestThroughputModeDoesNotParkSchemaBlockedDispatcher`, and

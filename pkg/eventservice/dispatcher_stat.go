@@ -42,26 +42,21 @@ const (
 )
 
 // dispatcherScanState serializes scan preparation and execution for one dispatcher.
-// EventStore notifications prepare inline from Idle. A real scan changes
-// Preparing -> Queued -> Running. Notifications received while Preparing, or
-// while a low-latency scan is Running, set scanPending so completion schedules
-// one coalesced continuation. A scan stopped by SchemaStore changes to
-// SchemaBlocked and is queued again after the schema frontier advances.
-// isRemoved is the terminal lifecycle flag and is independent of scanState.
+// An EventStore notification claims Idle -> Running for inline preparation. If
+// data must be read, preparation changes Running or RunningPending -> Queued,
+// and a worker changes Queued -> Running. Internal requests enqueue directly
+// from Idle. In low-latency mode, a request received while Running changes it
+// to RunningPending, and completion queues one coalesced continuation. A scan
+// stopped by SchemaStore changes to SchemaBlocked and is queued again after the
+// schema frontier advances. isRemoved is the terminal lifecycle flag and is
+// independent of scanState.
 type dispatcherScanState uint8
 
 const (
-	// dispatcherScanIdle means no preparation or scan task is outstanding.
 	dispatcherScanIdle dispatcherScanState = iota
-	// dispatcherScanPreparing means an EventStore notification is checking whether
-	// a real scan is needed.
-	dispatcherScanPreparing
-	// dispatcherScanQueued means a real scan task is waiting for a scan worker.
 	dispatcherScanQueued
-	// dispatcherScanRunning means a scan worker owns the dispatcher.
 	dispatcherScanRunning
-	// dispatcherScanSchemaBlocked means a low-latency dispatcher is waiting for
-	// SchemaStore to advance before it can be prepared again.
+	dispatcherScanRunningPending
 	dispatcherScanSchemaBlocked
 )
 
@@ -158,12 +153,9 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related. scanMu protects scanState, scanPending, and schemaBlockedUntilTs.
-	scanMu    sync.Mutex
-	scanState dispatcherScanState
-	// scanPending records one request to scan the latest frontier after the current
-	// preparation or scan finishes.
-	scanPending          bool
+	// Scan task related. scanMu protects scanState and schemaBlockedUntilTs.
+	scanMu               sync.Mutex
+	scanState            dispatcherScanState
 	schemaBlockedUntilTs uint64
 
 	// activeScanMu protects activeScan and serializes scan registration with
@@ -258,10 +250,9 @@ func (a *dispatcherStat) isScanBusy() bool {
 	if a.isRemoved.Load() {
 		return false
 	}
-	return a.scanState == dispatcherScanPreparing ||
-		a.scanState == dispatcherScanQueued ||
+	return a.scanState == dispatcherScanQueued ||
 		a.scanState == dispatcherScanRunning ||
-		a.scanPending
+		a.scanState == dispatcherScanRunningPending
 }
 
 func (a *dispatcherStat) isHandshaked() bool {
@@ -293,7 +284,6 @@ func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Contex
 func (a *dispatcherStat) markRemoved() {
 	a.isRemoved.Store(true)
 	a.scanMu.Lock()
-	a.scanPending = false
 	a.schemaBlockedUntilTs = 0
 	a.scanMu.Unlock()
 

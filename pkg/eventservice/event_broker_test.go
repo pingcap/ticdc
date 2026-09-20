@@ -222,13 +222,12 @@ func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	require.Eventually(t, func() bool {
 		disp.scanMu.Lock()
 		defer disp.scanMu.Unlock()
-		return disp.scanState == dispatcherScanPreparing
+		return disp.scanState == dispatcherScanRunning
 	}, time.Second, time.Millisecond)
 
 	broker.onNotify(disp, 201, 0)
 	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanPreparing, disp.scanState)
-	require.True(t, disp.scanPending)
+	require.Equal(t, dispatcherScanRunningPending, disp.scanState)
 	disp.scanMu.Unlock()
 	require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
 
@@ -253,69 +252,6 @@ func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	require.Equal(t, uint64(201), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
 	require.Zero(t, broker.scanTaskQueues[disp.scanWorkerIndex].len())
-}
-
-func TestQueuedScanReadsNotificationReceivedDuringPreparation(t *testing.T) {
-	broker, _, schemaStore, _ := newEventBrokerForTest()
-	broker.close()
-
-	prepareStarted := make(chan struct{})
-	resumePrepare := make(chan struct{})
-	var prepareHookOnce sync.Once
-	schemaStore.getTableDDLEventStateHook = func() {
-		prepareHookOnce.Do(func() {
-			close(prepareStarted)
-			<-resumePrepare
-		})
-	}
-	var resumeOnce sync.Once
-	resumePreparation := func() {
-		resumeOnce.Do(func() { close(resumePrepare) })
-	}
-	t.Cleanup(resumePreparation)
-
-	info := newMockDispatcherInfoForTest(t)
-	info.epoch = 1
-	info.startTs = 100
-	status := broker.getOrSetChangefeedStatus(info)
-	disp := newDispatcherStat(info, 1, 1, nil, status)
-	disp.setHandshaked()
-	disp.eventStoreCommitTs.Store(150)
-
-	prepareDone := make(chan struct{})
-	go func() {
-		broker.onNotify(disp, 200, 150)
-		close(prepareDone)
-	}()
-
-	select {
-	case <-prepareStarted:
-	case <-time.After(time.Second):
-		t.Fatal("preparation did not read the scan frontier")
-	}
-
-	broker.onNotify(disp, 201, 150)
-	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanPreparing, disp.scanState)
-	require.True(t, disp.scanPending)
-	disp.scanMu.Unlock()
-
-	resumePreparation()
-	select {
-	case <-prepareDone:
-	case <-time.After(time.Second):
-		t.Fatal("preparation did not finish")
-	}
-
-	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanQueued, disp.scanState)
-	require.False(t, disp.scanPending)
-	disp.scanMu.Unlock()
-
-	queuedTask := popScanTask(t, broker, disp.scanWorkerIndex)
-	requestResult := broker.getScanTaskRequestResult(queuedTask)
-	require.True(t, requestResult.needScan)
-	require.Equal(t, uint64(201), requestResult.request.Range.CommitTsEnd)
 }
 
 func TestNotifyFastPathPreservesSyncPointOrder(t *testing.T) {
@@ -372,8 +308,7 @@ func TestLowLatencyScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 	require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
 	require.Zero(t, broker.scanTaskQueues[0].len())
 	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanRunning, disp.scanState)
-	require.True(t, disp.scanPending)
+	require.Equal(t, dispatcherScanRunningPending, disp.scanState)
 	disp.scanMu.Unlock()
 
 	broker.finishScan(disp, false, false, 0)
@@ -526,10 +461,6 @@ func TestScanWorkerDrainsQueuedNotify(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
-	removed := &dispatcherStat{}
-	removed.markRemoved()
-	broker.scanTaskQueues[0].push(removed)
-
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
 	info.startTs = 100
@@ -539,28 +470,18 @@ func TestScanWorkerDrainsQueuedNotify(t *testing.T) {
 	require.True(t, disp.isScanBusy())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var workers sync.WaitGroup
-	workers.Add(1)
+	done := make(chan struct{})
 	go func() {
-		defer workers.Done()
 		_ = broker.runScanWorker(ctx, 0)
+		close(done)
 	}()
 	require.Eventually(t, func() bool { return !disp.isScanBusy() }, time.Second, time.Millisecond)
 	cancel()
-	done := make(chan struct{})
-	go func() {
-		workers.Wait()
-		close(done)
-	}()
-	require.Eventually(t, func() bool {
-		select {
-		case <-done:
-			return true
-		default:
-			return false
-		}
-	}, time.Second, time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scan worker did not stop")
+	}
 }
 
 func TestInterruptedScanIsQueuedAgain(t *testing.T) {
@@ -727,6 +648,7 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	newStat := dispPtr.Load()
 	require.NotSame(t, oldStat, newStat)
 	require.True(t, oldStat.isRemoved.Load())
+	require.False(t, oldStat.isScanBusy())
 	_, ok = bucket.dispatchers.Load(oldStat)
 	require.False(t, ok)
 	require.True(t, newStat.isScanBusy())
