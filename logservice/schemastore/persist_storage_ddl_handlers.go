@@ -24,6 +24,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -611,7 +612,6 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
-	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -633,24 +633,18 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
-func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent, resolve sqlname.Resolver) error {
 	if event.TableInfo == nil || event.TableInfo.View == nil {
-		return
+		return nil
 	}
-
 	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
-		event.Query,
-		event.TableInfo.View.SelectStmt,
-		event.SchemaName,
+		event.Query, event.TableInfo.View.SelectStmt, event.SchemaName, resolve,
 	)
 	if err != nil {
-		log.Warn("normalize create view query with stored select failed",
-			zap.String("query", event.Query),
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.Error(err))
-		return
+		return err
 	}
 	event.Query = query
+	return nil
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {

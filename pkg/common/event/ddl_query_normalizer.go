@@ -14,10 +14,10 @@
 package event
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 )
@@ -25,6 +25,9 @@ import (
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT
 // carries information that the original query text does not carry.
+// When resolve is provided, it must return canonical source names from the
+// catalog at the DDL timestamp. Declarations and their references are normalized
+// together, including the view name. This function never applies routing rules.
 //
 // TiDB persists the normalized SELECT body of a view in TableInfo.View.SelectStmt
 // when executing CREATE VIEW, so this field can carry resolved source-table
@@ -45,7 +48,7 @@ import (
 //	currentSchema    = "other_db"
 //
 //	                 → "CREATE VIEW `other_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`"
-func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string) (string, error) {
+func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string, resolve sqlname.Resolver) (string, error) {
 	if query == "" || storedSelectStmt == "" {
 		return query, nil
 	}
@@ -63,11 +66,20 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
-	if !normalizeCreateViewSelect(selectStmt, currentSchema) {
-		return query, nil
+	if resolve != nil {
+		// Bind the stored SELECT and view declaration to the same historical catalog.
+		// Always retain these canonical names, even when no reference needs qualification.
+		createViewStmt.Select = selectStmt
+		if _, err := sqlname.Bind(createViewStmt, currentSchema).Apply(resolve); err != nil {
+			return query, err
+		}
+	} else {
+		if !normalizeCreateViewSelect(selectStmt, currentSchema) {
+			return query, nil
+		}
+		createViewStmt.Select = selectStmt
 	}
 
-	createViewStmt.Select = selectStmt
 	normalizedQuery, err := Restore(createViewStmt)
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
@@ -75,30 +87,12 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 	return normalizedQuery, nil
 }
 
-type createViewSelectNormalizer struct {
-	changed bool
-	scopes  []createViewSelectScope
-	// withScopes holds consuming query scopes hidden from their CTE definitions.
-	withScopes []createViewSelectScope
-}
-
-type createViewSelectScope struct {
-	aliases         map[string]struct{}
-	tableByName     map[string]string
-	ambiguousTables map[string]struct{}
-}
-
-// normalizeCreateViewSelect returns true when CREATE VIEW should use the stored
-// SELECT body. It also turns unaliased table-qualified column references into
-// schema-qualified references: `orders`.`id` with FROM `source_db`.`orders`
-// becomes `source_db`.`orders`.`id`. Explicit alias references are preserved.
+// normalizeCreateViewSelect qualifies bound physical table references.
+// With no catalog, original table spellings remain.
 func normalizeCreateViewSelect(selectStmt ast.StmtNode, currentSchema string) bool {
 	currentSchemaOnly := createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema)
-	normalizer := &createViewSelectNormalizer{
-		scopes: make([]createViewSelectScope, 0),
-	}
-	selectStmt.Accept(normalizer)
-	return !currentSchemaOnly || normalizer.changed
+	changed, _ := sqlname.Bind(selectStmt, "").Apply(nil)
+	return !currentSchemaOnly || changed
 }
 
 func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
@@ -108,108 +102,6 @@ func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchem
 		}
 	}
 	return true
-}
-
-func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
-	switch v := in.(type) {
-	case *ast.SelectStmt:
-		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
-	case *ast.SetOprStmt, *ast.SetOprSelectList:
-		// A WITH on a set operation owns an empty scope. Hiding it must not
-		// accidentally hide the enclosing query's correlated tables.
-		n.scopes = append(n.scopes, createViewSelectScope{})
-	case *ast.WithClause:
-		// CTE definitions can reference outer queries, but cannot see the
-		// FROM tables of the query consuming this WITH clause.
-		n.withScopes = append(n.withScopes, n.scopes[len(n.scopes)-1])
-		n.scopes = n.scopes[:len(n.scopes)-1]
-	case *ast.ColumnName:
-		n.qualifyColumnName(v)
-	}
-	return in, false
-}
-
-func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
-	switch in.(type) {
-	case *ast.SelectStmt, *ast.SetOprStmt, *ast.SetOprSelectList:
-		n.scopes = n.scopes[:len(n.scopes)-1]
-	case *ast.WithClause:
-		n.scopes = append(n.scopes, n.withScopes[len(n.withScopes)-1])
-		n.withScopes = n.withScopes[:len(n.withScopes)-1]
-	}
-	return in, true
-}
-
-// qualifyColumnName resolves a table qualifier to its source schema by walking
-// the SELECT scopes from the innermost outward. pkg/routing's tableRenameVisitor
-// applies the same rules to routed targets; keep both in sync
-// (TestRewriteParserBackedDDLQueryRangeVariableResolution pins the case list).
-func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
-	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
-		return
-	}
-
-	tableKey := strings.ToLower(c.Table.O)
-	// Resolve correlated references from the innermost SELECT outward.
-	for _, scope := range slices.Backward(n.scopes) {
-		if _, ok := scope.aliases[tableKey]; ok {
-			return
-		}
-		if _, ok := scope.ambiguousTables[tableKey]; ok {
-			return
-		}
-		if schema, ok := scope.tableByName[tableKey]; ok {
-			if schema != "" {
-				c.Schema = ast.NewCIStr(schema)
-				n.changed = true
-			}
-			return
-		}
-	}
-}
-
-func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {
-	scope := createViewSelectScope{
-		aliases:         make(map[string]struct{}),
-		tableByName:     make(map[string]string),
-		ambiguousTables: make(map[string]struct{}),
-	}
-	if selectStmt == nil || selectStmt.From == nil || selectStmt.From.TableRefs == nil {
-		return scope
-	}
-	collectCreateViewSelectTables(selectStmt.From.TableRefs, &scope)
-	return scope
-}
-
-func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSelectScope) {
-	switch v := node.(type) {
-	case *ast.Join:
-		if v.Left != nil {
-			collectCreateViewSelectTables(v.Left, scope)
-		}
-		if v.Right != nil {
-			collectCreateViewSelectTables(v.Right, scope)
-		}
-	case *ast.TableSource:
-		if v.AsName.O != "" {
-			scope.aliases[strings.ToLower(v.AsName.O)] = struct{}{}
-			return
-		}
-		tableName, ok := v.Source.(*ast.TableName)
-		if !ok || tableName.Name.O == "" {
-			return
-		}
-		tableKey := strings.ToLower(tableName.Name.O)
-		if _, ambiguous := scope.ambiguousTables[tableKey]; ambiguous {
-			return
-		}
-		if _, exists := scope.tableByName[tableKey]; exists {
-			delete(scope.tableByName, tableKey)
-			scope.ambiguousTables[tableKey] = struct{}{}
-			return
-		}
-		scope.tableByName[tableKey] = tableName.Schema.O
-	}
 }
 
 type tableSchemaExtractor struct {

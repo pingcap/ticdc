@@ -1017,7 +1017,7 @@ func TestEmptyTargetSchema(t *testing.T) {
 
 func TestCorrelatedView(t *testing.T) {
 	stored := "SELECT orders.id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.order_id = orders.id)"
-	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db")
+	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db", nil)
 	require.NoError(t, err)
 	router := newTestRouter(t, false, []*config.DispatchRule{
 		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
@@ -1094,6 +1094,9 @@ func TestViewCTECorrelatedScope(t *testing.T) {
 	})
 	for _, tc := range []struct{ name, body string }{
 		{"table", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+		{"derived", "SELECT 1 FROM other_db.t JOIN (SELECT t.id AS id) AS c ON c.id = other_db.t.id"},
+		{"lateral", "SELECT 1 FROM other_db.t JOIN LATERAL (SELECT t.id AS id) AS c ON c.id = other_db.t.id WHERE c.id = source_db.t.id"},
+		{"lateral before same named table", "SELECT 1 FROM other_db.t AS o JOIN LATERAL (SELECT t.id AS id) AS c ON c.id = o.id JOIN other_db.t ON other_db.t.id = c.id"},
 		{"alias", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t AS t JOIN c ON c.id = t.id"},
 		{"nested", "WITH c AS (WITH d AS (SELECT t.id AS id) SELECT id FROM d) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
 		{"union", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id UNION ALL SELECT 1 FROM c WHERE id = 1"},
@@ -1103,7 +1106,7 @@ func TestViewCTECorrelatedScope(t *testing.T) {
 			ddl := helper.DDL2Event("CREATE VIEW source_db.v AS SELECT t.id FROM source_db.t WHERE EXISTS (" + tc.body + ")")
 			tk.MustQuery("SELECT * FROM source_db.v ORDER BY id").Check(testkit.Rows("1"))
 			tk.MustExec("DROP VIEW source_db.v")
-			normalized, err := event.NormalizeCreateViewQueryWithStoredSelect(ddl.Query, ddl.TableInfo.View.SelectStmt, "source_db")
+			normalized, err := event.NormalizeCreateViewQueryWithStoredSelect(ddl.Query, ddl.TableInfo.View.SelectStmt, "source_db", nil)
 			require.NoError(t, err)
 			for _, mode := range []string{"normalize", "route", "normalize then route"} {
 				t.Run(mode, func(t *testing.T) {

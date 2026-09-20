@@ -195,6 +195,53 @@ CREATE VIEW source_db.cte_shadow_view AS
     WITH orders AS (SELECT id FROM users WHERE id <= 2)
     SELECT id FROM orders;
 
+-- SQL identifier case must not affect the case-sensitive routing matcher.
+CREATE VIEW source_db.case_qualified_view AS
+    SELECT SOURCE_DB.ORDERS.id FROM source_db.orders;
+CREATE VIEW source_db.case_table_view AS
+    SELECT ORDERS.id FROM source_db.orders;
+CREATE VIEW source_db.case_wildcard_view AS
+    SELECT SOURCE_DB.ORDERS.* FROM source_db.orders;
+-- FROM spelling must resolve to the same metadata name used for DML routing.
+CREATE VIEW source_db.case_from_view AS
+    SELECT ORDERS.id FROM SOURCE_DB.ORDERS;
+CREATE VIEW source_db.case_view_dependency AS
+    SELECT CASE_FROM_VIEW.id FROM SOURCE_DB.CASE_FROM_VIEW;
+
+-- Same-named tables with different rows make a lost correlation observable.
+CREATE TABLE source_extra_db.users (id INT PRIMARY KEY);
+INSERT INTO source_extra_db.users VALUES (1), (3);
+-- The CTE definition sees the true outer users, not its consumer's FROM.
+CREATE VIEW source_db.cte_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        WITH c AS (SELECT users.id AS id)
+        SELECT 1 FROM source_extra_db.users JOIN c ON c.id = source_extra_db.users.id
+    );
+-- A non-lateral derived table has the same consumer-scope boundary.
+CREATE VIEW source_db.derived_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users
+        JOIN (SELECT users.id AS id) AS c ON c.id = source_extra_db.users.id
+    );
+-- LATERAL sees preceding FROM items.
+CREATE VIEW source_db.lateral_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users
+        JOIN LATERAL (SELECT users.id AS id) AS c ON c.id = source_extra_db.users.id
+        WHERE c.id = source_db.users.id
+    );
+-- A later FROM item must not shadow the true outer users inside LATERAL.
+CREATE VIEW source_db.lateral_forward_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users AS u
+        JOIN LATERAL (SELECT users.id AS id) AS c ON c.id = u.id
+        JOIN source_extra_db.users ON source_extra_db.users.id = c.id
+    );
+
 -- ============================================
 -- DDL: PARTITION TABLE
 -- ============================================

@@ -82,11 +82,13 @@ function verify_table_route_result() {
 	check_table_not_exists "$target_db.transient_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 
 	# Compare view results explicitly: table data checks alone cannot detect a
-	# CTE accidentally reading an existing physical table.
+	# CTE accidentally reading an existing physical table, lost correlations,
+	# or qualifiers routed differently from their FROM declaration.
 	sed 's/_routed//g' "$CUR/data/cte_query.sql" |
 		mysql -uroot -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -Dsource_db -N -B >"$work_dir/cte_upstream.txt"
 	mysql -uroot -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -D"$target_db" -N -B \
 		<"$CUR/data/cte_query.sql" >"$work_dir/cte_downstream.txt"
+	diff -u "$CUR/data/cte_query.result" "$work_dir/cte_upstream.txt"
 	diff -u "$work_dir/cte_upstream.txt" "$work_dir/cte_downstream.txt"
 }
 

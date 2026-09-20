@@ -783,6 +783,16 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
+	// Bind view dependencies to the catalog at this DDL's commit, before storing
+	// the SQL. Current in-memory metadata omits newly created views, and replay
+	// must not depend on the latest catalog or on a changefeed's route rules.
+	if job.Type == model.ActionCreateView && ddlEvent.TableInfo != nil && ddlEvent.TableInfo.View != nil {
+		resolve := newViewTableResolver(getSnapshotMeta(p.kvStorage, ddlEvent.FinishedTs))
+		if err := normalizeCreateViewQueryWithStoredSelect(&ddlEvent, resolve); err != nil {
+			return err
+		}
+	}
+
 	if handler.enrichPersistedDDLEventFunc != nil {
 		if err := handler.enrichPersistedDDLEventFunc(p.getTableInfoAtTs, &ddlEvent); err != nil {
 			return err

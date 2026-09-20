@@ -27,6 +27,7 @@ check-struct-only = false
         "target_db.exchange_partitioned_routed",
         "target_extra_db.exchange_normal_routed",
         "target_extra_db.external_users_routed",
+        "target_extra_db.users_routed",
         "target_extra_db.external_users_from_default_routed",
         "target_extra_db.cross_move_target_routed",
         "target_extra_db.partitioned_events_like_from_default_routed",
@@ -52,6 +53,7 @@ check-struct-only = false
         "exchange_partitioned",
         "exchange_normal",
         "external_users",
+        "scope_users",
         "external_users_from_default",
         "cross_move_target",
         "partitioned_events_like_from_default",
@@ -158,3 +160,9 @@ schema-pattern = "source_extra_db"
 table-pattern = "exchange_normal"
 target-schema = "target_extra_db"
 target-table = "exchange_normal_routed"
+
+[routes.scope_users]
+schema-pattern = "source_extra_db"
+table-pattern = "users"
+target-schema = "target_extra_db"
+target-table = "users_routed"

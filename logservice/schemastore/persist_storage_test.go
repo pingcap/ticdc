@@ -4046,6 +4046,8 @@ func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
 		},
 	})
 
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
+
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
 		ddl.Query)
@@ -4070,6 +4072,8 @@ func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelec
 			101: {Name: "target_db", Tables: map[int64]bool{}},
 		},
 	})
+
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
@@ -4142,6 +4146,7 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 				},
 			})
 
+			require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 			require.Equal(t, tc.expected, ddl.Query)
 			require.Equal(t, "target_db", ddl.SchemaName)
 			require.Equal(t, "v", ddl.TableName)
