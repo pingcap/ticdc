@@ -130,6 +130,15 @@ func (p namePattern) covers(matcher namePattern) bool {
 	}
 }
 
+// overlaps reports whether the patterns share a name, preserving case sensitivity.
+func (p namePattern) overlaps(other namePattern) bool {
+	// A prefix and a suffix always share their concatenation. For all other
+	// supported pattern pairs, an overlap means one pattern covers the other.
+	return p.covers(other) || other.covers(p) ||
+		(p.kind == patternPrefix && other.kind == patternSuffix) ||
+		(p.kind == patternSuffix && other.kind == patternPrefix)
+}
+
 // targetName is a parsed route target expression: literal text around one placeholder, or a literal
 // name. An empty expression keeps the source name, which is an empty substitution.
 type targetName struct {
@@ -385,7 +394,7 @@ func (r routeRuleToCheck) findCapturedSchema(filters []tablePattern) (string, bo
 	target.suffix = strings.ToLower(target.suffix)
 	for _, source := range filters {
 		// A case sensitive matcher that cannot select this source never routes its DDL.
-		if _, ok := findNameWitness(source.schema, r.matcher.schema, namePattern{kind: patternAny}, targetName{hasVariable: true}); !ok {
+		if !source.schema.overlaps(r.matcher.schema) {
 			continue
 		}
 		source.schema.value = strings.ToLower(source.schema.value)

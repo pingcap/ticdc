@@ -310,6 +310,45 @@ func TestValidateSameClusterRouting(t *testing.T) {
 	}
 }
 
+func TestNamePatternOverlaps(t *testing.T) {
+	cases := []struct {
+		left, right string
+		want        bool
+	}{
+		{"*", "*", true},
+		{"*", "src", true},
+		{"*", "src*", true},
+		{"*", "*src", true},
+		{"src", "src", true},
+		{"src", "dst", false},
+		{"src", "SRC", false},
+		{"src", "sr*", true},
+		{"src", "src_*", false},
+		{"src", "*rc", true},
+		{"src", "*_src", false},
+		{"src*", "src*", true},
+		{"src*", "src_copy*", true},
+		{"src*", "dst*", false},
+		{"src*", "SRC*", false},
+		{"*src", "*src", true},
+		{"*src", "*copy_src", true},
+		{"*src", "*dst", false},
+		{"*src", "*SRC", false},
+		{"src*", "*dst", true},
+		{"src*", "*SRC", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.left+"/"+tc.right, func(t *testing.T) {
+			left, reason, ok := parseNamePattern(tc.left)
+			require.True(t, ok, reason)
+			right, reason, ok := parseNamePattern(tc.right)
+			require.True(t, ok, reason)
+			require.Equal(t, tc.want, left.overlaps(right))
+			require.Equal(t, tc.want, right.overlaps(left))
+		})
+	}
+}
+
 func TestSameClusterSchemaIsolationCaseSensitive(t *testing.T) {
 	cases := []struct {
 		name        string
