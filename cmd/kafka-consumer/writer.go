@@ -265,6 +265,26 @@ func (w *writer) flushEventsFromGroups(
 }
 
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	// Decoded events for one table can carry different column schemas even
+	// without a DDL (for example, full rows and key-only rows). Wait before a
+	// schema change so the asynchronous writer cannot batch incompatible rows.
+	tableInfos := make(map[int64]*commonType.TableInfo)
+	start := 0
+	for i, e := range events {
+		tableID := e.GetTableID()
+		if previous, ok := tableInfos[tableID]; ok && !previous.HasSameColumnSchema(e.TableInfo) {
+			if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
+				return err
+			}
+			clear(tableInfos)
+			start = i
+		}
+		tableInfos[tableID] = e.TableInfo
+	}
+	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
+}
+
+func (w *writer) flushDMLBatchAndWait(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
 	if len(events) == 0 {
 		return nil
 	}

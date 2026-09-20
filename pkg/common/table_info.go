@@ -265,6 +265,21 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 	return ti.columnSchema.Clone()
 }
 
+// HasSameColumnSchema reports whether two table infos have equivalent columns,
+// indices and handle metadata, independently of their table IDs and UpdateTS.
+func (ti *TableInfo) HasSameColumnSchema(other *TableInfo) bool {
+	if ti == nil || other == nil {
+		return ti == other
+	}
+	if ti.columnSchema == other.columnSchema {
+		return true
+	}
+	if ti.columnSchema == nil || other.columnSchema == nil {
+		return false
+	}
+	return ti.columnSchema.equal(other.columnSchema)
+}
+
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
 	if ti == nil || ti.columnSchema == nil {
 		return nil

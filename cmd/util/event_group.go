@@ -1209,7 +1209,9 @@ func appendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 }
 
 func sameDMLTransaction(last, row *commonEvent.DMLEvent) bool {
-	return last != nil && row != nil && last.CommitTs == row.CommitTs
+	return last != nil && row != nil && last.CommitTs == row.CommitTs &&
+		last.GetTableID() == row.GetTableID() &&
+		last.TableInfo.HasSameColumnSchema(row.TableInfo)
 }
 
 func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeCount int) []T {
