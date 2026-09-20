@@ -429,7 +429,12 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.Name = ast.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
-		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
+		// Open protocol omits virtual generated columns and carries no index
+		// membership. A non-primary composite key may therefore be incomplete
+		// (for example, UNIQUE(a, virtual_b) carries only a). Do not promote
+		// its remaining handle columns to a primary key.
+		isComposite := raw.Flag&multipleKeyFlag != 0
+		if isPrimary(raw.Flag) || (isHandle(raw.Flag) && !isComposite) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
@@ -450,7 +455,9 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.GeneratedExprString = "holder" // just to make it not empty
 			col.GeneratedStored = true
 		}
-		if isUnique(raw.Flag) {
+		// A column belonging to a composite unique index is not individually
+		// unique. Only infer single-column unique indexes from unambiguous flags.
+		if isUnique(raw.Flag) && !isComposite {
 			col.AddFlag(mysql.UniqueKeyFlag)
 		}
 
