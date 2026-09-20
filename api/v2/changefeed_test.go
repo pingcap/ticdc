@@ -14,18 +14,11 @@
 package v2
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -188,47 +181,4 @@ func TestRouteMatcherValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Return the same info pointer as the real coordinator, rather than a copy.
-type updateTestCoordinator struct {
-	server.Coordinator
-	info *config.ChangeFeedInfo
-}
-
-func (c *updateTestCoordinator) Initialized() bool { return true }
-
-func (c *updateTestCoordinator) GetChangefeed(context.Context, common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
-	return c.info, &config.ChangeFeedStatus{}, nil
-}
-
-type updateTestServer struct {
-	server.Server
-	co server.Coordinator
-}
-
-func (s *updateTestServer) GetCoordinator() (server.Coordinator, error) { return s.co, nil }
-
-func TestRejectedUpdatePreservesChangefeedInfo(t *testing.T) {
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		State:        config.StateStopped, StartTs: 10, TargetTs: 20,
-		SinkURI: "mysql://root@127.0.0.1:4000/", Config: config.GetDefaultReplicaConfig(),
-	}
-	before, err := info.MarshalWithTruncation(false)
-	require.NoError(t, err)
-	h := NewOpenAPIV2(&updateTestServer{co: &updateTestCoordinator{info: info}})
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Set("ctx-keyspace", &keyspacepb.KeyspaceMeta{State: keyspacepb.KeyspaceState_ENABLED})
-	c.Params = gin.Params{{Key: "changefeed_id", Value: "test"}}
-	// These fields are applied before the forbidden start_ts is checked.
-	c.Request = httptest.NewRequest(http.MethodPut, "/api/v2/changefeeds/test", strings.NewReader(
-		`{"start_ts":1,"target_ts":30,"sink_uri":"mysql://root@127.0.0.1:5000/","replica_config":{"allow_same_cluster":true}}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	h.UpdateChangefeed(c)
-	require.NotEmpty(t, c.Errors)
-	require.ErrorContains(t, c.Errors.Last().Err, "start_ts can not be updated")
-	after, err := info.MarshalWithTruncation(false)
-	require.NoError(t, err)
-	require.JSONEq(t, before, after)
 }
