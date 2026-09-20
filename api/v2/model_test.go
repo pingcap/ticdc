@@ -33,6 +33,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 		EnableSyncPoint:       util.AddressOf(true),
 		EnableTableMonitor:    util.AddressOf(true),
 		BDRMode:               util.AddressOf(true),
+		AllowSameCluster:      util.AddressOf(true),
 		Sink: &SinkConfig{
 			CloudStorageConfig: &CloudStorageConfig{
 				UseTableIDAsPath: util.AddressOf(true),
@@ -68,6 +69,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.EnableSyncPoint))
 	require.True(t, util.GetOrZero(internalCfg.EnableTableMonitor))
 	require.True(t, util.GetOrZero(internalCfg.BDRMode))
+	require.True(t, util.GetOrZero(internalCfg.AllowSameCluster))
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
@@ -94,6 +96,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
+	require.True(t, *apiCfgBack.AllowSameCluster)
 	require.True(t, *apiCfgBack.IgnoreIneligibleTable)
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
