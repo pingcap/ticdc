@@ -218,8 +218,19 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	value := &messageRow{Update: map[string]column{
 		"a": {Type: mysql.TypeLong, Flag: primaryKeyFlag | handleKeyFlag, Value: int64(1)},
 		"b": {Type: mysql.TypeLong, Flag: primaryKeyFlag | handleKeyFlag, Value: int64(2)},
-		"c": {Type: mysql.TypeLong, Value: int64(3)},
+		"c": {Type: mysql.TypeLong, Flag: uniqueKeyFlag, Value: int64(3)},
+		"d": {Type: mysql.TypeLong, Flag: uniqueKeyFlag, Value: int64(4)},
 	}}
 
-	common.RequireRowLocatorByPrimaryKey(t, decoder.newTableInfo(key, value), "a", "b")
+	tableInfo := decoder.newTableInfo(key, value)
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "a", "b")
+	require.Len(t, tableInfo.GetIndices(), 3)
+	indexIDs := make(map[int64]struct{})
+	for _, index := range tableInfo.GetIndices() {
+		require.NotContains(t, indexIDs, index.ID)
+		indexIDs[index.ID] = struct{}{}
+		if index.Primary {
+			require.Equal(t, int64(1), index.ID)
+		}
+	}
 }

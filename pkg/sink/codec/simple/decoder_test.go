@@ -122,8 +122,17 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 		},
 		Indexes: []*IndexSchema{
 			{Name: "PRIMARY", Unique: true, Primary: true, Columns: []string{"a", "b"}},
+			{Name: "c_unique", Unique: true, Columns: []string{"c"}},
+			{Name: "b_idx", Columns: []string{"b"}},
 		},
 	}
 
-	common.RequireRowLocatorByPrimaryKey(t, newTableInfo(schema), "a", "b")
+	tableInfo := newTableInfo(schema)
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "a", "b")
+	require.Len(t, tableInfo.GetIndices(), 3)
+	indexIDs := make(map[int64]struct{})
+	for _, index := range tableInfo.GetIndices() {
+		require.NotContains(t, indexIDs, index.ID)
+		indexIDs[index.ID] = struct{}{}
+	}
 }

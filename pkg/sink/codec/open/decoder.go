@@ -489,7 +489,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		case mysql.HasUniKeyFlag(col.GetFlag()):
 			indices = append(indices, &timodel.IndexInfo{
-				ID:   1 + int64(len(indices)),
+				ID:   2 + int64(len(indices)), // Reserve ID 1 for the primary index.
 				Name: ast.NewCIStr(col.Name.O + "_idx"),
 				Columns: []*timodel.IndexColumn{{
 					Name:   col.Name,
@@ -521,7 +521,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	// if there are multiple multi-column indices, consider as one.
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
-			ID:      1 + int64(len(indices)),
+			ID:      2 + int64(len(indices)),
 			Name:    ast.NewCIStr("multi_idx"),
 			Columns: multiColumns,
 			Unique:  false,
