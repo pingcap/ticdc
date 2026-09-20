@@ -182,6 +182,7 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 
 // EventServiceConfig represents config for event service
 type EventServiceConfig struct {
+	// ScanTaskQueueSize is deprecated. EventService scan task queues are unbounded.
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
 

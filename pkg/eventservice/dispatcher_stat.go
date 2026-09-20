@@ -42,26 +42,21 @@ const (
 )
 
 // dispatcherScanState serializes scan preparation and execution for one dispatcher.
-// Scheduling requests enqueue preparation from Idle. A prepare worker changes
-// PrepareQueued -> Preparing and either completes a no-scan fast path or changes
-// Preparing -> Queued before handing the task to a scan worker.
-// The scan worker changes Queued -> Running. Notifications received while
-// Preparing, or while a low-latency scan is Running, set scanPending, and
-// completion queues one coalesced preparation. A scan stopped by SchemaStore
-// changes to SchemaBlocked and is prepared again after the schema frontier
-// advances. isRemoved is the terminal lifecycle flag and is independent of the
-// current scan state.
+// EventStore notifications prepare inline from Idle. A real scan changes
+// Preparing -> Queued -> Running. Notifications received while Preparing, or
+// while a low-latency scan is Running, set scanPending so completion schedules
+// one coalesced continuation. A scan stopped by SchemaStore changes to
+// SchemaBlocked and is queued again after the schema frontier advances.
+// isRemoved is the terminal lifecycle flag and is independent of scanState.
 type dispatcherScanState uint8
 
 const (
 	// dispatcherScanIdle means no preparation or scan task is outstanding.
 	dispatcherScanIdle dispatcherScanState = iota
-	// dispatcherScanPrepareQueued means one task is waiting in the preparation queue.
-	dispatcherScanPrepareQueued
-	// dispatcherScanPreparing means a prepare worker owns the dispatcher and is
-	// checking whether a real scan is needed.
+	// dispatcherScanPreparing means an EventStore notification is checking whether
+	// a real scan is needed.
 	dispatcherScanPreparing
-	// dispatcherScanQueued means a real scan task is waiting in the bounded scan queue.
+	// dispatcherScanQueued means a real scan task is waiting for a scan worker.
 	dispatcherScanQueued
 	// dispatcherScanRunning means a scan worker owns the dispatcher.
 	dispatcherScanRunning
@@ -166,10 +161,8 @@ type dispatcherStat struct {
 	// Scan task related. scanMu protects scanState, scanPending, and schemaBlockedUntilTs.
 	scanMu    sync.Mutex
 	scanState dispatcherScanState
-	// scanPending records one coalesced request to prepare another scan after the
-	// current stage finishes. It is separate from scanState because a request can
-	// become pending while either preparation or scan execution owns the dispatcher;
-	// keeping it orthogonal avoids separate PreparingPending and RunningPending states.
+	// scanPending records one request to scan the latest frontier after the current
+	// preparation or scan finishes.
 	scanPending          bool
 	schemaBlockedUntilTs uint64
 
@@ -259,24 +252,13 @@ func (a *dispatcherStat) beginScan() bool {
 	return true
 }
 
-func (a *dispatcherStat) beginPrepare() bool {
-	a.scanMu.Lock()
-	defer a.scanMu.Unlock()
-	if a.isRemoved.Load() || a.scanState != dispatcherScanPrepareQueued {
-		return false
-	}
-	a.scanState = dispatcherScanPreparing
-	return true
-}
-
 func (a *dispatcherStat) isScanBusy() bool {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
 	if a.isRemoved.Load() {
 		return false
 	}
-	return a.scanState == dispatcherScanPrepareQueued ||
-		a.scanState == dispatcherScanPreparing ||
+	return a.scanState == dispatcherScanPreparing ||
 		a.scanState == dispatcherScanQueued ||
 		a.scanState == dispatcherScanRunning ||
 		a.scanPending

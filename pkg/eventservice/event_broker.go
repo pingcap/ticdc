@@ -63,32 +63,32 @@ type schemaBlockedDispatcherBucket struct {
 	dirty       atomic.Bool
 }
 
-type dispatcherTaskQueue struct {
+type scanTaskQueue struct {
 	mu    sync.Mutex
 	queue *notifyqueue.Queue[scanTask]
 }
 
-func newDispatcherTaskQueue() *dispatcherTaskQueue {
-	return &dispatcherTaskQueue{queue: notifyqueue.New[scanTask]()}
+func newScanTaskQueue() *scanTaskQueue {
+	return &scanTaskQueue{queue: notifyqueue.New[scanTask]()}
 }
 
-func (q *dispatcherTaskQueue) push(task scanTask) {
+func (q *scanTaskQueue) push(task scanTask) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.queue.Push(task)
 }
 
-func (q *dispatcherTaskQueue) pop() (scanTask, bool) {
+func (q *scanTaskQueue) pop() (scanTask, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.queue.TryPop()
 }
 
-func (q *dispatcherTaskQueue) ready() <-chan struct{} {
+func (q *scanTaskQueue) ready() <-chan struct{} {
 	return q.queue.Ready()
 }
 
-func (q *dispatcherTaskQueue) len() int {
+func (q *scanTaskQueue) len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.queue.Len()
@@ -122,11 +122,9 @@ type eventBroker struct {
 	// large transaction spill cleanup needs another attempt.
 	pendingLargeTxnCleanup sync.Map
 
-	// taskChan is used to send the scan tasks to the scan workers.
-	taskChan []chan scanTask
-	// prepareTaskQueue isolates EventStore notifications from scan queue backpressure.
-	// Dispatcher state coalesces repeated notifications into one queued task.
-	prepareTaskQueue []*dispatcherTaskQueue
+	// scanTaskQueues are unbounded so scheduling never blocks EventStore callbacks.
+	// Dispatcher state coalesces repeated requests into at most one queued task.
+	scanTaskQueues []*scanTaskQueue
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -166,7 +164,6 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
-	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
 	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
@@ -188,8 +185,7 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
-		taskChan:                make([]chan scanTask, scanWorkerCount),
-		prepareTaskQueue:        make([]*dispatcherTaskQueue, scanWorkerCount),
+		scanTaskQueues:          make([]*scanTaskQueue, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
@@ -214,14 +210,9 @@ func newEventBroker(
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
-		taskChan := make(chan scanTask, scanTaskQueueSize)
-		c.taskChan[i] = taskChan
-		c.prepareTaskQueue[i] = newDispatcherTaskQueue()
+		c.scanTaskQueues[i] = newScanTaskQueue()
 		g.Go(func() error {
 			return c.runScanWorker(ctx, i)
-		})
-		g.Go(func() error {
-			return c.runPrepareWorker(ctx, i)
 		})
 	}
 
@@ -384,18 +375,7 @@ func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent
 }
 
 func (c *eventBroker) runScanWorker(ctx context.Context, workerIndex int) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case task := <-c.taskChan[workerIndex]:
-			c.doScan(ctx, task)
-		}
-	}
-}
-
-func (c *eventBroker) runPrepareWorker(ctx context.Context, workerIndex int) error {
-	queue := c.prepareTaskQueue[workerIndex]
+	queue := c.scanTaskQueues[workerIndex]
 	for {
 		select {
 		case <-ctx.Done():
@@ -403,7 +383,7 @@ func (c *eventBroker) runPrepareWorker(ctx context.Context, workerIndex int) err
 		default:
 		}
 		if task, ok := queue.pop(); ok {
-			c.prepareScan(ctx, task)
+			c.doScan(ctx, task)
 			continue
 		}
 		select {
@@ -1098,11 +1078,11 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs ui
 		d.lastReceivedResolvedTsTime.Store(time.Now())
 		updateMetricEventStoreOutputResolved(d.info.GetMode())
 		d.onLatestCommitTs(commitTs)
-		c.requestPrepare(d)
+		c.prepareScanFromNotify(d)
 	}
 }
 
-func (c *eventBroker) requestPrepare(d *dispatcherStat) {
+func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 	span := d.info.GetTableSpan()
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		return
@@ -1115,15 +1095,15 @@ func (c *eventBroker) requestPrepare(d *dispatcherStat) {
 		return
 	}
 	if d.scanState == dispatcherScanIdle {
-		d.scanState = dispatcherScanPrepareQueued
+		d.scanState = dispatcherScanPreparing
 		d.scanMu.Unlock()
-		c.prepareTaskQueue[d.scanWorkerIndex].push(d)
+		c.prepareScan(d)
 		return
 	}
 	// A queued task reads the latest dispatcher state, so notifications received
-	// before it starts need no extra work item. Notifications received while a
-	// preparation is running, or while a low-latency scan is running, request one
-	// coalesced follow-up.
+	// before it starts need no extra work item. Notifications received while an
+	// inline preparation is running, or while a low-latency scan is running,
+	// request one coalesced continuation.
 	if d.scanState == dispatcherScanPreparing ||
 		(d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning) {
 		d.scanPending = true
@@ -1131,10 +1111,7 @@ func (c *eventBroker) requestPrepare(d *dispatcherStat) {
 	d.scanMu.Unlock()
 }
 
-func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
-	if !d.beginPrepare() {
-		return
-	}
+func (c *eventBroker) prepareScan(d *dispatcherStat) {
 	if d.isRemoved.Load() {
 		c.finishScan(d, false, false, 0)
 		return
@@ -1173,11 +1150,35 @@ func (c *eventBroker) prepareScan(ctx context.Context, d *dispatcherStat) {
 	d.schemaBlockedUntilTs = 0
 	d.scanMu.Unlock()
 
-	select {
-	case <-ctx.Done():
+	c.enqueueScan(d)
+}
+
+func (c *eventBroker) enqueueScan(d *dispatcherStat) {
+	c.scanTaskQueues[d.scanWorkerIndex].push(d)
+}
+
+func (c *eventBroker) requestScan(d *dispatcherStat) {
+	span := d.info.GetTableSpan()
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		return
-	case c.taskChan[d.scanWorkerIndex] <- d:
 	}
+
+	d.scanMu.Lock()
+	if d.isRemoved.Load() {
+		d.scanPending = false
+		d.scanMu.Unlock()
+		return
+	}
+	if d.scanState == dispatcherScanIdle {
+		d.scanState = dispatcherScanQueued
+		d.scanMu.Unlock()
+		c.enqueueScan(d)
+		return
+	}
+	if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
+		d.scanPending = true
+	}
+	d.scanMu.Unlock()
 }
 
 func (c *eventBroker) finishScan(
@@ -1209,11 +1210,11 @@ func (c *eventBroker) finishScan(
 		return
 	}
 	if interrupted || d.scanPending {
-		d.scanState = dispatcherScanPrepareQueued
+		d.scanState = dispatcherScanQueued
 		d.scanPending = false
 		d.schemaBlockedUntilTs = 0
 		d.scanMu.Unlock()
-		c.prepareTaskQueue[d.scanWorkerIndex].push(d)
+		c.enqueueScan(d)
 		return
 	}
 
@@ -1297,12 +1298,12 @@ func (c *eventBroker) scanSchemaBlockedDispatchers(lastSchemaResolvedTs map[comm
 				d.scanMu.Unlock()
 				return true
 			}
-			d.scanState = dispatcherScanPrepareQueued
+			d.scanState = dispatcherScanQueued
 			d.scanPending = false
 			d.schemaBlockedUntilTs = 0
 			d.scanMu.Unlock()
 			bucket.dispatchers.Delete(d)
-			c.prepareTaskQueue[d.scanWorkerIndex].push(d)
+			c.enqueueScan(d)
 			return true
 		})
 		return true
@@ -1344,7 +1345,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	changefeedID := info.GetChangefeedID()
 
 	status := c.getOrSetChangefeedStatus(info)
-	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
+	dispatcher := newDispatcherStat(info, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
@@ -1557,7 +1558,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 	status := c.getOrSetChangefeedStatus(dispatcherInfo)
 
-	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
+	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
 	for {
@@ -1599,7 +1600,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 
-	c.requestPrepare(newStat)
+	c.requestScan(newStat)
 
 	return nil
 }

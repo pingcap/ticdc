@@ -60,14 +60,14 @@ func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
 }
 
-func runNextPrepareTask(t *testing.T, broker *eventBroker, workerIndex int) {
+func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	t.Helper()
-	task, ok := broker.prepareTaskQueue[workerIndex].pop()
+	task, ok := broker.scanTaskQueues[workerIndex].pop()
 	require.True(t, ok)
-	broker.prepareScan(context.Background(), task)
+	return task
 }
 
-func TestPrepareRequestCoalescing(t *testing.T) {
+func TestScanRequestCoalescing(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
@@ -86,16 +86,16 @@ func TestPrepareRequestCoalescing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			broker.requestPrepare(disp)
+			broker.requestScan(disp)
 		}()
 	}
 	close(start)
 	wg.Wait()
 	require.True(t, disp.isScanBusy())
-	require.Equal(t, 1, broker.prepareTaskQueue[0].len())
-	require.Empty(t, broker.taskChan[0])
+	require.Equal(t, 1, broker.scanTaskQueues[0].len())
 	require.Empty(t, broker.messageCh[0])
-	runNextPrepareTask(t, broker, 0)
+	task := popScanTask(t, broker, 0)
+	broker.doScan(context.Background(), task)
 	require.False(t, disp.isScanBusy())
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
@@ -126,16 +126,14 @@ func TestNoScanTaskDoesNotCreateActiveScanLifecycle(t *testing.T) {
 	schemaStore.resolvedTs = 200
 	schemaStore.maxDDLCommitTs = 0
 
-	broker.requestPrepare(disp)
-	task, ok := broker.prepareTaskQueue[disp.scanWorkerIndex].pop()
-	require.True(t, ok)
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
 	ctx := &scanLifecycleTrackingContext{Context: context.Background()}
-	broker.prepareScan(ctx, task)
+	broker.doScan(ctx, task)
 
 	require.Zero(t, ctx.doneCalls.Load())
 	require.Equal(t, uint64(200), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
-	require.Empty(t, broker.taskChan[disp.scanWorkerIndex])
 }
 
 func TestGetOrSetChangefeedStatusInitializesFilter(t *testing.T) {
@@ -180,9 +178,8 @@ func TestOnNotify(t *testing.T) {
 	broker.onNotify(disp, 103, 101)
 	require.Equal(t, uint64(103), disp.receivedResolvedTs.Load())
 	require.True(t, disp.isScanBusy())
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
-	require.Len(t, broker.taskChan[disp.scanWorkerIndex], 1)
-	task := <-broker.taskChan[disp.scanWorkerIndex]
+	require.Equal(t, 1, broker.scanTaskQueues[disp.scanWorkerIndex].len())
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
 	require.Equal(t, task.id, disp.id)
 
 	status := broker.getOrSetChangefeedStatus(disInfo)
@@ -194,18 +191,18 @@ func TestOnNotify(t *testing.T) {
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
 	ss.maxDDLCommitTs = disp.sentResolvedTs.Load()
 	broker.onNotify(disp, 104, 101)
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
-	require.Empty(t, broker.taskChan[disp.scanWorkerIndex])
+	require.Zero(t, broker.scanTaskQueues[disp.scanWorkerIndex].len())
 	require.Equal(t, uint64(104), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
 }
 
-func TestNotifyPreparationCoalescesRunningNotification(t *testing.T) {
+func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
 	schemaStore.maxDDLCommitTs = 0
 
 	info := newMockDispatcherInfoForTest(t)
+	info.lowLatencyMode = true
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
@@ -216,14 +213,9 @@ func TestNotifyPreparationCoalescesRunningNotification(t *testing.T) {
 	messageCh <- nil
 	broker.messageCh[disp.messageWorkerIndex] = messageCh
 
-	broker.onNotify(disp, 200, 0)
-	require.Equal(t, 1, broker.prepareTaskQueue[disp.scanWorkerIndex].len())
-
-	task, ok := broker.prepareTaskQueue[disp.scanWorkerIndex].pop()
-	require.True(t, ok)
 	done := make(chan struct{})
 	go func() {
-		broker.prepareScan(context.Background(), task)
+		broker.onNotify(disp, 200, 0)
 		close(done)
 	}()
 
@@ -251,18 +243,79 @@ func TestNotifyPreparationCoalescesRunningNotification(t *testing.T) {
 	}, time.Second, time.Millisecond)
 
 	resolved := <-messageCh
-	require.Contains(t, []uint64{200, 201}, resolved.resolvedTsEvent.GetCommitTs())
-	require.Equal(t, 1, broker.prepareTaskQueue[disp.scanWorkerIndex].len())
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
-	if resolved.resolvedTsEvent.GetCommitTs() == 200 {
-		resolved = <-messageCh
-		require.Equal(t, uint64(201), resolved.resolvedTsEvent.GetCommitTs())
-	} else {
-		require.Empty(t, messageCh)
-	}
+	require.Equal(t, uint64(200), resolved.resolvedTsEvent.GetCommitTs())
+	require.Equal(t, 1, broker.scanTaskQueues[disp.scanWorkerIndex].len())
+
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
+	resolved = <-messageCh
+	require.Equal(t, uint64(201), resolved.resolvedTsEvent.GetCommitTs())
 	require.Equal(t, uint64(201), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
-	require.Empty(t, broker.taskChan[disp.scanWorkerIndex])
+	require.Zero(t, broker.scanTaskQueues[disp.scanWorkerIndex].len())
+}
+
+func TestQueuedScanReadsNotificationReceivedDuringPreparation(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	broker.close()
+
+	prepareStarted := make(chan struct{})
+	resumePrepare := make(chan struct{})
+	var prepareHookOnce sync.Once
+	schemaStore.getTableDDLEventStateHook = func() {
+		prepareHookOnce.Do(func() {
+			close(prepareStarted)
+			<-resumePrepare
+		})
+	}
+	var resumeOnce sync.Once
+	resumePreparation := func() {
+		resumeOnce.Do(func() { close(resumePrepare) })
+	}
+	t.Cleanup(resumePreparation)
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.startTs = 100
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.setHandshaked()
+	disp.eventStoreCommitTs.Store(150)
+
+	prepareDone := make(chan struct{})
+	go func() {
+		broker.onNotify(disp, 200, 150)
+		close(prepareDone)
+	}()
+
+	select {
+	case <-prepareStarted:
+	case <-time.After(time.Second):
+		t.Fatal("preparation did not read the scan frontier")
+	}
+
+	broker.onNotify(disp, 201, 150)
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanPreparing, disp.scanState)
+	require.True(t, disp.scanPending)
+	disp.scanMu.Unlock()
+
+	resumePreparation()
+	select {
+	case <-prepareDone:
+	case <-time.After(time.Second):
+		t.Fatal("preparation did not finish")
+	}
+
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanQueued, disp.scanState)
+	require.False(t, disp.scanPending)
+	disp.scanMu.Unlock()
+
+	queuedTask := popScanTask(t, broker, disp.scanWorkerIndex)
+	requestResult := broker.getScanTaskRequestResult(queuedTask)
+	require.True(t, requestResult.needScan)
+	require.Equal(t, uint64(201), requestResult.request.Range.CommitTsEnd)
 }
 
 func TestNotifyFastPathPreservesSyncPointOrder(t *testing.T) {
@@ -286,7 +339,6 @@ func TestNotifyFastPathPreservesSyncPointOrder(t *testing.T) {
 	disp.setHandshaked()
 
 	broker.onNotify(disp, resolvedTs, 0)
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
 
 	syncPoint := <-broker.messageCh[disp.messageWorkerIndex]
 	require.Equal(t, event.TypeSyncPointEvent, syncPoint.msgType)
@@ -296,7 +348,7 @@ func TestNotifyFastPathPreservesSyncPointOrder(t *testing.T) {
 	require.Equal(t, event.TypeResolvedEvent, resolved.msgType)
 	require.Equal(t, resolvedTs, resolved.resolvedTsEvent.GetCommitTs())
 	require.Equal(t, resolvedTs, disp.sentResolvedTs.Load())
-	require.Empty(t, broker.taskChan[disp.scanWorkerIndex])
+	require.Zero(t, broker.scanTaskQueues[disp.scanWorkerIndex].len())
 	require.False(t, disp.isScanBusy())
 }
 
@@ -311,14 +363,14 @@ func TestLowLatencyScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 	status := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, status)
 
-	disp.scanState = dispatcherScanQueued
-	task := disp
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, 0)
 	require.True(t, task.beginScan())
 
 	broker.onNotify(disp, 200, 0)
 	broker.onNotify(disp, 201, 0)
 	require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
-	require.Empty(t, broker.taskChan[0])
+	require.Zero(t, broker.scanTaskQueues[0].len())
 	disp.scanMu.Lock()
 	require.Equal(t, dispatcherScanRunning, disp.scanState)
 	require.True(t, disp.scanPending)
@@ -326,11 +378,9 @@ func TestLowLatencyScanRequestWhileRunningSchedulesContinuation(t *testing.T) {
 
 	broker.finishScan(disp, false, false, 0)
 	require.True(t, disp.isScanBusy())
-	require.Equal(t, 1, broker.prepareTaskQueue[0].len())
-	runNextPrepareTask(t, broker, 0)
-	require.Len(t, broker.taskChan[0], 1)
+	require.Equal(t, 1, broker.scanTaskQueues[0].len())
 
-	task = <-broker.taskChan[0]
+	task = popScanTask(t, broker, 0)
 	require.True(t, task.beginScan())
 	broker.finishScan(disp, false, false, 0)
 	require.False(t, disp.isScanBusy())
@@ -345,29 +395,27 @@ func TestThroughputModeDoesNotContinueScanRequestWhileRunning(t *testing.T) {
 	status := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, status)
 
-	disp.scanState = dispatcherScanQueued
-	task := disp
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, 0)
 	require.True(t, task.beginScan())
 
 	broker.onNotify(disp, 200, 0)
 	require.Equal(t, uint64(200), disp.receivedResolvedTs.Load())
-	require.Empty(t, broker.taskChan[0])
+	require.Zero(t, broker.scanTaskQueues[0].len())
 	disp.scanMu.Lock()
 	require.Equal(t, dispatcherScanRunning, disp.scanState)
 	disp.scanMu.Unlock()
 
 	broker.finishScan(disp, false, false, 0)
 	require.False(t, disp.isScanBusy())
-	require.Empty(t, broker.taskChan[0])
+	require.Zero(t, broker.scanTaskQueues[0].len())
 }
 
-func TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify(t *testing.T) {
+func TestLowLatencyScanContinuationIsQueued(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
 	schemaStore.maxDDLCommitTs = 0
 
-	queue := make(chan scanTask, 1)
-	broker.taskChan[0] = queue
 	info := newMockDispatcherInfoForTest(t)
 	info.lowLatencyMode = true
 	info.epoch = 1
@@ -375,28 +423,25 @@ func TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify(t *testing.T) {
 	status := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, status)
 
-	disp.scanState = dispatcherScanQueued
-	task := disp
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, 0)
 	require.True(t, task.beginScan())
 	broker.onNotify(disp, 200, 0)
-	queue <- nil
 
 	broker.finishScan(disp, false, false, 0)
 	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanPrepareQueued, disp.scanState)
+	require.Equal(t, dispatcherScanQueued, disp.scanState)
 	disp.scanMu.Unlock()
-	require.Len(t, queue, 1)
-	require.Equal(t, 1, broker.prepareTaskQueue[0].len())
+	require.Equal(t, 1, broker.scanTaskQueues[0].len())
 	require.Equal(t, uint64(200), disp.receivedResolvedTs.Load())
 
-	<-queue
-	runNextPrepareTask(t, broker, 0)
 	broker.onNotify(disp, 201, 0)
-	runNextPrepareTask(t, broker, 0)
+	task = popScanTask(t, broker, 0)
+	broker.doScan(context.Background(), task)
 	require.Equal(t, uint64(201), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
-	require.Empty(t, queue)
-	require.Len(t, broker.messageCh[disp.messageWorkerIndex], 3)
+	require.Zero(t, broker.scanTaskQueues[0].len())
+	require.Len(t, broker.messageCh[disp.messageWorkerIndex], 2)
 }
 
 func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
@@ -416,7 +461,7 @@ func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
 	require.Equal(t, dispatcherScanSchemaBlocked, disp.scanState)
 	require.Equal(t, uint64(100), disp.schemaBlockedUntilTs)
 	disp.scanMu.Unlock()
-	require.Empty(t, broker.taskChan[0])
+	require.Zero(t, broker.scanTaskQueues[0].len())
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   info.GetTableSpan().KeyspaceID,
@@ -428,7 +473,7 @@ func TestRunningNotifyParksAtSchemaBlock(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestNotifyDoesNotBlockOnFullScanQueue(t *testing.T) {
+func TestNotifyEnqueuesWithoutBlockingOrDuplicatingTask(t *testing.T) {
 	for _, testCase := range []struct {
 		name           string
 		lowLatencyMode bool
@@ -439,10 +484,6 @@ func TestNotifyDoesNotBlockOnFullScanQueue(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			broker, _, _, _ := newEventBrokerForTest()
 			broker.close()
-
-			queue := make(chan scanTask, 1)
-			broker.taskChan[0] = queue
-			queue <- nil
 
 			info := newMockDispatcherInfoForTest(t)
 			info.lowLatencyMode = testCase.lowLatencyMode
@@ -467,24 +508,27 @@ func TestNotifyDoesNotBlockOnFullScanQueue(t *testing.T) {
 			}, time.Second, time.Millisecond)
 
 			broker.onNotify(disp, 201, 0)
-			require.Len(t, queue, 1)
-			task, ok := broker.prepareTaskQueue[disp.scanWorkerIndex].pop()
-			require.True(t, ok)
+			require.Equal(t, 1, broker.scanTaskQueues[disp.scanWorkerIndex].len())
+			task := popScanTask(t, broker, disp.scanWorkerIndex)
 			require.Same(t, disp, task)
-			_, ok = broker.prepareTaskQueue[disp.scanWorkerIndex].pop()
+			_, ok := broker.scanTaskQueues[disp.scanWorkerIndex].pop()
 			require.False(t, ok)
 			require.Equal(t, uint64(201), disp.receivedResolvedTs.Load())
-			disp.scanMu.Lock()
-			require.Equal(t, dispatcherScanPrepareQueued, disp.scanState)
-			disp.scanMu.Unlock()
-			require.Len(t, queue, 1)
+			require.True(t, task.beginScan())
+			broker.finishScan(task, false, false, 0)
+			require.False(t, disp.isScanBusy())
+			require.Zero(t, broker.scanTaskQueues[disp.scanWorkerIndex].len())
 		})
 	}
 }
 
-func TestPrepareWorkerSchedulesNotifyScan(t *testing.T) {
+func TestScanWorkerDrainsQueuedNotify(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
+
+	removed := &dispatcherStat{}
+	removed.markRemoved()
+	broker.scanTaskQueues[0].push(removed)
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
@@ -496,57 +540,58 @@ func TestPrepareWorkerSchedulesNotifyScan(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_ = broker.runScanWorker(ctx, 0)
+	}()
+	require.Eventually(t, func() bool { return !disp.isScanBusy() }, time.Second, time.Millisecond)
+	cancel()
 	done := make(chan struct{})
 	go func() {
-		_ = broker.runPrepareWorker(ctx, 0)
+		workers.Wait()
 		close(done)
 	}()
-	require.Eventually(t, func() bool { return len(broker.taskChan[0]) == 1 }, time.Second, time.Millisecond)
-	task := <-broker.taskChan[0]
-	require.Same(t, disp, task)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("scan worker did not stop")
-	}
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
 }
 
-func TestInterruptedScanQueueFullRecoversOnNextNotify(t *testing.T) {
+func TestInterruptedScanIsQueuedAgain(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 	broker.close()
 	schemaStore.maxDDLCommitTs = 0
-
-	queue := make(chan scanTask, 1)
-	broker.taskChan[0] = queue
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, status)
-	disp.scanState = dispatcherScanQueued
-	task := disp
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, 0)
 	require.True(t, task.beginScan())
 	broker.onNotify(disp, 200, 0)
-	queue <- nil
 	broker.finishScan(disp, true, false, 0)
 
 	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanPrepareQueued, disp.scanState)
+	require.Equal(t, dispatcherScanQueued, disp.scanState)
 	disp.scanMu.Unlock()
-	require.Len(t, queue, 1)
-	require.Equal(t, 1, broker.prepareTaskQueue[0].len())
+	require.Equal(t, 1, broker.scanTaskQueues[0].len())
 	require.Equal(t, uint64(200), disp.receivedResolvedTs.Load())
 
-	<-queue
-	runNextPrepareTask(t, broker, 0)
 	broker.onNotify(disp, 201, 0)
-	runNextPrepareTask(t, broker, 0)
+	task = popScanTask(t, broker, 0)
+	broker.doScan(context.Background(), task)
 	require.Equal(t, uint64(201), disp.sentResolvedTs.Load())
 	require.False(t, disp.isScanBusy())
-	require.Empty(t, queue)
-	require.Len(t, broker.messageCh[disp.messageWorkerIndex], 3)
+	require.Zero(t, broker.scanTaskQueues[0].len())
+	require.Len(t, broker.messageCh[disp.messageWorkerIndex], 2)
 }
 
 func TestLowLatencySchemaBlockedRetriesWithoutNotify(t *testing.T) {
@@ -558,12 +603,11 @@ func TestLowLatencySchemaBlockedRetriesWithoutNotify(t *testing.T) {
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
-	disp := newDispatcherStat(info, uint64(len(broker.taskChan)), 1, nil, status)
+	disp := newDispatcherStat(info, uint64(len(broker.scanTaskQueues)), 1, nil, status)
 	disp.setHandshaked()
 	schemaStore.resolvedTs = 100
 	schemaStore.maxDDLCommitTs = 0
 	broker.onNotify(disp, 300, 0)
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   info.GetTableSpan().KeyspaceID,
@@ -583,13 +627,14 @@ func TestLowLatencySchemaBlockedRetriesWithoutNotify(t *testing.T) {
 	schemaStore.resolvedTs = 200
 	broker.scanSchemaBlockedDispatchers(lastSchemaResolvedTs)
 	disp.scanMu.Lock()
-	require.Equal(t, dispatcherScanPrepareQueued, disp.scanState)
+	require.Equal(t, dispatcherScanQueued, disp.scanState)
 	disp.scanMu.Unlock()
 	_, ok = bucket.dispatchers.Load(disp)
 	require.False(t, ok)
-	require.Equal(t, 1, broker.prepareTaskQueue[disp.scanWorkerIndex].len())
+	require.Equal(t, 1, broker.scanTaskQueues[disp.scanWorkerIndex].len())
 
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
 	require.Equal(t, uint64(200), disp.sentResolvedTs.Load())
 	disp.scanMu.Lock()
 	require.Equal(t, dispatcherScanSchemaBlocked, disp.scanState)
@@ -598,7 +643,8 @@ func TestLowLatencySchemaBlockedRetriesWithoutNotify(t *testing.T) {
 
 	schemaStore.resolvedTs = 300
 	broker.scanSchemaBlockedDispatchers(lastSchemaResolvedTs)
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
+	task = popScanTask(t, broker, disp.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
 	require.Equal(t, uint64(300), disp.sentResolvedTs.Load())
 	disp.scanMu.Lock()
 	require.Equal(t, dispatcherScanIdle, disp.scanState)
@@ -621,7 +667,7 @@ func TestThroughputModeDoesNotParkSchemaBlockedDispatcher(t *testing.T) {
 	info.epoch = 1
 	info.startTs = 100
 	status := broker.getOrSetChangefeedStatus(info)
-	disp := newDispatcherStat(info, uint64(len(broker.taskChan)), 1, nil, status)
+	disp := newDispatcherStat(info, uint64(len(broker.scanTaskQueues)), 1, nil, status)
 	disp.setHandshaked()
 	disp.receivedResolvedTs.Store(300)
 	schemaStore.resolvedTs = 100
@@ -630,8 +676,9 @@ func TestThroughputModeDoesNotParkSchemaBlockedDispatcher(t *testing.T) {
 	require.False(t, requestResult.schemaBlocked)
 	require.Zero(t, requestResult.schemaBlockedUntilTs)
 
-	disp.scanState = dispatcherScanQueued
-	broker.doScan(context.Background(), disp)
+	broker.requestScan(disp)
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
 	disp.scanMu.Lock()
 	require.Equal(t, dispatcherScanIdle, disp.scanState)
 	disp.scanMu.Unlock()
@@ -660,8 +707,9 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	schemaStore.resolvedTs = 100
 	schemaStore.maxDDLCommitTs = 0
 
-	oldStat.scanState = dispatcherScanQueued
-	broker.doScan(context.Background(), oldStat)
+	broker.requestScan(oldStat)
+	task := popScanTask(t, broker, oldStat.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   info.GetTableSpan().KeyspaceID,
 		Name: info.GetChangefeedID().Keyspace(),
@@ -679,7 +727,6 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	newStat := dispPtr.Load()
 	require.NotSame(t, oldStat, newStat)
 	require.True(t, oldStat.isRemoved.Load())
-	require.False(t, oldStat.isScanBusy())
 	_, ok = bucket.dispatchers.Load(oldStat)
 	require.False(t, ok)
 	require.True(t, newStat.isScanBusy())
@@ -1050,8 +1097,7 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 
 	broker.onNotify(disp, 102, 101)
 	require.True(t, disp.isScanBusy())
-	runNextPrepareTask(t, broker, disp.scanWorkerIndex)
-	task := <-broker.taskChan[disp.scanWorkerIndex]
+	task := popScanTask(t, broker, disp.scanWorkerIndex)
 
 	// Simulate a race where the changefeed status is deleted while a scan task is still running.
 	broker.changefeedMap.Delete(disInfo.GetChangefeedID())
@@ -1431,9 +1477,9 @@ func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {
 	newStat := dispPtr.Load()
 	require.NotSame(t, oldStat, newStat)
 	require.True(t, newStat.isScanBusy())
-	runNextPrepareTask(t, broker, newStat.scanWorkerIndex)
+	task := popScanTask(t, broker, newStat.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
 	require.Equal(t, uint64(1), newStat.seq.Load())
-	require.Empty(t, broker.taskChan[newStat.scanWorkerIndex])
 
 	handshake := <-broker.messageCh[newStat.messageWorkerIndex]
 	require.Equal(t, event.TypeHandshakeEvent, handshake.msgType)
@@ -1444,7 +1490,7 @@ func TestResetDispatcherSendsHandshakeWithoutNextNotify(t *testing.T) {
 	require.Equal(t, uint64(500), resolved.resolvedTsEvent.GetCommitTs())
 }
 
-func TestResetDispatcherUsesPreparationWhenScanQueueIsFull(t *testing.T) {
+func TestResetDispatcherIsQueuedWithoutNextNotify(t *testing.T) {
 	broker, _, schemaStore, _ := newEventBrokerForTest()
 
 	dispInfo := newMockDispatcherInfoForTest(t)
@@ -1459,10 +1505,6 @@ func TestResetDispatcherUsesPreparationWhenScanQueueIsFull(t *testing.T) {
 	schemaStore.resolvedTs = 501
 	schemaStore.maxDDLCommitTs = 0
 
-	queue := make(chan scanTask, 1)
-	broker.taskChan[oldStat.scanWorkerIndex] = queue
-	queue <- nil
-
 	resetInfo := newMockDispatcherInfo(t, dispInfo.GetStartTs(), dispInfo.GetID(), dispInfo.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
 	resetInfo.epoch = oldStat.epoch + 1
 	require.NoError(t, broker.resetDispatcher(resetInfo))
@@ -1470,17 +1512,16 @@ func TestResetDispatcherUsesPreparationWhenScanQueueIsFull(t *testing.T) {
 	newStat := dispPtr.Load()
 	require.NotSame(t, oldStat, newStat)
 	newStat.scanMu.Lock()
-	require.Equal(t, dispatcherScanPrepareQueued, newStat.scanState)
+	require.Equal(t, dispatcherScanQueued, newStat.scanState)
 	newStat.scanMu.Unlock()
-	require.Len(t, queue, 1)
-	require.Equal(t, 1, broker.prepareTaskQueue[newStat.scanWorkerIndex].len())
+	require.Equal(t, 1, broker.scanTaskQueues[newStat.scanWorkerIndex].len())
 	require.Equal(t, uint64(0), newStat.seq.Load())
 
-	broker.onNotify(newStat, 501, 0)
-	runNextPrepareTask(t, broker, newStat.scanWorkerIndex)
-	require.Equal(t, uint64(501), newStat.sentResolvedTs.Load())
+	task := popScanTask(t, broker, newStat.scanWorkerIndex)
+	broker.doScan(context.Background(), task)
+	require.Equal(t, uint64(500), newStat.sentResolvedTs.Load())
 	require.False(t, newStat.isScanBusy())
-	require.Len(t, queue, 1)
+	require.Zero(t, broker.scanTaskQueues[newStat.scanWorkerIndex].len())
 
 	handshake := <-broker.messageCh[newStat.messageWorkerIndex]
 	require.Equal(t, event.TypeHandshakeEvent, handshake.msgType)
@@ -1488,7 +1529,7 @@ func TestResetDispatcherUsesPreparationWhenScanQueueIsFull(t *testing.T) {
 
 	resolved := <-broker.messageCh[newStat.messageWorkerIndex]
 	require.Equal(t, event.TypeResolvedEvent, resolved.msgType)
-	require.Equal(t, uint64(501), resolved.resolvedTsEvent.GetCommitTs())
+	require.Equal(t, uint64(500), resolved.resolvedTsEvent.GetCommitTs())
 	require.Empty(t, broker.messageCh[newStat.messageWorkerIndex])
 }
 
