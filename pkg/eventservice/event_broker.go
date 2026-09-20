@@ -82,8 +82,8 @@ type eventBroker struct {
 
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
-	// Count registrations before publishing them, and remove them from the count
-	// only after deleting the registry entry. Includes table trigger dispatchers.
+	// Count registrations before activating or publishing them, and decrement
+	// after registration failure or removal cleanup. Includes table trigger dispatchers.
 	dispatcherCount atomic.Int64
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
@@ -1332,6 +1332,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 
 	start := time.Now()
+	// RegisterDispatcher can activate the notifier before schema registration finishes.
+	c.dispatcherCount.Inc()
 	success := c.eventStore.RegisterDispatcher(
 		changefeedID,
 		id,
@@ -1351,6 +1353,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	)
 
 	if !success {
+		c.dispatcherCount.Dec()
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("changefeedID", changefeedID),
@@ -1380,13 +1383,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		// Mark removed to avoid processing notifications before unregister completes.
 		dispatcher.markRemoved()
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
+		c.dispatcherCount.Dec()
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.removeChangefeedStatus(status)
 		}
 		return err
 	}
-	c.dispatcherCount.Inc()
 	if _, loaded := c.dispatchers.Swap(id, dispatcherPtr); loaded {
 		c.dispatcherCount.Dec()
 	}

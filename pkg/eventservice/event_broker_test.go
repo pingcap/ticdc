@@ -645,20 +645,70 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	require.True(t, newStat.isScanBusy())
 }
 
-func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
-	broker, es, ss, _ := newEventBrokerForTest()
-	defer broker.close()
+func TestAddDispatcherCountDuringRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		eventStoreSuccess bool
+		schemaStoreError  error
+	}{
+		{name: "success", eventStoreSuccess: true},
+		{name: "event store failure"},
+		{name: "schema store failure", eventStoreSuccess: true, schemaStoreError: errors.New("register schema store failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			broker, es, ss, _ := newEventBrokerForTest()
+			broker.close()
+			service := &eventService{brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}}
+			info := newMockDispatcherInfoForTest(t)
 
-	ss.registerTableError = errors.New("register schema store failed")
+			countBeforeActivation := make(chan int, 1)
+			es.registerDispatcherHook = func() bool {
+				countBeforeActivation <- service.GetDispatcherCount()
+				return tc.eventStoreSuccess
+			}
+			schemaRegistrationStarted := make(chan struct{})
+			resumeRegistration := make(chan struct{})
+			ss.registerTableError = tc.schemaStoreError
+			ss.registerTableHook = func() {
+				close(schemaRegistrationStarted)
+				<-resumeRegistration
+			}
+			releaseRegistration := sync.OnceFunc(func() { close(resumeRegistration) })
+			var wg sync.WaitGroup
+			t.Cleanup(func() { releaseRegistration(); wg.Wait() })
+			result := make(chan error, 1)
+			wg.Go(func() { result <- broker.addDispatcher(info) })
 
-	info := newMockDispatcherInfoForTest(t)
-	err := broker.addDispatcher(info)
-	require.Error(t, err)
-	require.Zero(t, broker.dispatcherCount.Load())
+			// RegisterDispatcher may activate its notifier before it returns.
+			require.Equal(t, 1, <-countBeforeActivation)
+			if tc.eventStoreSuccess {
+				<-schemaRegistrationStarted
+				_, ok := es.dispatcherMap.Load(info.GetID())
+				require.True(t, ok)
+				// The heartbeat must count the active dispatcher while schema
+				// registration is blocked, even though it is not published yet.
+				require.Nil(t, broker.getDispatcher(info.GetID()))
+				require.Equal(t, 1, service.GetDispatcherCount())
+				require.NoError(t, es.AppendEvents(info.GetID(), info.GetStartTs()+1))
+				require.Equal(t, 1, service.GetDispatcherCount())
+			}
+			releaseRegistration()
+			require.ErrorIs(t, <-result, tc.schemaStoreError)
 
-	_, ok := es.spansMap.Load(info.GetTableSpan())
-	require.False(t, ok)
-	require.Equal(t, uint64(1), es.unregisterCount.Load())
+			if tc.eventStoreSuccess && tc.schemaStoreError == nil {
+				require.Equal(t, 1, service.GetDispatcherCount())
+				broker.removeDispatcher(info)
+			}
+			require.Zero(t, service.GetDispatcherCount())
+			_, ok := es.spansMap.Load(info.GetTableSpan())
+			require.False(t, ok)
+			if tc.eventStoreSuccess {
+				require.Equal(t, uint64(1), es.unregisterCount.Load())
+			} else {
+				require.Zero(t, es.unregisterCount.Load())
+			}
+		})
+	}
 }
 
 func TestDoScanReleasesChangefeedQuotaOnDispatcherQuotaFailure(t *testing.T) {

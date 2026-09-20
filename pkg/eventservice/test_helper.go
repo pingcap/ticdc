@@ -39,6 +39,7 @@ type mockSchemaStore struct {
 	maxDDLCommitTs uint64
 
 	registerTableError error
+	registerTableHook  func()
 	getTableInfoError  error
 }
 
@@ -127,6 +128,9 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
+	if m.registerTableHook != nil {
+		m.registerTableHook()
+	}
 	return m.registerTableError
 }
 

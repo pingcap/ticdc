@@ -260,6 +260,7 @@ type mockEventStore struct {
 	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
 	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
 	unregisterCount          atomic.Uint64
+	registerDispatcherHook   func() bool
 }
 
 func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
@@ -415,6 +416,9 @@ func (m *mockEventStore) RegisterDispatcher(
 	_ bool,
 	_ bool,
 ) bool {
+	if m.registerDispatcherHook != nil && !m.registerDispatcherHook() {
+		return false
+	}
 	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTS),
 		zap.Any("span", common.FormatTableSpan(span)))
