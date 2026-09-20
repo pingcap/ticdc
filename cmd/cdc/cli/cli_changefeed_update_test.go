@@ -180,6 +180,7 @@ func TestSameClusterUpdateConfigs(t *testing.T) {
 	confDir := "../../../tests/integration_tests/same_upstream_downstream/conf"
 	for _, tc := range []struct{ name, want string }{
 		{"same_schema", "requires database isolation"},
+		{"case_sensitive", "requires database isolation"},
 		{"source_schema_chain", "requires database isolation"},
 		{"all_schemas", "requires database isolation"},
 		{"schema_ambiguity", "different target-schema expressions"},

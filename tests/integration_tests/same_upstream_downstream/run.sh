@@ -128,7 +128,13 @@ function run() {
 			echo "Expected create to reject $unsafe_case, got: $result"
 			exit 1
 		fi
-		if result=$(cdc_cli_changefeed update -c "$allow_same_cluster_id" \
+		# Each update case starts from the same valid config on its own changefeed.
+		update_case_id="update-reject-${unsafe_case//_/-}"
+		cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" \
+			--config="$CUR/conf/allow_same_cluster.toml" -c "$update_case_id"
+		cdc_cli_changefeed pause -c "$update_case_id"
+		ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$update_case_id" "stopped" "null" ""
+		if result=$(cdc_cli_changefeed update -c "$update_case_id" \
 			--config="$unsafe_config" --no-confirm 2>&1); then
 			echo "Unexpected update success for $unsafe_case: $result"
 			exit 1
@@ -137,13 +143,11 @@ function run() {
 			echo "Expected update to reject $unsafe_case, got: $result"
 			exit 1
 		fi
-		# Restore the valid configuration before the next update or resume.
-		cdc_cli_changefeed update -c "$allow_same_cluster_id" \
-			--config="$CUR/conf/allow_same_cluster.toml" --no-confirm
+		cdc_cli_changefeed remove -c "$update_case_id"
 	done
 	wait_for_rows 1 "allow_same_cluster_src_copy.t2"
 	ensure 30 check_changefeed_state "$UP_PD_ENDPOINT" "$allow_same_cluster_id" "stopped" "null" ""
-	# Resume with the restored valid configuration.
+	# Resume the original changefeed, whose configuration was not updated by the rejection cases.
 	cdc_cli_changefeed resume -c "$allow_same_cluster_id"
 	run_sql "insert into $src_db.t1 values (3, 'c');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	wait_for_rows 3 "$dst_db.$dst_table"
