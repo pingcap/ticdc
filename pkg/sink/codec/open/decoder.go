@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -42,7 +43,14 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+type cachedTable struct {
+	columns    map[string]column
+	info       *commonType.TableInfo
+	projection string
+}
+
 type decoder struct {
+	tables     map[[2]string]*cachedTable
 	keyBytes   []byte
 	valueBytes []byte
 
@@ -282,12 +290,6 @@ func buildColumns(
 		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
-		// Snapshot query returns enum/set as their string representations, while open protocol uses
-		// integer/bitset values for these types. Downgrade enum/set to varchar to keep the
-		// assembled handle-key-only events decodable.
-		if strings.HasPrefix(dataType, "enum") || strings.HasPrefix(dataType, "set") {
-			dataType = "varchar"
-		}
 		if common.IsUnsignedMySQLType(dataType) {
 			flag |= unsignedFlag
 		}
@@ -303,6 +305,33 @@ func buildColumns(
 	return columns
 }
 
+// snapshotColumns uses protocol metadata so snapshot rows have the same chunk
+// layout as ordinary messages. Cached columns never retain row values.
+func (b *decoder) snapshotColumns(ctx context.Context, ts uint64, schema, table string, conditions map[string]interface{}, columns map[string]column) map[string]column {
+	cached := b.tables[[2]string{schema, table}]
+	var holder *common.ColumnsHolder
+	if cached == nil {
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
+		columns = buildColumns(holder, columns)
+		b.queryTableInfo(&messageKey{Schema: schema, Table: table}, &messageRow{Update: columns})
+		cached = b.tables[[2]string{schema, table}]
+	}
+	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
+	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
+		return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
+	}) {
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions, cached.projection)
+	}
+	result := maps.Clone(cached.columns)
+	for i, typ := range holder.Types {
+		name := typ.Name()
+		col := result[name]
+		col.Value = holder.Values[i]
+		result[name] = col
+	}
+	return result
+}
+
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
 	var (
 		schema   = key.Schema
@@ -314,22 +343,18 @@ func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messag
 		for name, col := range row.Delete {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		row.Delete = buildColumns(holder, row.Delete)
+		row.Delete = b.snapshotColumns(ctx, commitTs-1, schema, table, conditions, row.Delete)
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		row.PreColumns = buildColumns(holder, row.PreColumns)
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		row.Update = buildColumns(holder, row.Update)
+		row.PreColumns = b.snapshotColumns(ctx, commitTs-1, schema, table, conditions, row.PreColumns)
+		row.Update = b.snapshotColumns(ctx, commitTs, schema, table, conditions, row.Update)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		row.Update = buildColumns(holder, row.Update)
+		row.Update = b.snapshotColumns(ctx, commitTs, schema, table, conditions, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
@@ -375,8 +400,38 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	tableInfo := b.newTableInfo(key, value)
-	return tableInfo
+	columns := value.Update
+	if columns == nil {
+		columns = value.Delete
+	}
+	tableKey := [2]string{key.Schema, key.Table}
+	if cached := b.tables[tableKey]; cached != nil && maps.EqualFunc(cached.columns, columns, func(a, b column) bool {
+		return a.Type == b.Type && a.Flag == b.Flag
+	}) {
+		id := cached.info.TableName.TableID
+		key.Partition = &id
+		return cached.info
+	}
+	info := b.newTableInfo(key, value)
+	metadata := make(map[string]column, len(columns))
+	for name, col := range columns {
+		col.Value = nil
+		col.WhereHandle = nil
+		metadata[name] = col
+	}
+	names := make([]string, 0, len(columns))
+	for _, col := range info.GetColumns() {
+		name := commonType.QuoteName(col.Name.O)
+		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
+			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+		}
+		names = append(names, name)
+	}
+	if b.tables == nil {
+		b.tables = make(map[[2]string]*cachedTable)
+	}
+	b.tables[tableKey] = &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")}
+	return info
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -738,39 +793,28 @@ func formatColumn(c column, ft types.FieldType) column {
 			log.Panic("invalid column value for the bit type", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value = tiTypes.NewBinaryLiteralFromUint(intVal, -1)
-	case mysql.TypeEnum:
-		var enumValue int64
+	case mysql.TypeEnum, mysql.TypeSet:
+		var value uint64
 		switch v := c.Value.(type) {
 		case json.Number:
-			enumValue, err = v.Int64()
+			value, err = strconv.ParseUint(string(v), 10, 64)
 		case []uint8:
-			enumValue, err = strconv.ParseInt(string(v), 10, 64)
+			value, err = strconv.ParseUint(string(v), 10, 64)
+		case uint64:
+			value = v
+		case int64:
+			value = uint64(v)
 		default:
-			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
+			log.Panic("invalid column value for enum/set", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
+			log.Panic("invalid column value for enum/set", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
-		// only enum's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Enum{
-			Value: uint64(enumValue),
-		}
-	case mysql.TypeSet:
-		var setValue int64
-		switch v := c.Value.(type) {
-		case json.Number:
-			setValue, err = v.Int64()
-		case []uint8:
-			setValue, err = strconv.ParseInt(string(v), 10, 64)
-		default:
-			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
-		}
-		// only set's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Set{
-			Value: uint64(setValue),
+		// The MySQL sink accesses only the numeric value; Open carries no elements.
+		if c.Type == mysql.TypeEnum {
+			c.Value = tiTypes.Enum{Value: value}
+		} else {
+			c.Value = tiTypes.Set{Value: value}
 		}
 	case mysql.TypeJSON:
 		var data string

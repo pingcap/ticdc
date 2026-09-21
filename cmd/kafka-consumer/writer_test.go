@@ -61,6 +61,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
 		},
@@ -100,6 +101,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -153,6 +155,7 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -197,6 +200,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -290,6 +294,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		watermark:   0,
 	}
 	w := &writer{
+		spillStore:  util.NewSpillStore(),
 		progresses:  []*partitionProgress{p},
 		mysqlSink:   s,
 		eventRouter: eventRouter,
@@ -359,6 +364,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	require.NoError(t, unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other")))
 
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{
 				partition: 0,
@@ -414,6 +420,7 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
 	}
 	w := &writer{
+		spillStore:      util.NewSpillStore(),
 		progresses:      []*partitionProgress{progress},
 		mysqlSink:       s,
 		protocol:        config.ProtocolOpen,
@@ -442,6 +449,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		watermark:   20,
 	}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			progress,
 			{partition: 1, watermark: 5},
@@ -466,6 +474,7 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	require.NoError(t, err)
 
 	w := &writer{
+		spillStore:             util.NewSpillStore(),
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
@@ -525,6 +534,7 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			require.NoError(t, err)
 
 			w := &writer{
+				spillStore:             util.NewSpillStore(),
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,

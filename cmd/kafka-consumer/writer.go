@@ -149,17 +149,6 @@ func newWriter(ctx context.Context, o *option) *writer {
 	return w
 }
 
-func (w *writer) run(ctx context.Context) error {
-	return w.mysqlSink.Run(ctx)
-}
-
-func (w *writer) getSpillStore() *util.SpillStore {
-	if w.spillStore == nil {
-		w.spillStore = util.NewSpillStore()
-	}
-	return w.spillStore
-}
-
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
 	for _, progress := range w.progresses {
@@ -167,7 +156,7 @@ func (w *writer) cleanupEventsGroups() error {
 			_ = group.Cleanup()
 		}
 	}
-	if err := w.getSpillStore().Cleanup(); err != nil {
+	if err := w.spillStore.Cleanup(); err != nil {
 		cleanupErr = err
 		log.Warn("cleanup spill store failed", zap.Error(err))
 	}
@@ -205,7 +194,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 func (w *writer) flushEventsFromGroups(
 	ctx context.Context, groups []*util.EventsGroup, resolveTs uint64, fields ...zap.Field,
 ) (int, error) {
-	limit := w.getSpillStore().ResolveLimit()
+	limit := w.spillStore.ResolveLimit()
 	batchEvents := make([]*event.DMLEvent, 0, limit.MaxMessages)
 	batchMessages := 0
 	var batchBytes int64
@@ -230,7 +219,6 @@ func (w *writer) flushEventsFromGroups(
 
 	for {
 		hasMoreGroups := false
-		preparedAny := false
 		for _, group := range groups {
 			if batchMessages >= limit.MaxMessages || batchBytes >= limit.MaxBytes {
 				if err := flush(); err != nil {
@@ -247,7 +235,6 @@ func (w *writer) flushEventsFromGroups(
 			}
 			hasMoreGroups = hasMoreGroups || hasMore
 			if batch != nil {
-				preparedAny = true
 				prepared = append(prepared, batch)
 				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
 				batchMessages += len(batch.Messages)
@@ -257,7 +244,7 @@ func (w *writer) flushEventsFromGroups(
 		if err := flush(); err != nil {
 			return 0, err
 		}
-		if !hasMoreGroups || !preparedAny {
+		if !hasMoreGroups {
 			break
 		}
 	}
@@ -353,9 +340,7 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 func (w *writer) globalWatermark() uint64 {
 	watermark := uint64(math.MaxUint64)
 	for _, progress := range w.progresses {
-		if progress.watermark < watermark {
-			watermark = progress.watermark
-		}
+		watermark = min(watermark, progress.watermark)
 	}
 	return watermark
 }
@@ -374,7 +359,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 		return err
 	}
 	if total != 0 {
-		stats := w.getSpillStore().Stats()
+		stats := w.spillStore.Stats()
 		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
@@ -411,7 +396,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 	}
 
 	needFlush := false
-	wasDraining := w.getSpillStore().ShouldDrain()
+	wasDraining := w.spillStore.ShouldDrain()
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
@@ -459,26 +444,8 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		needFlush = true
 	case common.MessageTypeRow:
 		var counter int
-		dmlMessage := progress.decoder.NextDMLMessage()
-		if dmlMessage == nil {
-			if w.protocol != config.ProtocolSimple {
-				log.Panic("DML message is nil, it's not expected",
-					zap.Int32("partition", partition), zap.Any("offset", offset))
-			}
-			log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
-			break
-		}
-
-		if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
-			return false, err
-		}
-		counter++
-		for {
-			_, hasNext = progress.decoder.HasNext()
-			if !hasNext {
-				break
-			}
-			dmlMessage = progress.decoder.NextDMLMessage()
+		for hasNext {
+			dmlMessage := progress.decoder.NextDMLMessage()
 			if dmlMessage == nil {
 				if w.protocol != config.ProtocolSimple {
 					log.Panic("DML message is nil, it's not expected",
@@ -491,6 +458,10 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 				return false, err
 			}
 			counter++
+			_, hasNext = progress.decoder.HasNext()
+		}
+		if counter == 0 {
+			break
 		}
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
 		if len(message.Key)+len(message.Value) > w.maxMessageBytes && counter > 1 {
@@ -511,7 +482,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 	if needFlush {
 		return w.Write(ctx, messageType)
 	}
-	if !wasDraining && w.getSpillStore().ShouldDrain() {
+	if !wasDraining && w.spillStore.ShouldDrain() {
 		if err := w.flushDMLEventsByWatermark(ctx); err != nil {
 			return false, err
 		}
@@ -717,7 +688,7 @@ func (w *writer) appendMessage2Group(
 
 	group := progress.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
+		group = util.NewEventsGroup(progress.partition, tableID, w.spillStore)
 		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
 			return w.messageWithPartitionCheck(message, progress.partition, sourcePosition)
 		})
