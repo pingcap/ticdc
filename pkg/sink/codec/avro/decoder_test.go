@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
@@ -104,7 +106,7 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 	event := dec.assembleDMLEventFromDecoded(
 		map[string]any{"id": int64(42)},
 		map[string]any{
-			"id": int64(42), tidbCommitTs: int64(100),
+			"id": int64(42), tidbCommitTs: int64(100), tidbOp: updateOperation,
 			tidbRowLevelChecksum: strconv.FormatUint(uint64(checksum), 10),
 		},
 		map[string]any{
@@ -114,6 +116,18 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 			},
 		}, false, true, 0)
 	require.NotNil(t, event)
+	require.Equal(t, int32(2), event.Len())
+	deleted, ok := event.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, commonType.RowTypeDelete, deleted.RowType)
+	require.Zero(t, deleted.Checksum.Previous)
+	require.Zero(t, deleted.Checksum.Current)
+	inserted, ok := event.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, commonType.RowTypeInsert, inserted.RowType)
+	require.Equal(t, checksum, inserted.Checksum.Current)
+	_, ok = event.GetNextRow()
+	require.False(t, ok)
 	t.Cleanup(event.PostFlush)
 }
 
@@ -133,4 +147,50 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
 	require.Nil(t, sqlmodel.GetWhereHandle(tableInfo, tableInfo).UniqueNotNullIdx)
+}
+
+func TestUpdateWithoutBeforeValue(t *testing.T) {
+	schema := map[string]any{
+		"namespace": "default.test", "name": "t",
+		"fields": []any{
+			map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+			map[string]any{"name": "v", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		},
+	}
+	key := map[string]any{"id": int64(1)}
+	makeEvent := func(op string, ts, value int64) *commonEvent.DMLEvent {
+		e, err := assembleEvent(key, map[string]any{
+			"id": int64(1), "v": value, tidbOp: op, tidbCommitTs: ts,
+		}, schema, false, true)
+		require.NoError(t, err)
+		return e
+	}
+	t.Run("row semantics", func(t *testing.T) {
+		e := makeEvent(updateOperation, 101, 20)
+		defer e.PostFlush()
+		require.Equal(t, int32(2), e.Len())
+		require.Equal(t, uint64(101), e.CommitTs)
+		deleted, ok := e.GetNextRow()
+		require.True(t, ok)
+		require.Equal(t, commonType.RowTypeDelete, deleted.RowType)
+		require.Equal(t, int64(1), deleted.PreRow.GetInt64(0))
+		require.True(t, deleted.PreRow.IsNull(1))
+		inserted, ok := e.GetNextRow()
+		require.True(t, ok)
+		require.Equal(t, commonType.RowTypeInsert, inserted.RowType)
+		require.Equal(t, int64(20), inserted.Row.GetInt64(1))
+		_, ok = e.GetNextRow()
+		require.False(t, ok)
+	})
+}
+
+func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
+	schema := map[string]any{
+		"namespace": "default.test", "name": "t",
+		"fields": []any{map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}}},
+	}
+	for _, key := range []map[string]any{nil, {"id": nil}, {"missing": int64(1)}} {
+		_, err := assembleEvent(key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true)
+		require.ErrorContains(t, err, "handle")
+	}
 }

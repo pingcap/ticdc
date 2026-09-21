@@ -624,7 +624,7 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64, originalRowType commonType.RowType) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -634,6 +634,12 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 		if !ok {
 			row.Rewind()
 			break
+		}
+
+		// Avro updates without a before image expand into a keyed delete and
+		// an insert. Only the complete after image can reproduce column routing.
+		if w.protocol == config.ProtocolAvro && originalRowType == commonType.RowTypeUpdate && change.RowType == commonType.RowTypeDelete {
+			continue
 		}
 
 		target, _, err := partitioner.GeneratePartitionIndexAndKey(&change, partitionNum, row.TableInfo, row.GetCommitTs())
@@ -654,7 +660,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset int64) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
-		w.checkPartition(row, partition, offset)
+		w.checkPartition(row, partition, offset, message.RowType)
 		return row
 	})
 }

@@ -237,7 +237,12 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		} else {
 			checksum.Current = uint32(expectedChecksum)
 		}
-		event.Checksum = []*integrity.Checksum{checksum}
+		if event.Len() == 2 {
+			// The synthetic keyed delete carries no before-image checksum.
+			event.Checksum = []*integrity.Checksum{{}, checksum}
+		} else {
+			event.Checksum = []*integrity.Checksum{checksum}
+		}
 	}
 
 	if corrupted {
@@ -309,6 +314,26 @@ func assembleEvent(
 		}
 	}
 
+	// Without a before image, represent an update as a keyed delete followed
+	// by an insert. Both operations stay in one event for downstream batching.
+	updateWithoutBefore := !isDelete && !hasBefore && valueMap[tidbOp] == updateOperation
+	var deleteData map[string]any
+	if updateWithoutBefore {
+		if len(keyMap) == 0 {
+			return nil, errors.ErrCodecDecode.GenWithStack("update without before value requires a handle key")
+		}
+		deleteData = make(map[string]any, len(keyMap))
+		for name, keyValue := range keyMap {
+			value, ok := data[name]
+			if !ok || value == nil || keyValue == nil {
+				return nil, errors.ErrCodecDecode.GenWithStack("update without before value has an invalid handle column: %s", name)
+			}
+			// Handle-key changes are split upstream, so the after image
+			// contains the same key, already converted to the chunk type.
+			deleteData[name] = value
+		}
+	}
+
 	schemaName, tableName := schemaAndTableName(schema)
 
 	var commitTs int64
@@ -345,6 +370,11 @@ func assembleEvent(
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
 	} else {
+		if updateWithoutBefore {
+			common.AppendRow2Chunk(deleteData, event.TableInfo.GetColumns(), event.Rows)
+			event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+			event.Length++
+		}
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
 	}
