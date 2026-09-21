@@ -40,10 +40,15 @@ type mockSchemaStore struct {
 	// Keep table-trigger scans idle unless a test explicitly advances their history.
 	tableTriggerResolvedTs uint64
 
+<<<<<<< HEAD
 	registerTableHook   func()
 	unregisterTableHook func()
 	getTableInfoError   error
 	registerTableError  error
+=======
+	registerTableError error
+	getTableInfoError  error
+>>>>>>> f2e96bbc6 (eventcollector: wait for local progress before switching sources (#6323))
 
 	onGetTableDDLEventState func()
 }
