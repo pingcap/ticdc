@@ -92,6 +92,16 @@ func TestScanRequestCoalescing(t *testing.T) {
 	require.False(t, disp.isScanBusy())
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
+	ready, ok := e.e.(*event.ReadyEvent)
+	require.True(t, ok)
+	require.Equal(t, uint64(102), ready.ResolvedTs)
+
+	// While waiting for RESET, retries must carry the latest progress.
+	disp.receivedResolvedTs.Store(103)
+	disp.lastReadySendTime.Store(0)
+	require.False(t, broker.checkAndSendReady(disp))
+	e = <-broker.messageCh[0]
+	require.Equal(t, uint64(103), e.e.(*event.ReadyEvent).ResolvedTs)
 }
 
 type scanLifecycleTrackingContext struct {
