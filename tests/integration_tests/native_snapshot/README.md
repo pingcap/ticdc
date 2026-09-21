@@ -28,18 +28,21 @@ Normal checkpoint, pause and epoch updates preserve the snapshot child.
 ## Build
 
 Use the `codex/snapshot-e2e-demo` worktree in each repository. The CSE worktree
-is based on `21e88dd874` (the packed backup reader); the TiCDC worktree is based
-on `6a1cb553c`. Build on Linux for the development host:
+is based on packed-reader PR #5709 at `ce471b0d203d3e5d3800355e1324a7ed12aa25de`;
+the TiCDC worktree is based on `6a1cb553c`. CSE planning uses the current
+`sample_range` coverage validation and materialization consumes its lazy
+`scan_range` batch stream, retaining the reader's resource ownership. Build on Linux for the development host:
 
 ```sh
 # TiCDC repository; VERSION is a demo build label, not a released artifact.
 mkdir -p "$RUN/bin"
-go build -tags=nextgen -ldflags '-X github.com/pingcap/ticdc/pkg/version.ReleaseVersion=v9.0.0 -X github.com/pingcap/ticdc/pkg/version.GitHash=6a1cb553c-dirty -X github.com/pingcap/ticdc/pkg/version.GitBranch=codex/snapshot-e2e-demo' -o "$RUN/bin/cdc" ./cmd/cdc
+go build -tags=nextgen -ldflags "-X github.com/pingcap/ticdc/pkg/version.ReleaseVersion=v9.0.0 -X github.com/pingcap/ticdc/pkg/version.GitHash=$(git rev-parse HEAD) -X github.com/pingcap/ticdc/pkg/version.GitBranch=codex/snapshot-e2e-demo" -o "$RUN/bin/cdc" ./cmd/cdc
 go build -o "$RUN/bin/snapshot-provider" ./cmd/snapshot-provider
 go build -o "$RUN/bin/snapshot-verify" ./tests/integration_tests/native_snapshot/verify
 
 # CSE repository, pinned nightly toolchain from rust-toolchain.toml.
 cargo build -p cse-ctl
+cp "${CARGO_TARGET_DIR:-target}/debug/cse-ctl" "$RUN/bin/cse-ctl"
 ```
 
 ## Run on 10.2.15.7
@@ -98,6 +101,42 @@ checks all original snapshot values and recomputes the stable record ID, rejects
 snapshot output after incremental activation, replays DML/DDL, and compares every
 final row and all four columns against SQL. It captures topic end offsets at
 startup, so run it only after `wait` and without concurrent fixture writes.
+
+## Continuous incremental validation
+
+After `demo.py wait`, run the live workload against a fresh fixture:
+
+```sh
+python3 tests/integration_tests/native_snapshot/live.py \
+  --root "$RUN" --name unique-demo-feed --topic unique-demo-topic --duration 60
+```
+
+The workload repeatedly commits an update, an insert and a delete in one SQL
+optimistic transaction (the older lab CSE does not support TiDB's pessimistic
+lock-conflict option). While writes are active, it samples Kafka end offsets and replays
+the topic, requiring multiple advancing values of the live marker. After writes
+stop, it waits for the final checkpoint and compares every row and column with
+SQL, including the exact expected incremental event count. Reports and the write
+journal stay under `$RUN`. The observed row age includes polling and replay
+cost; it is a freshness observation, not a per-event latency benchmark.
+
+The latest-reader run uses `/data/nvme0n1/cse-snapshot-latest5709-20260921` and
+installs its own `bin/cse-ctl`. Pass `--cse-binary "$RUN/bin/cse-ctl"` to
+`demo.py prepare` and `start` so a later build cannot replace its exporter.
+
+The latest-reader validation seeded 3,000 rows plus an empty table at
+`B=469229866966581249`. Initial catchup applied four DML events and one DDL,
+matching all 3,001 SQL rows. The 60-second live phase committed 526 optimistic
+transactions and 1,577 additional DML events; nine samples observed Kafka values
+advancing while SQL writes were active. Final replay contained exactly 1,581
+incremental row events and matched all 3,002 SQL rows and columns.
+
+Killing the capture during `APPLYING` preserved generation
+`6d38fc3d-ce47-4b81-ade1-2376cf9966c0`. Restart replayed 128 snapshot rows with
+stable IDs; deduplication recovered the same 3,000 snapshot rows, all 1,581
+incremental events, and the matching 3,002 final rows. The already committed
+feed retained zero snapshot duplicates after that restart. The wait helper
+retries transient API failures while keyspace controllers initialize.
 
 ## Recovery and observed result
 

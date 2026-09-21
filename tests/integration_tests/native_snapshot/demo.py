@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 
@@ -139,8 +140,22 @@ def main():
         subprocess.run([str(root/"bin/cdc"), "cli", "changefeed", "create", "--server="+args.server, "--keyspace="+args.keyspace, "--changefeed-id="+args.name, "--sink-uri=kafka://"+args.broker+"/"+args.topic+"?protocol=open-protocol&partition-num=1&replication-factor=1&required-acks=-1", "--start-ts="+str(manifest["snapshot_ts"]), "--config="+str(root/"changefeed.toml"), "--no-confirm"], check=True)
     elif args.action == "wait":
         target = json.loads((root/"target.json").read_text())["checkpoint_ts"]
+        state = {}
         for _ in range(300):
-            state = http(args.server+"/api/v2/changefeeds/"+args.name+"?keyspace="+args.keyspace)
+            try:
+                state = http(args.server+"/api/v2/changefeeds/"+args.name+"?keyspace="+args.keyspace)
+            except urllib.error.HTTPError as error:
+                # The capture can own its election before keyspace controllers
+                # are ready after restart. Retry transient server responses.
+                if error.code not in (500, 502, 503, 504):
+                    raise
+                state = {"error": error.read(4096).decode(errors="replace")}
+                time.sleep(1)
+                continue
+            except (urllib.error.URLError, TimeoutError) as error:
+                state = {"error": str(error)}
+                time.sleep(1)
+                continue
             if state.get("bootstrap_complete") and state.get("checkpoint_ts", 0) >= target:
                 write(args.name+"-status.json", state)
                 print("snapshot committed and incremental checkpoint reached", target)
