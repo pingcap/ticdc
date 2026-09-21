@@ -140,8 +140,8 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) (*common.TableInfo
 	return tableInfo.CloneWithRouting(binding.Target.Schema, binding.Target.Table), nil
 }
 
-// ApplyToDDLEvent returns the original DDL event unless routing changes the DDL query;
-// when query changes, it also routes related metadata.
+// ApplyToDDLEvent returns the original DDL event unless routing changes its
+// query or related metadata.
 func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	if len(r.rules) == 0 || ddl == nil {
 		return ddl, nil
@@ -170,15 +170,20 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	// The event primary table is `other_db`.`child`, but the FOREIGN KEY reference can
 	// still match table route rules. So when table route is enabled, inspect the query
 	// through TiDB parser and let the AST visitor find all table names.
-	newQuery, err := r.rewriteParserBackedDDLQuery(ddl)
+	plan, err := r.buildParserBackedDDLRoutePlan(ddl)
 	if err != nil {
 		return nil, err
 	}
 
-	// In CDC DDL events, routed DDL metadata should correspond to names in Query.
-	// If Query is unchanged, no routed DDL event is needed.
-	if newQuery == ddl.Query {
+	queryRouted := plan.query != ddl.Query
+	if !queryRouted && !plan.hasOutOfBandTableMetadata {
 		return ddl, nil
+	}
+	if err := r.validateTableNamePreservingSchemaChanges(
+		plan.tableNamePreservingSchemaChanges,
+		ddl.MultipleTableInfos,
+	); err != nil {
+		return nil, err
 	}
 
 	binding, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
@@ -203,6 +208,11 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	if err != nil {
 		return nil, err
 	}
+	metadataRouted := binding.routed() || extraBinding.routed() ||
+		tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
+	if !queryRouted && !metadataRouted {
+		return ddl, nil
+	}
 
 	if multipleTableInfos == nil {
 		multipleTableInfos = append([]*common.TableInfo(nil), ddl.MultipleTableInfos...)
@@ -219,7 +229,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
-		newQuery,
+		plan.query,
 		binding.Target.Schema,
 		binding.Target.Table,
 		extraBinding.Target.Schema,
@@ -230,8 +240,44 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	), nil
 }
 
+<<<<<<< HEAD:downstreamadapter/routing/router.go
 // route returns the source-to-target table name binding.
 func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
+=======
+// validateTableNamePreservingSchemaChanges verifies that a schema name change
+// can be represented downstream without renaming any tables inside the schema.
+func (r Router) validateTableNamePreservingSchemaChanges(
+	changes []schemaNameChange,
+	tableInfos []*common.TableInfo,
+) error {
+	for _, change := range changes {
+		for _, tableInfo := range tableInfos {
+			if tableInfo == nil {
+				continue
+			}
+			tableName := tableInfo.GetTableName()
+			oldBinding, err := r.Route(change.from, tableName)
+			if err != nil {
+				return err
+			}
+			newBinding, err := r.Route(change.to, tableName)
+			if err != nil {
+				return err
+			}
+			if oldBinding.Target.Table != newBinding.Target.Table {
+				return errors.ErrTableRoutingFailed.GenWithStack(
+					"schema change from %s to %s cannot preserve routed table %s: target table changes from %s to %s",
+					change.from, change.to, tableName,
+					oldBinding.Target.Table, newBinding.Target.Table)
+			}
+		}
+	}
+	return nil
+}
+
+// Route returns the source-to-target table name binding.
+func (r Router) Route(originSchema, originTable string) (binding RouteBinding, err error) {
+>>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258)):pkg/routing/router.go
 	// In CDC runtime, table names should always carry schema.
 	// Empty schema means this name pair is absent, so keep it unchanged.
 	// This also prevents wildcard rules like *.* from matching it.

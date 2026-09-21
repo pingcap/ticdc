@@ -265,6 +265,7 @@ func TestToEventType(t *testing.T) {
 		{"drop database", DropDatabase, nil},
 		{"alter database", AlterDatabase, nil},
 		{"alter schema", AlterDatabase, nil},
+		{"recover database", RecoverDatabase, nil},
 		{"create index", CreateIndex, nil},
 		{"add table partition", AddTablePartition, nil},
 		{"drop taBle partition", DropTablePartition, nil},
@@ -297,6 +298,7 @@ func TestClassifyEvent(t *testing.T) {
 		{UpdateEvent, dml, nil},
 		{DeleteEvent, dml, nil},
 		// ddl
+<<<<<<< HEAD
 		{CreateDatabase, ddl, nil},
 		{CreateSchema, ddl, nil},
 		{DropDatabase, incompatibleDDL, nil},
@@ -318,6 +320,35 @@ func TestClassifyEvent(t *testing.T) {
 		{"create", NullEvent, errors.NotValidf("event type %s", "create")},
 		{EventType("xxx"), NullEvent, errors.NotValidf("event type %s", "xxx")},
 		{EventType("I don't know"), NullEvent, errors.NotValidf("event type %s", "I don't know")},
+=======
+		{CreateDatabase, ddl},
+		{CreateSchema, ddl},
+		{DropDatabase, incompatibleDDL},
+		{DropSchema, incompatibleDDL},
+		{RecoverDatabase, incompatibleDDL},
+		{AlterSchema, ddl},
+		{CreateTable, ddl},
+		{DropTable, incompatibleDDL},
+		{TruncateTable, incompatibleDDL},
+		{RenameTable, incompatibleDDL},
+		{CreateIndex, ddl},
+		{DropIndex, incompatibleDDL},
+		{CreateView, ddl},
+		{DropView, ddl},
+		{AlterTable, ddl},
+		{AddTablePartition, ddl},
+		{AddForeignKey, incompatibleDDL},
+		{DropForeignKey, incompatibleDDL},
+		{AddFullTextIndex, ddl},
+		{CreateHybridIndex, ddl},
+		{DropTablePartition, incompatibleDDL},
+		{RebaseAutoID, incompatibleDDL},
+		{TruncateTablePartition, incompatibleDDL},
+		// an event type that the filter does not know is classified as NullEvent
+		{EventType("create"), NullEvent},
+		{EventType("xxx"), NullEvent},
+		{EventType("I don't know"), NullEvent},
+>>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 	}
 
 	for _, cs := range cases {

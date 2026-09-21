@@ -452,6 +452,112 @@ func TestApplyToDDLEventRejectsAmbiguousSchemaRouting(t *testing.T) {
 	require.Contains(t, err.Error(), "ambiguous schema routing")
 }
 
+func TestApplyToRecoverSchemaDDLEvent(t *testing.T) {
+	t.Parallel()
+
+	newRecoverSchemaEvent := func(query, schema string) *event.DDLEvent {
+		return &event.DDLEvent{
+			Type:       byte(model.ActionRecoverSchema),
+			SchemaName: schema,
+			Query:      query,
+			MultipleTableInfos: []*common.TableInfo{
+				{TableName: common.TableName{Schema: schema, Table: "t1", TableID: 1}},
+				{TableName: common.TableName{Schema: schema, Table: "t2", TableID: 2}},
+			},
+			TableNameChange: &event.TableNameChange{
+				AddName: []event.SchemaTableName{
+					{SchemaName: schema, TableName: "t1"},
+					{SchemaName: schema, TableName: "t2"},
+				},
+			},
+		}
+	}
+
+	t.Run("flashback database", func(t *testing.T) {
+		router := newTestRouter(t, false, []*config.DispatchRule{{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  "{table}_routed",
+		}})
+		ddl := newRecoverSchemaEvent("FLASHBACK DATABASE `source_db`", "source_db")
+
+		routed, err := router.ApplyToDDLEvent(ddl)
+		require.NoError(t, err)
+		require.NotSame(t, ddl, routed)
+		require.Equal(t, "FLASHBACK DATABASE `target_db`", routed.Query)
+		require.Equal(t, "target_db", routed.GetTargetSchemaName())
+		require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
+		require.Equal(t, "t1_routed", routed.MultipleTableInfos[0].GetTargetTableName())
+		require.Equal(t, "target_db", routed.MultipleTableInfos[1].GetTargetSchemaName())
+		require.Equal(t, "t2_routed", routed.MultipleTableInfos[1].GetTargetTableName())
+		require.Equal(t, ddl.TableNameChange, routed.TableNameChange)
+		require.Empty(t, ddl.MultipleTableInfos[0].TableName.TargetSchema)
+		require.Empty(t, ddl.MultipleTableInfos[0].TableName.TargetTable)
+	})
+
+	t.Run("table-only route still routes recovered metadata", func(t *testing.T) {
+		router := newTestRouter(t, false, []*config.DispatchRule{{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "source_db",
+			TargetTable:  "{table}_routed",
+		}})
+		ddl := newRecoverSchemaEvent("FLASHBACK DATABASE `source_db`", "source_db")
+
+		routed, err := router.ApplyToDDLEvent(ddl)
+		require.NoError(t, err)
+		require.NotSame(t, ddl, routed)
+		require.Equal(t, ddl.Query, routed.Query)
+		require.Equal(t, "source_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
+		require.Equal(t, "t1_routed", routed.MultipleTableInfos[0].GetTargetTableName())
+	})
+
+	t.Run("flashback database to new name", func(t *testing.T) {
+		router := newTestRouter(t, false, []*config.DispatchRule{
+			{
+				Matcher:      []string{"old_db.*"},
+				TargetSchema: "old_target_db",
+				TargetTable:  "{table}_routed",
+			},
+			{
+				Matcher:      []string{"new_db.*"},
+				TargetSchema: "new_target_db",
+				TargetTable:  "{table}_routed",
+			},
+		})
+		ddl := newRecoverSchemaEvent("FLASHBACK DATABASE `old_db` TO `new_db`", "new_db")
+
+		routed, err := router.ApplyToDDLEvent(ddl)
+		require.NoError(t, err)
+		require.NotSame(t, ddl, routed)
+		require.Equal(t, "FLASHBACK DATABASE `old_target_db` TO `new_target_db`", routed.Query)
+		require.Equal(t, "new_target_db", routed.GetTargetSchemaName())
+		require.Equal(t, "new_target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
+		require.Equal(t, "t1_routed", routed.MultipleTableInfos[0].GetTargetTableName())
+	})
+
+	t.Run("flashback database to rejects target table rename", func(t *testing.T) {
+		router := newTestRouter(t, false, []*config.DispatchRule{
+			{
+				Matcher:      []string{"old_db.*"},
+				TargetSchema: "old_target_db",
+				TargetTable:  "{table}_old",
+			},
+			{
+				Matcher:      []string{"new_db.*"},
+				TargetSchema: "new_target_db",
+				TargetTable:  "{table}_new",
+			},
+		})
+		ddl := newRecoverSchemaEvent("FLASHBACK DATABASE `old_db` TO `new_db`", "new_db")
+
+		_, err := router.ApplyToDDLEvent(ddl)
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+		require.Contains(t, err.Error(), "schema change from old_db to new_db")
+		require.Contains(t, err.Error(), "target table changes from t1_old to t1_new")
+	})
+}
+
 func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -620,6 +726,9 @@ func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 	otherDBDDL := helper.DDL2Event("CREATE DATABASE `other_db`")
 	otherTableDDL := helper.DDL2Event("CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY)")
 	ddl := helper.DDL2Event("ALTER TABLE `other_db`.`t1` ADD COLUMN `c1` INT")
+	ddl.MultipleTableInfos = []*common.TableInfo{{
+		TableName: common.TableName{Schema: "source_db", Table: "metadata_only"},
+	}}
 
 	routed, err := router.ApplyToDDLEvent(otherDBDDL)
 	require.NoError(t, err)
@@ -632,6 +741,8 @@ func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 	routed, err = router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Same(t, ddl, routed)
+	require.Empty(t, ddl.MultipleTableInfos[0].TableName.TargetSchema)
+	require.Empty(t, ddl.MultipleTableInfos[0].TableName.TargetTable)
 }
 
 func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
