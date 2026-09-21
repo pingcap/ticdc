@@ -26,7 +26,7 @@ func TestTargetTableRegistry(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	r := NewTargetTableRegistry(changefeedID, 0)
+	r := NewTargetTableRegistry(changefeedID, false, 0)
 	require.NotNil(t, r)
 
 	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
@@ -137,4 +137,90 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
+}
+
+// TestValidateNoStaticRouteConflictCaseSensitivity checks that target identity
+// follows the changefeed's case sensitivity: a case-insensitive changefeed routes
+// both sources into one table, so the rules conflict.
+func TestValidateNoStaticRouteConflictCaseSensitivity(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	rules := []*config.DispatchRule{
+		{Matcher: []string{"db1.*"}, TargetSchema: "archive", TargetTable: "Orders"},
+		{Matcher: []string{"db2.*"}, TargetSchema: "archive", TargetTable: "orders"},
+	}
+	tables := []common.TableName{
+		{Schema: "db1", Table: "t1"},
+		{Schema: "db2", Table: "t2"},
+	}
+
+	err := ValidateNoStaticRouteConflict(changefeedID, false, rules, tables)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+
+	require.NoError(t, ValidateNoStaticRouteConflict(changefeedID, true, rules, tables))
+}
+
+// TestTargetTableRegistryCaseSensitivity covers table identity in the registry.
+func TestTargetTableRegistryCaseSensitivity(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+
+	t.Run("case insensitive targets conflict", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID, false, 0)
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "t1", "archive", "Orders"),
+		}, true))
+		err := r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db2", "t2", "archive", "orders"),
+		}, true)
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	})
+
+	t.Run("case sensitive targets stay distinct", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID, true, 0)
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "t1", "archive", "Orders"),
+		}, true))
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db2", "t2", "archive", "orders"),
+		}, true))
+		require.Len(t, r.target2Source, 2)
+	})
+
+	t.Run("case insensitive sources share one owner", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID, false, 0)
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "t1", "archive", "orders"),
+		}, true))
+		// The same table spelled differently is idempotent, not a conflict.
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "T1", "archive", "orders"),
+		}, true))
+		require.Len(t, r.source2Target, 1)
+
+		// Releasing the differently spelled name releases the same entry.
+		require.NoError(t, r.ApplyTransition([]TableKey{{Schema: "DB1", Table: "T1"}}, nil, true))
+		require.Empty(t, r.source2Target)
+		require.Empty(t, r.target2Source)
+	})
+
+	t.Run("case sensitive sources are different owners", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID, true, 0)
+		require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "t1", "archive", "orders"),
+		}, true))
+		err := r.ApplyTransition(nil, []RouteBinding{
+			NewRouteBinding("db1", "T1", "archive", "orders"),
+		}, true)
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	})
 }

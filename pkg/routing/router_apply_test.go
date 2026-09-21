@@ -21,6 +21,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,6 +131,14 @@ func TestApplyToDDLEvent(t *testing.T) {
 	renameTablesDDL := helper.DDL2Event("RENAME TABLE `multi_db`.`t1` TO `multi_db`.`t1_new`, `multi_db`.`t2` TO `multi_db`.`t2_new`")
 	oldOrdersDDL := helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
 	renameDDL := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
+	helper.DDL2Event("CREATE DATABASE `db{table}`")
+	literalSchemaDDL := helper.DDL2Event("CREATE TABLE `db{table}`.`orders` (`id` INT PRIMARY KEY)")
+	literalTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`table{table}` (`id` INT PRIMARY KEY)")
+	literalNameRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"*.*"},
+		TargetSchema: "{schema}_archive",
+		TargetTable:  "{schema}_{table}",
+	}})
 
 	var zeroRouter Router
 	noMatchedRouter := newTestRouter(t, false, []*config.DispatchRule{{
@@ -176,6 +186,26 @@ func TestApplyToDDLEvent(t *testing.T) {
 			router:     zeroRouter,
 			ddl:        singleTableDDL,
 			expectSame: true,
+		},
+		{
+			name:   "placeholder in source schema stays literal",
+			router: literalNameRouter,
+			ddl:    literalSchemaDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`db{table}_archive`.`db{table}_orders`")
+				require.Equal(t, "db{table}_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "db{table}_orders", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "placeholder in source table stays literal",
+			router: literalNameRouter,
+			ddl:    literalTableDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`source_db_archive`.`source_db_table{table}`")
+				require.Equal(t, "source_db_archive", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "source_db_table{table}", routed.TableInfo.GetTargetTableName())
+			},
 		},
 		{
 			name:       "no matched rule keeps original",
@@ -820,7 +850,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 		TargetTable:  TablePlaceholder,
 	}})
 
-	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!", "")
+	_, _, err := router.rewriteSingleDDLQuery("INVALID SQL !!!", "")
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)
@@ -866,6 +896,236 @@ func TestApplyToDDLEventRejectsParserUnsupportedIndexDDL(t *testing.T) {
 			_, err := router.ApplyToDDLEvent(ddl)
 			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 			require.Contains(t, err.Error(), "table routing does not support ddl type")
+		})
+	}
+}
+
+func TestViewWildcardRouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"dst.t_r", "dst.t", "test.t_r"} {
+		helper.Tk().MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		helper.Tk().MustExec("INSERT INTO " + table + " VALUES (7)")
+	}
+	for _, tc := range []struct{ name, query string }{
+		{"v_table", "SELECT t.* FROM t"},
+		{"v_schema", "SELECT test.t.* FROM test.t"},
+		{"v_star", "SELECT * FROM t"},
+		{"v_alias", "SELECT x.* FROM t AS x"},
+		{"v_same_alias", "SELECT t.* FROM t AS t"},
+		{"v_join", "SELECT t.* FROM t JOIN t AS x ON t.id = x.id"},
+		{"v_nested", "SELECT x.* FROM (SELECT t.* FROM t) AS x"},
+		{"v_scopes", "SELECT t.* FROM t WHERE EXISTS (SELECT t.* FROM t AS t)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW " + tc.name + " AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM " + tc.name).Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW " + tc.name)
+			for _, rule := range []*config.DispatchRule{
+				{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"},
+				{Matcher: []string{"test.*"}, TargetSchema: "dst"},
+				{Matcher: []string{"test.*"}, TargetTable: "{table}_r"},
+				{Matcher: []string{"other.*"}, TargetSchema: "dst"},
+			} {
+				router := newTestRouter(t, false, []*config.DispatchRule{rule})
+				routed, err := router.ApplyToDDLEvent(ddl)
+				require.NoError(t, err)
+				helper.Tk().MustExec("USE " + common.QuoteName(routed.GetTargetSchemaName()))
+				helper.Tk().MustExec(routed.Query)
+				view := common.QuoteSchema(routed.GetTargetSchemaName(), routed.GetTargetTableName())
+				helper.Tk().MustQuery("SELECT * FROM " + view).Check(testkit.Rows("7"))
+				helper.Tk().MustExec("DROP VIEW " + view)
+			}
+		})
+	}
+}
+
+func TestViewCTERouting(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("USE test")
+	helper.DDL2Event("CREATE TABLE t (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO t VALUES (7)")
+	helper.DDL2Event("CREATE TABLE orders (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("INSERT INTO orders VALUES (99)")
+	helper.Tk().MustExec("CREATE DATABASE dst")
+	for _, table := range []string{"t", "orders"} {
+		helper.Tk().MustExec("CREATE TABLE dst." + table + "_r LIKE test." + table)
+		helper.Tk().MustExec("INSERT INTO dst." + table + "_r SELECT * FROM test." + table)
+	}
+	router := newTestRouter(t, false, []*config.DispatchRule{{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"}})
+	for _, tc := range []struct{ name, query string }{
+		{"plain", "WITH c AS (SELECT id FROM t) SELECT id FROM c"},
+		{"shadow", "WITH orders AS (SELECT id FROM t) SELECT id FROM orders"},
+		{"column", "WITH orders AS (SELECT id FROM t) SELECT orders.id FROM orders"},
+		{"wildcard", "WITH orders AS (SELECT id FROM t) SELECT orders.* FROM orders"},
+		{"definition", "WITH t AS (SELECT id FROM t) SELECT id FROM t"},
+		{"qualified", "WITH t AS (SELECT 99 AS id) SELECT test.t.* FROM test.t"},
+		{"forward", "WITH a AS (SELECT id FROM t), t AS (SELECT 99 AS id) SELECT id FROM a"},
+		{"multiple", "WITH a AS (SELECT id FROM t), b AS (SELECT id FROM a) SELECT id FROM b"},
+		{"nested", "WITH c AS (SELECT id FROM t) SELECT id FROM (WITH c AS (SELECT id FROM c) SELECT id FROM c) AS x"},
+		{"scope", "SELECT t.* FROM t WHERE EXISTS (WITH t AS (SELECT 99 AS id) SELECT id FROM t)"},
+		{"union", "WITH c AS (SELECT id FROM t) SELECT id FROM c UNION SELECT id FROM c"},
+		{"recursive", "WITH RECURSIVE c(id) AS (SELECT id - 1 FROM t UNION ALL SELECT id + 1 FROM c WHERE id < 7) SELECT id FROM c WHERE id = 7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			helper.Tk().MustExec("USE test")
+			ddl := helper.DDL2Event("CREATE VIEW v AS " + tc.query)
+			helper.Tk().MustQuery("SELECT * FROM v").Check(testkit.Rows("7"))
+			routed, err := router.ApplyToDDLEvent(ddl)
+			require.NoError(t, err)
+			helper.Tk().MustExec("USE dst")
+			helper.Tk().MustExec(routed.Query)
+			helper.Tk().MustQuery("SELECT * FROM v_r").Check(testkit.Rows("7"))
+			helper.Tk().MustExec("DROP VIEW v_r")
+			helper.Tk().MustExec("DROP VIEW test.v")
+		})
+	}
+}
+
+func TestEmptyTargetSchema(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "{table}"},
+	})
+	for _, tc := range []struct {
+		query  string
+		action model.ActionType
+	}{
+		{"CREATE DATABASE source_db", model.ActionCreateSchema},
+		{"ALTER DATABASE source_db CHARACTER SET utf8mb4", model.ActionModifySchemaCharsetAndCollate},
+		{"DROP DATABASE source_db", model.ActionDropSchema},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			ddl := &event.DDLEvent{Query: tc.query, Type: byte(tc.action), SchemaName: "source_db"}
+			original := *ddl
+			_, err := router.ApplyToDDLEvent(ddl)
+			require.Error(t, err)
+			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			require.Contains(t, err.Error(), "target schema is empty")
+			require.Equal(t, original, *ddl)
+		})
+	}
+	binding, err := router.Route("source_db", "orders")
+	require.NoError(t, err)
+	require.Equal(t, "orders", binding.Target.Schema)
+}
+
+func TestCorrelatedView(t *testing.T) {
+	stored := "SELECT orders.id FROM source_db.orders WHERE EXISTS (SELECT 1 FROM source_db.lines WHERE lines.order_id = orders.id)"
+	query, err := event.NormalizeCreateViewQueryWithStoredSelect("CREATE VIEW source_db.v AS "+stored, stored, "source_db", nil)
+	require.NoError(t, err)
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+	})
+	routed, err := router.ApplyToDDLEvent(&event.DDLEvent{
+		Query: query, Type: byte(model.ActionCreateView), SchemaName: "source_db", TableName: "v",
+	})
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`.`lines_r`.`order_id`=`target_db`.`orders_r`.`id`")
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("CREATE DATABASE target_db")
+	helper.Tk().MustExec("CREATE TABLE target_db.orders_r (id INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE target_db.lines_r (order_id INT)")
+	helper.Tk().MustExec("INSERT INTO target_db.orders_r VALUES (1), (2)")
+	helper.Tk().MustExec("INSERT INTO target_db.lines_r VALUES (1)")
+	helper.Tk().MustExec(routed.Query)
+	helper.Tk().MustQuery("SELECT * FROM target_db.v_r").Check(testkit.Rows("1"))
+}
+
+func TestViewRoutingReferenceCase(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	tk := helper.Tk()
+	tk.MustExec("CREATE DATABASE source_db")
+	tk.MustExec("CREATE DATABASE target_db")
+	tk.MustExec("CREATE TABLE source_db.orders (id INT PRIMARY KEY)")
+	tk.MustExec("INSERT INTO source_db.orders VALUES (7)")
+	tk.MustExec("CREATE TABLE target_db.orders_r LIKE source_db.orders")
+	tk.MustExec("INSERT INTO target_db.orders_r SELECT * FROM source_db.orders")
+	for _, caseSensitive := range []bool{true, false} {
+		mode := "insensitive"
+		if caseSensitive {
+			mode = "sensitive"
+		}
+		router := newTestRouter(t, caseSensitive, []*config.DispatchRule{{
+			Matcher: []string{"source_db.orders", "source_db.v"}, TargetSchema: "target_db", TargetTable: "{table}_r",
+		}})
+		for _, reference := range []string{"source_db.ORDERS.id", "SOURCE_DB.orders.id", "ORDERS.id", "source_db.ORDERS.*", "ORDERS.*"} {
+			t.Run(reference+"/"+mode, func(t *testing.T) {
+				ddl := helper.DDL2Event("CREATE VIEW source_db.v AS SELECT " + reference + " FROM source_db.orders")
+				tk.MustQuery("SELECT * FROM source_db.v").Check(testkit.Rows("7"))
+				routed, err := router.ApplyToDDLEvent(ddl)
+				require.NoError(t, err)
+				require.Contains(t, routed.Query, "SELECT `target_db`.`orders_r`.")
+				tk.MustExec(routed.Query)
+				tk.MustQuery("SELECT * FROM target_db.v_r").Check(testkit.Rows("7"))
+				tk.MustExec("DROP VIEW target_db.v_r")
+				tk.MustExec("DROP VIEW source_db.v")
+			})
+		}
+	}
+}
+
+func TestViewCTECorrelatedScope(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	tk := helper.Tk()
+	for _, schema := range []string{"source_db", "other_db", "target_db", "other_target"} {
+		tk.MustExec("CREATE DATABASE " + schema)
+	}
+	for _, table := range []string{"source_db.t", "target_db.t_r"} {
+		tk.MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		tk.MustExec("INSERT INTO " + table + " VALUES (1), (2)")
+	}
+	for _, table := range []string{"other_db.t", "other_target.t_r"} {
+		tk.MustExec("CREATE TABLE " + table + " (id INT PRIMARY KEY)")
+		tk.MustExec("INSERT INTO " + table + " VALUES (1)")
+	}
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: "{table}_r"},
+		{Matcher: []string{"other_db.*"}, TargetSchema: "other_target", TargetTable: "{table}_r"},
+	})
+	for _, tc := range []struct{ name, body string }{
+		{"table", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+		{"derived", "SELECT 1 FROM other_db.t JOIN (SELECT t.id AS id) AS c ON c.id = other_db.t.id"},
+		{"lateral", "SELECT 1 FROM other_db.t JOIN LATERAL (SELECT t.id AS id) AS c ON c.id = other_db.t.id WHERE c.id = source_db.t.id"},
+		{"lateral before same named table", "SELECT 1 FROM other_db.t AS o JOIN LATERAL (SELECT t.id AS id) AS c ON c.id = o.id JOIN other_db.t ON other_db.t.id = c.id"},
+		{"alias", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t AS t JOIN c ON c.id = t.id"},
+		{"nested", "WITH c AS (WITH d AS (SELECT t.id AS id) SELECT id FROM d) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+		{"union", "WITH c AS (SELECT t.id AS id) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id UNION ALL SELECT 1 FROM c WHERE id = 1"},
+		{"recursive", "WITH RECURSIVE c(id) AS (SELECT t.id UNION ALL SELECT id + 1 FROM c WHERE id < 1) SELECT 1 FROM other_db.t JOIN c ON c.id = other_db.t.id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ddl := helper.DDL2Event("CREATE VIEW source_db.v AS SELECT t.id FROM source_db.t WHERE EXISTS (" + tc.body + ")")
+			tk.MustQuery("SELECT * FROM source_db.v ORDER BY id").Check(testkit.Rows("1"))
+			tk.MustExec("DROP VIEW source_db.v")
+			normalized, err := event.NormalizeCreateViewQueryWithStoredSelect(ddl.Query, ddl.TableInfo.View.SelectStmt, "source_db", nil)
+			require.NoError(t, err)
+			for _, mode := range []string{"normalize", "route", "normalize then route"} {
+				t.Run(mode, func(t *testing.T) {
+					copyDDL := *ddl
+					view := "source_db.v"
+					if mode != "route" {
+						copyDDL.Query = normalized
+					}
+					if mode != "normalize" {
+						routed, err := router.ApplyToDDLEvent(&copyDDL)
+						require.NoError(t, err)
+						copyDDL = *routed
+						view = "target_db.v_r"
+					}
+					tk.MustExec(copyDDL.Query)
+					tk.MustQuery("SELECT * FROM " + view + " ORDER BY id").Check(testkit.Rows("1"))
+					tk.MustExec("DROP VIEW " + view)
+				})
+			}
 		})
 	}
 }

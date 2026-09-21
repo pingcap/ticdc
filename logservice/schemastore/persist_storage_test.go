@@ -4046,6 +4046,8 @@ func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
 		},
 	})
 
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
+
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
 		ddl.Query)
@@ -4070,6 +4072,8 @@ func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelec
 			101: {Name: "target_db", Tables: map[int64]bool{}},
 		},
 	})
+
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
@@ -4142,6 +4146,7 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 				},
 			})
 
+			require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 			require.Equal(t, tc.expected, ddl.Query)
 			require.Equal(t, "target_db", ddl.SchemaName)
 			require.Equal(t, "v", ddl.TableName)
@@ -4839,4 +4844,150 @@ func assertTableDeleted(t *testing.T, storage *persistentStorage, tableID int64,
 	info, err := storage.getTableInfo(tableID, ts)
 	require.Nil(t, info)
 	require.IsType(t, &TableDeletedError{}, err)
+}
+
+func TestExchangeTableInfo(t *testing.T) {
+	for _, partitionSchema := range []string{"normal_db", "partition_db"} {
+		t.Run(partitionSchema, func(t *testing.T) {
+			normal := common.WrapTableInfo("normal_db", newEligibleTableInfoForTest(200, "nt"))
+			partition := newEligiblePartitionTableInfoForTest(100, "pt", []model.PartitionDefinition{{ID: 200}, {ID: 102}})
+			raw := &PersistedDDLEvent{
+				Type: byte(model.ActionExchangeTablePartition), SchemaName: "normal_db", TableName: "nt", TableID: 200,
+				ExtraSchemaName: partitionSchema, ExtraTableName: "pt", ExtraTableID: 100,
+				TableInfo: partition, ExtraTableInfo: normal, PrevPartitions: []int64{101, 102},
+			}
+			// The event fetched by a physical table dispatcher describes the state
+			// of that physical table after the exchange.
+			for _, tc := range []struct {
+				physical, logical int64
+				schema, table     string
+				partition         bool
+			}{
+				{200, 100, partitionSchema, "pt", true},
+				{101, 101, "normal_db", "nt", false},
+			} {
+				ddl, ok, err := buildTableDDLEvent(raw, nil, tc.physical)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, &commonEvent.TableStateChange{
+					PhysicalTableID: tc.physical,
+					Kind:            commonEvent.TableStateUpdated,
+				}, ddl.TableStateChange)
+				require.Equal(t, tc.schema, ddl.TableInfo.GetSchemaName())
+				require.Equal(t, tc.table, ddl.TableInfo.GetTableName())
+				require.Equal(t, tc.logical, ddl.TableInfo.TableName.TableID)
+				require.Equal(t, tc.partition, ddl.TableInfo.TableName.IsPartition)
+				require.Equal(t, partitionSchema, ddl.MultipleTableInfos[0].GetSchemaName())
+				require.Same(t, normal, ddl.MultipleTableInfos[1])
+				stored, deleted := extractTableInfoFuncForExchangeTablePartition(raw, tc.physical)
+				require.False(t, deleted)
+				require.Equal(t, stored.TableName, ddl.TableInfo.TableName)
+				require.Equal(t, stored.GetColumns(), ddl.TableInfo.GetColumns())
+			}
+
+			// The table trigger event has no physical table, so it keeps the
+			// event-level table info and carries no state change.
+			trigger, ok, err := buildDDLEvent(raw, nil, 0)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Nil(t, trigger.TableStateChange)
+			require.Equal(t, partitionSchema, trigger.TableInfo.GetSchemaName())
+			require.Equal(t, "pt", trigger.TableInfo.GetTableName())
+			require.Equal(t, int64(100), trigger.TableInfo.TableName.TableID)
+			require.Equal(t, int64(200), normal.TableName.TableID)
+		})
+	}
+}
+
+func TestBuildTableDDLEventTableStateChange(t *testing.T) {
+	tableInfo := newEligibleTableInfoForTest(300, "t1")
+	truncateTable := func() *PersistedDDLEvent {
+		return &PersistedDDLEvent{
+			Type: byte(model.ActionTruncateTable), SchemaID: 100, SchemaName: "test", TableName: "t1",
+			TableID: 300, ExtraTableID: 301,
+			TableInfo: newEligibleTableInfoForTest(301, "t1"),
+		}
+	}
+
+	for _, tc := range []struct {
+		name             string
+		rawEvent         *PersistedDDLEvent
+		physicalTableID  int64
+		kind             commonEvent.TableStateChangeKind
+		eventTableInfoID int64
+	}{
+		{
+			name: "alter table updates the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionAddColumn), SchemaID: 100, SchemaName: "test", TableName: "t1", TableID: 300,
+				TableInfo: tableInfo,
+			},
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUpdated,
+			eventTableInfoID: 300,
+		},
+		{
+			name: "create view received by another table keeps the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionCreateView), SchemaID: 100, SchemaName: "test", TableName: "v1", TableID: 500,
+				TableInfo: newEligibleTableInfoForTest(500, "v1"),
+			},
+			// The view event is tracked in every table's DDL history for barrier
+			// coordination, but it does not change another table's schema.
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 500,
+		},
+		{
+			name: "create table like keeps the referenced table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionCreateTable), SchemaID: 100, SchemaName: "test", TableName: "b", TableID: 140,
+				ExtraTableID: 138, Query: "CREATE TABLE `b` LIKE `a`",
+				TableInfo: newEligibleTableInfoForTest(140, "b"),
+			},
+			physicalTableID:  138,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 140,
+		},
+		{
+			name:             "truncate table updates the new physical table",
+			rawEvent:         truncateTable(),
+			physicalTableID:  301,
+			kind:             commonEvent.TableStateUpdated,
+			eventTableInfoID: 301,
+		},
+		{
+			name:             "truncate table does not update the old physical table",
+			rawEvent:         truncateTable(),
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 301,
+		},
+		{
+			name: "drop table does not update the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionDropTable), SchemaID: 100, SchemaName: "test", TableName: "t1", TableID: 300,
+				TableInfo: tableInfo,
+			},
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 300,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ddl, ok, err := buildTableDDLEvent(tc.rawEvent, nil, tc.physicalTableID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, &commonEvent.TableStateChange{
+				PhysicalTableID: tc.physicalTableID,
+				Kind:            tc.kind,
+			}, ddl.TableStateChange)
+			// The event still carries its own table info for routing and sinks.
+			require.NotNil(t, ddl.TableInfo)
+			require.Equal(t, tc.eventTableInfoID, ddl.TableInfo.TableName.TableID)
+			if tc.kind == commonEvent.TableStateUpdated {
+				require.Equal(t, tc.physicalTableID, ddl.TableInfo.TableName.TableID)
+			}
+		})
+	}
 }
