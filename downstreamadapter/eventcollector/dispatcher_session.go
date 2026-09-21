@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -24,8 +25,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
+
+const localReadyMaxLag = 5 * time.Second
 
 // dispatcherConnState owns the EventService registration state for one dispatcher.
 // It does not send messages. Its job is to apply atomic state transitions and
@@ -48,8 +52,9 @@ import (
 //     pendingRemoteEventServiceID=""
 //
 // This means local registration and remote probing can overlap. A remote service
-// may serve data first, but a later local ready still moves the dispatcher back
-// to local and cleans up remote registrations.
+// may serve data first. Once local catches up to within localReadyMaxLag of the
+// remote progress, a later local ready moves the dispatcher back to local and
+// cleans up remote registrations.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -60,7 +65,7 @@ type dispatcherConnState struct {
 	currentEventServiceID node.ID
 	// localReadyPending means the local register request has been sent but local
 	// ready has not been accepted. It may be true while a remote service is
-	// already current; local ready wins when it arrives later.
+	// already current; local ready wins after catching up to the remote progress.
 	localReadyPending bool
 	// pendingRemoteEventServiceID is the remote EventService currently being
 	// probed for reuse. It waits for either ready or not reusable, and only one
@@ -69,6 +74,9 @@ type dispatcherConnState struct {
 	// remoteCandidates are the remaining remote EventServices to probe after the
 	// current pending remote reports not reusable.
 	remoteCandidates []string
+	// remoteResolvedTs is the progress reported by the accepted remote ready.
+	// Use it as the catch-up baseline until the remote delivers its first events.
+	remoteResolvedTs uint64
 }
 
 // Registration state transitions.
@@ -124,11 +132,18 @@ type readyDecision struct {
 // acceptReady enforces the ready acceptance rules:
 //  1. once local is already serving, any later remote ready is stale and should
 //     only trigger cleanup;
-//  2. local ready can be accepted while local registration is still pending, and
-//     local wins over any remote that started serving earlier;
+//  2. local ready can be accepted while local registration is still pending;
+//     if a remote is serving, local must be within localReadyMaxLag of its progress;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
-func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) readyDecision {
+func (d *dispatcherConnState) acceptReady(
+	from node.ID,
+	localServerID node.ID,
+	readyResolvedTs uint64,
+	requiredCheckpointTs uint64,
+	remoteDeliveredTs uint64,
+	dispatcherStartTs uint64,
+) readyDecision {
 	d.Lock()
 	defer d.Unlock()
 	if d.removed {
@@ -138,6 +153,18 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 	if from == localServerID {
 		if !d.localReadyPending {
 			return readyDecision{}
+		}
+		if !d.currentEventServiceID.IsEmpty() && d.currentEventServiceID != localServerID {
+			baseline := max(requiredCheckpointTs, remoteDeliveredTs)
+			// Before remote delivers data, the dispatcher still reports startTs.
+			// Use the remote ready progress so a barely initialized local source
+			// cannot immediately take over.
+			if baseline <= dispatcherStartTs {
+				baseline = max(baseline, d.remoteResolvedTs)
+			}
+			if oracle.ExtractPhysical(baseline)-oracle.ExtractPhysical(readyResolvedTs) > localReadyMaxLag.Milliseconds() {
+				return readyDecision{}
+			}
 		}
 
 		decision := readyDecision{
@@ -151,6 +178,7 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 		d.localReadyPending = false
 		d.pendingRemoteEventServiceID = ""
 		d.remoteCandidates = nil
+		d.remoteResolvedTs = 0
 		return decision
 	}
 
@@ -170,10 +198,10 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 	}
 
 	d.currentEventServiceID = from
-	// Keep localReadyPending unchanged: local ready may still arrive later and
-	// move the dispatcher back to local.
+	// Keep localReadyPending unchanged so local can take over after catching up.
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.remoteResolvedTs = readyResolvedTs
 	return readyDecision{
 		commitTarget: from,
 	}
@@ -194,6 +222,7 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	d.localReadyPending = false
 	d.pendingRemoteEventServiceID = ""
 	d.remoteCandidates = nil
+	d.remoteResolvedTs = 0
 	return []node.ID(targets), false
 }
 
@@ -440,7 +469,7 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	from := *event.From
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		s.handleReadyEvent(from)
+		s.handleReadyEvent(from, event.GetCommitTs())
 	case commonEvent.TypeNotReusableEvent:
 		if from == s.localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
@@ -459,12 +488,20 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 
 // handleReadyEvent applies the ready decision produced by connState: clean up
 // any stale registrations, then commit whichever target won the ready race.
-func (s *dispatcherSession) handleReadyEvent(from node.ID) {
+func (s *dispatcherSession) handleReadyEvent(from node.ID, readyResolvedTs uint64) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	// connState decides whether this ready should be accepted and which stale
 	// registrations must be cleaned up. Session only applies the side effects.
-	accepted := s.connState.acceptReady(from, s.localServerID)
+	requiredCheckpointTs := s.target.GetCheckpointTs()
+	accepted := s.connState.acceptReady(
+		from,
+		s.localServerID,
+		readyResolvedTs,
+		requiredCheckpointTs,
+		s.target.GetResolvedTs(),
+		s.target.GetStartTs(),
+	)
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
 	}
@@ -472,13 +509,13 @@ func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 		return
 	}
 	if accepted.commitTarget == s.localServerID {
-		s.handleAcceptedLocalReadyLocked()
+		s.handleAcceptedLocalReadyLocked(requiredCheckpointTs)
 		return
 	}
 	s.handleAcceptedRemoteReadyLocked(accepted.commitTarget)
 }
 
-func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
+func (s *dispatcherSession) handleAcceptedLocalReadyLocked(resetTs uint64) {
 	if s.readyCallback != nil {
 		// This path is used during the initial add flow before the dispatcher is
 		// committed. Local is still authoritative, so any speculative remote
@@ -491,7 +528,7 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()))
-	s.doResetLocked(s.localServerID, s.target.GetCheckpointTs())
+	s.doResetLocked(s.localServerID, resetTs)
 }
 
 func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {

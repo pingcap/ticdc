@@ -596,7 +596,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			return false
 		}
 		remoteID := node.ID(task.info.GetServerID())
-		event := event.NewReadyEvent(task.info.GetID())
+		event := event.NewReadyEvent(task.info.GetID(), task.receivedResolvedTs.Load())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",
