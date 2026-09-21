@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pingcap/log"
@@ -214,7 +215,7 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 	ordinary := newMockDispatcherInfoForTest(t)
 	es.registerDispatcher(ctx, ordinary)
 	require.Equal(t, 1, es.GetDispatcherCount())
-	// Repeated registration reuses the existing entry and its resources.
+	// Repeated registration replaces the entry without increasing the count.
 	es.registerDispatcher(ctx, ordinary)
 	require.Equal(t, 1, es.GetDispatcherCount())
 
@@ -358,7 +359,7 @@ func TestPendingHeartbeatWithoutBroker(t *testing.T) {
 func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
 	for _, handshaked := range []bool{false, true} {
 		t.Run(fmt.Sprintf("handshaked=%t", handshaked), func(t *testing.T) {
-			broker, store, schema, responses := newEventBrokerForTest()
+			broker, es, ss, responses := newEventBrokerForTest()
 			// Drive both queues explicitly to reproduce the reordering without
 			// depending on the service loop's select or background scans.
 			broker.close()
@@ -367,12 +368,19 @@ func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
 				dispatcherInfoChan:  make(chan DispatcherInfo, 1),
 				dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 1),
 			}
-			var storeRegistrations, schemaReferences int
-			store.registerDispatcherHook = func() bool { storeRegistrations++; return true }
-			schema.registerTableHook = func() { schemaReferences++ }
-			schema.unregisterTableHook = func() { schemaReferences-- }
-
 			info := newMockDispatcherInfoForTest(t)
+			registrations, schemaReferences := 0, 0
+			es.registerDispatcherHook = func() bool {
+				// Registering over an existing ID would overwrite the metadata
+				// needed to detach its original EventStore subscription.
+				_, exists := es.dispatcherMap.Load(info.id)
+				require.False(t, exists)
+				require.Zero(t, schemaReferences)
+				registrations++
+				return true
+			}
+			ss.registerTableHook = func() { schemaReferences++ }
+			ss.unregisterTableHook = func() { schemaReferences-- }
 			heartbeat := commonEvent.NewDispatcherHeartbeat()
 			heartbeat.ClusterID = info.clusterID
 			heartbeat.AddDispatcherProgress(info.id, 0, 0)
@@ -383,7 +391,7 @@ func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
 
 			if handshaked {
 				reset := *info
-				reset.epoch = 1
+				reset.epoch = 3
 				reset.actionType = eventpb.ActionType_ACTION_TYPE_RESET
 				require.NoError(t, broker.resetDispatcher(&reset))
 				broker.getDispatcher(info.id).Load().setHandshaked()
@@ -397,30 +405,91 @@ func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
 			service.dispatcherInfoChan <- info
 			service.registerDispatcher(t.Context(), <-service.dispatcherInfoChan)
 
-			require.Equal(t, 1, storeRegistrations)
-			require.Equal(t, 1, schemaReferences)
 			require.Equal(t, 1, service.GetDispatcherCount())
-			require.Same(t, original, broker.getDispatcher(info.id).Load())
-			require.Equal(t, handshaked, original.isHandshaked())
-			// A retry must receive Ready even if the initial registration has
-			// already handshaked, so the collector can complete its retry.
-			readyCh := broker.getMessageCh(original.messageWorkerIndex, common.IsRedoMode(info.mode))
+			current := broker.getDispatcher(info.id).Load()
+			require.NotSame(t, original, current)
+			require.True(t, original.isRemoved.Load())
+			require.Zero(t, current.epoch)
+			require.Equal(t, 2, registrations)
+			require.Equal(t, 1, schemaReferences)
+			require.Equal(t, uint64(1), es.unregisterCount.Load())
+			// The replacement follows the usual Ready/RESET flow. A recreated
+			// collector can start at epoch one even if the old registration used three.
+			readyCh := broker.getMessageCh(current.messageWorkerIndex, common.IsRedoMode(info.mode))
+			require.Empty(t, readyCh)
+			require.False(t, broker.checkAndSendReady(current))
 			require.Len(t, readyCh, 1)
 			ready := <-readyCh
 			require.Equal(t, commonEvent.TypeReadyEvent, ready.msgType)
 			require.Equal(t, node.ID(info.serverID), ready.serverID)
 			ready.reset()
+			reset := *info
+			reset.epoch = 1
+			require.NoError(t, broker.resetDispatcher(&reset))
+			require.Equal(t, uint64(1), broker.getDispatcher(info.id).Load().epoch)
 
 			service.deregisterDispatcher(info)
 			require.Zero(t, service.GetDispatcherCount())
 			require.Zero(t, schemaReferences)
-			require.Equal(t, uint64(storeRegistrations), store.unregisterCount.Load())
-			_, registered := store.dispatcherMap.Load(info.id)
-			require.False(t, registered)
-			_, subscribed := store.spansMap.Load(info.span)
-			require.False(t, subscribed)
+			require.Equal(t, uint64(2), es.unregisterCount.Load())
+			_, exists := es.dispatcherMap.Load(info.id)
+			require.False(t, exists)
+			_, exists = es.spansMap.Load(info.span)
+			require.False(t, exists)
 		})
 	}
+}
+
+func TestEventServiceSerializesDispatcherCleanup(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+	synctest.Test(t, func(t *testing.T) {
+		service := &eventService{
+			brokers:            map[uint64]*eventBroker{broker.tidbClusterID: broker},
+			dispatcherInfoChan: make(chan DispatcherInfo, 1),
+		}
+		info := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(info))
+		original := broker.getDispatcher(info.id).Load()
+		original.setHandshaked()
+		original.lastReceivedHeartbeatTime.Store(time.Now().Add(-2 * heartbeatTimeout).Unix())
+
+		cleanupStarted := make(chan struct{})
+		resumeCleanup := make(chan struct{})
+		ss.unregisterTableHook = func() {
+			close(cleanupStarted)
+			<-resumeCleanup
+		}
+		releaseCleanup := sync.OnceFunc(func() { close(resumeCleanup) })
+		ctx, cancel := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		t.Cleanup(func() { releaseCleanup(); cancel(); wg.Wait() })
+		wg.Go(func() { _ = service.Run(ctx) })
+		synctest.Wait()
+		// Advance to the service's cleanup tick without a real-time sleep.
+		time.Sleep(10 * time.Second)
+		<-cleanupStarted
+		require.Nil(t, broker.getDispatcher(info.id))
+		// The map entry is gone, but cleanup still keeps the drain count positive.
+		require.Equal(t, 1, service.GetDispatcherCount())
+
+		service.dispatcherInfoChan <- info
+		synctest.Wait()
+		// REGISTER stays queued until Run finishes unregistering the old resources.
+		require.Len(t, service.dispatcherInfoChan, 1)
+		require.Nil(t, broker.getDispatcher(info.id))
+		releaseCleanup()
+		synctest.Wait()
+		require.Empty(t, service.dispatcherInfoChan)
+		require.NotNil(t, broker.getDispatcher(info.id))
+		require.Equal(t, 1, service.GetDispatcherCount())
+
+		cancel()
+		wg.Wait()
+		ss.unregisterTableHook = nil
+		service.deregisterDispatcher(info)
+		require.Zero(t, service.GetDispatcherCount())
+	})
 }
 
 func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {

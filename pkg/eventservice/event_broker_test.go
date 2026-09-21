@@ -671,13 +671,8 @@ func TestUnhandshakedRegistrationExpiresWithoutConsumerHeartbeats(t *testing.T) 
 			service.StopAcceptingRegistrations()
 			// The other consumer was removed before RESET and all REMOVE attempts
 			// were lost. No more heartbeat can renew that registration.
-			ctx, cancel := context.WithCancel(t.Context())
-			var wg sync.WaitGroup
-			t.Cleanup(func() { cancel(); wg.Wait() })
-			wg.Go(func() { _ = broker.reportDispatcherStatToStore(ctx, time.Millisecond) })
-			require.Eventually(t, func() bool { return broker.dispatcherCount.Load() == 1 }, time.Second, time.Millisecond)
-			cancel()
-			wg.Wait()
+			broker.removeInactiveDispatchers()
+			require.Equal(t, int64(1), broker.dispatcherCount.Load())
 			require.Nil(t, broker.getDispatcher(orphan.id))
 			require.NotNil(t, broker.getDispatcher(live.id))
 			broker.removeDispatcher(live)
@@ -689,18 +684,27 @@ func TestUnhandshakedRegistrationExpiresWithoutConsumerHeartbeats(t *testing.T) 
 func TestAddDispatcherCountDuringRegistration(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
+		replace           bool
 		eventStoreSuccess bool
 		schemaStoreError  error
 	}{
 		{name: "success", eventStoreSuccess: true},
 		{name: "event store failure"},
 		{name: "schema store failure", eventStoreSuccess: true, schemaStoreError: errors.New("register schema store failed")},
+		{name: "replacement", replace: true, eventStoreSuccess: true},
+		{name: "replacement event store failure", replace: true},
+		{name: "replacement schema store failure", replace: true, eventStoreSuccess: true, schemaStoreError: errors.New("register schema store failed")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			broker, es, ss, _ := newEventBrokerForTest()
 			broker.close()
 			service := &eventService{brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}}
 			info := newMockDispatcherInfoForTest(t)
+			var original *dispatcherStat
+			if tc.replace {
+				require.NoError(t, broker.addDispatcher(info))
+				original = broker.getDispatcher(info.GetID()).Load()
+			}
 
 			countBeforeActivation := make(chan int, 1)
 			es.registerDispatcherHook = func() bool {
@@ -717,11 +721,20 @@ func TestAddDispatcherCountDuringRegistration(t *testing.T) {
 			releaseRegistration := sync.OnceFunc(func() { close(resumeRegistration) })
 			var wg sync.WaitGroup
 			t.Cleanup(func() { releaseRegistration(); wg.Wait() })
-			result := make(chan error, 1)
-			wg.Go(func() { result <- broker.addDispatcher(info) })
+			registered := make(chan struct{})
+			wg.Go(func() {
+				service.registerDispatcher(t.Context(), info)
+				close(registered)
+			})
 
 			// RegisterDispatcher may activate its notifier before it returns.
 			require.Equal(t, 1, <-countBeforeActivation)
+			if tc.replace {
+				// The old registration has been fully removed. The in-flight
+				// replacement must still prevent a zero drain report.
+				require.True(t, original.isRemoved.Load())
+				require.Equal(t, uint64(1), es.unregisterCount.Load())
+			}
 			if tc.eventStoreSuccess {
 				<-schemaRegistrationStarted
 				_, ok := es.dispatcherMap.Load(info.GetID())
@@ -734,20 +747,24 @@ func TestAddDispatcherCountDuringRegistration(t *testing.T) {
 				require.Equal(t, 1, service.GetDispatcherCount())
 			}
 			releaseRegistration()
-			require.ErrorIs(t, <-result, tc.schemaStoreError)
+			<-registered
 
 			if tc.eventStoreSuccess && tc.schemaStoreError == nil {
 				require.Equal(t, 1, service.GetDispatcherCount())
 				broker.removeDispatcher(info)
 			}
 			require.Zero(t, service.GetDispatcherCount())
+			require.Nil(t, broker.getDispatcher(info.GetID()))
 			_, ok := es.spansMap.Load(info.GetTableSpan())
 			require.False(t, ok)
-			if tc.eventStoreSuccess {
-				require.Equal(t, uint64(1), es.unregisterCount.Load())
-			} else {
-				require.Zero(t, es.unregisterCount.Load())
+			var expectedUnregisters uint64
+			if tc.replace {
+				expectedUnregisters++
 			}
+			if tc.eventStoreSuccess {
+				expectedUnregisters++
+			}
+			require.Equal(t, expectedUnregisters, es.unregisterCount.Load())
 		})
 	}
 }
@@ -808,24 +825,84 @@ func TestDoScanReleasesChangefeedQuotaOnScanError(t *testing.T) {
 	require.Equal(t, uint64(minScanLimitInBytes*2), changefeedQuota.Load())
 }
 
-func TestTableTriggerDispatcherMetricCount(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
-	defer broker.close()
+func TestDispatcherCountOnReplacement(t *testing.T) {
+	for name, tableTrigger := range map[string]bool{"ordinary": false, "table trigger": true} {
+		t.Run(name, func(t *testing.T) {
+			broker, es, ss, _ := newEventBrokerForTest()
+			broker.close()
+			var schemaRegistrations, schemaUnregistrations int
+			ss.registerTableHook = func() { schemaRegistrations++ }
+			ss.unregisterTableHook = func() { schemaUnregistrations++ }
+			info := newMockDispatcherInfoForTest(t)
+			if tableTrigger {
+				info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+			}
+			baseline := testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1"))
+			require.NoError(t, broker.addDispatcher(info))
+			require.Equal(t, int64(1), broker.dispatcherCount.Load())
+			require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 
-	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+			original := broker.getDispatcher(info.GetID()).Load()
+			require.NoError(t, broker.addDispatcher(info))
+			require.NotSame(t, original, broker.getDispatcher(info.GetID()).Load())
+			require.True(t, original.isRemoved.Load())
+			require.Equal(t, int64(1), broker.dispatcherCount.Load())
+			require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 
-	baseline := testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1"))
-	require.NoError(t, broker.addDispatcher(info))
-	require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			broker.removeDispatcher(info)
+			require.Zero(t, broker.dispatcherCount.Load())
+			require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			expectedRegistrations := 2
+			if tableTrigger {
+				expectedRegistrations = 0
+			}
+			require.Equal(t, expectedRegistrations, schemaRegistrations)
+			require.Equal(t, expectedRegistrations, schemaUnregistrations)
+			require.Equal(t, uint64(expectedRegistrations), es.unregisterCount.Load())
+		})
+	}
+}
 
-	original := broker.getDispatcher(info.GetID()).Load()
-	require.NoError(t, broker.addDispatcher(info))
-	require.Same(t, original, broker.getDispatcher(info.GetID()).Load())
-	require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+func TestInactiveDispatcherCleanupAfterRegistrationChanges(t *testing.T) {
+	for _, action := range []string{"replace", "reset", "heartbeat"} {
+		t.Run(action, func(t *testing.T) {
+			broker, es, _, _ := newEventBrokerForTest()
+			broker.close()
+			broker.stopping.Store(true)
+			info := newMockDispatcherInfoForTest(t)
+			require.NoError(t, broker.addDispatcher(info))
+			original := broker.getDispatcher(info.id).Load()
+			expired := time.Now().Add(-2 * heartbeatTimeout).Unix()
+			original.lastReceivedHeartbeatTime.Store(expired)
+			require.True(t, broker.isInactiveDispatcher(original))
 
-	broker.removeDispatcher(info)
-	require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			// Requests processed before the cleanup tick must take effect before
+			// cleanup checks the current registration and its heartbeat time.
+			switch action {
+			case "replace":
+				require.NoError(t, broker.addDispatcher(info))
+			case "reset":
+				reset := *info
+				reset.epoch = 1
+				require.NoError(t, broker.resetDispatcher(&reset))
+			case "heartbeat":
+				original.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+			}
+			current := broker.getDispatcher(info.id).Load()
+			unregisters := es.unregisterCount.Load()
+			broker.removeInactiveDispatchers()
+			require.Same(t, current, broker.getDispatcher(info.id).Load())
+			require.False(t, current.isRemoved.Load())
+			require.Equal(t, int64(1), broker.dispatcherCount.Load())
+			require.Equal(t, unregisters, es.unregisterCount.Load())
+
+			current.lastReceivedHeartbeatTime.Store(expired)
+			broker.removeInactiveDispatchers()
+			require.Nil(t, broker.getDispatcher(info.id))
+			require.Zero(t, broker.dispatcherCount.Load())
+			require.Equal(t, unregisters+1, es.unregisterCount.Load())
+		})
+	}
 }
 
 func TestScanRangeCappedByScanWindow(t *testing.T) {
@@ -1163,12 +1240,8 @@ func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
 }
 
 func TestCURDDispatcher(t *testing.T) {
-	broker, store, schema, _ := newEventBrokerForTest()
+	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
-	var storeRegistrations, schemaReferences int
-	store.registerDispatcherHook = func() bool { storeRegistrations++; return true }
-	schema.registerTableHook = func() { schemaReferences++ }
-	schema.unregisterTableHook = func() { schemaReferences-- }
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
@@ -1200,24 +1273,9 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
 	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
-	// Case 3: Moving the same ID to a new consumer replaces the registration
-	// after releasing its old resources; it must not be treated as a retry.
-	movedInfo := *dispInfo
-	movedInfo.serverID = "server2"
-	movedInfo.epoch = 0
-	require.NoError(t, broker.addDispatcher(&movedInfo))
-	require.True(t, disp.isRemoved.Load())
-	require.Equal(t, movedInfo.serverID, broker.getDispatcher(dispInfo.GetID()).Load().info.GetServerID())
-	require.Equal(t, int64(1), broker.dispatcherCount.Load())
-	require.Equal(t, 2, storeRegistrations)
-	require.Equal(t, uint64(1), store.unregisterCount.Load())
-	require.Equal(t, 1, schemaReferences)
-
-	// Case 4: Remove a dispatcher.
-	broker.removeDispatcher(&movedInfo)
+	// Case 3: Remove a dispatcher.
+	broker.removeDispatcher(dispInfo)
 	require.Zero(t, broker.dispatcherCount.Load())
-	require.Equal(t, uint64(storeRegistrations), store.unregisterCount.Load())
-	require.Zero(t, schemaReferences)
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
 	// Check changefeedStatus after removing the only dispatcher
@@ -1369,7 +1427,7 @@ func (*blockingEncryptionManager) DecryptData(
 }
 
 func TestDispatcherLifecycleCancelsActiveScanBeforeCleanup(t *testing.T) {
-	for _, action := range []string{"reset", "remove"} {
+	for _, action := range []string{"reset", "remove", "replace"} {
 		t.Run(action, func(t *testing.T) {
 			broker, _, _, _ := newEventBrokerForTest()
 			defer broker.close()
@@ -1414,6 +1472,10 @@ func TestDispatcherLifecycleCancelsActiveScanBeforeCleanup(t *testing.T) {
 						eventpb.ActionType_ACTION_TYPE_RESET)
 					resetInfo.epoch = stat.epoch + 1
 					lifecycleErrCh <- broker.resetDispatcher(resetInfo)
+					return
+				}
+				if action == "replace" {
+					lifecycleErrCh <- broker.addDispatcher(dispInfo)
 					return
 				}
 				broker.removeDispatcher(dispInfo)
@@ -1708,10 +1770,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	// Now Set this dispatcher lastReceivedHeartbeatTime to a time in the past
 	// it should be considered as inactive and removed
 	dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Add(-heartbeatTimeout * 2).Unix())
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go broker.reportDispatcherStatToStore(ctx, time.Millisecond)
-	time.Sleep(100 * time.Millisecond)
+	broker.removeInactiveDispatchers()
 
 	// Create a heartbeat for the now-removed (inactive) dispatcher
 	heartbeatForInactiveDispatcher := &DispatcherHeartBeatWithServerID{
@@ -1738,7 +1797,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	removedDispatcher := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, removedDispatcher)
 
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	// Verify that a response was sent indicating the dispatcher is removed
 	select {

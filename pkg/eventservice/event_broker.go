@@ -80,10 +80,12 @@ type eventBroker struct {
 	// changefeedMap is used to track the changefeed status.
 	changefeedMap sync.Map // common.ChangeFeedID -> *changefeedStatus
 
-	// All the dispatchers that register to the eventBroker.
+	// All the dispatchers that register to the eventBroker. Registration, reset
+	// and removal (including timeout cleanup) are serialized by EventService.Run.
 	dispatchers sync.Map
-	// Count registrations before activating or publishing them, and decrement
-	// after registration failure or removal cleanup. Includes table trigger dispatchers.
+	// Count published registrations, including table trigger dispatchers.
+	// Removals decrement after store cleanup. EventService.registering covers
+	// the gap between removing an old registration and publishing its replacement.
 	dispatcherCount atomic.Int64
 	// stopping enables cleanup of abandoned registrations that never handshaked.
 	stopping atomic.Bool
@@ -337,13 +339,6 @@ func (c *eventBroker) sendNotReusableEvent(
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
-	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
-	updateMetricEventServiceSendCommandCount(d.info.GetMode())
-}
-
-func (c *eventBroker) sendReadyEvent(d *dispatcherStat) {
-	ready := event.NewReadyEvent(d.id)
-	wrapEvent := newWrapReadyEvent(node.ID(d.info.GetServerID()), ready)
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(d.info.GetMode())
 }
@@ -607,7 +602,10 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		if now-lastSendTime < currentInterval {
 			return false
 		}
-		c.sendReadyEvent(task)
+		remoteID := node.ID(task.info.GetServerID())
+		event := event.NewReadyEvent(task.info.GetID())
+		wrapEvent := newWrapReadyEvent(remoteID, event)
+		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id))
 		task.lastReadySendTime.Store(now)
@@ -616,6 +614,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			newInterval = maxReadyEventIntervalSeconds
 		}
 		task.readyInterval.Store(newInterval)
+		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
 	return true
@@ -998,47 +997,46 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 	log.Info("update dispatcher send ts goroutine is started")
-	isInactiveDispatcher := func(d *dispatcherStat) bool {
-		// Pending registrations also receive collector heartbeats. During drain,
-		// a lost REMOVE must not keep an unhandshaked registration alive forever.
-		// Preserve the initialization behavior of older collectors outside drain.
-		return (d.isHandshaked() || c.stopping.Load()) &&
-			time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				checkpointTs := dispatcher.checkpointTs.Load()
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
-				if isInactiveDispatcher(dispatcher) {
-					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
-				}
 				return true
 			})
-
-			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
-				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
-				if isInactiveDispatcher(dispatcher) {
-					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
-				}
-				return true
-			})
-
-			for _, d := range inActiveDispatchers {
-				log.Warn("remove in-active dispatcher",
-					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-					zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
-				c.removeDispatcher(d.info)
-			}
 		}
 	}
+}
+
+func (c *eventBroker) isInactiveDispatcher(d *dispatcherStat) bool {
+	// Pending registrations also receive collector heartbeats. During drain,
+	// a lost REMOVE must not keep an unhandshaked registration alive forever.
+	// Preserve the initialization behavior of older collectors outside drain.
+	return (d.isHandshaked() || c.stopping.Load()) &&
+		time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+}
+
+// removeInactiveDispatchers runs in EventService.Run alongside dispatcher requests,
+// so store cleanup always finishes before a replacement can register the same ID.
+func (c *eventBroker) removeInactiveDispatchers() {
+	removeInactive := func(_, value any) bool {
+		d := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if c.isInactiveDispatcher(d) {
+			log.Warn("remove in-active dispatcher",
+				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+			c.removeDispatcher(d.info)
+		}
+		return true
+	}
+	c.dispatchers.Range(removeInactive)
+	c.tableTriggerDispatchers.Range(removeInactive)
 }
 
 func (c *eventBroker) close() {
@@ -1318,22 +1316,15 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	id := info.GetID()
-	// A pending heartbeat can overtake the initial REGISTER and cause a retry through
-	// a stale Removed response. Reuse the existing registration before acquiring store resources.
-	if existing := c.getDispatcher(id); existing != nil {
-		d := existing.Load()
-		if d.info.GetServerID() == info.GetServerID() {
-			// Reply even after handshake so the collector can finish its retry.
-			// RESET, rather than REGISTER, advances the existing dispatcher's epoch.
-			c.sendReadyEvent(d)
-			return nil
-		}
-		// A dispatcher keeps its ID when moving to another consumer. Release
-		// the previous consumer's resources before replacing its registration.
-		c.removeDispatcher(d.info)
-	}
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
+
+	if existing := c.getDispatcher(id); existing != nil {
+		// REGISTER may be a retry or a recreated collector starting at epoch zero.
+		// Release the old store registrations before replacing their ID mappings,
+		// then let the new dispatcher follow the normal Ready/RESET handshake.
+		c.removeDispatcher(existing.Load().info)
+	}
 
 	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
@@ -1341,11 +1332,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		c.dispatcherCount.Inc()
-		if _, loaded := c.tableTriggerDispatchers.Swap(id, dispatcherPtr); loaded {
-			c.dispatcherCount.Dec()
+		if _, loaded := c.tableTriggerDispatchers.Swap(id, dispatcherPtr); !loaded {
+			c.dispatcherCount.Inc()
+			c.metricsCollector.metricDispatcherCount.Inc()
 		}
-		c.metricsCollector.metricDispatcherCount.Inc()
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
@@ -1356,8 +1346,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 
 	start := time.Now()
-	// RegisterDispatcher can activate the notifier before schema registration finishes.
-	c.dispatcherCount.Inc()
+	// EventService.registering keeps in-flight registrations visible to drain
+	// reports until they are published and counted below.
 	success := c.eventStore.RegisterDispatcher(
 		changefeedID,
 		id,
@@ -1377,7 +1367,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	)
 
 	if !success {
-		c.dispatcherCount.Dec()
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("changefeedID", changefeedID),
@@ -1407,17 +1396,16 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		// Mark removed to avoid processing notifications before unregister completes.
 		dispatcher.markRemoved()
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
-		c.dispatcherCount.Dec()
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.removeChangefeedStatus(status)
 		}
 		return err
 	}
-	if _, loaded := c.dispatchers.Swap(id, dispatcherPtr); loaded {
-		c.dispatcherCount.Dec()
+	if _, loaded := c.dispatchers.Swap(id, dispatcherPtr); !loaded {
+		c.dispatcherCount.Inc()
+		c.metricsCollector.metricDispatcherCount.Inc()
 	}
-	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -1476,14 +1464,17 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		c.removeChangefeedStatus(stat.changefeedStat)
 	}
 
-	c.eventStore.UnregisterDispatcher(changefeedID, id)
+	// Table trigger dispatchers do not register resources in either store.
+	if !isTableTriggerDispatcher {
+		c.eventStore.UnregisterDispatcher(changefeedID, id)
 
-	span := dispatcherInfo.GetTableSpan()
-	keyspaceMeta := common.KeyspaceMeta{
-		ID:   span.KeyspaceID,
-		Name: changefeedID.Keyspace(),
+		span := dispatcherInfo.GetTableSpan()
+		keyspaceMeta := common.KeyspaceMeta{
+			ID:   span.KeyspaceID,
+			Name: changefeedID.Keyspace(),
+		}
+		_ = c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
 	}
-	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),

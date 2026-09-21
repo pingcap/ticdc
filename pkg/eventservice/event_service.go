@@ -157,6 +157,17 @@ func (s *eventService) Run(ctx context.Context) error {
 		case <-ticker.C:
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
+			// Serialize timeout removal with REGISTER/REMOVE/RESET. Store resources
+			// are keyed by dispatcher ID and must be released before ID reuse.
+			s.brokersMu.RLock()
+			brokers := make([]*eventBroker, 0, len(s.brokers))
+			for _, broker := range s.brokers {
+				brokers = append(brokers, broker)
+			}
+			s.brokersMu.RUnlock()
+			for _, broker := range brokers {
+				broker.removeInactiveDispatchers()
+			}
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
