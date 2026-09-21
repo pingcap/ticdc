@@ -133,16 +133,14 @@ func TestPullerDebugInfoConcurrent(t *testing.T) {
 	client := &subscriptionClient{spanRegistry: registry}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 100; i++ {
+	wg.Go(func() {
+		for i := range 100 {
 			span.resolvedTs.Store(oracle.GoTimeToTS(now.Add(time.Duration(i) * time.Millisecond)))
 			registry.Remove(span.subID)
 			registry.Add(span)
 		}
-	}()
-	for i := 0; i < 100; i++ {
+	})
+	for range 100 {
 		client.GetPullerDebugInfo(PullerDebugOptions{
 			SubscriptionLimit: 1,
 			RegionLimit:       1,

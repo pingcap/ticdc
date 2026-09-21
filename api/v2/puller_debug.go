@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	apiutil "github.com/pingcap/ticdc/pkg/api"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -106,7 +106,7 @@ func parsePullerDebugUint(c *gin.Context, name string) (uint64, bool) {
 }
 
 func writePullerDebugInvalidParam(c *gin.Context, message string) {
-	err := cerror.ErrAPIInvalidParam.GenWithStack("invalid api parameter: %s", message)
+	err := errors.ErrAPIInvalidParam.GenWithStack("invalid api parameter: %s", message)
 	c.IndentedJSON(http.StatusBadRequest, apiutil.NewHTTPError(err))
 }
 
