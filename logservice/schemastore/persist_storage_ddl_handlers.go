@@ -22,6 +22,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -112,9 +113,16 @@ type persistStorageDDLHandler struct {
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
+<<<<<<< HEAD
 	// NOTE: the tableID is used in exchange table partition and rename tables DDL only,
 	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
 	// For other DDLs, tableID is not used and can be set to 0.
+=======
+	// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+	// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
+	// The rename table and eligibility build functions consume it directly; exchange
+	// partition uses it to attach the dispatcher's table state in buildTableDDLEvent.
+>>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
 }
 
@@ -592,7 +600,6 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
-	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -614,24 +621,18 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
-func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent, resolve sqlname.Resolver) error {
 	if event.TableInfo == nil || event.TableInfo.View == nil {
-		return
+		return nil
 	}
-
 	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
-		event.Query,
-		event.TableInfo.View.SelectStmt,
-		event.SchemaName,
+		event.Query, event.TableInfo.View.SelectStmt, event.SchemaName, resolve,
 	)
 	if err != nil {
-		log.Warn("normalize create view query with stored select failed",
-			zap.String("query", event.Query),
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.Error(err))
-		return
+		return err
 	}
 	event.Query = query
+	return nil
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -2634,7 +2635,10 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+// NOTE: the third parameter is the physical table id of the fetching
+// dispatcher. This function ignores it because the post-DDL table info of that
+// table is attached in buildTableDDLEvent.
+func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, _ int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2753,10 +2757,16 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	}
 	// For exchange table partition, we only set NotSync to true when the partition table is filtered.
 	ddlEvent.NotSync = notSyncPartitionTable
+	// The default event (including the DDL trigger) describes the partition table.
+	// Keep the old normal table info for storage sinks to emit its column schema.
+	// A table dispatcher fetch replaces TableInfo with the post-DDL info of its
+	// own physical table in buildTableDDLEvent.
+	ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo)
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
-		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
+		ddlEvent.TableInfo,
 		rawEvent.ExtraTableInfo,
 	}
+<<<<<<< HEAD
 	if tableID != 0 {
 		// Here we set TableInfo to the table info of tableID.
 		// First, check whether the tableID is a normal table after exchange.
@@ -2786,6 +2796,8 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			)
 		}
 	}
+=======
+>>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 	return ddlEvent, true, err
 }
 

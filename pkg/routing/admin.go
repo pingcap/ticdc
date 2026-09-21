@@ -100,9 +100,10 @@ func NewAdmin(
 		return nil, nil
 	}
 
+	caseSensitive := util.GetOrZero(replicaConfig.CaseSensitive)
 	router, err := NewRouter(
 		changefeedID,
-		util.GetOrZero(replicaConfig.CaseSensitive),
+		caseSensitive,
 		replicaConfig.Sink.DispatchRules,
 	)
 	if err != nil {
@@ -113,7 +114,7 @@ func NewAdmin(
 	admin := &Admin{
 		changefeedID:       changefeedID,
 		router:             router,
-		registry:           NewTargetTableRegistry(changefeedID, len(tables)),
+		registry:           NewTargetTableRegistry(changefeedID, caseSensitive, len(tables)),
 		activeRoutes:       activeRoutes,
 		pendingTransitions: make(map[uint64]*routeTransition),
 		reportError:        reportError,
@@ -125,13 +126,16 @@ func NewAdmin(
 			return nil, err
 		}
 
-		if _, ok := activeRoutes[binding.Source]; ok {
+		// Admission state is keyed by table identity, so `T` and `t` share one
+		// entry unless the changefeed is case-sensitive.
+		source := binding.Source.normalized(caseSensitive)
+		if _, ok := activeRoutes[source]; ok {
 			continue
 		}
 		if err := admin.registry.ApplyTransition(nil, []RouteBinding{binding}, true); err != nil {
 			return nil, err
 		}
-		activeRoutes[binding.Source] = binding
+		activeRoutes[source] = binding
 	}
 	return admin, nil
 }
@@ -238,10 +242,10 @@ func (a *Admin) applyTransition(transition *routeTransition, mutate bool) error 
 		return nil
 	}
 	for _, source := range releases {
-		delete(a.activeRoutes, source)
+		delete(a.activeRoutes, source.normalized(a.registry.caseSensitive))
 	}
 	for _, admit := range admits {
-		a.activeRoutes[admit.Source] = admit
+		a.activeRoutes[admit.Source.normalized(a.registry.caseSensitive)] = admit
 	}
 	return nil
 }
@@ -253,8 +257,9 @@ func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, [
 	releases := append([]TableKey(nil), transition.releases...)
 	admits := transition.admits
 	for _, schema := range transition.releaseSchemas {
+		releaseSchema := normalizeIdentifier(schema, a.registry.caseSensitive)
 		for source := range a.activeRoutes {
-			if source.Schema == schema {
+			if normalizeIdentifier(source.Schema, a.registry.caseSensitive) == releaseSchema {
 				releases = append(releases, source)
 			}
 		}

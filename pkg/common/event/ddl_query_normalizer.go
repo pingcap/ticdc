@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/model"
@@ -25,6 +26,9 @@ import (
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT
 // carries information that the original query text does not carry.
+// When resolve is provided, it must return canonical source names from the
+// catalog at the DDL timestamp. Declarations and their references are normalized
+// together, including the view name. This function never applies routing rules.
 //
 // TiDB persists the normalized SELECT body of a view in TableInfo.View.SelectStmt
 // when executing CREATE VIEW, so this field can carry resolved source-table
@@ -45,7 +49,7 @@ import (
 //	currentSchema    = "other_db"
 //
 //	                 → "CREATE VIEW `other_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`"
-func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string) (string, error) {
+func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string, resolve sqlname.Resolver) (string, error) {
 	if query == "" || storedSelectStmt == "" {
 		return query, nil
 	}
@@ -63,11 +67,20 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
-	if !normalizeCreateViewSelect(selectStmt, currentSchema) {
-		return query, nil
+	if resolve != nil {
+		// Bind the stored SELECT and view declaration to the same historical catalog.
+		// Always retain these canonical names, even when no reference needs qualification.
+		createViewStmt.Select = selectStmt
+		if _, err := sqlname.Bind(createViewStmt, currentSchema).Apply(resolve); err != nil {
+			return query, err
+		}
+	} else {
+		if !normalizeCreateViewSelect(selectStmt, currentSchema) {
+			return query, nil
+		}
+		createViewStmt.Select = selectStmt
 	}
 
-	createViewStmt.Select = selectStmt
 	normalizedQuery, err := Restore(createViewStmt)
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
@@ -75,28 +88,12 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 	return normalizedQuery, nil
 }
 
-type createViewSelectNormalizer struct {
-	changed bool
-	scopes  []createViewSelectScope
-}
-
-type createViewSelectScope struct {
-	aliases         map[string]struct{}
-	tableByName     map[string]string
-	ambiguousTables map[string]struct{}
-}
-
-// normalizeCreateViewSelect returns true when CREATE VIEW should use the stored
-// SELECT body. It also turns unaliased table-qualified column references into
-// schema-qualified references: `orders`.`id` with FROM `source_db`.`orders`
-// becomes `source_db`.`orders`.`id`. Explicit alias references are preserved.
+// normalizeCreateViewSelect qualifies bound physical table references.
+// With no catalog, original table spellings remain.
 func normalizeCreateViewSelect(selectStmt ast.StmtNode, currentSchema string) bool {
 	currentSchemaOnly := createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema)
-	normalizer := &createViewSelectNormalizer{
-		scopes: make([]createViewSelectScope, 0),
-	}
-	selectStmt.Accept(normalizer)
-	return !currentSchemaOnly || normalizer.changed
+	changed, _ := sqlname.Bind(selectStmt, "").Apply(nil)
+	return !currentSchemaOnly || changed
 }
 
 func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
@@ -108,6 +105,7 @@ func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchem
 	return true
 }
 
+<<<<<<< HEAD
 func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
 	switch v := in.(type) {
 	case *ast.SelectStmt:
@@ -190,6 +188,8 @@ func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSele
 	}
 }
 
+=======
+>>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 type tableSchemaExtractor struct {
 	schemas []string
 }
