@@ -20,10 +20,12 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -58,8 +60,38 @@ func TestPersistSchemaSnapshotReturnsWhenListDatabasesSnapshotLost(t *testing.T)
 	defer db.Close()
 
 	snapshotLostErr := snapshotLostByGCError{}
-	_, _, _, err = persistSchemaSnapshot(db, &snapshotLostStorage{err: snapshotLostErr}, 100, true)
+	_, _, _, err = persistSchemaSnapshot(context.Background(), db, &snapshotLostStorage{err: snapshotLostErr}, 100, true)
 	require.ErrorIs(t, err, snapshotLostErr)
+}
+
+func TestPersistSchemaSnapshotStopsRetryingWhenCanceled(t *testing.T) {
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+
+	attempted := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := persistSchemaSnapshot(ctx, db, &snapshotLostStorage{
+			err:       cerror.New("retryable snapshot error"),
+			attempted: attempted,
+		}, 100, true)
+		done <- err
+	}()
+
+	select {
+	case <-attempted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema snapshot initialization did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema snapshot initialization did not stop")
+	}
 }
 
 func TestSchemaStoreDoesNotDecryptLegacyValuesWhenManagerIsConfigured(t *testing.T) {
@@ -234,8 +266,9 @@ func TestPersistSchemaSnapshotEncryptionRoundTrip(t *testing.T) {
 		keyspaceID:        42,
 		kvStorage:         tikvStore,
 		encryptionManager: encMgr,
+		ctx:               context.Background(),
 	}
-	storage.initializeFromKVStorage(filepath.Join(t.TempDir(), "schema-store"), version.Ver)
+	require.NoError(t, storage.initializeFromKVStorage(filepath.Join(t.TempDir(), "schema-store"), version.Ver))
 	defer func() {
 		require.NoError(t, storage.db.Close())
 	}()
@@ -442,15 +475,17 @@ func (snapshotLostByGCError) Error() string {
 
 type snapshotLostStorage struct {
 	kv.Storage
-	err error
+	err       error
+	attempted chan struct{}
 }
 
 func (s *snapshotLostStorage) GetSnapshot(kv.Version) kv.Snapshot {
-	return &snapshotLostSnapshot{err: s.err}
+	return &snapshotLostSnapshot{err: s.err, attempted: s.attempted}
 }
 
 type snapshotLostSnapshot struct {
-	err error
+	err       error
+	attempted chan struct{}
 }
 
 func (s *snapshotLostSnapshot) Get(context.Context, kv.Key, ...kv.GetOption) (kv.ValueEntry, error) {
@@ -458,6 +493,12 @@ func (s *snapshotLostSnapshot) Get(context.Context, kv.Key, ...kv.GetOption) (kv
 }
 
 func (s *snapshotLostSnapshot) Iter(kv.Key, kv.Key) (kv.Iterator, error) {
+	if s.attempted != nil {
+		select {
+		case s.attempted <- struct{}{}:
+		default:
+		}
+	}
 	return nil, s.err
 }
 
