@@ -878,42 +878,47 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 		checkpointMs  int64
 		deliveredMs   int64
 		baselineMs    int64
-		localReadyMs  int64
+		localLagMs    int64
 	}{
 		{
 			name:          "remote ready is the baseline before data arrives",
 			remoteReadyMs: 160000, checkpointMs: 100000, deliveredMs: 100000,
-			baselineMs: 160000, localReadyMs: 155000,
+			baselineMs: 160000, localLagMs: 5000,
 		},
 		{
 			name:          "delivered progress replaces the remote ready baseline",
 			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
-			baselineMs: 130000, localReadyMs: 125000,
+			baselineMs: 130000, localLagMs: 5000,
 		},
 		{
 			name:          "delivered progress advances beyond remote ready",
 			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 190000,
-			baselineMs: 190000, localReadyMs: 185000,
+			baselineMs: 190000, localLagMs: 5000,
 		},
 		{
 			name:          "checkpoint is ahead of delivered resolved ts",
 			remoteReadyMs: 160000, checkpointMs: 140000, deliveredMs: 130000,
-			baselineMs: 140000, localReadyMs: 135000,
+			baselineMs: 140000, localLagMs: 5000,
 		},
 		{
 			name:          "legacy remote ready uses dispatcher progress",
 			remoteReadyMs: 0, checkpointMs: 110000, deliveredMs: 130000,
-			baselineMs: 130000, localReadyMs: 125000,
+			baselineMs: 130000, localLagMs: 5000,
 		},
 		{
 			name:          "local is less than five seconds behind",
 			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
-			baselineMs: 130000, localReadyMs: 125001,
+			baselineMs: 130000, localLagMs: 4999,
 		},
 		{
-			name:          "local is ahead of remote",
+			name:          "local has the same physical timestamp",
 			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
-			baselineMs: 130000, localReadyMs: 140000,
+			baselineMs: 130000, localLagMs: 0,
+		},
+		{
+			name:          "local is ahead of remote by more than five seconds",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: -10000,
 		},
 	}
 	for _, tt := range tests {
@@ -936,13 +941,14 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 			messages = nil
 
 			// Model the progress delivered after remote takes over. Logical TSO
-			// bits must not change the inclusive five-second physical-time limit.
+			// bits must not affect the inclusive five-second physical-time limit.
 			mockDisp.checkPointTs = oracle.ComposeTS(tt.checkpointMs, 0)
 			mockDisp.resolvedTs = oracle.ComposeTS(tt.deliveredMs, 0)
 			if mockDisp.resolvedTs > mockDisp.startTs {
 				mockDisp.resolvedTs += 20
 			}
 			epoch := stat.loadCurrentEpochState().epoch
+			// Missing progress or a lag above five seconds must keep remote serving.
 			for _, ts := range []uint64{0, oracle.ComposeTS(tt.baselineMs-5001, 0)} {
 				sendReady(localServerID, ts)
 				current, pendingLocal, pendingRemote := sessionState(stat.session)
@@ -953,7 +959,8 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 				require.Equal(t, epoch, stat.loadCurrentEpochState().epoch)
 			}
 
-			sendReady(localServerID, oracle.ComposeTS(tt.localReadyMs, 0))
+			localResolvedTs := oracle.ComposeTS(tt.baselineMs-tt.localLagMs, 0)
+			sendReady(localServerID, localResolvedTs)
 			current, pendingLocal, pendingRemote := sessionState(stat.session)
 			require.Equal(t, localServerID, current)
 			require.False(t, pendingLocal)
@@ -966,10 +973,10 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, reset.ActionType)
 			require.Equal(t, mockDisp.checkPointTs, reset.StartTs)
 			require.Equal(t, epoch+1, reset.Epoch)
-			require.Zero(t, stat.session.connState.remoteResolvedTs)
+			require.Zero(t, stat.session.connState.getRemoteReadyResolvedTs())
 
 			messages = nil
-			sendReady(localServerID, oracle.ComposeTS(tt.localReadyMs, 0))
+			sendReady(localServerID, localResolvedTs)
 			require.Empty(t, messages)
 		})
 	}
