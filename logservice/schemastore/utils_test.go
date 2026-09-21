@@ -89,7 +89,7 @@ func TestBuildPersistedDDLEventForMultiSchemaChangeContainsIndexIDs(t *testing.T
 		},
 	}
 
-	event := buildPersistedDDLEventForMultiSchemaChange(args)
+	event, _ := buildPersistedDDLEventForMultiSchemaChange(args)
 	expectedIndexIDs := getIndexIDs(job)
 	require.Len(t, expectedIndexIDs, 1)
 	require.Equal(t, expectedIndexIDs, event.IndexIDs)
