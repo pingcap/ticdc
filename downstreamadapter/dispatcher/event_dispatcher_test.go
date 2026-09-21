@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -1024,12 +1025,12 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	omitResponse.Store(true)
 	handlerErrCh := make(chan error, 1)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		req := msg.Message[0].(*schemastore.GetTableInfosRequest)
 		if cancelOnRequest.Load() {
 			cancelBootstrap()
 			return nil
 		}
-		resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
+		resp := &schemastore.GetTableInfosResponse{RequestID: req.RequestID}
 		for _, tableID := range req.TableIDs {
 			if omitResponse.Load() && tableID == tableInfo2.TableName.TableID {
 				continue
@@ -1039,7 +1040,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 				handlerErrCh <- err
 				return err
 			}
-			resp.TableInfos = append(resp.TableInfos, messaging.SchemaStoreTableInfo{TableID: tableID, TableInfo: data})
+			resp.TableInfos = append(resp.TableInfos, schemastore.TableInfoResult{TableID: tableID, TableInfo: data})
 		}
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp))
 	})

@@ -15,8 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"encoding/json"
-	"slices"
 	"sync"
 	"time"
 
@@ -27,127 +25,90 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"go.uber.org/zap"
 )
 
 const (
-	schemaStoreResponseMaxTries   = 10
-	schemaStoreRequestWorkers     = 16
-	schemaStoreMaxPendingRequests = 256
+	schemaStoreResponseMaxTries = 10
+	schemaStoreRequestWorkers   = 16
+	schemaStoreRequestQueueSize = 256
 )
 
-// schemaStoreMessageHandler owns request admission, queuing and execution.
-// Only dispatch accesses the queue and the running request count.
 type schemaStoreMessageHandler struct {
-	store  *schemaStore
-	mc     messaging.MessageCenter
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	submissions chan schemaRequestSubmission
-	tasks       chan schemaRequest
-	completed   chan struct{}
-	stopped     chan struct{}
-	workers     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	store    *schemaStore
+	mc       messaging.MessageCenter
+	requests chan schemaRequest
+	wg       sync.WaitGroup
 }
 
 type schemaRequest struct {
-	from      node.ID
-	message   *messaging.SchemaStoreRequest
-	expiresAt time.Time
-}
-
-type schemaRequestSubmission struct {
-	request schemaRequest
-	result  chan error
+	from    node.ID
+	message messaging.IOTypeT
 }
 
 func newSchemaStoreMessageHandler(ctx context.Context, store *schemaStore, mc messaging.MessageCenter, workers int) *schemaStoreMessageHandler {
 	ctx, cancel := context.WithCancel(ctx)
 	h := &schemaStoreMessageHandler{
-		store: store, mc: mc, ctx: ctx, cancel: cancel,
-		submissions: make(chan schemaRequestSubmission),
-		tasks:       make(chan schemaRequest),
-		completed:   make(chan struct{}),
-		stopped:     make(chan struct{}),
+		ctx: ctx, cancel: cancel, store: store, mc: mc,
+		requests: make(chan schemaRequest, schemaStoreRequestQueueSize),
 	}
 	for range workers {
-		h.workers.Go(h.runWorker)
+		h.wg.Go(h.runWorker)
 	}
-	go h.dispatch()
 	mc.RegisterHandler(messaging.SchemaStoreTopic, h.handleMessage)
 	return h
 }
 
-// stop releases queued requests without waiting for synchronous storage calls.
-// The store must close its keyspaces before waiting for the workers to exit.
+// stop discards pending requests before the store closes its keyspaces and waits
+// for running workers. The channel stays open for concurrent submitters.
 func (h *schemaStoreMessageHandler) stop() {
 	h.mc.DeRegisterHandler(messaging.SchemaStoreTopic)
 	h.cancel()
-	<-h.stopped
+	h.discardPendingRequests()
 }
 
-func (h *schemaStoreMessageHandler) dispatch() {
-	queue := make([]schemaRequest, 0, schemaStoreMaxPendingRequests)
-	running := 0
-	timer := time.NewTimer(messaging.SchemaStoreRequestTimeout)
-	defer timer.Stop()
-	defer close(h.stopped)
-	defer close(h.tasks)
-	defer func() { clear(queue) }()
+func (h *schemaStoreMessageHandler) discardPendingRequests() {
 	for {
-		if h.ctx.Err() != nil {
-			return
-		}
-		// Admission assigns expiration times in FIFO order. Expire requests even
-		// when every worker is busy, releasing both their payloads and queue slots.
-		now := time.Now()
-		expired := 0
-		for expired < len(queue) && !queue[expired].expiresAt.After(now) {
-			expired++
-		}
-		queue = slices.Delete(queue, 0, expired)
-		var output chan schemaRequest
-		var next schemaRequest
-		var expiration <-chan time.Time
-		timer.Stop()
-		if len(queue) > 0 {
-			output, next = h.tasks, queue[0]
-			timer.Reset(time.Until(next.expiresAt))
-			expiration = timer.C
-		}
 		select {
-		case <-h.ctx.Done():
+		case <-h.requests:
+		default:
 			return
-		case submission := <-h.submissions:
-			if running+len(queue) >= schemaStoreMaxPendingRequests {
-				submission.result <- errors.ErrSchemaStoreRequestFailed.GenWithStack("schema store request queue is full")
-				continue
-			}
-			submission.request.expiresAt = time.Now().Add(messaging.SchemaStoreRequestTimeout)
-			queue = append(queue, submission.request)
-			submission.result <- nil
-		case output <- next:
-			running++
-			queue = slices.Delete(queue, 0, 1)
-		case <-h.completed:
-			running--
-		case <-expiration:
 		}
 	}
 }
 
+func (h *schemaStoreMessageHandler) submit(req schemaRequest) error {
+	if err := h.ctx.Err(); err != nil {
+		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	select {
+	case h.requests <- req:
+		// A sender can pass the first check just before stop drains the queue.
+		// Release that late submission too, without closing the shared channel.
+		if err := h.ctx.Err(); err != nil {
+			h.discardPendingRequests()
+			return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+		}
+		return nil
+	default:
+		return errors.ErrSchemaStoreRequestFailed.GenWithStack("schema store request queue is full")
+	}
+}
+
 func (h *schemaStoreMessageHandler) runWorker() {
-	for request := range h.tasks {
-		// This deadline bounds response delivery; existing storage calls keep
-		// their own waiting and lifetime semantics.
-		ctx, cancel := context.WithDeadline(h.ctx, request.expiresAt)
-		h.handleRequest(ctx, request.from, request.message)
-		cancel()
+	for {
 		select {
-		case h.completed <- struct{}{}:
 		case <-h.ctx.Done():
 			return
+		case req := <-h.requests:
+			// The timeout starts on dequeue. Existing synchronous storage calls
+			// retain their own waiting and cancellation semantics.
+			ctx, cancel := context.WithTimeout(h.ctx, schemastore.RequestTimeout)
+			h.handleRequest(ctx, req.from, req.message)
+			cancel()
 		}
 	}
 }
@@ -172,94 +133,83 @@ func (h *schemaStoreMessageHandler) sendResponse(ctx context.Context, to node.ID
 }
 
 func (h *schemaStoreMessageHandler) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
-	for _, m := range msg.Message {
-		req, ok := m.(*messaging.SchemaStoreRequest)
-		if !ok || req == nil {
+	if err := ctx.Err(); err != nil {
+		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
+	}
+	for _, message := range msg.Message {
+		var rejection messaging.IOTypeT
+		switch req := message.(type) {
+		case *schemastore.GetTableInfosRequest:
+			if req == nil {
+				continue
+			}
+			if err := h.submit(schemaRequest{from: msg.From, message: req}); err != nil {
+				rejection = &schemastore.GetTableInfosResponse{RequestID: req.RequestID, Error: schemastore.NewError(err)}
+			}
+		case *schemastore.GetAllPhysicalTablesRequest:
+			if req == nil {
+				continue
+			}
+			if err := h.submit(schemaRequest{from: msg.From, message: req}); err != nil {
+				rejection = &schemastore.GetAllPhysicalTablesResponse{RequestID: req.RequestID, Error: schemastore.NewError(err)}
+			}
+		default:
 			continue
 		}
-		if err := h.submit(ctx, msg.From, req); err != nil {
-			// Rejection must not wait or retry on the shared command router.
-			resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID, Error: err.Error()}
-			code, _ := errors.RFCCode(err)
-			resp.ErrorCode = string(code)
-			if sendErr := h.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp)); sendErr != nil {
-				return sendErr
+		// Rejection must not wait or retry on the shared command router.
+		if rejection != nil {
+			if err := h.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, rejection)); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (h *schemaStoreMessageHandler) submit(ctx context.Context, from node.ID, req *messaging.SchemaStoreRequest) error {
-	if err := ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	if err := h.ctx.Err(); err != nil {
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
-	}
-	if req.Operation == messaging.SchemaStoreGetTableInfos && (len(req.TableIDs) == 0 || len(req.TableIDs) > messaging.SchemaStoreTableBatchSize) {
-		return errors.ErrSchemaStoreRequestFailed.GenWithStack("invalid schema store batch size %d", len(req.TableIDs))
-	}
-	// Dispatch only handles queue state, so admission never waits for storage.
-	// The buffered result also lets dispatch finish if the submitter cancels.
-	submission := schemaRequestSubmission{
-		request: schemaRequest{from: from, message: req},
-		result:  make(chan error, 1),
-	}
-	select {
-	case h.submissions <- submission:
-	case <-ctx.Done():
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
-	case <-h.ctx.Done():
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, h.ctx.Err())
-	}
-	select {
-	case err := <-submission.result:
-		return err
-	case <-ctx.Done():
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, ctx.Err())
-	case <-h.ctx.Done():
-		return errors.WrapError(errors.ErrSchemaStoreRequestFailed, h.ctx.Err())
-	}
-}
-
-func (h *schemaStoreMessageHandler) handleRequest(ctx context.Context, from node.ID, req *messaging.SchemaStoreRequest) {
+func (h *schemaStoreMessageHandler) handleRequest(ctx context.Context, from node.ID, message messaging.IOTypeT) {
 	if ctx.Err() != nil {
 		return
 	}
-	resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID}
-	var err error
-	switch req.Operation {
-	case messaging.SchemaStoreRegisterKeyspace:
-		err = h.store.RegisterKeyspace(h.ctx, req.Keyspace)
-	case messaging.SchemaStoreGetAllPhysicalTables:
-		var f filter.Filter
-		f, err = filter.NewFilter(req.Filter, "", req.CaseSensitive, req.ForceReplicate)
-		if err == nil {
-			resp.Tables, err = h.store.GetAllPhysicalTables(req.Keyspace, req.Ts, f)
+	var response messaging.IOTypeT
+	var requestID uint64
+	var keyspaceID uint32
+	switch req := message.(type) {
+	case *schemastore.GetTableInfosRequest:
+		requestID, keyspaceID = req.RequestID, req.Keyspace.ID
+		infos, more, err := h.getTableInfosBatch(ctx, req)
+		response = &schemastore.GetTableInfosResponse{RequestID: requestID, TableInfos: infos, More: more, Error: schemastore.NewError(err)}
+	case *schemastore.GetAllPhysicalTablesRequest:
+		requestID, keyspaceID = req.RequestID, req.Keyspace.ID
+		resp := &schemastore.GetAllPhysicalTablesResponse{RequestID: requestID}
+		response = resp
+		if req.Filter == nil {
+			resp.Error = schemastore.NewError(errors.ErrSchemaStoreRequestFailed.GenWithStack("schema store filter is missing"))
+			break
 		}
-	case messaging.SchemaStoreGetTableInfos:
-		resp.TableInfos, resp.More, err = h.getTableInfosBatch(ctx, req)
+		f, err := filter.NewFilter(schemastore.FilterConfigFromProto(req.Filter), "", req.CaseSensitive, req.ForceReplicate)
+		if err == nil {
+			tables, readErr := h.store.GetAllPhysicalTables(req.Keyspace.ToCommon(), req.Ts, f)
+			err = readErr
+			resp.Tables = schemastore.NewPhysicalTables(tables)
+		}
+		resp.Error = schemastore.NewError(err)
 	default:
-		err = errors.ErrSchemaStoreRequestFailed.GenWithStack("unknown schema store operation: %d", req.Operation)
-	}
-	if err != nil {
-		resp.Error = err.Error()
-		code, _ := errors.RFCCode(err)
-		resp.ErrorCode = string(code)
-		resp.TableInfos = nil
+		return
 	}
 	if ctx.Err() != nil {
 		return
 	}
-	if err := h.sendResponse(ctx, from, resp); err != nil && ctx.Err() == nil {
-		log.Warn("send schema store response failed", zap.Uint32("keyspaceID", req.Keyspace.ID),
-			zap.Uint64("requestID", req.RequestID), zap.Error(err))
+	if err := h.sendResponse(ctx, from, response); err != nil && ctx.Err() == nil {
+		log.Warn("send schema store response failed", zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("requestID", requestID), zap.Error(err))
 	}
 }
 
-func (h *schemaStoreMessageHandler) getTableInfosBatch(ctx context.Context, req *messaging.SchemaStoreRequest) ([]messaging.SchemaStoreTableInfo, bool, error) {
-	store, err := h.store.acquireKeyspaceSchemaStore(req.Keyspace)
+func (h *schemaStoreMessageHandler) getTableInfosBatch(ctx context.Context, req *schemastore.GetTableInfosRequest) ([]schemastore.TableInfoResult, bool, error) {
+	if len(req.TableIDs) == 0 || len(req.TableIDs) > schemastore.TableBatchSize {
+		return nil, false, errors.ErrSchemaStoreRequestFailed.GenWithStack("invalid schema store batch size %d", len(req.TableIDs))
+	}
+
+	store, err := h.store.acquireKeyspaceSchemaStore(req.Keyspace.ToCommon())
 	if err != nil {
 		return nil, false, err
 	}
@@ -267,15 +217,14 @@ func (h *schemaStoreMessageHandler) getTableInfosBatch(ctx context.Context, req 
 	if !store.waitResolvedTs(0, req.Ts, 2*time.Second) {
 		return nil, false, errors.ErrKeyspaceNotFound.FastGenByArgs(req.Keyspace.ID)
 	}
-	result := make([]messaging.SchemaStoreTableInfo, 0, len(req.TableIDs))
-	// Reserve space for the response envelope; account for base64 and JSON
-	// overhead in each table result, not just the raw schema bytes.
-	size := 128
+	result := make([]schemastore.TableInfoResult, 0, len(req.TableIDs))
+	// Reserve the response envelope, including the continuation flag.
+	size := (&schemastore.GetTableInfosResponse{RequestID: req.RequestID, More: true}).Size()
 	for _, tableID := range req.TableIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, false, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
 		}
-		item := messaging.SchemaStoreTableInfo{TableID: tableID}
+		item := schemastore.TableInfoResult{TableID: tableID}
 		var info *common.TableInfo
 		info, err = store.dataStorage.getTableInfoAtTs(tableID, req.Ts)
 		if err == nil {
@@ -292,17 +241,14 @@ func (h *schemaStoreMessageHandler) getTableInfosBatch(ctx context.Context, req 
 			}
 			item.Error = err.Error()
 		}
-		encoded, err := json.Marshal(item)
-		if err != nil {
-			return nil, false, errors.WrapError(errors.ErrMarshalFailed, err)
-		}
-		if size+len(encoded)+1 > messaging.SchemaStoreTableBatchBytes {
+		itemSize := (&schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{item}}).Size()
+		if size+itemSize > schemastore.TableBatchBytes {
 			if len(result) == 0 {
 				return nil, false, errors.ErrSchemaStoreRequestFailed.GenWithStack("schema for table %d exceeds the response size limit", tableID)
 			}
 			return result, true, nil
 		}
-		size += len(encoded) + 1
+		size += itemSize
 		result = append(result, item)
 	}
 	return result, false, nil

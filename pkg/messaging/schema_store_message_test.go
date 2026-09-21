@@ -16,10 +16,9 @@ package messaging
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,12 +27,12 @@ func TestSchemaStoreMessageRoundTrip(t *testing.T) {
 		typ     IOType
 		message IOTypeT
 	}{
-		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 1, Operation: SchemaStoreGetTableInfos, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}, TableIDs: []int64{3}, Ts: 4}},
-		{TypeSchemaStoreResponse, &SchemaStoreResponse{RequestID: 1, TableInfos: []SchemaStoreTableInfo{{TableID: 3, TableInfo: []byte("table")}, {TableID: 4, Error: "table deleted"}}, More: true}},
-		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 5, Operation: SchemaStoreRegisterKeyspace, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}}},
-		{TypeSchemaStoreRequest, &SchemaStoreRequest{RequestID: 6, Operation: SchemaStoreGetAllPhysicalTables, Keyspace: common.KeyspaceMeta{ID: 2, Name: "ks"}, Ts: 10, Filter: config.NewDefaultFilterConfig(), CaseSensitive: true, ForceReplicate: true}},
-		{TypeSchemaStoreResponse, &SchemaStoreResponse{RequestID: 6, Tables: []commonEvent.Table{{SchemaID: 10, TableID: 20, Splitable: true, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"}}}}},
-		{TypeSchemaStoreResponse, &SchemaStoreResponse{RequestID: 7, Error: "missing keyspace", ErrorCode: "CDC:ErrKeyspaceNotFound"}},
+		{TypeGetTableInfosRequest, &schemastore.GetTableInfosRequest{RequestID: 1, Keyspace: schemastore.KeyspaceMeta{ID: 2, Name: "ks"}, TableIDs: []int64{3}, Ts: 4}},
+		{TypeGetTableInfosResponse, &schemastore.GetTableInfosResponse{RequestID: 1, TableInfos: []schemastore.TableInfoResult{{TableID: 3, TableInfo: []byte("table")}, {TableID: 4, Error: "table deleted"}}, More: true}},
+		{TypeGetAllPhysicalTablesRequest, &schemastore.GetAllPhysicalTablesRequest{RequestID: 6, Keyspace: schemastore.KeyspaceMeta{ID: 2, Name: "ks"}, Ts: 10, Filter: &eventpb.InnerFilterConfig{Rules: []string{"test.*"}}, CaseSensitive: true, ForceReplicate: true}},
+		{TypeGetAllPhysicalTablesResponse, &schemastore.GetAllPhysicalTablesResponse{RequestID: 6, Tables: []schemastore.PhysicalTable{{SchemaID: 10, TableID: 20, Splitable: true, SchemaTableName: &schemastore.SchemaTableName{SchemaName: "test", TableName: "t"}}}}},
+		{TypeGetTableInfosResponse, &schemastore.GetTableInfosResponse{RequestID: 7, Error: &schemastore.Error{Message: "missing keyspace", Code: "CDC:ErrKeyspaceNotFound"}}},
+		{TypeGetAllPhysicalTablesResponse, &schemastore.GetAllPhysicalTablesResponse{RequestID: 8, Error: &schemastore.Error{Message: "missing keyspace", Code: "CDC:ErrKeyspaceNotFound"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.typ.String(), func(t *testing.T) {

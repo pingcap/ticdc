@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
-	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -258,8 +257,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	schemaStore := client.GetSchemaStoreClient()
-	if err = schemaStore.RegisterKeyspace(ctx, common.KeyspaceMeta{
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	// The ctx's lifecycle is the same as the HTTP request.
+	// The schema store may use the context to fetch database information asynchronously.
+	// Therefore, we cannot use the context of the HTTP request.
+	// We create a new context here.
+	schemaCxt := context.Background()
+	if err = schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
 		ID:   keyspaceMeta.GetId(),
 		Name: keyspaceMeta.Name,
 	}); err != nil {

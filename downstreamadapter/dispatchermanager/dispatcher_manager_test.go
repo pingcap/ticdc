@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -479,9 +480,9 @@ func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	tableInfoData, err := tableInfo.Marshal()
 	require.NoError(t, err)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		req := msg.Message[0].(*schemastore.GetTableInfosRequest)
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreResponse{RequestID: req.RequestID, TableInfos: []messaging.SchemaStoreTableInfo{{TableID: 11, TableInfo: tableInfoData}}}))
+			&schemastore.GetTableInfosResponse{RequestID: req.RequestID, TableInfos: []schemastore.TableInfoResult{{TableID: 11, TableInfo: tableInfoData}}}))
 	})
 
 	heartbeatCollector := &HeartBeatCollector{}

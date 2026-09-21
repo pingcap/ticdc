@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -103,8 +104,12 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
-	TypeSchemaStoreRequest                 IOType = 49
-	TypeSchemaStoreResponse                IOType = 50
+
+	// Schema store related
+	TypeGetTableInfosRequest         IOType = 49
+	TypeGetTableInfosResponse        IOType = 50
+	TypeGetAllPhysicalTablesRequest  IOType = 51
+	TypeGetAllPhysicalTablesResponse IOType = 52
 
 	// Node drain related
 	TypeNodeHeartbeatRequest            IOType = 42
@@ -198,10 +203,14 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
-	case TypeSchemaStoreRequest:
-		return "SchemaStoreRequest"
-	case TypeSchemaStoreResponse:
-		return "SchemaStoreResponse"
+	case TypeGetTableInfosRequest:
+		return "GetTableInfosRequest"
+	case TypeGetTableInfosResponse:
+		return "GetTableInfosResponse"
+	case TypeGetAllPhysicalTablesRequest:
+		return "GetAllPhysicalTablesRequest"
+	case TypeGetAllPhysicalTablesResponse:
+		return "GetAllPhysicalTablesResponse"
 	case TypeNodeHeartbeatRequest:
 		return "NodeHeartbeatRequest"
 	case TypeSetNodeLivenessRequest:
@@ -404,10 +413,14 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
-	case TypeSchemaStoreRequest:
-		m = &SchemaStoreRequest{}
-	case TypeSchemaStoreResponse:
-		m = &SchemaStoreResponse{}
+	case TypeGetTableInfosRequest:
+		m = &schemastore.GetTableInfosRequest{}
+	case TypeGetTableInfosResponse:
+		m = &schemastore.GetTableInfosResponse{}
+	case TypeGetAllPhysicalTablesRequest:
+		m = &schemastore.GetAllPhysicalTablesRequest{}
+	case TypeGetAllPhysicalTablesResponse:
+		m = &schemastore.GetAllPhysicalTablesResponse{}
 	case TypeNodeHeartbeatRequest:
 		m = &heartbeatpb.NodeHeartbeat{}
 	case TypeSetNodeLivenessRequest:
@@ -530,10 +543,14 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
-	case *SchemaStoreRequest:
-		ioType = TypeSchemaStoreRequest
-	case *SchemaStoreResponse:
-		ioType = TypeSchemaStoreResponse
+	case *schemastore.GetTableInfosRequest:
+		ioType = TypeGetTableInfosRequest
+	case *schemastore.GetTableInfosResponse:
+		ioType = TypeGetTableInfosResponse
+	case *schemastore.GetAllPhysicalTablesRequest:
+		ioType = TypeGetAllPhysicalTablesRequest
+	case *schemastore.GetAllPhysicalTablesResponse:
+		ioType = TypeGetAllPhysicalTablesResponse
 	case *heartbeatpb.NodeHeartbeat:
 		ioType = TypeNodeHeartbeatRequest
 	case *heartbeatpb.SetNodeLivenessRequest:

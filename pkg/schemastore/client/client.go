@@ -26,14 +26,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"go.uber.org/zap"
 )
+
+type response interface {
+	messaging.IOTypeT
+	GetRequestID() uint64
+	GetError() *schemastore.Error
+}
 
 type Client struct {
 	mc            messaging.MessageCenter
 	target        node.ID
 	nextRequestID atomic.Uint64
-	requests      sync.Map // uint64 request ID -> chan *messaging.SchemaStoreResponse
+	requests      sync.Map // uint64 request ID -> chan response
 }
 
 var (
@@ -73,14 +80,14 @@ func SetSchemaStoreClientForTest(c *Client) func() {
 
 func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) error {
 	for _, m := range msg.Message {
-		resp, ok := m.(*messaging.SchemaStoreResponse)
-		if !ok || resp == nil {
+		resp, ok := m.(response)
+		if !ok || resp.GetRequestID() == 0 {
 			continue
 		}
-		if value, ok := c.requests.LoadAndDelete(resp.RequestID); ok {
+		if value, ok := c.requests.LoadAndDelete(resp.GetRequestID()); ok {
 			// Exactly one response claims the single buffered slot. Duplicates
 			// and late responses cannot block the shared command router.
-			value.(chan *messaging.SchemaStoreResponse) <- resp
+			value.(chan response) <- resp
 		}
 	}
 	return nil
@@ -89,19 +96,25 @@ func (c *Client) handleMessage(_ context.Context, msg *messaging.TargetMessage) 
 // GetTableInfos fetches bounded batches and rejects incomplete responses. No
 // partial result is returned if any batch fails or the caller cancels.
 func (c *Client) GetTableInfos(ctx context.Context, meta common.KeyspaceMeta, tableIDs []int64, ts uint64) ([]*common.TableInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, messaging.SchemaStoreRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schemastore.RequestTimeout)
 	defer cancel()
 	result := make([]*common.TableInfo, 0, len(tableIDs))
 	skipped := 0
-	var firstSkipped messaging.SchemaStoreTableInfo
+	var firstSkipped schemastore.TableInfoResult
 	for len(tableIDs) > 0 {
-		batch := tableIDs[:min(len(tableIDs), messaging.SchemaStoreTableBatchSize)]
-		resp, err := c.request(ctx, &messaging.SchemaStoreRequest{
-			Operation: messaging.SchemaStoreGetTableInfos, Keyspace: meta, TableIDs: batch, Ts: ts,
-		})
+		batch := tableIDs[:min(len(tableIDs), schemastore.TableBatchSize)]
+		req := &schemastore.GetTableInfosRequest{
+			RequestID: c.nextRequestID.Add(1), Keyspace: schemastore.NewKeyspaceMeta(meta), TableIDs: batch, Ts: ts,
+		}
+		reply, err := c.request(ctx, req.RequestID, req)
 		if err != nil {
 			return nil, err
 		}
+		resp, ok := reply.(*schemastore.GetTableInfosResponse)
+		if !ok {
+			return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("unexpected response to table infos request: %T", reply)
+		}
+
 		count := len(resp.TableInfos)
 		if count == 0 || count > len(batch) || (!resp.More && count != len(batch)) || (resp.More && count == len(batch)) {
 			return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("incomplete schema store batch: requested %d, received %d, more %t", len(batch), count, resp.More)
@@ -138,26 +151,26 @@ func (c *Client) GetTableInfos(ctx context.Context, meta common.KeyspaceMeta, ta
 	return result, nil
 }
 
-func (c *Client) RegisterKeyspace(ctx context.Context, meta common.KeyspaceMeta) error {
-	_, err := c.request(ctx, &messaging.SchemaStoreRequest{Operation: messaging.SchemaStoreRegisterKeyspace, Keyspace: meta})
-	return err
-}
-
 func (c *Client) GetAllPhysicalTables(ctx context.Context, meta common.KeyspaceMeta, ts uint64,
 	filterConfig *config.FilterConfig, caseSensitive, forceReplicate bool,
 ) ([]commonEvent.Table, error) {
-	resp, err := c.request(ctx, &messaging.SchemaStoreRequest{
-		Operation: messaging.SchemaStoreGetAllPhysicalTables, Keyspace: meta, Ts: ts,
-		Filter: filterConfig, CaseSensitive: caseSensitive, ForceReplicate: forceReplicate,
-	})
+	req := &schemastore.GetAllPhysicalTablesRequest{
+		RequestID: c.nextRequestID.Add(1), Keyspace: schemastore.NewKeyspaceMeta(meta), Ts: ts,
+		Filter: schemastore.NewFilterConfig(filterConfig), CaseSensitive: caseSensitive, ForceReplicate: forceReplicate,
+	}
+	reply, err := c.request(ctx, req.RequestID, req)
 	if err != nil {
 		return nil, err
 	}
-	return resp.Tables, nil
+	resp, ok := reply.(*schemastore.GetAllPhysicalTablesResponse)
+	if !ok {
+		return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("unexpected response to physical tables request: %T", reply)
+	}
+	return schemastore.PhysicalTablesFromProto(resp.Tables), nil
 }
 
-func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest) (*messaging.SchemaStoreResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, messaging.SchemaStoreRequestTimeout)
+func (c *Client) request(ctx context.Context, requestID uint64, req messaging.IOTypeT) (response, error) {
+	ctx, cancel := context.WithTimeout(ctx, schemastore.RequestTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
@@ -165,10 +178,9 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 	if c.target.IsEmpty() {
 		return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("server id is empty")
 	}
-	req.RequestID = c.nextRequestID.Add(1)
-	ch := make(chan *messaging.SchemaStoreResponse, 1)
-	c.requests.Store(req.RequestID, ch)
-	defer c.requests.Delete(req.RequestID)
+	ch := make(chan response, 1)
+	c.requests.Store(requestID, ch)
+	defer c.requests.Delete(requestID)
 	if err := c.mc.SendCommand(messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreTopic, req)); err != nil {
 		return nil, err
 	}
@@ -179,11 +191,8 @@ func (c *Client) request(ctx context.Context, req *messaging.SchemaStoreRequest)
 		if err := ctx.Err(); err != nil {
 			return nil, errors.WrapError(errors.ErrSchemaStoreRequestFailed, err)
 		}
-		if resp.Error != "" {
-			if resp.ErrorCode != "" {
-				return nil, errors.Normalize(resp.Error, errors.RFCCodeText(resp.ErrorCode)).GenWithStackByArgs()
-			}
-			return nil, errors.ErrSchemaStoreRequestFailed.GenWithStack("%s", resp.Error)
+		if err := resp.GetError().ToError(); err != nil {
+			return nil, err
 		}
 		return resp, nil
 	}

@@ -425,7 +425,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 		s.messageHandler.stop()
 		// Closing keyspaces releases workers waiting for resolved ts. Wait after
 		// keyspaceLocker is unlocked so in-flight acquisitions can also finish.
-		defer s.messageHandler.workers.Wait()
+		defer s.messageHandler.wg.Wait()
 	}
 
 	s.keyspaceLocker.Lock()

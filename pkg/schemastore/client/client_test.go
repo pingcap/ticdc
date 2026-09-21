@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/schemastore"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
@@ -101,16 +102,15 @@ func TestSchemaStoreClientTableBatches(t *testing.T) {
 			}
 			calls := 0
 			mc.EXPECT().SendCommand(gomock.Any()).AnyTimes().DoAndReturn(func(msg *messaging.TargetMessage) error {
-				req := msg.Message[0].(*messaging.SchemaStoreRequest)
-				require.Equal(t, messaging.SchemaStoreGetTableInfos, req.Operation)
-				require.LessOrEqual(t, len(req.TableIDs), messaging.SchemaStoreTableBatchSize)
+				req := msg.Message[0].(*schemastore.GetTableInfosRequest)
+				require.LessOrEqual(t, len(req.TableIDs), schemastore.TableBatchSize)
 				batch := req.TableIDs
 				if partial {
 					batch = batch[:min(len(batch), 31)]
 				}
-				resp := &messaging.SchemaStoreResponse{RequestID: req.RequestID, More: len(batch) < len(req.TableIDs)}
+				resp := &schemastore.GetTableInfosResponse{RequestID: req.RequestID, More: len(batch) < len(req.TableIDs)}
 				for _, id := range batch {
-					resp.TableInfos = append(resp.TableInfos, messaging.SchemaStoreTableInfo{TableID: id, TableInfo: marshalTestTable(t, id)})
+					resp.TableInfos = append(resp.TableInfos, schemastore.TableInfoResult{TableID: id, TableInfo: marshalTestTable(t, id)})
 				}
 				calls++
 				return c.handleMessage(t.Context(), messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp))
@@ -128,29 +128,29 @@ func TestSchemaStoreClientTableBatches(t *testing.T) {
 }
 
 func TestSchemaStoreClientBatchErrors(t *testing.T) {
-	first := messaging.SchemaStoreTableInfo{TableID: 1, TableInfo: marshalTestTable(t, 1)}
-	second := messaging.SchemaStoreTableInfo{TableID: 2, TableInfo: marshalTestTable(t, 2)}
+	first := schemastore.TableInfoResult{TableID: 1, TableInfo: marshalTestTable(t, 1)}
+	second := schemastore.TableInfoResult{TableID: 2, TableInfo: marshalTestTable(t, 2)}
 	tests := []struct {
 		name      string
-		response  *messaging.SchemaStoreResponse
+		response  *schemastore.GetTableInfosResponse
 		wantError string
 		wantCount int
 	}{
-		{name: "complete", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first, second}}, wantCount: 2},
-		{name: "explicit table error", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first, {TableID: 2, Error: "table deleted"}}}, wantCount: 1},
-		{name: "missing table", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first}}, wantError: "incomplete"},
-		{name: "duplicate table", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first, first}}, wantError: "unexpected table"},
-		{name: "empty continuation", response: &messaging.SchemaStoreResponse{More: true}, wantError: "incomplete"},
-		{name: "invalid continuation", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first, second}, More: true}, wantError: "incomplete"},
-		{name: "decode error", response: &messaging.SchemaStoreResponse{TableInfos: []messaging.SchemaStoreTableInfo{first, {TableID: 2, TableInfo: []byte("invalid")}}}, wantError: "Unmarshal"},
-		{name: "server error", response: &messaging.SchemaStoreResponse{Error: "delivery failed"}, wantError: "delivery failed"},
+		{name: "complete", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first, second}}, wantCount: 2},
+		{name: "explicit table error", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first, {TableID: 2, Error: "table deleted"}}}, wantCount: 1},
+		{name: "missing table", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first}}, wantError: "incomplete"},
+		{name: "duplicate table", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first, first}}, wantError: "unexpected table"},
+		{name: "empty continuation", response: &schemastore.GetTableInfosResponse{More: true}, wantError: "incomplete"},
+		{name: "invalid continuation", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first, second}, More: true}, wantError: "incomplete"},
+		{name: "decode error", response: &schemastore.GetTableInfosResponse{TableInfos: []schemastore.TableInfoResult{first, {TableID: 2, TableInfo: []byte("invalid")}}}, wantError: "Unmarshal"},
+		{name: "server error", response: &schemastore.GetTableInfosResponse{Error: &schemastore.Error{Message: "delivery failed"}}, wantError: "delivery failed"},
 		{name: "missing response", wantError: "deadline exceeded"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, mc := newTestClient(t)
 			mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
-				req := msg.Message[0].(*messaging.SchemaStoreRequest)
+				req := msg.Message[0].(*schemastore.GetTableInfosRequest)
 				if tt.response == nil {
 					return nil
 				}
@@ -179,17 +179,17 @@ func TestSchemaStoreClientBatchErrors(t *testing.T) {
 
 func TestSchemaStoreClientResponseDoesNotBlockRouter(t *testing.T) {
 	c, mc := newTestClient(t)
-	responses := make(chan *messaging.SchemaStoreResponse, 1)
+	responses := make(chan response, 1)
 	c.requests.Store(uint64(1), responses)
 	otherDone := make(chan struct{})
 	mc.RegisterHandler("unrelated-command", func(context.Context, *messaging.TargetMessage) error { close(otherDone); return nil })
 	// Leave the first response unread. Neither a duplicate nor another topic
 	// may wait for the caller to drain or decode it.
-	msg := messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreResponse{RequestID: 1})
+	msg := messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic, &schemastore.GetTableInfosResponse{RequestID: 1})
 	require.NoError(t, mc.SendCommand(msg))
 	require.Eventually(t, func() bool { return len(responses) == 1 }, time.Second, time.Millisecond)
-	require.NoError(t, mc.SendCommand(messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreResponse{RequestID: 1})))
-	require.NoError(t, mc.SendCommand(messaging.NewSingleTargetMessage(c.target, "unrelated-command", &messaging.SchemaStoreResponse{RequestID: 2})))
+	require.NoError(t, mc.SendCommand(messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic, &schemastore.GetTableInfosResponse{RequestID: 1})))
+	require.NoError(t, mc.SendCommand(messaging.NewSingleTargetMessage(c.target, "unrelated-command", &schemastore.GetTableInfosResponse{RequestID: 2})))
 	select {
 	case <-otherDone:
 	case <-time.After(time.Second):
@@ -203,9 +203,9 @@ func TestSchemaStoreClientConcurrentRequests(t *testing.T) {
 	c, mc := newTestClient(t)
 	cfg := config.NewDefaultFilterConfig()
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		req := msg.Message[0].(*schemastore.GetAllPhysicalTablesRequest)
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreResponse{RequestID: req.RequestID, Tables: []commonEvent.Table{{TableID: int64(req.Ts)}}}))
+			&schemastore.GetAllPhysicalTablesResponse{RequestID: req.RequestID, Tables: []schemastore.PhysicalTable{{TableID: int64(req.Ts)}}}))
 	})
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -216,7 +216,6 @@ func TestSchemaStoreClientConcurrentRequests(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	require.NoError(t, c.RegisterKeyspace(t.Context(), common.DefaultKeyspace))
 	requireNoPendingRequests(t, c)
 	other, _ := newTestClient(t)
 	require.NotSame(t, c, other)
@@ -227,11 +226,12 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 	c, mc := newTestClient(t)
 	remoteErr := errors.ErrKeyspaceNotFound.GenWithStackByArgs(123)
 	mc.RegisterHandler(messaging.SchemaStoreTopic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		req := msg.Message[0].(*messaging.SchemaStoreRequest)
+		req := msg.Message[0].(*schemastore.GetTableInfosRequest)
 		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreResponse{RequestID: req.RequestID, Error: remoteErr.Error(), ErrorCode: string(errors.ErrKeyspaceNotFound.RFCCode())}))
+			&schemastore.GetTableInfosResponse{RequestID: req.RequestID, Error: schemastore.NewError(remoteErr)}))
 	})
-	require.True(t, errors.ErrKeyspaceNotFound.Equal(c.RegisterKeyspace(t.Context(), common.DefaultKeyspace)))
+	_, err := c.GetTableInfos(t.Context(), common.DefaultKeyspace, []int64{1}, 100)
+	require.True(t, errors.ErrKeyspaceNotFound.Equal(err))
 	t.Run("cancellation only stops local wait", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -240,20 +240,48 @@ func TestSchemaStoreClientRequestErrors(t *testing.T) {
 		c := New(mc, "test")
 		var requestID uint64
 		mc.EXPECT().SendCommand(gomock.Any()).Times(1).DoAndReturn(func(msg *messaging.TargetMessage) error {
-			req := msg.Message[0].(*messaging.SchemaStoreRequest)
-			require.Equal(t, messaging.SchemaStoreRegisterKeyspace, req.Operation)
+			req := msg.Message[0].(*schemastore.GetTableInfosRequest)
 			requestID = req.RequestID
 			cancel()
 			return nil
 		})
-		require.ErrorIs(t, c.RegisterKeyspace(ctx, common.DefaultKeyspace), context.Canceled)
+		_, err := c.GetTableInfos(ctx, common.DefaultKeyspace, []int64{1}, 100)
+		require.ErrorIs(t, err, context.Canceled)
 		requireNoPendingRequests(t, c)
 		// A late response is discarded after the caller has stopped waiting.
 		require.NoError(t, c.handleMessage(t.Context(), messaging.NewSingleTargetMessage(c.target, messaging.SchemaStoreClientTopic,
-			&messaging.SchemaStoreResponse{RequestID: requestID})))
+			&schemastore.GetTableInfosResponse{RequestID: requestID})))
 		requireNoPendingRequests(t, c)
 	})
 	c.target = "missing-target"
-	require.Error(t, c.RegisterKeyspace(t.Context(), common.DefaultKeyspace))
+	_, err = c.GetTableInfos(t.Context(), common.DefaultKeyspace, []int64{1}, 100)
+	require.Error(t, err)
 	requireNoPendingRequests(t, c)
+}
+
+func TestSchemaStoreClientUnexpectedResponse(t *testing.T) {
+	for _, tableInfos := range []bool{true, false} {
+		mc := mock.NewMockMessageCenter(gomock.NewController(t))
+		mc.EXPECT().RegisterHandler(messaging.SchemaStoreClientTopic, gomock.Any())
+		c := New(mc, "test")
+		mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+			var resp messaging.IOTypeT
+			if tableInfos {
+				req := msg.Message[0].(*schemastore.GetTableInfosRequest)
+				resp = &schemastore.GetAllPhysicalTablesResponse{RequestID: req.RequestID}
+			} else {
+				req := msg.Message[0].(*schemastore.GetAllPhysicalTablesRequest)
+				resp = &schemastore.GetTableInfosResponse{RequestID: req.RequestID}
+			}
+			return c.handleMessage(t.Context(), messaging.NewSingleTargetMessage("test", messaging.SchemaStoreClientTopic, resp))
+		})
+		var err error
+		if tableInfos {
+			_, err = c.GetTableInfos(t.Context(), common.DefaultKeyspace, []int64{1}, 100)
+		} else {
+			_, err = c.GetAllPhysicalTables(t.Context(), common.DefaultKeyspace, 100, config.NewDefaultFilterConfig(), true, false)
+		}
+		require.ErrorContains(t, err, "unexpected response")
+		requireNoPendingRequests(t, c)
+	}
 }
