@@ -335,6 +335,8 @@ type schemaStore struct {
 	pdClock pdutil.Clock
 	pdCli   pd.Client
 	root    string
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	// keyspaceSchemaStoreMap is a map to store *keyspaceSchemaStore for every keyspace.
 	// The key is keyspaceID
@@ -347,10 +349,13 @@ type schemaStore struct {
 }
 
 func New(root string, pdCli pd.Client) SchemaStore {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &schemaStore{
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		pdCli:                  pdCli,
 		root:                   root,
+		ctx:                    ctx,
+		cancel:                 cancel,
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
@@ -416,6 +421,12 @@ func (s *schemaStore) Run(ctx context.Context) error {
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
+	// Cancel in-progress keyspace registration before waiting for the keyspace
+	// lock. Registration can hold the lock while loading the initial snapshot.
+	if s.cancel != nil {
+		s.cancel()
+	}
+
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
@@ -609,15 +620,19 @@ func (s *schemaStore) RegisterKeyspace(
 	if _, tombstone := s.tombstoneKeyspaces[keyspaceMeta.ID]; tombstone {
 		return errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 	}
+	storeCtx, cancel := s.newKeyspaceContext(ctx)
+	if err := storeCtx.Err(); err != nil {
+		cancel()
+		return err
+	}
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
-	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceMeta.Name)
+	kvStorage, err := keyspaceManager.GetStorage(storeCtx, keyspaceMeta.Name)
 	if err != nil {
+		cancel()
 		return err
 	}
 
-	// Background tasks outlive the registration call and stop when the store closes.
-	storeCtx, cancel := context.WithCancel(context.Background())
 	// The schema store initialization needs two guarantees:
 	// 1. the snapshot at gcSafePoint is still readable;
 	// 2. the DDL history after that snapshot is not GC'ed before the local
@@ -625,7 +640,7 @@ func (s *schemaStore) RegisterKeyspace(
 	// The keeper is created before the initial snapshot and stays alive for the
 	// whole schema store lifetime so both guarantees share the same GC barrier.
 	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
-	gcSafePoint, err := s.acquireInitialGCSafePoint(ctx, keyspaceMeta, gcKeeper)
+	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
 	if err != nil {
 		cancel()
 		return err
@@ -716,6 +731,18 @@ func (s *schemaStore) RegisterKeyspace(
 	s.keyspaceSchemaStoreMap[keyspaceMeta.ID] = store
 
 	return nil
+}
+
+func (s *schemaStore) newKeyspaceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	storeCtx, cancel := context.WithCancel(ctx)
+	if s.ctx == nil {
+		return storeCtx, cancel
+	}
+	stopModuleCancel := context.AfterFunc(s.ctx, cancel)
+	return storeCtx, func() {
+		stopModuleCancel()
+		cancel()
+	}
 }
 
 func (s *schemaStore) removeTombstoneKeyspace(
