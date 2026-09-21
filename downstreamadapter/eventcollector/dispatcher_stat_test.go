@@ -879,6 +879,7 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 		deliveredMs   int64
 		baselineMs    int64
 		localLagMs    int64
+		legacyLocal   bool
 	}{
 		{
 			name:          "remote ready is the baseline before data arrives",
@@ -920,6 +921,16 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
 			baselineMs: 130000, localLagMs: -10000,
 		},
+		{
+			name:          "legacy local ready switches before remote data arrives",
+			remoteReadyMs: 160000, checkpointMs: 100000, deliveredMs: 100000,
+			baselineMs: 160000, localLagMs: 5000, legacyLocal: true,
+		},
+		{
+			name:          "legacy local ready switches after legacy remote delivers data",
+			remoteReadyMs: 0, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 5000, legacyLocal: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -931,6 +942,13 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 			setSessionState(stat.session, "", true, remoteServerID)
 			sendReady := func(from node.ID, resolvedTs uint64) {
 				ready := commonEvent.NewReadyEvent(mockDisp.id, resolvedTs)
+				if tt.legacyLocal && from == localServerID {
+					payload, err := commonEvent.MarshalEventWithHeader(
+						commonEvent.TypeReadyEvent, commonEvent.ReadyEventVersion1, mockDisp.id.Marshal())
+					require.NoError(t, err)
+					require.NoError(t, ready.Unmarshal(payload))
+					require.Zero(t, ready.ResolvedTs)
+				}
 				stat.handleSignalEvent(dispatcher.DispatcherEvent{From: &from, Event: &ready})
 			}
 			sendReady(remoteServerID, oracle.ComposeTS(tt.remoteReadyMs, 0))
@@ -948,9 +966,10 @@ func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
 				mockDisp.resolvedTs += 20
 			}
 			epoch := stat.loadCurrentEpochState().epoch
-			// Missing progress or a lag above five seconds must keep remote serving.
-			for _, ts := range []uint64{0, oracle.ComposeTS(tt.baselineMs-5001, 0)} {
-				sendReady(localServerID, ts)
+			// Enforce the lag limit only when local reports progress. Legacy ready
+			// payloads omit it and must retain the original immediate switch.
+			if !tt.legacyLocal {
+				sendReady(localServerID, oracle.ComposeTS(tt.baselineMs-5001, 0))
 				current, pendingLocal, pendingRemote := sessionState(stat.session)
 				require.Equal(t, remoteServerID, current)
 				require.True(t, pendingLocal)

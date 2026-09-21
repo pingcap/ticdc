@@ -216,17 +216,24 @@ func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	messageCh <- nil
 	broker.messageCh[disp.messageWorkerIndex] = messageCh
 
+	// The schema lookup happens after the scan range is captured. Observing
+	// Running alone does not guarantee that the first notification captured 200.
+	scanRangeReady := make(chan struct{})
+	schemaStore.onGetTableDDLEventState = sync.OnceFunc(func() {
+		close(scanRangeReady)
+	})
+
 	done := make(chan struct{})
 	go func() {
 		broker.onNotify(disp, 200, 0)
 		close(done)
 	}()
 
-	require.Eventually(t, func() bool {
-		disp.scanMu.Lock()
-		defer disp.scanMu.Unlock()
-		return disp.scanState == dispatcherScanRunning
-	}, time.Second, time.Millisecond)
+	select {
+	case <-scanRangeReady:
+	case <-time.After(time.Second):
+		t.Fatal("first notification did not capture its scan range")
+	}
 
 	broker.onNotify(disp, 201, 0)
 	disp.scanMu.Lock()
