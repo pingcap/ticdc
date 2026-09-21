@@ -52,9 +52,9 @@ const localReadyMaxLag = 5 * time.Second
 //     pendingRemoteEventServiceID=""
 //
 // This means local registration and remote probing can overlap. A remote service
-// may serve data first. Once local is no more than localReadyMaxLag behind the
-// catch-up target, a later local ready moves the dispatcher back to local and
-// cleans up remote registrations.
+// may serve data first. A local ready moves the dispatcher back to local and
+// cleans up remote registrations. When progress is available, local must be no
+// more than localReadyMaxLag behind the catch-up target before switching.
 type dispatcherConnState struct {
 	sync.RWMutex
 	// removed marks the session as terminal after removal starts. New
@@ -65,7 +65,7 @@ type dispatcherConnState struct {
 	currentEventServiceID node.ID
 	// localReadyPending means the local register request has been sent but local
 	// ready has not been accepted. It may be true while a remote service is
-	// already current; local ready wins once its lag is at most localReadyMaxLag.
+	// already current; local ready wins once the catch-up gate is satisfied.
 	localReadyPending bool
 	// pendingRemoteEventServiceID is the remote EventService currently being
 	// probed for reuse. It waits for either ready or not reusable, and only one
@@ -133,11 +133,13 @@ type readyDecision struct {
 //  1. once local is already serving, any later remote ready is stale and should
 //     only trigger cleanup;
 //  2. local ready can be accepted while local registration is still pending;
-//     if a remote is serving, local may lag the catch-up target by at most localReadyMaxLag;
+//     if a remote is serving and progress is available, local may lag the
+//     catch-up target by at most localReadyMaxLag;
 //  3. remote ready is accepted only from the single remote candidate currently
 //     being probed.
 //
-// sourceResolvedTs is the progress reported by this ready event.
+// sourceResolvedTs is the progress reported by this ready event. Zero means
+// progress is unavailable, so preserve the legacy behavior of switching immediately.
 // catchUpTargetTs is the remote progress used as the catch-up baseline. Local
 // may take over when its physical timestamp is no more than localReadyMaxLag behind.
 func (d *dispatcherConnState) acceptReady(
@@ -159,9 +161,9 @@ func (d *dispatcherConnState) acceptReady(
 		// A reusable remote may start serving first during dispatcher relocation
 		// or a rolling restart. Local ready can arrive while the new local
 		// subscription is still far behind. Switching then could stall replication,
-		// so keep reading from remote until a local ready reports progress no more
+		// so keep reading from remote until local progress is no more
 		// than localReadyMaxLag behind the catch-up target. Local may also be ahead.
-		if !d.currentEventServiceID.IsEmpty() && d.currentEventServiceID != localServerID {
+		if sourceResolvedTs != 0 && !d.currentEventServiceID.IsEmpty() && d.currentEventServiceID != localServerID {
 			lagMs := oracle.ExtractPhysical(catchUpTargetTs) - oracle.ExtractPhysical(sourceResolvedTs)
 			if lagMs > localReadyMaxLag.Milliseconds() {
 				return readyDecision{}
