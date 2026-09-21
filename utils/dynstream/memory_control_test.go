@@ -127,8 +127,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 1,
 		queueTime: time.Now(),
 	}
-	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
-	require.True(t, ok)
+	accepted, appended := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(1), path1.areaMemStat.totalPendingSize.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
@@ -140,8 +141,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -153,8 +155,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	require.True(t, accepted)
+	require.False(t, appended)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -171,8 +174,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(22), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -204,8 +208,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(42), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 4, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
