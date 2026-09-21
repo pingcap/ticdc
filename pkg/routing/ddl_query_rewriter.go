@@ -428,9 +428,12 @@ func rewriteDDLStmtTables(
 				"rewrite ddl query got unexpected target table count: expected %d, got %d",
 				expectedCount, len(targetTables))
 		}
-		v.DBName = ast.NewCIStr(targetTables[0].SchemaName)
-		if expectedCount == 2 {
-			v.NewName = targetTables[1].SchemaName
+		for i, targetTable := range targetTables {
+			if i == 0 {
+				v.DBName = ast.NewCIStr(targetTable.SchemaName)
+			} else {
+				v.NewName = targetTable.SchemaName
+			}
 		}
 	default:
 		visitor := newTableRenameVisitor(sourceTables, targetTables)
