@@ -21,34 +21,69 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDecoderReusesTableInfo(t *testing.T) {
-	d := &decoder{}
-	key := &messageKey{Schema: "test", Table: "t"}
+	d := &decoder{config: common.NewConfig(config.ProtocolOpen), idx: 1}
+	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
-	require.Nil(t, d.tables[[2]string{"test", "t"}].columns["id"].Value)
+	require.Nil(t, d.tables[d.tableCacheKey(key)].columns["id"].Value)
 	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("2")}
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	// DDL messages can be repeated or arrive out of timestamp order.
+	for _, ts := range []uint64{300, 200, 200} {
+		k, v, err := encodeDDLEvent(&commonEvent.DDLEvent{
+			SchemaName: "test", TableName: "t", FinishedTs: ts,
+			Type: byte(timodel.ActionModifyColumn), Query: "alter table test.t modify id bigint primary key",
+		}, d.config)
+		require.NoError(t, err)
+		d.AddKeyValue(k, v)
+		typ, ok := d.HasNext()
+		require.True(t, ok)
+		require.Equal(t, common.MessageTypeDDL, typ)
+		d.NextDDLEvent()
+	}
+	require.Equal(t, []uint64{200, 300}, d.ddlCommitTs[[2]string{"test", "t"}])
+	key.Ts = 200
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	key.Ts = 201
 	cols["id"] = column{Type: mysql.TypeLonglong, Flag: primaryKeyFlag}
-	require.NotSame(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
+	second := d.queryTableInfo(key, &messageRow{Update: cols})
+	require.NotSame(t, first, second)
+	require.Equal(t, mysql.TypeLonglong, second.GetColumns()[0].GetType())
+	key.Ts = 250
+	require.Same(t, second, d.queryTableInfo(key, &messageRow{Update: cols}))
+	key.Ts = 100
+	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}
+	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
 	require.Equal(t, mysql.TypeLong, first.GetColumns()[0].GetType())
-	for _, changed := range []map[string]column{
-		{"id": {Type: mysql.TypeLong, Flag: nullableFlag}},
-		{"renamed": {Type: mysql.TypeLong, Flag: primaryKeyFlag}},
-		{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag}, "added": {Type: mysql.TypeLong}},
-	} {
-		baseline := d.queryTableInfo(key, &messageRow{Update: map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag}}})
-		require.NotSame(t, baseline, d.queryTableInfo(key, &messageRow{Update: changed}))
+}
+
+func TestDeleteReusesCompleteTableInfo(t *testing.T) {
+	d := &decoder{}
+	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
+	handle := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
+	// A cold key-only delete does not seed the full-table cache.
+	cold := d.queryTableInfo(key, &messageRow{Delete: handle})
+	require.Len(t, cold.GetColumns(), 1)
+	require.Empty(t, d.tables)
+	cols := map[string]column{
+		"id": handle["id"],
+		"v":  {Type: mysql.TypeVarchar, Value: "value"},
 	}
-	for _, cached := range d.tables {
-		for _, col := range cached.columns {
-			require.Nil(t, col.Value)
-		}
-	}
+	full := d.queryTableInfo(key, &messageRow{Update: cols})
+	deleted := d.assembleDMLEvent(key, &messageRow{Delete: handle})
+	require.Same(t, full, deleted.TableInfo)
+	row := deleted.Rows.GetRow(0)
+	require.Equal(t, int64(1), commonType.ExtractColVal(&row, full.GetColumns()[0], 0))
+	require.True(t, row.IsNull(1))
 }
 
 func TestHandleKeyOnlyPreservesEnumSetTypes(t *testing.T) {
@@ -87,6 +122,14 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			require.NoError(t, err)
 			defer db.Close()
 			d := &decoder{upstreamTiDB: db}
+			// The new interval must discover its own schema even with an old
+			// interval already cached for this table.
+			oldKey := &messageKey{Schema: "test", Table: "t", Ts: 50}
+			oldInfo := d.queryTableInfo(oldKey, &messageRow{Update: map[string]column{
+				"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag},
+				"e":  {Type: mysql.TypeVarchar},
+			}})
+			d.addDDLCommitTs("test", "t", 90)
 			mock.ExpectExec("set @@tidb_snapshot=100").WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectQuery(`select \* from test.t where id = 1`).WillReturnRows(sqlmock.NewRowsWithColumnDefinition(
 				sqlmock.NewColumn("e").OfType("ENUM", "").Nullable(true),
@@ -103,6 +146,8 @@ func TestHandleKeyOnlyColdCache(t *testing.T) {
 			}})
 			require.NoError(t, mock.ExpectationsWereMet())
 			require.Equal(t, mysql.TypeEnum, event.TableInfo.GetColumns()[0].GetType())
+			require.NotSame(t, oldInfo, event.TableInfo)
+			require.Equal(t, mysql.TypeVarchar, oldInfo.GetColumns()[0].GetType())
 			row := event.Rows.GetRow(0)
 			got := commonType.ExtractColVal(&row, event.TableInfo.GetColumns()[0], 0)
 			if nullable {

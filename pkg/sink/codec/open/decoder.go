@@ -43,6 +43,12 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+type tableCacheKey struct {
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
 type cachedTable struct {
 	columns    map[string]column
 	info       *commonType.TableInfo
@@ -50,9 +56,11 @@ type cachedTable struct {
 }
 
 type decoder struct {
-	tables     map[[2]string]*cachedTable
-	keyBytes   []byte
-	valueBytes []byte
+	// Keep old intervals available for delayed decoding of buffered messages.
+	tables      map[tableCacheKey]*cachedTable
+	ddlCommitTs map[[2]string][]uint64
+	keyBytes    []byte
+	valueBytes  []byte
 
 	nextKey *messageKey
 
@@ -188,6 +196,17 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
+	// Every partition decoder must record the boundary, even though only
+	// partition zero executes the DDL downstream.
+	schema, table := result.SchemaName, result.TableName
+	switch m.Type {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
+		// These DDLs affect multiple names. Start a new cache interval for all
+		// tables rather than relying on the single name carried by the message.
+		schema, table = "", ""
+	}
+	b.addDDLCommitTs(schema, table, result.FinishedTs)
+
 	// only the DDL comes from the first partition will be processed.
 	if b.idx == 0 {
 		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
@@ -307,14 +326,16 @@ func buildColumns(
 
 // snapshotColumns uses protocol metadata so snapshot rows have the same chunk
 // layout as ordinary messages. Cached columns never retain row values.
-func (b *decoder) snapshotColumns(ctx context.Context, ts uint64, schema, table string, conditions map[string]interface{}, columns map[string]column) map[string]column {
-	cached := b.tables[[2]string{schema, table}]
+func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]interface{}, columns map[string]column) map[string]column {
+	schema, table := key.Schema, key.Table
+	cacheKey := b.tableCacheKey(key)
+	cached := b.tables[cacheKey]
 	var holder *common.ColumnsHolder
 	if cached == nil {
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
-		b.queryTableInfo(&messageKey{Schema: schema, Table: table}, &messageRow{Update: columns})
-		cached = b.tables[[2]string{schema, table}]
+		b.queryTableInfo(key, &messageRow{Update: columns})
+		cached = b.tables[cacheKey]
 	}
 	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
 	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
@@ -333,28 +354,24 @@ func (b *decoder) snapshotColumns(ctx context.Context, ts uint64, schema, table 
 }
 
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
-	var (
-		schema   = key.Schema
-		table    = key.Table
-		commitTs = key.Ts
-	)
+	commitTs := key.Ts
 	conditions := make(map[string]interface{}, 1)
 	if len(row.Delete) != 0 {
 		for name, col := range row.Delete {
 			conditions[name] = col.Value
 		}
-		row.Delete = b.snapshotColumns(ctx, commitTs-1, schema, table, conditions, row.Delete)
+		row.Delete = b.snapshotColumns(ctx, key, commitTs-1, conditions, row.Delete)
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
-		row.PreColumns = b.snapshotColumns(ctx, commitTs-1, schema, table, conditions, row.PreColumns)
-		row.Update = b.snapshotColumns(ctx, commitTs, schema, table, conditions, row.Update)
+		row.PreColumns = b.snapshotColumns(ctx, key, commitTs-1, conditions, row.PreColumns)
+		row.Update = b.snapshotColumns(ctx, key, commitTs, conditions, row.Update)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
-		row.Update = b.snapshotColumns(ctx, commitTs, schema, table, conditions, row.Update)
+		row.Update = b.snapshotColumns(ctx, key, commitTs, conditions, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
@@ -399,20 +416,51 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 	return b.assembleDMLEvent(msgKey, rowMsg)
 }
 
+// DML at the DDL commit timestamp is flushed before that DDL.
+func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
+	var version uint64
+	for _, name := range [][2]string{{"", ""}, {key.Schema, ""}, {key.Schema, key.Table}} {
+		timestamps := b.ddlCommitTs[name]
+		i, _ := slices.BinarySearch(timestamps, key.Ts)
+		if i > 0 {
+			version = max(version, timestamps[i-1])
+		}
+	}
+	return tableCacheKey{schema: key.Schema, table: key.Table, ddlCommitTs: version}
+}
+
+func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
+	if ts == 0 {
+		return
+	}
+	if b.ddlCommitTs == nil {
+		b.ddlCommitTs = make(map[[2]string][]uint64)
+	}
+	name := [2]string{schema, table}
+	timestamps := b.ddlCommitTs[name]
+	i, exists := slices.BinarySearch(timestamps, ts)
+	if !exists {
+		b.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
+	}
+}
+
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	columns := value.Update
 	if columns == nil {
 		columns = value.Delete
 	}
-	tableKey := [2]string{key.Schema, key.Table}
-	if cached := b.tables[tableKey]; cached != nil && maps.EqualFunc(cached.columns, columns, func(a, b column) bool {
-		return a.Type == b.Type && a.Flag == b.Flag
-	}) {
+	tableKey := b.tableCacheKey(key)
+	if cached := b.tables[tableKey]; cached != nil {
 		id := cached.info.TableName.TableID
 		key.Partition = &id
 		return cached.info
 	}
 	info := b.newTableInfo(key, value)
+	// A delete can contain only handle columns. Use a complete row to seed
+	// the cache; a cold delete must not define the layout of later inserts.
+	if value.Update == nil {
+		return info
+	}
 	metadata := make(map[string]column, len(columns))
 	for name, col := range columns {
 		col.Value = nil
@@ -428,7 +476,7 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 		names = append(names, name)
 	}
 	if b.tables == nil {
-		b.tables = make(map[[2]string]*cachedTable)
+		b.tables = make(map[tableCacheKey]*cachedTable)
 	}
 	b.tables[tableKey] = &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")}
 	return info
