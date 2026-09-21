@@ -83,6 +83,31 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 	require.Equal(t, liveness.CaptureDraining, nodeLiveness.Load())
 }
 
+func TestStoppingHeartbeatClosesEventServiceAdmission(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	previous, _ := appcontext.TryGetService[any](appcontext.EventService)
+	counter := NewMockEventBrokerDispatcherCounter(gomock.NewController(t))
+	appcontext.SetService(appcontext.EventService, counter)
+	t.Cleanup(func() { appcontext.SetService(appcontext.EventService, previous) })
+	var nodeLiveness liveness.Liveness
+	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
+	m := NewMaintainerManager(&node.Info{ID: "capture"}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.coordinatorID, m.coordinatorVersion = "coordinator", 1
+	gomock.InOrder(
+		counter.EXPECT().StopAcceptingRegistrations(),
+		counter.EXPECT().GetDispatcherCount().Return(0),
+	)
+	request := messaging.NewSingleTargetMessage(m.nodeInfo.ID, messaging.MaintainerManagerTopic,
+		&heartbeatpb.SetNodeLivenessRequest{NodeEpoch: m.node.nodeEpoch, Target: heartbeatpb.NodeLiveness_STOPPING})
+	request.From = m.coordinatorID
+	m.onSetNodeLivenessRequest(request)
+	heartbeat := (<-mc.GetMessageChannel()).Message[0].(*heartbeatpb.NodeHeartbeat)
+	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, heartbeat.Liveness)
+	require.Zero(t, heartbeat.EventBrokerDispatcherCount)
+	require.Equal(t, m.node.nodeEpoch, heartbeat.NodeEpoch)
+}
+
 func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)

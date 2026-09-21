@@ -645,6 +645,47 @@ func TestResetSchemaBlockedDispatcherRemovesOldEpoch(t *testing.T) {
 	require.True(t, newStat.isScanBusy())
 }
 
+func TestUnhandshakedRegistrationExpiresWithoutConsumerHeartbeats(t *testing.T) {
+	for name, tableTrigger := range map[string]bool{"ordinary": false, "table trigger": true} {
+		t.Run(name, func(t *testing.T) {
+			broker, _, _, _ := newEventBrokerForTest()
+			broker.close()
+			orphan := newMockDispatcherInfoForTest(t)
+			orphan.onlyReuse = true
+			live := newMockDispatcherInfoForTest(t)
+			if tableTrigger {
+				orphan.span = common.KeyspaceDDLSpan(0)
+				live.span = common.KeyspaceDDLSpan(1)
+			}
+			for _, info := range []*mockDispatcherInfo{orphan, live} {
+				require.NoError(t, broker.addDispatcher(info))
+				stat := broker.getDispatcher(info.id).Load()
+				require.False(t, stat.isHandshaked())
+				stat.lastReceivedHeartbeatTime.Store(time.Now().Add(-2 * heartbeatTimeout).Unix())
+			}
+			// The live consumer is still waiting for ready and renews epoch zero.
+			heartbeat := event.NewDispatcherHeartbeat()
+			heartbeat.AddDispatcherProgress(live.id, 0, 0)
+			broker.handleDispatcherHeartbeat(&DispatcherHeartBeatWithServerID{serverID: live.serverID, heartbeat: heartbeat})
+			service := &eventService{brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}}
+			service.StopAcceptingRegistrations()
+			// The other consumer was removed before RESET and all REMOVE attempts
+			// were lost. No more heartbeat can renew that registration.
+			ctx, cancel := context.WithCancel(t.Context())
+			var wg sync.WaitGroup
+			t.Cleanup(func() { cancel(); wg.Wait() })
+			wg.Go(func() { _ = broker.reportDispatcherStatToStore(ctx, time.Millisecond) })
+			require.Eventually(t, func() bool { return broker.dispatcherCount.Load() == 1 }, time.Second, time.Millisecond)
+			cancel()
+			wg.Wait()
+			require.Nil(t, broker.getDispatcher(orphan.id))
+			require.NotNil(t, broker.getDispatcher(live.id))
+			broker.removeDispatcher(live)
+			require.Zero(t, broker.dispatcherCount.Load())
+		})
+	}
+}
+
 func TestAddDispatcherCountDuringRegistration(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

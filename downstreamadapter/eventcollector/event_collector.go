@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -424,15 +425,14 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
 		stat := value.(*dispatcherStat)
 		eventServiceID, checkpointTs, epoch, ok := stat.getHeartbeatReport()
-		if !ok {
-			return true
+		if ok {
+			group(eventServiceID, stat.getDispatcherID(), checkpointTs, epoch)
 		}
-		group(
-			eventServiceID,
-			stat.getDispatcherID(),
-			checkpointTs,
-			epoch,
-		)
+		// Keep registrations alive while waiting for ready. Epoch zero renews
+		// the registration without reporting progress from another stream.
+		for _, target := range stat.session.connState.pendingRegistrations(c.serverId) {
+			group(target, stat.getDispatcherID(), 0, 0)
+		}
 		return true
 	})
 
@@ -472,6 +472,23 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
+			if req.Message.Type == messaging.TypeDispatcherRequest {
+				requests := req.Message.Message[:0]
+				for _, payload := range req.Message.Message {
+					request := payload.(*messaging.DispatcherRequest)
+					if request.GetActionType() == eventpb.ActionType_ACTION_TYPE_REGISTER {
+						stat := c.getDispatcherStatByID(request.GetID())
+						if stat == nil || !stat.session.connState.hasRegistration(req.Message.To, c.serverId) {
+							continue
+						}
+					}
+					requests = append(requests, payload)
+				}
+				req.Message.Message = requests
+				if len(requests) == 0 {
+					continue
+				}
+			}
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				sleepInterval := 10 * time.Millisecond

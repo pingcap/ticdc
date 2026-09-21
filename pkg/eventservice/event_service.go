@@ -78,6 +78,10 @@ type eventService struct {
 	// clusterID -> eventBroker
 	brokers   map[uint64]*eventBroker
 	brokersMu sync.RWMutex
+	// Protected by brokersMu. In-flight registrations keep the drain count
+	// positive without blocking node heartbeats on schema initialization.
+	registrationsStopped bool
+	registering          int
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
@@ -176,7 +180,8 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 // GetDispatcherCount returns the number of dispatchers registered in all local
-// event brokers, including table trigger dispatchers.
+// event brokers, including table trigger dispatchers. It cannot report zero
+// while an admitted registration is still in progress.
 func (s *eventService) GetDispatcherCount() int {
 	s.brokersMu.RLock()
 	defer s.brokersMu.RUnlock()
@@ -184,7 +189,18 @@ func (s *eventService) GetDispatcherCount() int {
 	for _, broker := range s.brokers {
 		count += int(broker.dispatcherCount.Load())
 	}
-	return count
+	return max(count, s.registering)
+}
+
+// StopAcceptingRegistrations closes admission before a STOPPING heartbeat can
+// report zero. Registrations admitted earlier remain visible in the count.
+func (s *eventService) StopAcceptingRegistrations() {
+	s.brokersMu.Lock()
+	defer s.brokersMu.Unlock()
+	s.registrationsStopped = true
+	for _, broker := range s.brokers {
+		broker.stopping.Store(true)
+	}
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -228,12 +244,32 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	clusterID := info.GetClusterID()
 	s.brokersMu.Lock()
+	if s.registrationsStopped {
+		s.brokersMu.Unlock()
+		if info.IsOnlyReuse() {
+			topic := messaging.EventCollectorTopic
+			if common.IsRedoMode(info.GetMode()) {
+				topic = messaging.RedoEventCollectorTopic
+			}
+			rejection := event.NewNotReusableEvent(info.GetID())
+			msg := messaging.NewSingleTargetMessage(node.ID(info.GetServerID()), topic, &rejection)
+			// A lost rejection is retried when the pending consumer heartbeats.
+			_ = s.mc.SendEvent(msg)
+		}
+		return
+	}
+	s.registering++
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
 	s.brokersMu.Unlock()
+	defer func() {
+		s.brokersMu.Lock()
+		s.registering--
+		s.brokersMu.Unlock()
+	}()
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)
@@ -271,6 +307,18 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 	c, ok := s.brokers[clusterID]
 	s.brokersMu.RUnlock()
 	if !ok {
+		response := event.NewDispatcherHeartbeatResponse()
+		response.ClusterID = clusterID
+		if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
+			for _, progress := range heartbeat.heartbeat.DispatcherProgresses {
+				response.Append(event.NewDispatcherState(progress.DispatcherID, event.DSStateRemoved))
+			}
+		} else {
+			for _, progress := range heartbeat.heartbeat.DispatcherProgressesLegacy {
+				response.Append(event.NewDispatcherState(progress.DispatcherID, event.DSStateRemoved))
+			}
+		}
+		_ = s.mc.SendCommand(messaging.NewSingleTargetMessage(node.ID(heartbeat.serverID), messaging.EventCollectorTopic, response))
 		return
 	}
 	c.handleDispatcherHeartbeat(heartbeat)

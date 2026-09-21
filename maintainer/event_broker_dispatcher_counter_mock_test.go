@@ -46,3 +46,15 @@ func (mr *MockEventBrokerDispatcherCounterMockRecorder) GetDispatcherCount() *go
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDispatcherCount", reflect.TypeOf((*MockEventBrokerDispatcherCounter)(nil).GetDispatcherCount))
 }
+
+// StopAcceptingRegistrations mocks base method.
+func (m *MockEventBrokerDispatcherCounter) StopAcceptingRegistrations() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "StopAcceptingRegistrations")
+}
+
+// StopAcceptingRegistrations indicates an expected call of StopAcceptingRegistrations.
+func (mr *MockEventBrokerDispatcherCounterMockRecorder) StopAcceptingRegistrations() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopAcceptingRegistrations", reflect.TypeOf((*MockEventBrokerDispatcherCounter)(nil).StopAcceptingRegistrations))
+}

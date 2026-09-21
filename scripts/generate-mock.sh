@@ -45,3 +45,4 @@ fi
 "$MOCKGEN" -source pkg/redo/writer/writer.go -destination pkg/redo/writer/writer_mock.go -package writer
 "$MOCKGEN" -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock
 "$MOCKGEN" -mock_names eventBrokerDispatcherCounter=MockEventBrokerDispatcherCounter -source maintainer/maintainer_manager_node.go -destination maintainer/event_broker_dispatcher_counter_mock_test.go -package maintainer
+"$MOCKGEN" -destination pkg/messaging/mock/message_center_mock.go -package mock github.com/pingcap/ticdc/pkg/messaging MessageCenter

@@ -30,6 +30,7 @@ import (
 
 type eventBrokerDispatcherCounter interface {
 	GetDispatcherCount() int
+	StopAcceptingRegistrations()
 }
 
 // managerNodeState owns node-scoped state shared by all local maintainers.
@@ -121,6 +122,9 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		WriteLeaseWitnessAck:        m.node.pendingWitnessAck,
 	}
 	if counter, ok := appcontext.TryGetService[eventBrokerDispatcherCounter](appcontext.EventService); ok {
+		if currentLiveness == liveness.CaptureStopping {
+			counter.StopAcceptingRegistrations()
+		}
 		hb.EventBrokerDispatcherCount = uint32(counter.GetDispatcherCount())
 	}
 	target := m.newCoordinatorTopicMessage(hb)

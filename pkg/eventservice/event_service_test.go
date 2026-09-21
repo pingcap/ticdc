@@ -232,6 +232,75 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 	require.Zero(t, es.GetDispatcherCount())
 }
 
+func TestStopAcceptingRegistrations(t *testing.T) {
+	broker, store, schema, _ := newEventBrokerForTest()
+	broker.close()
+	mc := messaging.NewMockMessageCenter()
+	service := &eventService{mc: mc, brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}}
+	info := newMockDispatcherInfoForTest(t)
+
+	// An admitted registration can block in schema initialization without
+	// delaying STOPPING or allowing its heartbeat to report zero.
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	schema.registerTableHook = func() { close(started); <-resume }
+	var wg sync.WaitGroup
+	t.Cleanup(func() { release(); wg.Wait() })
+	wg.Go(func() { service.registerDispatcher(t.Context(), info) })
+	<-started
+	service.StopAcceptingRegistrations()
+	require.Equal(t, 1, service.GetDispatcherCount())
+	release()
+	wg.Wait()
+	service.deregisterDispatcher(info)
+	// This is the snapshot used by the STOPPING heartbeat.
+	require.Zero(t, service.GetDispatcherCount())
+
+	for _, tc := range []struct {
+		name      string
+		onlyReuse bool
+		mode      int64
+		clusterID uint64
+		topic     string
+	}{
+		{name: "local", clusterID: info.clusterID},
+		{name: "remote", onlyReuse: true, clusterID: info.clusterID, topic: messaging.EventCollectorTopic},
+		{name: "redo remote new cluster", onlyReuse: true, mode: common.RedoMode, clusterID: info.clusterID + 1, topic: messaging.RedoEventCollectorTopic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			late := newMockDispatcherInfoForTest(t)
+			late.onlyReuse, late.mode, late.clusterID = tc.onlyReuse, tc.mode, tc.clusterID
+			service.registerDispatcher(t.Context(), late)
+			require.Zero(t, service.GetDispatcherCount())
+			require.Len(t, service.brokers, 1)
+			_, active := store.dispatcherMap.Load(late.id)
+			require.False(t, active)
+			if tc.onlyReuse {
+				response := <-mc.GetMessageChannel()
+				require.Equal(t, tc.topic, response.Topic)
+				require.Equal(t, late.GetID(), response.Message[0].(*commonEvent.NotReusableEvent).GetDispatcherID())
+			} else {
+				require.Empty(t, mc.GetMessageChannel())
+			}
+		})
+	}
+}
+
+func TestPendingHeartbeatWithoutBroker(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	service := &eventService{mc: mc}
+	id := common.NewDispatcherID()
+	heartbeat := commonEvent.NewDispatcherHeartbeat()
+	heartbeat.ClusterID = 42
+	heartbeat.AddDispatcherProgress(id, 0, 0)
+	service.StopAcceptingRegistrations()
+	service.handleDispatcherHeartbeat(&DispatcherHeartBeatWithServerID{serverID: "consumer", heartbeat: heartbeat})
+	response := (<-mc.GetMessageChannel()).Message[0].(*commonEvent.DispatcherHeartbeatResponse)
+	require.Equal(t, uint64(42), response.ClusterID)
+	require.Equal(t, []commonEvent.DispatcherState{commonEvent.NewDispatcherState(id, commonEvent.DSStateRemoved)}, response.DispatcherStates)
+}
+
 func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	es := &eventService{}
 
@@ -544,6 +613,7 @@ type mockDispatcherInfo struct {
 	actionType        eventpb.ActionType
 	filterConfig      *eventpb.FilterConfig
 	bdrMode           bool
+	onlyReuse         bool
 	integrity         *integrity.Config
 	mode              int64
 	epoch             uint64
@@ -630,7 +700,7 @@ func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 }
 
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
-	return false
+	return m.onlyReuse
 }
 
 func (m *mockDispatcherInfo) GetBdrMode() bool {

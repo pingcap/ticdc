@@ -85,6 +85,8 @@ type eventBroker struct {
 	// Count registrations before activating or publishing them, and decrement
 	// after registration failure or removal cleanup. Includes table trigger dispatchers.
 	dispatcherCount atomic.Int64
+	// stopping enables cleanup of abandoned registrations that never handshaked.
+	stopping atomic.Bool
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
@@ -991,9 +993,14 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInterval time.Duration) error {
 	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
 	log.Info("update dispatcher send ts goroutine is started")
 	isInactiveDispatcher := func(d *dispatcherStat) bool {
-		return d.isHandshaked() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
+		// Pending registrations also receive collector heartbeats. During drain,
+		// a lost REMOVE must not keep an unhandshaked registration alive forever.
+		// Preserve the initialization behavior of older collectors outside drain.
+		return (d.isHandshaked() || c.stopping.Load()) &&
+			time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
 	}
 	for {
 		select {
