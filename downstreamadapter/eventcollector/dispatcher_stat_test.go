@@ -51,6 +51,7 @@ type mockDispatcher struct {
 	handleError    func(err error)
 	events         []dispatcher.DispatcherEvent
 	checkPointTs   uint64
+	resolvedTs     uint64
 	tableSpan      *heartbeatpb.TableSpan
 	lowLatencyMode bool
 
@@ -132,6 +133,9 @@ func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
+	if m.resolvedTs != 0 {
+		return m.resolvedTs
+	}
 	return m.startTs
 }
 
@@ -867,6 +871,138 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 		)
 		requireNoDispatcherRequest(t, mockEventCollector)
 	})
+}
+
+func TestLocalReadyWaitsForRemoteProgress(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	tests := []struct {
+		name          string
+		remoteReadyMs int64
+		checkpointMs  int64
+		deliveredMs   int64
+		baselineMs    int64
+		localLagMs    int64
+		legacyLocal   bool
+	}{
+		{
+			name:          "remote ready is the baseline before data arrives",
+			remoteReadyMs: 160000, checkpointMs: 100000, deliveredMs: 100000,
+			baselineMs: 160000, localLagMs: 5000,
+		},
+		{
+			name:          "delivered progress replaces the remote ready baseline",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 5000,
+		},
+		{
+			name:          "delivered progress advances beyond remote ready",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 190000,
+			baselineMs: 190000, localLagMs: 5000,
+		},
+		{
+			name:          "checkpoint is ahead of delivered resolved ts",
+			remoteReadyMs: 160000, checkpointMs: 140000, deliveredMs: 130000,
+			baselineMs: 140000, localLagMs: 5000,
+		},
+		{
+			name:          "legacy remote ready uses dispatcher progress",
+			remoteReadyMs: 0, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 5000,
+		},
+		{
+			name:          "local is less than five seconds behind",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 4999,
+		},
+		{
+			name:          "local has the same physical timestamp",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 0,
+		},
+		{
+			name:          "local is ahead of remote by more than five seconds",
+			remoteReadyMs: 160000, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: -10000,
+		},
+		{
+			name:          "legacy local ready switches before remote data arrives",
+			remoteReadyMs: 160000, checkpointMs: 100000, deliveredMs: 100000,
+			baselineMs: 160000, localLagMs: 5000, legacyLocal: true,
+		},
+		{
+			name:          "legacy local ready switches after legacy remote delivers data",
+			remoteReadyMs: 0, checkpointMs: 110000, deliveredMs: 130000,
+			baselineMs: 130000, localLagMs: 5000, legacyLocal: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDisp := newMockDispatcher(common.NewDispatcherID(), oracle.ComposeTS(100000, 0))
+			var messages []*messaging.TargetMessage
+			stat := newDispatcherStatInternal(mockDisp, nil, localServerID, func(msg *messaging.TargetMessage) {
+				messages = append(messages, msg)
+			}, nil)
+			setSessionState(stat.session, "", true, remoteServerID)
+			sendReady := func(from node.ID, resolvedTs uint64) {
+				ready := commonEvent.NewReadyEvent(mockDisp.id, resolvedTs)
+				if tt.legacyLocal && from == localServerID {
+					payload, err := commonEvent.MarshalEventWithHeader(
+						commonEvent.TypeReadyEvent, commonEvent.ReadyEventVersion1, mockDisp.id.Marshal())
+					require.NoError(t, err)
+					require.NoError(t, ready.Unmarshal(payload))
+					require.Zero(t, ready.ResolvedTs)
+				}
+				stat.handleSignalEvent(dispatcher.DispatcherEvent{From: &from, Event: &ready})
+			}
+			sendReady(remoteServerID, oracle.ComposeTS(tt.remoteReadyMs, 0))
+			require.Equal(t, remoteServerID, stat.session.getEventServiceID())
+			require.Len(t, messages, 1)
+			require.Equal(t, remoteServerID, messages[0].To)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, messages[0].Message[0].(*messaging.DispatcherRequest).ActionType)
+			messages = nil
+
+			// Model the progress delivered after remote takes over. Logical TSO
+			// bits must not affect the inclusive five-second physical-time limit.
+			mockDisp.checkPointTs = oracle.ComposeTS(tt.checkpointMs, 0)
+			mockDisp.resolvedTs = oracle.ComposeTS(tt.deliveredMs, 0)
+			if mockDisp.resolvedTs > mockDisp.startTs {
+				mockDisp.resolvedTs += 20
+			}
+			epoch := stat.loadCurrentEpochState().epoch
+			// Enforce the lag limit only when local reports progress. Legacy ready
+			// payloads omit it and must retain the original immediate switch.
+			if !tt.legacyLocal {
+				sendReady(localServerID, oracle.ComposeTS(tt.baselineMs-5001, 0))
+				current, pendingLocal, pendingRemote := sessionState(stat.session)
+				require.Equal(t, remoteServerID, current)
+				require.True(t, pendingLocal)
+				require.Empty(t, pendingRemote)
+				require.Empty(t, messages)
+				require.Equal(t, epoch, stat.loadCurrentEpochState().epoch)
+			}
+
+			localResolvedTs := oracle.ComposeTS(tt.baselineMs-tt.localLagMs, 0)
+			sendReady(localServerID, localResolvedTs)
+			current, pendingLocal, pendingRemote := sessionState(stat.session)
+			require.Equal(t, localServerID, current)
+			require.False(t, pendingLocal)
+			require.Empty(t, pendingRemote)
+			require.Len(t, messages, 2)
+			require.Equal(t, remoteServerID, messages[0].To)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REMOVE, messages[0].Message[0].(*messaging.DispatcherRequest).ActionType)
+			require.Equal(t, localServerID, messages[1].To)
+			reset := messages[1].Message[0].(*messaging.DispatcherRequest)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, reset.ActionType)
+			require.Equal(t, mockDisp.checkPointTs, reset.StartTs)
+			require.Equal(t, epoch+1, reset.Epoch)
+			require.Zero(t, stat.session.connState.getRemoteReadyResolvedTs())
+
+			messages = nil
+			sendReady(localServerID, localResolvedTs)
+			require.Empty(t, messages)
+		})
+	}
 }
 
 func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
