@@ -22,6 +22,8 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -598,6 +600,159 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	}
 }
 
+func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	eventsCh := make(chan *cdcpb.ChangeDataEvent, 10)
+	serverImpl := newMockChangeDataServer(eventsCh)
+	serverWG := &sync.WaitGroup{}
+	server, storeAddr := newMockService(ctx, t, serverImpl, serverWG)
+
+	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
+	regionCache := tikv.NewRegionCache(pdClient)
+	appcontext.SetService(appcontext.RegionCache, regionCache)
+
+	cluster.AddStore(1, storeAddr)
+	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
+
+	client := NewSubscriptionClient(pdClient, nil, &security.Credential{})
+	concreteClient := client.(*subscriptionClient)
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.Run(ctx)
+	}()
+
+	defer func() {
+		cancel()
+		select {
+		case err := <-runDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("subscription client did not stop")
+		}
+		require.NoError(t, concreteClient.Close(context.Background()))
+		server.Stop()
+		serverImpl.wg.Wait()
+		serverWG.Wait()
+		regionCache.Close()
+		pdClient.Close()
+	}()
+
+	subID := client.AllocSubscriptionID()
+	span := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+	}
+	kvCh := make(chan []common.RawKVEntry, 1)
+	resolvedTsCh := make(chan uint64, 1)
+	client.Subscribe(
+		subID,
+		span,
+		1,
+		func(events []common.RawKVEntry, _ func()) bool {
+			kvCh <- append([]common.RawKVEntry(nil), events...)
+			return false
+		},
+		func(ts uint64) { resolvedTsCh <- ts },
+		0,
+		true,
+	)
+
+	var subscribeRequest *cdcpb.ChangeDataRequest
+	select {
+	case subscribeRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for change data request")
+	}
+	require.Equal(t, uint64(subID), subscribeRequest.RequestId)
+	require.Equal(t, uint64(11), subscribeRequest.RegionId)
+	require.Equal(t, uint64(1), subscribeRequest.CheckpointTs)
+	require.Equal(t, span.StartKey, subscribeRequest.StartKey)
+	require.Equal(t, span.EndKey, subscribeRequest.EndKey)
+	require.Equal(t, kvrpcpb.ExtraOp_ReadOldValue, subscribeRequest.ExtraOp)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, subscribeRequest.ScanPriority)
+	require.True(t, subscribeRequest.FilterLoop)
+	require.NotNil(t, subscribeRequest.Header)
+	require.Equal(t, pdClient.GetClusterID(ctx), subscribeRequest.Header.ClusterId)
+	require.NotNil(t, subscribeRequest.RegionEpoch)
+
+	eventsCh <- mockInitializedEvent(11, uint64(subID))
+	eventsCh <- &cdcpb.ChangeDataEvent{Events: []*cdcpb.Event{{
+		RegionId:  11,
+		RequestId: uint64(subID),
+		Event: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{Entries: []*cdcpb.Event_Row{{
+			StartTs:  1,
+			CommitTs: 2,
+			Type:     cdcpb.Event_COMMITTED,
+			OpType:   cdcpb.Event_Row_PUT,
+			Key:      []byte("key"),
+			Value:    []byte("value"),
+			OldValue: []byte("old-value"),
+		}}}},
+	}}}
+
+	select {
+	case entries := <-kvCh:
+		require.Len(t, entries, 1)
+		require.Equal(t, common.OpTypePut, entries[0].OpType)
+		require.Equal(t, uint64(1), entries[0].StartTs)
+		require.Equal(t, uint64(2), entries[0].CRTs)
+		require.Equal(t, uint64(11), entries[0].RegionID)
+		require.Equal(t, []byte("key"), entries[0].Key)
+		require.Equal(t, []byte("value"), entries[0].Value)
+		require.Equal(t, []byte("old-value"), entries[0].OldValue)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a KV event")
+	}
+
+	const targetTs = uint64(3)
+	eventsCh <- mockTsEventBatch(11, targetTs, uint64(subID))
+	select {
+	case resolvedTs := <-resolvedTsCh:
+		require.Equal(t, targetTs, resolvedTs)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for resolved ts")
+	}
+
+	eventsCh <- &cdcpb.ChangeDataEvent{Events: []*cdcpb.Event{{
+		RegionId:  11,
+		RequestId: uint64(subID),
+		Event: &cdcpb.Event_Error{Error: &cdcpb.Error{
+			EpochNotMatch: &errorpb.EpochNotMatch{},
+		}},
+	}}}
+
+	var retryRequest *cdcpb.ChangeDataRequest
+	select {
+	case retryRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retry request after region error")
+	}
+	require.Equal(t, uint64(subID), retryRequest.RequestId)
+	require.Equal(t, uint64(11), retryRequest.RegionId)
+	require.Equal(t, targetTs, retryRequest.CheckpointTs)
+	require.Nil(t, retryRequest.GetDeregister())
+
+	client.Unsubscribe(subID)
+	var deregisterRequest *cdcpb.ChangeDataRequest
+	select {
+	case deregisterRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for deregister request")
+	}
+	require.Equal(t, uint64(subID), deregisterRequest.RequestId)
+	require.True(t, deregisterRequest.FilterLoop)
+	require.NotNil(t, deregisterRequest.GetDeregister())
+
+	require.Eventually(t, func() bool {
+		return concreteClient.spanRegistry.Get(subID) == nil
+	}, 5*time.Second, 10*time.Millisecond, "subscription path was not removed")
+}
+
 func TestGetResolvedTargetTs(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
@@ -613,20 +768,6 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		EndKey:   []byte{'z'},
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span.initialized.Store(true)
-
-	// Replicate the getResolvedTargetTs closure from runResolveLockChecker
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
 
 	// Simulate clock skew: local pdClock is 30s ahead of PD.
 	// In the real scenario:
