@@ -8,6 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -25,30 +26,62 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/format"
 )
 
+type schemaNameChange struct {
+	from string
+	to   string
+}
+
+// ddlRoutePlan contains the rewritten query and routing semantics that cannot
+// be inferred from whether the query text changed.
+type ddlRoutePlan struct {
+	// query is the final DDL query after applying routing rules.
+	query string
+	// hasOutOfBandTableMetadata tells ApplyToDDLEvent to inspect table metadata
+	// such as MultipleTableInfos even when query itself is unchanged.
+	hasOutOfBandTableMetadata bool
+	// tableNamePreservingSchemaChanges records schema name changes whose routed
+	// tables must keep the same names before and after the schema change.
+	tableNamePreservingSchemaChanges []schemaNameChange
+}
+
 // rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
 func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, error) {
+	plan, err := r.buildParserBackedDDLRoutePlan(ddl)
+	if err != nil {
+		return "", err
+	}
+	return plan.query, nil
+}
+
+func (r Router) buildParserBackedDDLRoutePlan(ddl *commonEvent.DDLEvent) (ddlRoutePlan, error) {
 	if len(r.rules) == 0 {
-		return ddl.Query, nil
+		return ddlRoutePlan{query: ddl.Query}, nil
 	}
 
 	queries, err := splitMultiStmtDDLQuery(ddl.Query)
 	if err != nil {
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return ddlRoutePlan{}, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	var (
 		builder strings.Builder
+		plan    ddlRoutePlan
 		routed  bool
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, changed, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
+		singlePlan, err := r.buildSingleDDLRoutePlan(query, ddl.GetSchemaName())
 		if err != nil {
-			return "", err
+			return ddlRoutePlan{}, err
 		}
-		if changed {
+		plan.hasOutOfBandTableMetadata = plan.hasOutOfBandTableMetadata ||
+			singlePlan.hasOutOfBandTableMetadata
+		plan.tableNamePreservingSchemaChanges = append(
+			plan.tableNamePreservingSchemaChanges,
+			singlePlan.tableNamePreservingSchemaChanges...)
+		if singlePlan.query != query {
 			routed = true
-			query = newQuery
+			query = singlePlan.query
 		}
 		builder.WriteString(query)
 		if len(queries) > 1 && !strings.HasSuffix(query, ";") {
@@ -56,10 +89,12 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 		}
 	}
 	if !routed {
-		return ddl.Query, nil
+		plan.query = ddl.Query
+		return plan, nil
 	}
 
-	return builder.String(), nil
+	plan.query = builder.String()
+	return plan, nil
 }
 
 func splitMultiStmtDDLQuery(query string) ([]string, error) {
@@ -90,28 +125,49 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 //	route {source_db, t} with rule source_db.* → target_db.{table}_r
 //	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
+	plan, err := r.buildSingleDDLRoutePlan(query, defaultSchema)
+	if err != nil {
+		return "", false, err
+	}
+	return plan.query, plan.query != query, nil
+}
+
+func (r Router) buildSingleDDLRoutePlan(query string, defaultSchema string) (ddlRoutePlan, error) {
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
-		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return ddlRoutePlan{}, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
+
+	plan := ddlRoutePlan{query: query}
 	if _, ok := stmt.(ast.DDLNode); !ok {
 		// Non-DDL statements carry no routed names.
-		return query, false, nil
+		return plan, nil
+	}
+	if flashback, ok := stmt.(*ast.FlashBackDatabaseStmt); ok {
+		// FLASHBACK DATABASE restores tables that are carried by the DDL event
+		// metadata but are not named in the query.
+		plan.hasOutOfBandTableMetadata = true
+		if flashback.NewName != "" {
+			plan.tableNamePreservingSchemaChanges = []schemaNameChange{{
+				from: flashback.DBName.O,
+				to:   flashback.NewName,
+			}}
+		}
 	}
 
 	routed, err := rewriteDDLStmt(stmt, r, defaultSchema)
 	if err != nil {
-		return "", false, err
+		return ddlRoutePlan{}, err
 	}
 	if !routed {
-		return query, false, nil
+		return plan, nil
 	}
 
-	newQuery, err := restoreDDLStmt(stmt)
+	plan.query, err = restoreDDLStmt(stmt)
 	if err != nil {
-		return "", false, err
+		return ddlRoutePlan{}, err
 	}
-	return newQuery, true, nil
+	return plan, nil
 }
 
 // rewriteDDLStmt routes the names of one DDL AST in place and reports whether
@@ -124,6 +180,20 @@ func rewriteDDLStmt(stmt ast.StmtNode, router Router, defaultSchema string) (boo
 		return routeDatabaseName(&stmt.Name, router)
 	case *ast.DropDatabaseStmt:
 		return routeDatabaseName(&stmt.Name, router)
+	case *ast.FlashBackDatabaseStmt:
+		oldRouted, err := routeDatabaseName(&stmt.DBName, router)
+		if err != nil || stmt.NewName == "" {
+			return oldRouted, err
+		}
+		binding, err := router.Route(stmt.NewName, "")
+		if err != nil {
+			return false, err
+		}
+		newRouted := binding.routed()
+		if newRouted {
+			stmt.NewName = binding.Target.Schema
+		}
+		return oldRouted || newRouted, nil
 	}
 
 	bindings := sqlname.Bind(stmt, defaultSchema)

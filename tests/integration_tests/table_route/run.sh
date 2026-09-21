@@ -369,6 +369,72 @@ function run_route_admission_failover_case() {
 	cleanup_name_change_route_databases
 }
 
+function cleanup_flashback_route_databases() {
+	run_sql "DROP DATABASE IF EXISTS source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS new_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS table_only_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS old_target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS new_target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+}
+
+function run_flashback_database_case() {
+	local changefeed_id=table-route-flashback-database
+	local start_ts
+
+	echo "[$(date)] <<<<<< run table route FLASHBACK DATABASE case >>>>>>"
+	cleanup_flashback_route_databases
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$CUR/conf/flashback_changefeed.toml"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	run_sql "CREATE DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE source_db.t1 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_db.t1 VALUES (1, 'before flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "target_db.t1_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "target_db.t1_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM target_db.t1_routed WHERE id = 1;" "before flashback" 90
+	run_sql "INSERT INTO source_db.t1 VALUES (2, 'after flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM target_db.t1_routed WHERE id = 2;" "after flashback" 90
+
+	run_sql "CREATE DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE table_only_db.t2 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO table_only_db.t2 VALUES (1, 'before table-only flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "table_only_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "table_only_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "table_only_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM table_only_db.t2_routed WHERE id = 1;" "before table-only flashback" 90
+	run_sql "INSERT INTO table_only_db.t2 VALUES (2, 'after table-only flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM table_only_db.t2_routed WHERE id = 2;" "after table-only flashback" 90
+
+	run_sql "CREATE DATABASE old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE old_db.t2 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO old_db.t2 VALUES (1, 'before flashback to');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "old_target_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "old_target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE old_db TO new_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "new_target_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_db_not_exists "old_target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM new_target_db.t2_routed WHERE id = 1;" "before flashback to" 90
+	run_sql "INSERT INTO new_db.t2 VALUES (2, 'after flashback to');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM new_target_db.t2_routed WHERE id = 2;" "after flashback to" 90
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	cdc_cli_changefeed remove -c "$changefeed_id"
+	cleanup_flashback_route_databases
+}
+
 function run_mysql() {
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 
@@ -405,6 +471,7 @@ function run_mysql() {
 	cdc_cli_changefeed remove -c "$split_changefeed_id"
 
 	run_pause_resume_name_change_case
+	run_flashback_database_case
 	run_route_admission_failover_case
 
 	cleanup_process "$CDC_BINARY"
