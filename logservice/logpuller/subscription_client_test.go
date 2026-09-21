@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
@@ -716,6 +717,25 @@ func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for resolved ts")
 	}
+
+	eventsCh <- &cdcpb.ChangeDataEvent{Events: []*cdcpb.Event{{
+		RegionId:  11,
+		RequestId: uint64(subID),
+		Event: &cdcpb.Event_Error{Error: &cdcpb.Error{
+			EpochNotMatch: &errorpb.EpochNotMatch{},
+		}},
+	}}}
+
+	var retryRequest *cdcpb.ChangeDataRequest
+	select {
+	case retryRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retry request after region error")
+	}
+	require.Equal(t, uint64(subID), retryRequest.RequestId)
+	require.Equal(t, uint64(11), retryRequest.RegionId)
+	require.Equal(t, targetTs, retryRequest.CheckpointTs)
+	require.Nil(t, retryRequest.GetDeregister())
 
 	client.Unsubscribe(subID)
 	var deregisterRequest *cdcpb.ChangeDataRequest
