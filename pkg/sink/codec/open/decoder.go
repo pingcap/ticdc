@@ -326,7 +326,7 @@ func buildColumns(
 
 // snapshotColumns uses protocol metadata so snapshot rows have the same chunk
 // layout as ordinary messages. Cached columns never retain row values.
-func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]interface{}, columns map[string]column) map[string]column {
+func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
 	cacheKey := b.tableCacheKey(key)
 	cached := b.tables[cacheKey]
