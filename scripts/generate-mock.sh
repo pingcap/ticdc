@@ -58,6 +58,7 @@ run_mockgen -source pkg/api/v2/capture.go -destination pkg/api/v2/mock/capture_m
 run_mockgen -source pkg/api/v2/processor.go -destination pkg/api/v2/mock/processor_mock.go -package mock
 run_mockgen -source pkg/api/v2/changefeed.go -destination pkg/api/v2/mock/changefeed_mock.go -package mock
 run_mockgen -source pkg/api/v2/api_client.go -destination pkg/api/v2/mock/api_client_mock.go -package mock
+run_mockgen -source logservice/logpuller/debug.go -destination logservice/logpuller/mock/debug_info_provider.go -package mock
 run_mockgen -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 run_mockgen -source pkg/sink/kafka/admin_client.go -destination pkg/sink/kafka/admin_client_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
