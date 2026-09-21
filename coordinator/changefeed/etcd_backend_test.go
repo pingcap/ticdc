@@ -127,16 +127,19 @@ func TestUpdateChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, common.ChangeFeedID) (*config.ChangeFeedStatus, int64, error) {
+		return &config.ChangeFeedStatus{}, 1, nil
+	}).AnyTimes()
 
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("txn failed")).Times(1)
 	require.NotNil(t, backend.UpdateChangefeed(context.Background(), &config.ChangeFeedInfo{}, 0, config.ProgressStopping))
 
 	// txn fail
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(1)
+		Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(20)
 	require.NotNil(t, backend.UpdateChangefeed(context.Background(), &config.ChangeFeedInfo{}, 0, config.ProgressStopping))
 
-	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Len(0), NewFuncMatcher(func(i interface{}) bool {
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Len(1), NewFuncMatcher(func(i interface{}) bool {
 		ops := i.([]clientv3.Op)
 		require.Len(t, ops, 2)
 		require.True(t, ops[0].IsPut())
@@ -405,11 +408,11 @@ func TestPauseChangefeed(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{State: config.StateNormal}
+	info := &config.ChangeFeedInfo{ChangefeedID: changefeedID, State: config.StateNormal}
 	status := &config.ChangeFeedStatus{Progress: config.ProgressStopping}
 
 	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
-	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(2)
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
 
 	err := backend.PauseChangefeed(context.Background(), changefeedID)
@@ -532,11 +535,14 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
 	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
 	backend := NewEtcdBackend(cdcClient)
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, common.ChangeFeedID) (*config.ChangeFeedStatus, int64, error) {
+		return &config.ChangeFeedStatus{}, 1, nil
+	}).AnyTimes()
 
 	cps := map[common.ChangeFeedID]uint64{
 		common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName): 100,
 	}
-	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(1)
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(20)
 	err := backend.UpdateChangefeedCheckpointTs(context.Background(), cps)
 	require.NotNil(t, err)
 

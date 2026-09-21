@@ -27,6 +27,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -152,12 +153,13 @@ type ReplicaConfig replicaConfig
 type replicaConfig struct {
 	// Pause is a CLI create-only option, forwarded to the API creation request.
 	// It does not control the state of an existing changefeed.
-	Pause            *bool   `toml:"pause" json:"pause,omitempty"`
-	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
-	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
-	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
-	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
-	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	Pause            *bool            `toml:"pause" json:"pause,omitempty"`
+	Snapshot         *protocol.Config `toml:"snapshot" json:"snapshot,omitempty"`
+	PerformanceMode  *string          `toml:"performance-mode" json:"performance-mode,omitempty"`
+	MemoryQuota      *uint64          `toml:"memory-quota" json:"memory-quota,omitempty"`
+	CaseSensitive    *bool            `toml:"case-sensitive" json:"case-sensitive,omitempty"`
+	ForceReplicate   *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
+	CheckGCSafePoint *bool            `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
 	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
 	// By default TiCDC rejects such a changefeed to avoid self-replication loops. Set it to true
 	// only when the changefeed cannot capture its own writes, for example when the downstream

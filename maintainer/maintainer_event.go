@@ -14,8 +14,10 @@
 package maintainer
 
 import (
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/node"
 )
 
 const (
@@ -25,13 +27,16 @@ const (
 	EventMessage
 	// EventPeriod is triggered periodically, maintainer handle some task in the loop, like resend messages
 	EventPeriod
+	EventSnapshotDone
 )
 
 // Event identify the Event that maintainer will handle in event-driven loop
 type Event struct {
-	changefeedID common.ChangeFeedID
-	eventType    int
-	message      *messaging.TargetMessage
+	snapshotError     error
+	snapshotResponses map[node.ID]*heartbeatpb.MaintainerBootstrapResponse
+	changefeedID      common.ChangeFeedID
+	eventType         int
+	message           *messaging.TargetMessage
 	// blockStatusReleaseKeys tracks the block-status keys reserved when the
 	// event entered the maintainer queue. They are released after HandleEvent
 	// returns so duplicate resends stay suppressed while the event is pending.

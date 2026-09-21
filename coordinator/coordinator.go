@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/snapshot/bootstrap"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -123,6 +124,7 @@ func New(node *node.Info,
 		changefeedChangeCh: make(chan []*changefeedChange, 1024),
 		backend:            backend,
 	}
+	appcontext.SetService(bootstrap.RepositoryService, bootstrap.Repository(c))
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 	c.controller = NewController(
@@ -446,7 +448,19 @@ func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*
 }
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
-	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
+	info, status, err := c.controller.GetChangefeed(ctx, changefeedDisplayName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Config != nil && info.Config.Snapshot != nil {
+		if backend, ok := c.backend.(bootstrap.Repository); ok {
+			status.Snapshot, err = backend.LoadSnapshot(ctx, info.ChangefeedID, info.Epoch)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	return info, status, nil
 }
 
 func (c *coordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {

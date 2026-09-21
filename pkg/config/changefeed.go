@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/tikv/client-go/v2/oracle"
@@ -189,6 +190,7 @@ func (t AdminJobType) IsStopState() bool {
 }
 
 type ChangefeedConfig struct {
+	Snapshot        *protocol.Config    `json:"snapshot,omitempty"`
 	ChangefeedID    common.ChangeFeedID `json:"changefeed_id"`
 	PerformanceMode string              `json:"performance_mode"`
 	StartTS         uint64              `json:"start_ts"`
@@ -299,6 +301,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		}
 	}
 	return &ChangefeedConfig{
+		Snapshot:                      info.Config.Snapshot,
 		ChangefeedID:                  info.ChangefeedID,
 		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                       info.StartTs,
@@ -765,7 +768,8 @@ var (
 // ChangeFeedStatus stores information about a ChangeFeed
 // It is stored in etcd.
 type ChangeFeedStatus struct {
-	CheckpointTs uint64 `json:"checkpoint-ts"`
+	Snapshot     *protocol.State `json:"snapshot,omitempty"`
+	CheckpointTs uint64          `json:"checkpoint-ts"`
 	// Progress indicates changefeed progress status
 	Progress Progress `json:"progress"`
 

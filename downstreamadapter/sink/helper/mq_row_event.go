@@ -53,6 +53,7 @@ func NewMQRowEvents(
 				TotalPartition: partitionNum,
 			},
 			RowEvent: commonEvent.RowEvent{
+				Snapshot:        event.Snapshot,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
 				StartTs:         event.StartTs,
@@ -85,6 +86,7 @@ func NewRowEvents(
 		}
 
 		events = append(events, &commonEvent.RowEvent{
+			Snapshot:        event.Snapshot,
 			PhysicalTableID: event.PhysicalTableID,
 			TableInfo:       event.TableInfo,
 			StartTs:         event.StartTs,
