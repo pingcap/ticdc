@@ -92,6 +92,7 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
+	replayBoundary         map[replayKey]struct{}
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -252,6 +253,40 @@ func (w *writer) flushEventsFromGroups(
 }
 
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	// Replays use the same partition, and PrepareResolve keeps each table's
+	// equal commit-ts together. Deduplicate the restored batch before the sink
+	// merges row changes. Equality with the watermark remains open to replay.
+	seen := make(map[replayKey]struct{})
+	filtered := make([]*event.DMLEvent, 0, len(events))
+	var duplicates []*event.DMLEvent
+	for _, e := range events {
+		if retained := filterReplayRows(e, seen, w.replayBoundary); retained != nil {
+			filtered = append(filtered, retained)
+		} else {
+			duplicates = append(duplicates, e)
+		}
+	}
+	if err := w.flushFilteredDMLBatch(ctx, filtered, fields...); err != nil {
+		return err
+	}
+	// Advance deduplication state and release duplicate chunks only after the
+	// retained rows are durable. The caller then acknowledges the spill batch.
+	watermark := w.globalWatermark()
+	for key := range seen {
+		if key.commitTs >= watermark {
+			if w.replayBoundary == nil {
+				w.replayBoundary = make(map[replayKey]struct{})
+			}
+			w.replayBoundary[key] = struct{}{}
+		}
+	}
+	for _, e := range duplicates {
+		e.PostFlush()
+	}
+	return nil
+}
+
+func (w *writer) flushFilteredDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -357,6 +392,16 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	total, err := w.flushEventsFromGroups(ctx, groups, watermark, zap.Uint64("watermark", watermark))
 	if err != nil {
 		return err
+	}
+	// A replay may have been buffered before the watermark advanced. Keep the
+	// previous boundary until ALL groups have drained, not just one batch.
+	for key := range w.replayBoundary {
+		if key.commitTs < watermark {
+			delete(w.replayBoundary, key)
+		}
+	}
+	if len(w.replayBoundary) == 0 {
+		w.replayBoundary = nil
 	}
 	if total != 0 {
 		stats := w.spillStore.Stats()
