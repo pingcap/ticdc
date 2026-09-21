@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
-	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -419,9 +418,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 			backend := mock_changefeed.NewMockBackend(ctrl)
 			mc := messaging.NewMockMessageCenter()
 			appcontext.SetService(appcontext.MessageCenter, mc)
-			mc.EnableLocalDispatch()
-			t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, "coordinator")))
-			eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
+			appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 
 			nodeManager := watcher.NewNodeManager(nil, nil)
 			appcontext.SetService(watcher.NodeManagerName, nodeManager)
@@ -516,9 +513,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
 	nodeManager.GetAliveNodes()[currentNode] = &node.Info{ID: currentNode}
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	mc.EnableLocalDispatch()
-	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, "coordinator")))
-	eventservice.NewMockSchemaStore().RegisterMessageHandler(mc)
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
 	cfID := common.NewChangeFeedIDWithName("duplicate-epoch", common.DefaultKeyspaceName)
