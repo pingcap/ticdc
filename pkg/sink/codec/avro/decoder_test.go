@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
-	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/stretchr/testify/require"
 )
 
@@ -146,7 +145,7 @@ func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
 	tableInfo := newTableInfo("test", "t", columns, nil)
 	require.False(t, tableInfo.PKIsHandle())
 	require.Empty(t, tableInfo.GetIndices())
-	require.Nil(t, sqlmodel.GetWhereHandle(tableInfo, tableInfo).UniqueNotNullIdx)
+	require.Empty(t, tableInfo.GetOrderedHandleKeyColumnIDs())
 }
 
 func TestUpdateWithoutBeforeValue(t *testing.T) {

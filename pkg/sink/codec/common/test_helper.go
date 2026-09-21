@@ -14,14 +14,11 @@
 package common
 
 import (
-	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -146,30 +143,17 @@ func CompareRow(
 	}
 }
 
-// RequireRowLocatorByPrimaryKey asserts that an update of the given table info is
-// located by its primary key columns. The MySQL sink builds the WHERE clause of
-// an UPDATE from the handle key of the table info a decoder produced, so this is
-// the contract that table info has to satisfy: when the handle key is not the
-// primary key the sink scans the table by an unindexed column instead.
+// RequireRowLocatorByPrimaryKey checks handle-key identity and schema offsets
+// directly on the table metadata produced by a decoder.
 func RequireRowLocatorByPrimaryKey(t require.TestingT, tableInfo *commonType.TableInfo, primaryKeys ...string) {
-	columns := tableInfo.GetColumns()
-	preValues := make([]any, 0, len(columns))
-	postValues := make([]any, 0, len(columns))
-	for _, column := range columns {
-		preValues = append(preValues, "pre_"+column.Name.O)
-		postValues = append(postValues, "post_"+column.Name.O)
+	ids := tableInfo.GetOrderedHandleKeyColumnIDs()
+	require.Len(t, ids, len(primaryKeys))
+	for i, id := range ids {
+		require.True(t, tableInfo.IsHandleKey(id))
+		offset := tableInfo.MustGetColumnOffsetByID(id)
+		column := tableInfo.GetColumns()[offset]
+		require.Equal(t, id, column.ID)
+		require.Equal(t, primaryKeys[i], column.Name.O)
+		require.Equal(t, offset, column.Offset)
 	}
-
-	change := sqlmodel.NewRowChange(
-		&tableInfo.TableName, nil, preValues, postValues, tableInfo, tableInfo, nil)
-	sql, args := change.GenSQL(sqlmodel.DMLUpdate)
-
-	predicates := make([]string, 0, len(primaryKeys))
-	values := make([]any, 0, len(primaryKeys))
-	for _, key := range primaryKeys {
-		predicates = append(predicates, fmt.Sprintf("`%s` = ?", key))
-		values = append(values, "pre_"+key)
-	}
-	require.Contains(t, sql, "WHERE "+strings.Join(predicates, " AND "))
-	require.Equal(t, values, args[len(args)-len(primaryKeys):])
 }
