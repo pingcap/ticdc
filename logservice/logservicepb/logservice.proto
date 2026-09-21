@@ -47,7 +47,7 @@ message ReusableEventServiceResponse {
 // A capture-wide snapshot, including ordinary and table trigger dispatchers.
 message EventBrokerDispatcherCount {
     uint32 DispatcherCount = 1;
-    bool RegistrationsStopped = 3;
+    bool RegistrationsStopped = 2;
 }
 
 message EventBrokerDispatcherCountRequest {
