@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -93,7 +92,6 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
-	avroSchemas            *avroTableSchemas
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -148,7 +146,6 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	w.initAvroTableSchemas(ctx, cfg)
 	return w
 }
 
@@ -165,9 +162,6 @@ func (w *writer) getSpillStore() *util.SpillStore {
 
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
-	if w.avroSchemas != nil {
-		cleanupErr = w.avroSchemas.db.Close()
-	}
 	for _, progress := range w.progresses {
 		for _, group := range progress.eventsGroup {
 			_ = group.Cleanup()
@@ -205,14 +199,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 			zap.Any("tables", tableIDs))
 	}
-	if err := w.mysqlSink.WriteBlockEvent(ddl); err != nil {
-		return err
-	}
-	if w.avroSchemas != nil {
-		clear(w.avroSchemas.tables)
-		w.avroSchemas.version = max(w.avroSchemas.version, ddl.GetCommitTs())
-	}
-	return nil
+	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
 func (w *writer) flushEventsFromGroups(
@@ -262,11 +249,7 @@ func (w *writer) flushEventsFromGroups(
 			if batch != nil {
 				preparedAny = true
 				prepared = append(prepared, batch)
-				events, err := group.MessagesToEvents(batch.Messages)
-				if err != nil {
-					return 0, err
-				}
-				batchEvents = append(batchEvents, events...)
+				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
 				batchMessages += len(batch.Messages)
 				batchBytes += batch.ResolvedBytes
 			}
@@ -281,64 +264,7 @@ func (w *writer) flushEventsFromGroups(
 	return total, nil
 }
 
-type tableDMLBatchState struct {
-	tableInfo    *commonType.TableInfo
-	conflictKeys map[uint64]struct{}
-}
-
-// flushDMLBatch writes compatible events to the sink together. The CDC
-// event-service path gives the sink schema-consistent events with exact row
-// kinds. MQ formats can omit a before-image and materialize an update as an
-// insert, so one consumer batch also disallows reused sink conflict keys. The
-// sink can still batch transactions that touch different keys.
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
-	tables := make(map[int64]*tableDMLBatchState)
-	start := 0
-	for i, dml := range events {
-		if appendToDMLBatch(tables, dml) {
-			continue
-		}
-		if err := w.flushDMLBatchAndWait(ctx, events[start:i], fields...); err != nil {
-			return err
-		}
-		clear(tables)
-		start = i
-		appendToDMLBatch(tables, dml)
-	}
-	return w.flushDMLBatchAndWait(ctx, events[start:], fields...)
-}
-
-func appendToDMLBatch(tables map[int64]*tableDMLBatchState, dml *event.DMLEvent) bool {
-	tableID := dml.GetTableID()
-	state := tables[tableID]
-	keys := causality.ConflictKeys(dml)
-	if state == nil {
-		if keys == nil {
-			keys = make(map[uint64]struct{})
-		}
-		tables[tableID] = &tableDMLBatchState{
-			tableInfo:    dml.TableInfo,
-			conflictKeys: keys,
-		}
-		return true
-	}
-	if !state.tableInfo.HasSameColumnSchema(dml.TableInfo) {
-		return false
-	}
-	for key := range keys {
-		if _, conflict := state.conflictKeys[key]; conflict {
-			return false
-		}
-	}
-	for key := range keys {
-		state.conflictKeys[key] = struct{}{}
-	}
-	return true
-}
-
-func (w *writer) flushDMLBatchAndWait(
-	ctx context.Context, events []*event.DMLEvent, fields ...zap.Field,
-) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -803,7 +729,6 @@ func (w *writer) appendMessage2Group(
 	if err := group.AppendMessage(message); err != nil {
 		return err
 	}
-
 	if commitTs < progress.watermark {
 		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
@@ -815,11 +740,21 @@ func (w *writer) appendMessage2Group(
 			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
 		return nil
 	}
-	log.Debug("DML event append to the group",
-		zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-		zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
+	if commitTs >= group.HighWatermark {
+		log.Debug("DML event append to the group",
+			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", message.RowType))
+		return nil
+	}
+	log.Warn("DML event commit ts fallback, append it and sort before flush",
+		zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-		zap.Stringer("eventType", message.RowType))
+		zap.Stringer("eventType", message.RowType),
+		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
 	return nil
 }
 

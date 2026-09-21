@@ -15,9 +15,7 @@ package main
 
 import (
 	"context"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
@@ -28,9 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -305,9 +300,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		message *codeccommon.DMLMessage
 		offset  int64
 	}{
-		{newDMLMessageForWriterTest(20, 1), 1},
-		{newDMLMessageForWriterTest(10, 2), 2},
-		{newDMLMessageForWriterTest(20, 3), 3},
+		{newDMLMessageForWriterTest(20), 1},
+		{newDMLMessageForWriterTest(10), 2},
+		{newDMLMessageForWriterTest(20), 3},
 	} {
 		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(item.message), p, item.offset))
 	}
@@ -416,7 +411,7 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
-		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10, 1)}),
+		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
 	}
 	w := &writer{
 		progresses:      []*partitionProgress{progress},
@@ -455,7 +450,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol:    config.ProtocolOpen,
 	}
 
-	message := newDMLMessageForWriterTest(10, 1)
+	message := newDMLMessageForWriterTest(10)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, 10))
 
 	require.NotNil(t, progress.eventsGroup[1])
@@ -572,46 +567,19 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	}
 }
 
-func newDMLMessageForWriterTest(commitTs uint64, key int64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
-		tableInfo := newWriterTestTableInfo(1, mysql.TypeLonglong)
-		rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-		rows.AppendInt64(0, key)
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			StartTs:         commitTs - 1,
 			CommitTs:        commitTs,
-			Length:          1,
-			RowTypes:        []common.RowType{common.RowTypeInsert},
-			Rows:            rows,
-			TableInfo:       tableInfo,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
 		}
 	})
-}
-
-func newWriterTestTableInfo(tableID int64, columnType byte) *common.TableInfo {
-	column := &timodel.ColumnInfo{
-		ID:        1,
-		Name:      ast.NewCIStr("id"),
-		Offset:    0,
-		State:     timodel.StatePublic,
-		FieldType: *types.NewFieldType(columnType),
-	}
-	info := &timodel.TableInfo{
-		ID:      tableID,
-		Name:    ast.NewCIStr("t"),
-		Columns: []*timodel.ColumnInfo{column},
-		Indices: []*timodel.IndexInfo{{
-			ID:      1,
-			Name:    ast.NewCIStr("primary"),
-			Columns: []*timodel.IndexColumn{{Name: column.Name, Offset: 0}},
-			Primary: true,
-			Unique:  true,
-			State:   timodel.StatePublic,
-		}},
-	}
-	common.SetHandleKeyFlags(info)
-	return common.NewTableInfo4Decoder("test", info)
 }
 
 func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
@@ -622,132 +590,6 @@ func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codecco
 	)
 	messageData.AttachDMLMessage(message)
 	return message
-}
-
-func TestFlushDMLBatchSubmitsSameTableEventsInOneBatch(t *testing.T) {
-	// Events of the same table with different commit-ts and keys must reach the
-	// sink in one batch, so the sink can batch rows across transactions.
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	ctrl := gomock.NewController(t)
-	s := sinkmock.NewMockSink(ctrl)
-	var mu sync.Mutex
-	submitted := make([]*commonEvent.DMLEvent, 0, 2)
-	submittedAll := make(chan struct{})
-	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
-		mu.Lock()
-		submitted = append(submitted, event)
-		all := len(submitted) == 2
-		mu.Unlock()
-		if all {
-			close(submittedAll)
-		}
-	}).Times(2)
-
-	w := &writer{mysqlSink: s}
-	events := []*commonEvent.DMLEvent{
-		newFlushTestDMLEvent(1, 100, 1, mysql.TypeLonglong),
-		newFlushTestDMLEvent(1, 101, 2, mysql.TypeLonglong),
-	}
-	done := make(chan error, 1)
-	go func() { done <- w.flushDMLBatch(ctx, events) }()
-
-	// Both events must be in flight before any of them is allowed to finish.
-	select {
-	case <-submittedAll:
-	case <-ctx.Done():
-		require.Fail(t, "events of the same table were not submitted in one batch")
-	}
-
-	mu.Lock()
-	flushing := append([]*commonEvent.DMLEvent(nil), submitted...)
-	mu.Unlock()
-	for _, event := range flushing {
-		event.PostFlush()
-	}
-	require.NoError(t, <-done)
-}
-
-func TestFlushDMLBatchSeparatesIncompatibleSameTableEvents(t *testing.T) {
-	testCases := []struct {
-		name   string
-		first  *commonEvent.DMLEvent
-		second *commonEvent.DMLEvent
-	}{
-		{
-			name:   "same key",
-			first:  newFlushTestDMLEvent(1, 100, 1, mysql.TypeLonglong),
-			second: newFlushTestDMLEvent(1, 101, 1, mysql.TypeLonglong),
-		},
-		{
-			name:   "different schema",
-			first:  newFlushTestDMLEvent(1, 100, 1, mysql.TypeLonglong),
-			second: newFlushTestDMLEvent(1, 101, 2, mysql.TypeLong),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-
-			ctrl := gomock.NewController(t)
-			s := sinkmock.NewMockSink(ctrl)
-			firstSubmitted := make(chan struct{})
-			secondSubmitted := make(chan struct{})
-			s.EXPECT().AddDMLEvent(tc.first).Do(func(*commonEvent.DMLEvent) {
-				close(firstSubmitted)
-			})
-			s.EXPECT().AddDMLEvent(tc.second).Do(func(*commonEvent.DMLEvent) {
-				close(secondSubmitted)
-			})
-
-			w := &writer{mysqlSink: s}
-			done := make(chan error, 1)
-			go func() {
-				done <- w.flushDMLBatch(ctx, []*commonEvent.DMLEvent{tc.first, tc.second})
-			}()
-
-			select {
-			case <-firstSubmitted:
-			case <-ctx.Done():
-				require.FailNow(t, "first event was not submitted")
-			}
-			require.Never(t, func() bool {
-				select {
-				case <-secondSubmitted:
-					return true
-				default:
-					return false
-				}
-			}, 100*time.Millisecond, 10*time.Millisecond)
-
-			tc.first.PostFlush()
-			select {
-			case <-secondSubmitted:
-			case <-ctx.Done():
-				require.FailNow(t, "second event was not submitted after the first flush")
-			}
-			tc.second.PostFlush()
-			require.NoError(t, <-done)
-		})
-	}
-}
-
-func newFlushTestDMLEvent(tableID int64, commitTs uint64, key int64, columnType byte) *commonEvent.DMLEvent {
-	tableInfo := newWriterTestTableInfo(tableID, columnType)
-	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-	rows.AppendInt64(0, key)
-	return &commonEvent.DMLEvent{
-		PhysicalTableID: tableID,
-		CommitTs:        commitTs,
-		StartTs:         commitTs - 1,
-		Length:          1,
-		RowTypes:        []common.RowType{common.RowTypeInsert},
-		Rows:            rows,
-		TableInfo:       tableInfo,
-	}
 }
 
 type singleDMLDecoder struct {

@@ -237,11 +237,7 @@ func (w *writer) flushEventsFromGroups(
 			if batch != nil {
 				preparedAny = true
 				prepared = append(prepared, batch)
-				events, err := group.MessagesToEvents(batch.Messages)
-				if err != nil {
-					return 0, err
-				}
-				batchEvents = append(batchEvents, events...)
+				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
 				batchMessages += len(batch.Messages)
 				batchBytes += batch.ResolvedBytes
 			}

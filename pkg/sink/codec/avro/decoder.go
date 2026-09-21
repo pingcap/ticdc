@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"maps"
 	"math/big"
 	"strconv"
 	"strings"
@@ -51,20 +52,16 @@ type decoder struct {
 	config *common.Config
 	topic  string
 
-	upstreamTiDB      *sql.DB
-	tableInfoProvider func(string, string) (*commonType.TableInfo, error)
+	upstreamTiDB *sql.DB
+
+	// valueSchemas supplies the column layout for subsequent key-only deletes.
+	valueSchemas map[[2]string]map[string]any
 
 	schemaM schemamanager.SchemaManager
 	codecs  *lru.Cache
 
 	key   []byte
 	value []byte
-}
-
-// SetTableInfoProvider supplies the complete schema at the consumer's DDL boundary.
-// It is called when materializing a DML event, not when receiving a message.
-func (d *decoder) SetTableInfoProvider(provider func(string, string) (*commonType.TableInfo, error)) {
-	d.tableInfoProvider = provider
 }
 
 // NewDecoder return an avro decoder
@@ -84,6 +81,7 @@ func NewDecoder(
 		schemaM:      schemaM,
 		codecs:       codecs,
 		upstreamTiDB: db,
+		valueSchemas: make(map[[2]string]map[string]any),
 	}
 }
 
@@ -174,17 +172,33 @@ func (d *decoder) decodeDMLPayload() (
 	isDelete = !hasValue
 	if !hasValue {
 		// Legacy delete event only has the key payload or a delete marker value.
-		// It can only be decoded as a delete row with key columns in PreRow.
+		// Reuse the last value schema to preserve the full column layout.
 		if isDeleteValue {
 			deleteCommitTs = d.decodeDeleteCommitTs()
 		}
 		valueMap = keyMap
 		valueSchema = keySchema
+		schemaName, tableName := schemaAndTableName(keySchema)
+		if cached := d.valueSchemas[[2]string{schemaName, tableName}]; cached != nil {
+			valueSchema = cached
+			valueMap = maps.Clone(keyMap)
+			for _, field := range cached["fields"].([]any) {
+				name := field.(map[string]any)["name"].(string)
+				if isAvroExtensionField(name) {
+					break
+				}
+				if _, ok := valueMap[name]; !ok {
+					valueMap[name] = nil
+				}
+			}
+		}
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
+		schemaName, tableName := schemaAndTableName(valueSchema)
+		d.valueSchemas[[2]string{schemaName, tableName}] = valueSchema
 		if operation, ok := valueMap[tidbOp]; ok {
 			isDelete = operation == deleteOperation
 		}
@@ -201,16 +215,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 	hasValue bool,
 	deleteCommitTs uint64,
 ) *commonEvent.DMLEvent {
-	var tableInfo *commonType.TableInfo
-	if d.tableInfoProvider != nil {
-		schema, table := schemaAndTableName(valueSchema)
-		var err error
-		tableInfo, err = d.tableInfoProvider(schema, table)
-		if err != nil {
-			log.Panic("load avro table schema failed", zap.Error(err))
-		}
-	}
-	event, err := assembleEventWithTableInfo(keyMap, valueMap, valueSchema, isDelete, hasValue, tableInfo)
+	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
@@ -249,16 +254,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		checksumEvent := event
-		if tableInfo != nil {
-			checksumEvent, err = assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
-			if err != nil {
-				log.Panic("assemble checksum event failed", zap.Error(err))
-			}
-			checksumEvent.Checksum = event.Checksum
-			defer checksumEvent.PostFlush()
-		}
-		if err = common.VerifyChecksum(checksumEvent, d.upstreamTiDB); err != nil {
+		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
 			return nil
 		}
 	}
@@ -286,16 +282,10 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // assembleEvent return a row changed event
 // keyMap hold primary key or unique key columns
 // valueMap holds all columns for insert/update and before-value delete.
-// For legacy delete, valueMap is keyMap and only contains handle columns.
+// Legacy deletes use key values with NULLs for non-key columns from the cached schema.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
 	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
-) (*commonEvent.DMLEvent, error) {
-	return assembleEventWithTableInfo(keyMap, valueMap, schema, isDelete, hasValue, nil)
-}
-
-func assembleEventWithTableInfo(
-	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool, tableInfo *commonType.TableInfo,
 ) (*commonEvent.DMLEvent, error) {
 	fields, ok := schema["fields"].([]any)
 	if !ok {
@@ -330,32 +320,8 @@ func assembleEventWithTableInfo(
 		commitTs = o.(int64)
 	}
 
-	if tableInfo != nil {
-		// Key schemas describe the row locator, not a different table layout.
-		// Missing non-key values in a legacy delete occupy NULL slots; only the
-		// key columns participate in the sink's DELETE predicate.
-		columns = make([]*timodel.ColumnInfo, len(tableInfo.GetColumns()))
-		columnNames := make(map[string]struct{}, len(columns))
-		for i, col := range tableInfo.GetColumns() {
-			columnNames[col.Name.O] = struct{}{}
-			columns[i] = col.Clone()
-			if hasValue && !col.IsGenerated() {
-				if _, ok := data[col.Name.O]; !ok {
-					return nil, errors.ErrCodecDecode.GenWithStack("avro value is missing column " + col.Name.O)
-				}
-			}
-		}
-		for name := range data {
-			if _, ok := columnNames[name]; !ok {
-				return nil, errors.ErrCodecDecode.GenWithStack("avro column not found in table schema: " + name)
-			}
-		}
-	}
 	event := new(commonEvent.DMLEvent)
 	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
-	if tableInfo != nil {
-		event.TableInfo.UpdateTS = tableInfo.UpdateTS
-	}
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
