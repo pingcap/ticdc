@@ -116,6 +116,7 @@ func (h pullerSlowSubscriptionHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *pullerSlowSubscriptionHeap) Push(value any) {
 	*h = append(*h, value.(pullerSlowSubscription))
 }
+
 func (h *pullerSlowSubscriptionHeap) Pop() any {
 	old := *h
 	last := old[len(old)-1]
@@ -136,6 +137,7 @@ func (h pullerSlowRegionHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *pullerSlowRegionHeap) Push(value any) {
 	*h = append(*h, value.(PullerRegionDebugSummary))
 }
+
 func (h *pullerSlowRegionHeap) Pop() any {
 	old := *h
 	last := old[len(old)-1]

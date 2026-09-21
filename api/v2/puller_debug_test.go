@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	logpullermock "github.com/pingcap/ticdc/logservice/logpuller/mock"
+	apiutil "github.com/pingcap/ticdc/pkg/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,6 +82,12 @@ func TestPullerDebugAPIValidationAndNotFound(t *testing.T) {
 	response := performPullerDebugRequest(
 		router, "/debug/puller?subscription_limit=21")
 	require.Equal(t, http.StatusBadRequest, response.Code)
+	var httpErr apiutil.HTTPError
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &httpErr))
+	require.Equal(t, "CDC:ErrAPIInvalidParam", httpErr.Code)
+	require.Equal(t,
+		"[CDC:ErrAPIInvalidParam]invalid api parameter: subscription_limit must be between 1 and 20",
+		httpErr.Error)
 
 	response = performPullerDebugRequest(
 		router, "/debug/puller/subscriptions/not-a-number/regions/11")

@@ -106,7 +106,7 @@ func parsePullerDebugUint(c *gin.Context, name string) (uint64, bool) {
 }
 
 func writePullerDebugInvalidParam(c *gin.Context, message string) {
-	err := cerror.ErrAPIInvalidParam.GenWithStackByArgs(message)
+	err := cerror.ErrAPIInvalidParam.GenWithStack("invalid api parameter: %s", message)
 	c.IndentedJSON(http.StatusBadRequest, apiutil.NewHTTPError(err))
 }
 
