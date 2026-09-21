@@ -14,6 +14,7 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -178,16 +180,54 @@ func TestDrainNodeWaitsForEventBrokerDispatchers(t *testing.T) {
 	require.Positive(t, remaining)
 
 	// Maintainer progress is already zero, but the broker still serves dispatchers.
-	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
-		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 1,
-		EventBrokerDispatcherCount: 3,
-	})
+	setEventBrokerDispatcherCount(drainController, target, 3)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 3, remaining)
 
 	setTargetStoppingObserved(drainController, target)
 	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Zero(t, remaining)
+}
+
+func TestDrainNodeQueriesLogCoordinator(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	_, err := c.DrainNode(t.Context(), target)
+	require.NoError(t, err)
+	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 1})
+	drainMessageChannel(outboundMessages(c))
+	c.onPeriodTask()
+	var query *logservicepb.EventBrokerDispatcherCountRequest
+	for len(outboundMessages(c)) > 0 {
+		message := <-outboundMessages(c)
+		if message.Type == messaging.TypeEventBrokerDispatcherCountRequest {
+			require.Equal(t, messaging.LogCoordinatorTopic, message.Topic)
+			query = message.Message[0].(*logservicepb.EventBrokerDispatcherCountRequest)
+		}
+	}
+	require.NotNil(t, query)
+	require.Equal(t, target.String(), query.TargetNodeId)
+	remaining, err := c.DrainNode(t.Context(), target)
+	require.NoError(t, err)
+	require.Positive(t, remaining)
+	// A previous log coordinator can retain its handler after losing leadership.
+	// Its unknown reply must not consume the query before the current leader replies.
+	unknown := messaging.NewSingleTargetMessage("coordinator", messaging.CoordinatorTopic,
+		&logservicepb.EventBrokerDispatcherCountResponse{
+			TargetNodeId: query.TargetNodeId, RequestId: query.RequestId,
+		})
+	unknown.From = "previous-log-coordinator"
+	c.onMessage(t.Context(), unknown)
+	response := messaging.NewSingleTargetMessage("coordinator", messaging.CoordinatorTopic,
+		&logservicepb.EventBrokerDispatcherCountResponse{
+			TargetNodeId: query.TargetNodeId, RequestId: query.RequestId,
+			Report: &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true},
+		})
+	response.From = "log-coordinator"
+	c.onMessage(t.Context(), response)
+	remaining, err = c.DrainNode(t.Context(), target)
 	require.NoError(t, err)
 	require.Zero(t, remaining)
 }
@@ -621,17 +661,21 @@ func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 }
 
 func TestDrainNodeLegacyTargetFallsBackToHardRestart(t *testing.T) {
-	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, heartbeatpb.LegacyDrainProtocolVersion)
+	for _, version := range []uint32{heartbeatpb.LegacyDrainProtocolVersion, 1} {
+		t.Run(fmt.Sprintf("version %d", version), func(t *testing.T) {
+			c, _, target := newDrainTestController(t)
+			setDrainProtocolVersion(c, target, version)
 
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
+			remaining, err := c.DrainNode(t.Context(), target)
+			require.NoError(t, err)
+			require.Equal(t, 0, remaining)
 
-	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
-	require.False(t, ok)
-	require.Equal(t, node.ID(""), drainTarget)
-	require.Equal(t, uint64(0), epoch)
+			drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+			require.False(t, ok)
+			require.Equal(t, node.ID(""), drainTarget)
+			require.Equal(t, uint64(0), epoch)
+		})
+	}
 }
 
 func TestDrainNodeWaitsForTargetCapabilityObservation(t *testing.T) {
@@ -1205,13 +1249,18 @@ func TestRemoveNodeAcknowledgesPendingClear(t *testing.T) {
 	require.Nil(t, c.drainClearState)
 }
 
-func setTargetStoppingObserved(
-	drainController *drain.Controller,
-	target node.ID,
-) {
+func setTargetStoppingObserved(drainController *drain.Controller, target node.ID) {
 	drainController.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
-		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
-		NodeEpoch: 1,
+		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 1,
+	})
+	setEventBrokerDispatcherCount(drainController, target, 0)
+}
+
+func setEventBrokerDispatcherCount(drainController *drain.Controller, target node.ID, count uint32) {
+	req := drainController.NewEventBrokerDispatcherCountRequest(target)
+	drainController.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: req.TargetNodeId, RequestId: req.RequestId,
+		Report: &logservicepb.EventBrokerDispatcherCount{DispatcherCount: count, RegistrationsStopped: true},
 	})
 }
 

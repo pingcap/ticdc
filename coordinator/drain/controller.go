@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils"
@@ -65,9 +67,12 @@ type nodeState struct {
 	nodeEpoch   uint64
 	liveness    heartbeatpb.NodeLiveness
 
-	// Only a STOPPING heartbeat from the current node epoch can authorize completion.
+	// Completion requires a fresh broker report with admission closed for this capture.
 	eventBrokerDispatcherCount         int
 	eventBrokerDispatcherCountObserved bool
+	eventBrokerReportExpiresAt         time.Time
+	eventBrokerRequestID               uint64
+	eventBrokerRequestSentAt           time.Time
 }
 
 type drainTargetSchedulerGate struct {
@@ -93,9 +98,8 @@ type drainTargetClearGate struct {
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
 //
-// It is in-memory only. Observations come from either:
-// - NodeHeartbeat, or
-// - SetNodeLivenessResponse.
+// It is in-memory only. Liveness observations come from NodeHeartbeat or
+// SetNodeLivenessResponse; broker counts come from LogCoordinator responses.
 type Controller struct {
 	mu sync.Mutex
 
@@ -189,11 +193,6 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
-	st := c.ensureNodeStateLocked(nodeID)
-	if hb.NodeEpoch == st.nodeEpoch && hb.Liveness == heartbeatpb.NodeLiveness_STOPPING {
-		st.eventBrokerDispatcherCount = int(hb.GetEventBrokerDispatcherCount())
-		st.eventBrokerDispatcherCountObserved = true
-	}
 	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
 
@@ -424,17 +423,62 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
 }
 
-// GetEventBrokerDispatcherCount returns the count from a STOPPING heartbeat in
-// the current node epoch. Older nodes omit the field and report the protobuf
-// default zero, preserving their existing drain behavior.
+// NewEventBrokerDispatcherCountRequest queries the log coordinator only after
+// STOPPING, so broker registrations do not prevent closing registration admission.
+func (c *Controller) NewEventBrokerDispatcherCountRequest(nodeID node.ID) *logservicepb.EventBrokerDispatcherCountRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.stoppingObserved || time.Since(st.eventBrokerRequestSentAt) < common.EventBrokerReportTTL {
+		return nil
+	}
+	st.eventBrokerRequestID++
+	st.eventBrokerRequestSentAt = time.Now()
+	return &logservicepb.EventBrokerDispatcherCountRequest{
+		TargetNodeId: nodeID.String(), RequestId: st.eventBrokerRequestID,
+	}
+}
+
+// ObserveEventBrokerDispatcherCountResponse accepts only a response to the
+// current query. Its lifetime includes both the cached report age and query RTT.
+func (c *Controller) ObserveEventBrokerDispatcherCountResponse(resp *logservicepb.EventBrokerDispatcherCountResponse) {
+	if resp == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[node.ID(resp.TargetNodeId)]
+	if !ok || !st.stoppingObserved ||
+		st.eventBrokerRequestID != resp.RequestId || st.eventBrokerRequestSentAt.IsZero() {
+		return
+	}
+	sentAt := st.eventBrokerRequestSentAt
+	if resp.Report == nil || !resp.Report.RegistrationsStopped ||
+		resp.ReportAgeMs >= uint64(common.EventBrokerReportTTL/time.Millisecond) {
+		// Queries are broadcast. A former log coordinator can still reply with
+		// an unusable report; keep waiting for the current coordinator's reply.
+		return
+	}
+	expiresAt := sentAt.Add(common.EventBrokerReportTTL - time.Duration(resp.ReportAgeMs)*time.Millisecond)
+	if !time.Now().Before(expiresAt) {
+		return
+	}
+	st.eventBrokerDispatcherCount = int(resp.Report.DispatcherCount)
+	st.eventBrokerDispatcherCountObserved = true
+	st.eventBrokerReportExpiresAt = expiresAt
+	st.eventBrokerRequestSentAt = time.Time{}
+}
+
+// GetEventBrokerDispatcherCount returns a fresh, admission-closed count for the
+// requested capture. An absent or expired report cannot authorize completion.
 func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (int, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st, ok := c.nodes[nodeID]
-	if !ok {
+	if !ok || !st.eventBrokerDispatcherCountObserved || !time.Now().Before(st.eventBrokerReportExpiresAt) {
 		return 0, false
 	}
-	return st.eventBrokerDispatcherCount, st.eventBrokerDispatcherCountObserved
+	return st.eventBrokerDispatcherCount, true
 }
 
 // GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.

@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -81,31 +80,6 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 		[]messaging.IOType{first.Type, second.Type},
 	)
 	require.Equal(t, liveness.CaptureDraining, nodeLiveness.Load())
-}
-
-func TestStoppingHeartbeatClosesEventServiceAdmission(t *testing.T) {
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	previous, _ := appcontext.TryGetService[any](appcontext.EventService)
-	counter := NewMockEventBrokerDispatcherCounter(gomock.NewController(t))
-	appcontext.SetService(appcontext.EventService, counter)
-	t.Cleanup(func() { appcontext.SetService(appcontext.EventService, previous) })
-	var nodeLiveness liveness.Liveness
-	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
-	m := NewMaintainerManager(&node.Info{ID: "capture"}, &config.SchedulerConfig{}, &nodeLiveness)
-	m.coordinatorID, m.coordinatorVersion = "coordinator", 1
-	gomock.InOrder(
-		counter.EXPECT().StopAcceptingRegistrations(),
-		counter.EXPECT().GetDispatcherCount().Return(0),
-	)
-	request := messaging.NewSingleTargetMessage(m.nodeInfo.ID, messaging.MaintainerManagerTopic,
-		&heartbeatpb.SetNodeLivenessRequest{NodeEpoch: m.node.nodeEpoch, Target: heartbeatpb.NodeLiveness_STOPPING})
-	request.From = m.coordinatorID
-	m.onSetNodeLivenessRequest(request)
-	heartbeat := (<-mc.GetMessageChannel()).Message[0].(*heartbeatpb.NodeHeartbeat)
-	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, heartbeat.Liveness)
-	require.Zero(t, heartbeat.EventBrokerDispatcherCount)
-	require.Equal(t, m.node.nodeEpoch, heartbeat.NodeEpoch)
 }
 
 func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {
@@ -188,12 +162,6 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
-	previous, _ := appcontext.TryGetService[any](appcontext.EventService)
-	counter := NewMockEventBrokerDispatcherCounter(gomock.NewController(t))
-	appcontext.SetService(appcontext.EventService, counter)
-	t.Cleanup(func() { appcontext.SetService(appcontext.EventService, previous) })
-	counter.EXPECT().GetDispatcherCount().Return(2).Times(3)
-
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	m.coordinatorID = node.ID("coordinator")
@@ -219,7 +187,6 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	hb := apply("n2", 1)
 	require.Equal(t, "n2", hb.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
-	require.Equal(t, uint32(2), hb.EventBrokerDispatcherCount)
 
 	hb = apply("", 1)
 	require.Equal(t, "", hb.DispatcherDrainTargetNodeId)

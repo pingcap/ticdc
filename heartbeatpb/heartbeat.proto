@@ -209,8 +209,8 @@ message NodeHeartbeat {
     uint64 write_lease_request_seq = 5;
     uint32 write_lease_protocol_version = 6;
     WriteLeaseWitnessAck write_lease_witness_ack = 7;
-    // Includes ordinary and table trigger dispatchers registered in local event brokers.
-    uint32 event_broker_dispatcher_count = 10;
+    reserved 10;
+    reserved "event_broker_dispatcher_count";
 }
 
 message WriteLeaseWitnessChallenge {

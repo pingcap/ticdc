@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
@@ -86,14 +87,24 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 	require.Equal(t, response, decoded)
 }
 
-func TestNodeHeartbeatDispatcherCountIOTypeRoundTrip(t *testing.T) {
-	heartbeat := &heartbeatpb.NodeHeartbeat{
-		Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42,
-		EventBrokerDispatcherCount: 7,
+func TestEventBrokerDispatcherCountIOTypeRoundTrip(t *testing.T) {
+	report := &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 7, RegistrationsStopped: true}
+	for _, tc := range []struct {
+		kind    IOType
+		message IOTypeT
+	}{
+		{TypeEventBrokerDispatcherCount, report},
+		{TypeEventBrokerDispatcherCountRequest, &logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: "capture", RequestId: 9}},
+		{TypeEventBrokerDispatcherCountResponse, &logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: "capture", RequestId: 9, Report: report, ReportAgeMs: 100}},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			message := NewSingleTargetMessage("target", LogCoordinatorTopic, tc.message)
+			require.Equal(t, tc.kind, message.Type)
+			data, err := tc.message.Marshal()
+			require.NoError(t, err)
+			decoded, err := decodeIOType(tc.kind, data)
+			require.NoError(t, err)
+			require.Equal(t, tc.message, decoded)
+		})
 	}
-	data, err := heartbeat.Marshal()
-	require.NoError(t, err)
-	decoded, err := decodeIOType(TypeNodeHeartbeatRequest, data)
-	require.NoError(t, err)
-	require.Equal(t, heartbeat, decoded)
 }

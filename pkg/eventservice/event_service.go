@@ -22,12 +22,14 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -72,9 +74,10 @@ type DispatcherHeartBeatWithServerID struct {
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
-	mc          messaging.MessageCenter
-	eventStore  eventstore.EventStore
-	schemaStore schemastore.SchemaStore
+	mc           messaging.MessageCenter
+	eventStore   eventstore.EventStore
+	schemaStore  schemastore.SchemaStore
+	nodeLiveness *liveness.Liveness
 	// clusterID -> eventBroker
 	brokers   map[uint64]*eventBroker
 	brokersMu sync.RWMutex
@@ -90,7 +93,11 @@ type eventService struct {
 	tz *time.Location
 }
 
-func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
+func New(
+	eventStore eventstore.EventStore,
+	schemaStore schemastore.SchemaStore,
+	nodeLiveness *liveness.Liveness,
+) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	serverConfig := config.GetGlobalServerConfig()
 	tzName := serverConfig.TZ
@@ -117,6 +124,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
+		nodeLiveness:        nodeLiveness,
 		tz:                  tz,
 		brokers:             make(map[uint64]*eventBroker),
 		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
@@ -185,6 +193,10 @@ func (s *eventService) Close(_ context.Context) error {
 func (s *eventService) GetDispatcherCount() int {
 	s.brokersMu.RLock()
 	defer s.brokersMu.RUnlock()
+	return s.getDispatcherCountLocked()
+}
+
+func (s *eventService) getDispatcherCountLocked() int {
 	count := 0
 	for _, broker := range s.brokers {
 		count += int(broker.dispatcherCount.Load())
@@ -192,19 +204,42 @@ func (s *eventService) GetDispatcherCount() int {
 	return max(count, s.registering)
 }
 
-// StopAcceptingRegistrations closes admission before a STOPPING heartbeat can
-// report zero. Registrations admitted earlier remain visible in the count.
+// StopAcceptingRegistrations closes admission before an admission-closed report
+// can report zero. Registrations admitted earlier remain visible in the count.
 func (s *eventService) StopAcceptingRegistrations() {
 	s.brokersMu.Lock()
 	defer s.brokersMu.Unlock()
+	s.stopAcceptingRegistrationsLocked()
+}
+
+func (s *eventService) stopAcceptingRegistrationsLocked() {
 	s.registrationsStopped = true
 	for _, broker := range s.brokers {
 		broker.stopping.Store(true)
 	}
 }
 
+// Reporting is handled by the message-center handler, independently of the
+// request loop that may be waiting for schema initialization. Even an empty
+// broker registry must explicitly report zero after closing admission.
+func (s *eventService) reportDispatcherCount(target node.ID) {
+	if s.nodeLiveness != nil && s.nodeLiveness.Load() == liveness.CaptureStopping {
+		s.StopAcceptingRegistrations()
+	}
+	s.brokersMu.RLock()
+	report := &logservicepb.EventBrokerDispatcherCount{
+		DispatcherCount:      uint32(s.getDispatcherCountLocked()),
+		RegistrationsStopped: s.registrationsStopped,
+	}
+	s.brokersMu.RUnlock()
+	// The next LogCoordinator broadcast retries a lost report.
+	_ = s.mc.SendEvent(messaging.NewSingleTargetMessage(target, messaging.LogCoordinatorTopic, report))
+}
+
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
+	case messaging.TypeLogCoordinatorBroadcastRequest:
+		s.reportDispatcherCount(msg.From)
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
 		for _, info := range infos {
@@ -244,6 +279,9 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	clusterID := info.GetClusterID()
 	s.brokersMu.Lock()
+	if s.nodeLiveness != nil && s.nodeLiveness.Load() == liveness.CaptureStopping {
+		s.stopAcceptingRegistrationsLocked()
+	}
 	if s.registrationsStopped {
 		s.brokersMu.Unlock()
 		if info.IsOnlyReuse() {

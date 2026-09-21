@@ -391,6 +391,180 @@ func (m *ReusableEventServiceResponse) GetNodes() []string {
 	return nil
 }
 
+// A capture-wide snapshot, including ordinary and table trigger dispatchers.
+type EventBrokerDispatcherCount struct {
+	DispatcherCount      uint32 `protobuf:"varint,1,opt,name=DispatcherCount,proto3" json:"DispatcherCount,omitempty"`
+	RegistrationsStopped bool   `protobuf:"varint,3,opt,name=RegistrationsStopped,proto3" json:"RegistrationsStopped,omitempty"`
+}
+
+func (m *EventBrokerDispatcherCount) Reset()         { *m = EventBrokerDispatcherCount{} }
+func (m *EventBrokerDispatcherCount) String() string { return proto.CompactTextString(m) }
+func (*EventBrokerDispatcherCount) ProtoMessage()    {}
+func (*EventBrokerDispatcherCount) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a1db670929506a40, []int{7}
+}
+func (m *EventBrokerDispatcherCount) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EventBrokerDispatcherCount) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EventBrokerDispatcherCount.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EventBrokerDispatcherCount) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EventBrokerDispatcherCount.Merge(m, src)
+}
+func (m *EventBrokerDispatcherCount) XXX_Size() int {
+	return m.Size()
+}
+func (m *EventBrokerDispatcherCount) XXX_DiscardUnknown() {
+	xxx_messageInfo_EventBrokerDispatcherCount.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EventBrokerDispatcherCount proto.InternalMessageInfo
+
+func (m *EventBrokerDispatcherCount) GetDispatcherCount() uint32 {
+	if m != nil {
+		return m.DispatcherCount
+	}
+	return 0
+}
+
+func (m *EventBrokerDispatcherCount) GetRegistrationsStopped() bool {
+	if m != nil {
+		return m.RegistrationsStopped
+	}
+	return false
+}
+
+type EventBrokerDispatcherCountRequest struct {
+	TargetNodeId string `protobuf:"bytes,1,opt,name=TargetNodeId,proto3" json:"TargetNodeId,omitempty"`
+	RequestId    uint64 `protobuf:"varint,3,opt,name=RequestId,proto3" json:"RequestId,omitempty"`
+}
+
+func (m *EventBrokerDispatcherCountRequest) Reset()         { *m = EventBrokerDispatcherCountRequest{} }
+func (m *EventBrokerDispatcherCountRequest) String() string { return proto.CompactTextString(m) }
+func (*EventBrokerDispatcherCountRequest) ProtoMessage()    {}
+func (*EventBrokerDispatcherCountRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a1db670929506a40, []int{8}
+}
+func (m *EventBrokerDispatcherCountRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EventBrokerDispatcherCountRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EventBrokerDispatcherCountRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EventBrokerDispatcherCountRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EventBrokerDispatcherCountRequest.Merge(m, src)
+}
+func (m *EventBrokerDispatcherCountRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *EventBrokerDispatcherCountRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_EventBrokerDispatcherCountRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EventBrokerDispatcherCountRequest proto.InternalMessageInfo
+
+func (m *EventBrokerDispatcherCountRequest) GetTargetNodeId() string {
+	if m != nil {
+		return m.TargetNodeId
+	}
+	return ""
+}
+
+func (m *EventBrokerDispatcherCountRequest) GetRequestId() uint64 {
+	if m != nil {
+		return m.RequestId
+	}
+	return 0
+}
+
+type EventBrokerDispatcherCountResponse struct {
+	TargetNodeId string `protobuf:"bytes,1,opt,name=TargetNodeId,proto3" json:"TargetNodeId,omitempty"`
+	RequestId    uint64 `protobuf:"varint,3,opt,name=RequestId,proto3" json:"RequestId,omitempty"`
+	// Missing when no fresh report for the requested capture is available.
+	Report      *EventBrokerDispatcherCount `protobuf:"bytes,4,opt,name=Report,proto3" json:"Report,omitempty"`
+	ReportAgeMs uint64                      `protobuf:"varint,5,opt,name=ReportAgeMs,proto3" json:"ReportAgeMs,omitempty"`
+}
+
+func (m *EventBrokerDispatcherCountResponse) Reset()         { *m = EventBrokerDispatcherCountResponse{} }
+func (m *EventBrokerDispatcherCountResponse) String() string { return proto.CompactTextString(m) }
+func (*EventBrokerDispatcherCountResponse) ProtoMessage()    {}
+func (*EventBrokerDispatcherCountResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a1db670929506a40, []int{9}
+}
+func (m *EventBrokerDispatcherCountResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *EventBrokerDispatcherCountResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_EventBrokerDispatcherCountResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *EventBrokerDispatcherCountResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EventBrokerDispatcherCountResponse.Merge(m, src)
+}
+func (m *EventBrokerDispatcherCountResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *EventBrokerDispatcherCountResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_EventBrokerDispatcherCountResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_EventBrokerDispatcherCountResponse proto.InternalMessageInfo
+
+func (m *EventBrokerDispatcherCountResponse) GetTargetNodeId() string {
+	if m != nil {
+		return m.TargetNodeId
+	}
+	return ""
+}
+
+func (m *EventBrokerDispatcherCountResponse) GetRequestId() uint64 {
+	if m != nil {
+		return m.RequestId
+	}
+	return 0
+}
+
+func (m *EventBrokerDispatcherCountResponse) GetReport() *EventBrokerDispatcherCount {
+	if m != nil {
+		return m.Report
+	}
+	return nil
+}
+
+func (m *EventBrokerDispatcherCountResponse) GetReportAgeMs() uint64 {
+	if m != nil {
+		return m.ReportAgeMs
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterType((*SubscriptionState)(nil), "logservicepb.SubscriptionState")
 	proto.RegisterType((*TableState)(nil), "logservicepb.TableState")
@@ -400,6 +574,9 @@ func init() {
 	proto.RegisterType((*ChangefeedStates)(nil), "logservicepb.ChangefeedStates")
 	proto.RegisterType((*ReusableEventServiceRequest)(nil), "logservicepb.ReusableEventServiceRequest")
 	proto.RegisterType((*ReusableEventServiceResponse)(nil), "logservicepb.ReusableEventServiceResponse")
+	proto.RegisterType((*EventBrokerDispatcherCount)(nil), "logservicepb.EventBrokerDispatcherCount")
+	proto.RegisterType((*EventBrokerDispatcherCountRequest)(nil), "logservicepb.EventBrokerDispatcherCountRequest")
+	proto.RegisterType((*EventBrokerDispatcherCountResponse)(nil), "logservicepb.EventBrokerDispatcherCountResponse")
 }
 
 func init() {
@@ -407,38 +584,47 @@ func init() {
 }
 
 var fileDescriptor_a1db670929506a40 = []byte{
-	// 485 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x53, 0x41, 0x8b, 0xd3, 0x40,
-	0x14, 0xee, 0x24, 0xed, 0x8a, 0xaf, 0x2b, 0xd6, 0x50, 0x24, 0xee, 0x4a, 0x2c, 0x01, 0x21, 0x7a,
-	0x48, 0xa1, 0x5e, 0x64, 0x41, 0x04, 0xb7, 0x3d, 0xec, 0x65, 0x91, 0x49, 0x0f, 0xe2, 0x45, 0x26,
-	0xe9, 0xb3, 0x09, 0x5b, 0x33, 0x63, 0x66, 0x52, 0xd8, 0x3f, 0x21, 0x5e, 0xfd, 0x31, 0xde, 0x3d,
-	0xee, 0xd1, 0xa3, 0xb4, 0x7f, 0x44, 0x92, 0xb4, 0x76, 0xa6, 0xbb, 0x1e, 0x7a, 0x9b, 0x37, 0xef,
-	0x7b, 0xdf, 0xfb, 0xde, 0xf7, 0x66, 0x20, 0x58, 0xf0, 0xb9, 0xc4, 0x62, 0x99, 0x25, 0x38, 0xdc,
-	0x1d, 0x45, 0xac, 0x05, 0xa1, 0x28, 0xb8, 0xe2, 0xce, 0xb1, 0x9e, 0x3e, 0x39, 0x4d, 0x91, 0x15,
-	0x2a, 0x46, 0xa6, 0x44, 0x3c, 0xfc, 0x77, 0x6e, 0xa0, 0xfe, 0x0f, 0x02, 0x8f, 0xa2, 0x32, 0x96,
-	0x49, 0x91, 0x09, 0x95, 0xf1, 0x3c, 0x52, 0x4c, 0xa1, 0xd3, 0x87, 0x4e, 0x54, 0xc6, 0x17, 0x63,
-	0x97, 0x0c, 0x48, 0xd0, 0xa6, 0x4d, 0xe0, 0xbc, 0x84, 0x76, 0x24, 0x58, 0xee, 0x5a, 0x03, 0x12,
-	0x74, 0x47, 0x8f, 0x43, 0x8d, 0x37, 0x9c, 0xb2, 0x78, 0x81, 0x55, 0x96, 0xd6, 0x18, 0xc7, 0x87,
-	0xe3, 0xf3, 0x14, 0x93, 0x2b, 0xc1, 0xb3, 0x5c, 0x4d, 0xa5, 0x6b, 0xd7, 0x44, 0xc6, 0x9d, 0xe3,
-	0x01, 0x50, 0x94, 0x7c, 0xb1, 0xc4, 0xd9, 0x54, 0xba, 0xed, 0x1a, 0xa1, 0xdd, 0xf8, 0x11, 0x40,
-	0x43, 0x5b, 0x6b, 0x9a, 0xc0, 0x03, 0x5d, 0xa8, 0x74, 0xc9, 0xc0, 0x0e, 0xba, 0xa3, 0x67, 0xa1,
-	0x3e, 0x6c, 0x78, 0x6b, 0x16, 0x6a, 0x56, 0xf9, 0x3f, 0x09, 0x3c, 0x9c, 0x2c, 0x31, 0x57, 0x91,
-	0xe2, 0xc5, 0x86, 0xfa, 0x3d, 0x74, 0x77, 0x8d, 0xb6, 0xc4, 0xa1, 0x49, 0xbc, 0x57, 0x13, 0x6a,
-	0x05, 0x93, 0x5c, 0x15, 0xd7, 0x54, 0xa7, 0x38, 0xf9, 0x00, 0xbd, 0x7d, 0x80, 0xd3, 0x03, 0xfb,
-	0x0a, 0xaf, 0x6b, 0x4b, 0x6d, 0x5a, 0x1d, 0x9d, 0x10, 0x3a, 0x4b, 0xb6, 0x28, 0x71, 0xe3, 0xa8,
-	0x6b, 0x76, 0xdc, 0x11, 0xd0, 0x06, 0x76, 0x66, 0xbd, 0x26, 0x7e, 0x09, 0xfd, 0xf3, 0x94, 0xe5,
-	0x73, 0xfc, 0x8c, 0x38, 0xab, 0xb3, 0x0d, 0xfb, 0x9b, 0xca, 0xf0, 0xed, 0xfd, 0x66, 0x73, 0xdd,
-	0xd1, 0x13, 0x63, 0x49, 0x3a, 0x80, 0x1a, 0xf0, 0xbd, 0x5d, 0x58, 0xb7, 0x76, 0x71, 0x09, 0xbd,
-	0xbd, 0xb6, 0xd2, 0x39, 0x83, 0x23, 0xc3, 0x31, 0xdf, 0xd4, 0x7f, 0x97, 0x4c, 0xba, 0xa9, 0xf0,
-	0xbf, 0x11, 0x38, 0xa5, 0x58, 0xca, 0x6a, 0xc6, 0xc6, 0xda, 0xa6, 0x8e, 0xe2, 0xd7, 0x12, 0xa5,
-	0x72, 0x5e, 0x80, 0xf5, 0x9f, 0x21, 0xc6, 0x99, 0x14, 0x4c, 0x25, 0x29, 0x16, 0x17, 0x63, 0x6a,
-	0x1d, 0xf8, 0x2c, 0x5d, 0xb8, 0x17, 0x29, 0x56, 0xec, 0x5e, 0xe4, 0x36, 0xf4, 0x3f, 0xc1, 0xd3,
-	0xbb, 0xf5, 0x48, 0xc1, 0x73, 0x89, 0x87, 0x08, 0xea, 0x43, 0xe7, 0x92, 0xcf, 0xb0, 0xb2, 0xd1,
-	0x0e, 0xee, 0xd3, 0x26, 0x78, 0xf7, 0xf6, 0xd7, 0xca, 0x23, 0x37, 0x2b, 0x8f, 0xfc, 0x59, 0x79,
-	0xe4, 0xfb, 0xda, 0x6b, 0xdd, 0xac, 0xbd, 0xd6, 0xef, 0xb5, 0xd7, 0xfa, 0xf8, 0x7c, 0x9e, 0xa9,
-	0xb4, 0x8c, 0xc3, 0x84, 0x7f, 0x19, 0x8a, 0x2c, 0x9f, 0x27, 0x4c, 0x0c, 0x55, 0x96, 0xcc, 0x12,
-	0xe3, 0x9b, 0xc7, 0x47, 0xf5, 0x8f, 0x7d, 0xf5, 0x37, 0x00, 0x00, 0xff, 0xff, 0x6b, 0xcb, 0x75,
-	0xd6, 0x08, 0x04, 0x00, 0x00,
+	// 633 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x54, 0xcd, 0x6e, 0xd3, 0x4c,
+	0x14, 0xad, 0xf3, 0xd3, 0xaf, 0xb9, 0x69, 0xd5, 0x7c, 0xa3, 0x08, 0x99, 0xb6, 0x32, 0xc1, 0x12,
+	0x92, 0x61, 0xe1, 0x48, 0x61, 0x83, 0x2a, 0x21, 0xa0, 0x6d, 0x16, 0x41, 0xa2, 0x42, 0xe3, 0x2c,
+	0x10, 0x1b, 0xe4, 0x9f, 0x8b, 0x63, 0x35, 0x78, 0x06, 0xcf, 0x38, 0x52, 0x9f, 0x01, 0x09, 0xb1,
+	0xe5, 0x61, 0xd8, 0xb3, 0xec, 0x12, 0x89, 0x0d, 0x6a, 0x5e, 0x04, 0x79, 0xec, 0x10, 0x3b, 0x49,
+	0x91, 0x2a, 0x76, 0x33, 0xf7, 0xe7, 0x9c, 0x73, 0xcf, 0xb5, 0x07, 0xac, 0x29, 0x0b, 0x05, 0x26,
+	0xb3, 0xc8, 0xc7, 0xfe, 0xf2, 0xc8, 0xbd, 0xd2, 0xc5, 0xe6, 0x09, 0x93, 0x8c, 0xec, 0x96, 0xd3,
+	0x07, 0x87, 0x13, 0x74, 0x13, 0xe9, 0xa1, 0x2b, 0xb9, 0xd7, 0xff, 0x73, 0xce, 0x4b, 0xcd, 0xaf,
+	0x1a, 0xfc, 0xef, 0xa4, 0x9e, 0xf0, 0x93, 0x88, 0xcb, 0x88, 0xc5, 0x8e, 0x74, 0x25, 0x92, 0x2e,
+	0x34, 0x9d, 0xd4, 0x1b, 0x9d, 0xe9, 0x5a, 0x4f, 0xb3, 0x1a, 0x34, 0xbf, 0x90, 0x47, 0xd0, 0x70,
+	0xb8, 0x1b, 0xeb, 0xb5, 0x9e, 0x66, 0xb5, 0x07, 0x77, 0xec, 0x12, 0xae, 0x3d, 0x76, 0xbd, 0x29,
+	0x66, 0x59, 0xaa, 0x6a, 0x88, 0x09, 0xbb, 0xa7, 0x13, 0xf4, 0x2f, 0x38, 0x8b, 0x62, 0x39, 0x16,
+	0x7a, 0x5d, 0x01, 0x55, 0x62, 0xc4, 0x00, 0xa0, 0x28, 0xd8, 0x74, 0x86, 0xc1, 0x58, 0xe8, 0x0d,
+	0x55, 0x51, 0x8a, 0x98, 0x0e, 0x40, 0x0e, 0xab, 0x34, 0x0d, 0x61, 0xaf, 0x2c, 0x54, 0xe8, 0x5a,
+	0xaf, 0x6e, 0xb5, 0x07, 0xf7, 0xec, 0xf2, 0xb0, 0xf6, 0xda, 0x2c, 0xb4, 0xda, 0x65, 0x7e, 0xd3,
+	0x60, 0x7f, 0x38, 0xc3, 0x58, 0x3a, 0x92, 0x25, 0x05, 0xf4, 0x6b, 0x68, 0x2f, 0x89, 0x16, 0xc0,
+	0x76, 0x15, 0x78, 0xa5, 0xc7, 0x2e, 0x35, 0x0c, 0x63, 0x99, 0x5c, 0xd2, 0x32, 0xc4, 0xc1, 0x1b,
+	0xe8, 0xac, 0x16, 0x90, 0x0e, 0xd4, 0x2f, 0xf0, 0x52, 0x59, 0x5a, 0xa7, 0xd9, 0x91, 0xd8, 0xd0,
+	0x9c, 0xb9, 0xd3, 0x14, 0x0b, 0x47, 0xf5, 0x2a, 0xe3, 0x12, 0x80, 0xe6, 0x65, 0xc7, 0xb5, 0x27,
+	0x9a, 0x99, 0x42, 0xf7, 0x74, 0xe2, 0xc6, 0x21, 0xbe, 0x47, 0x0c, 0x54, 0x36, 0x47, 0x7f, 0x9a,
+	0x19, 0xbe, 0x88, 0x17, 0x9b, 0x6b, 0x0f, 0xee, 0x56, 0x96, 0x54, 0x2e, 0xa0, 0x95, 0xf2, 0x95,
+	0x5d, 0xd4, 0xd6, 0x76, 0x71, 0x0e, 0x9d, 0x15, 0x5a, 0x41, 0x8e, 0x61, 0xbb, 0xe2, 0x98, 0x59,
+	0xd5, 0xbf, 0x49, 0x26, 0x2d, 0x3a, 0xcc, 0xcf, 0x1a, 0x1c, 0x52, 0x4c, 0x45, 0x36, 0x63, 0x6e,
+	0x6d, 0xde, 0x47, 0xf1, 0x63, 0x8a, 0x42, 0x92, 0x87, 0x50, 0xbb, 0x61, 0x88, 0xb3, 0x48, 0x70,
+	0x57, 0xfa, 0x13, 0x4c, 0x46, 0x67, 0xb4, 0x76, 0xcb, 0xcf, 0x52, 0x87, 0xff, 0x1c, 0xe9, 0x26,
+	0xcb, 0x2f, 0x72, 0x71, 0x35, 0xdf, 0xc1, 0xd1, 0x66, 0x3d, 0x82, 0xb3, 0x58, 0xe0, 0x6d, 0x04,
+	0x75, 0xa1, 0x79, 0xce, 0x02, 0xcc, 0x6c, 0xac, 0x5b, 0x2d, 0x9a, 0x5f, 0xcc, 0x4f, 0x1a, 0x1c,
+	0x28, 0xe4, 0x93, 0x84, 0x5d, 0x60, 0xb2, 0xec, 0x3a, 0x65, 0x69, 0x2c, 0x89, 0x05, 0xfb, 0x2b,
+	0x21, 0x45, 0xb6, 0x47, 0x57, 0xc3, 0x64, 0x00, 0x5d, 0x8a, 0x61, 0x24, 0x64, 0xe2, 0xaa, 0x4f,
+	0xda, 0x91, 0x8c, 0x73, 0x0c, 0xd4, 0x40, 0x3b, 0x74, 0x63, 0xee, 0x65, 0x63, 0xa7, 0xd6, 0xa9,
+	0xd3, 0x56, 0xa6, 0x64, 0xc8, 0x99, 0x3f, 0x31, 0x67, 0x70, 0xff, 0x66, 0x31, 0x8b, 0x25, 0x98,
+	0xb0, 0x3b, 0x76, 0x93, 0x10, 0x65, 0xd6, 0x37, 0x0a, 0x94, 0xa0, 0x16, 0xad, 0xc4, 0xc8, 0x11,
+	0xb4, 0x8a, 0xf2, 0x51, 0x50, 0x78, 0xba, 0x0c, 0xac, 0xf3, 0xfe, 0xd4, 0xc0, 0xfc, 0x1b, 0x71,
+	0xe1, 0xf6, 0x3f, 0x33, 0x93, 0xe7, 0xb0, 0x4d, 0x91, 0xb3, 0x44, 0xaa, 0x87, 0xa5, 0x3d, 0xb0,
+	0x36, 0xfc, 0xce, 0x9b, 0x35, 0x14, 0x7d, 0xa4, 0x07, 0xed, 0xfc, 0xf4, 0x22, 0xc4, 0x57, 0x42,
+	0x6f, 0x2a, 0x86, 0x72, 0x68, 0x6d, 0xba, 0x93, 0x67, 0xdf, 0xaf, 0x0d, 0xed, 0xea, 0xda, 0xd0,
+	0x7e, 0x5d, 0x1b, 0xda, 0x97, 0xb9, 0xb1, 0x75, 0x35, 0x37, 0xb6, 0x7e, 0xcc, 0x8d, 0xad, 0xb7,
+	0x0f, 0xc2, 0x48, 0x4e, 0x52, 0xcf, 0xf6, 0xd9, 0x87, 0x3e, 0x8f, 0xe2, 0xd0, 0x77, 0x79, 0x5f,
+	0x46, 0x7e, 0xe0, 0x57, 0x9e, 0x72, 0x6f, 0x5b, 0xbd, 0xca, 0x8f, 0x7f, 0x07, 0x00, 0x00, 0xff,
+	0xff, 0x8c, 0x97, 0xb7, 0x6e, 0xec, 0x05, 0x00, 0x00,
 }
 
 func (m *SubscriptionState) Marshal() (dAtA []byte, err error) {
@@ -748,6 +934,131 @@ func (m *ReusableEventServiceResponse) MarshalToSizedBuffer(dAtA []byte) (int, e
 	return len(dAtA) - i, nil
 }
 
+func (m *EventBrokerDispatcherCount) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EventBrokerDispatcherCount) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EventBrokerDispatcherCount) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.RegistrationsStopped {
+		i--
+		if m.RegistrationsStopped {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.DispatcherCount != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.DispatcherCount))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *EventBrokerDispatcherCountRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EventBrokerDispatcherCountRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EventBrokerDispatcherCountRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.RequestId != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestId))
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.TargetNodeId) > 0 {
+		i -= len(m.TargetNodeId)
+		copy(dAtA[i:], m.TargetNodeId)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.TargetNodeId)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *EventBrokerDispatcherCountResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *EventBrokerDispatcherCountResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *EventBrokerDispatcherCountResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.ReportAgeMs != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.ReportAgeMs))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.Report != nil {
+		{
+			size, err := m.Report.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogservice(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.RequestId != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.RequestId))
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.TargetNodeId) > 0 {
+		i -= len(m.TargetNodeId)
+		copy(dAtA[i:], m.TargetNodeId)
+		i = encodeVarintLogservice(dAtA, i, uint64(len(m.TargetNodeId)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintLogservice(dAtA []byte, offset int, v uint64) int {
 	offset -= sovLogservice(v)
 	base := offset
@@ -884,6 +1195,60 @@ func (m *ReusableEventServiceResponse) Size() (n int) {
 			l = len(s)
 			n += 1 + l + sovLogservice(uint64(l))
 		}
+	}
+	return n
+}
+
+func (m *EventBrokerDispatcherCount) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.DispatcherCount != 0 {
+		n += 1 + sovLogservice(uint64(m.DispatcherCount))
+	}
+	if m.RegistrationsStopped {
+		n += 2
+	}
+	return n
+}
+
+func (m *EventBrokerDispatcherCountRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TargetNodeId)
+	if l > 0 {
+		n += 1 + l + sovLogservice(uint64(l))
+	}
+	if m.RequestId != 0 {
+		n += 1 + sovLogservice(uint64(m.RequestId))
+	}
+	return n
+}
+
+func (m *EventBrokerDispatcherCountResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TargetNodeId)
+	if l > 0 {
+		n += 1 + l + sovLogservice(uint64(l))
+	}
+	if m.RequestId != 0 {
+		n += 1 + sovLogservice(uint64(m.RequestId))
+	}
+	if m.Report != nil {
+		l = m.Report.Size()
+		n += 1 + l + sovLogservice(uint64(l))
+	}
+	if m.ReportAgeMs != 0 {
+		n += 1 + sovLogservice(uint64(m.ReportAgeMs))
 	}
 	return n
 }
@@ -1713,6 +2078,352 @@ func (m *ReusableEventServiceResponse) Unmarshal(dAtA []byte) error {
 			}
 			m.Nodes = append(m.Nodes, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogservice(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EventBrokerDispatcherCount) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogservice
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCount: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCount: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DispatcherCount", wireType)
+			}
+			m.DispatcherCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DispatcherCount |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RegistrationsStopped", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.RegistrationsStopped = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogservice(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EventBrokerDispatcherCountRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogservice
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCountRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCountRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetNodeId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetNodeId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RequestId", wireType)
+			}
+			m.RequestId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RequestId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogservice(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *EventBrokerDispatcherCountResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogservice
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCountResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: EventBrokerDispatcherCountResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetNodeId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetNodeId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RequestId", wireType)
+			}
+			m.RequestId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RequestId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Report", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogservice
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Report == nil {
+				m.Report = &EventBrokerDispatcherCount{}
+			}
+			if err := m.Report.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ReportAgeMs", wireType)
+			}
+			m.ReportAgeMs = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ReportAgeMs |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLogservice(dAtA[iNdEx:])

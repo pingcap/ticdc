@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -35,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -52,7 +54,7 @@ func startEventService(
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	appcontext.SetService(appcontext.EventStore, mockStore)
 	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
-	es := New(mockStore, mockSchemaStore)
+	es := New(mockStore, mockSchemaStore, nil)
 	esImpl := es.(*eventService)
 	go func() {
 		err := esImpl.Run(ctx)
@@ -79,7 +81,7 @@ func TestNewEventServiceRemovesOrphanedLargeTxnSpillFiles(t *testing.T) {
 
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	_ = New(newMockEventStore(100), NewMockSchemaStore())
+	_ = New(newMockEventStore(100), NewMockSchemaStore(), nil)
 
 	require.NoFileExists(t, orphanPath)
 }
@@ -194,7 +196,7 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 	defer es.Close(ctx)
 	require.Zero(t, es.GetDispatcherCount())
 
-	// Heartbeats may read the count while registration creates another broker.
+	// Log coordinator reports may read the count while registration creates another broker.
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -236,11 +238,12 @@ func TestStopAcceptingRegistrations(t *testing.T) {
 	broker, store, schema, _ := newEventBrokerForTest()
 	broker.close()
 	mc := messaging.NewMockMessageCenter()
-	service := &eventService{mc: mc, brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}}
+	var nodeLiveness liveness.Liveness
+	service := &eventService{mc: mc, brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}, nodeLiveness: &nodeLiveness}
 	info := newMockDispatcherInfoForTest(t)
 
 	// An admitted registration can block in schema initialization without
-	// delaying STOPPING or allowing its heartbeat to report zero.
+	// delaying the log coordinator report or allowing it to report zero.
 	started := make(chan struct{})
 	resume := make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
@@ -249,13 +252,25 @@ func TestStopAcceptingRegistrations(t *testing.T) {
 	t.Cleanup(func() { release(); wg.Wait() })
 	wg.Go(func() { service.registerDispatcher(t.Context(), info) })
 	<-started
-	service.StopAcceptingRegistrations()
-	require.Equal(t, 1, service.GetDispatcherCount())
+	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
+	require.True(t, nodeLiveness.Store(liveness.CaptureStopping))
+	broadcast := messaging.NewSingleTargetMessage("capture", messaging.EventServiceTopic, &common.LogCoordinatorBroadcastRequest{})
+	broadcast.From = "log-coordinator"
+	require.NoError(t, service.handleMessage(t.Context(), broadcast))
+	message := <-mc.GetMessageChannel()
+	require.Equal(t, broadcast.From, message.To)
+	require.Equal(t, messaging.LogCoordinatorTopic, message.Topic)
+	report := message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Equal(t, uint32(1), report.DispatcherCount)
 	release()
 	wg.Wait()
 	service.deregisterDispatcher(info)
-	// This is the snapshot used by the STOPPING heartbeat.
-	require.Zero(t, service.GetDispatcherCount())
+	// Only the next direct report can authorize completion.
+	require.NoError(t, service.handleMessage(t.Context(), broadcast))
+	report = (<-mc.GetMessageChannel()).Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Zero(t, report.DispatcherCount)
 
 	for _, tc := range []struct {
 		name      string
@@ -285,6 +300,31 @@ func TestStopAcceptingRegistrations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEventServiceReportsWithoutBrokers(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	var nodeLiveness liveness.Liveness
+	service := &eventService{mc: mc, nodeLiveness: &nodeLiveness}
+	service.reportDispatcherCount("log-coordinator")
+	report := (<-mc.GetMessageChannel()).Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.Zero(t, report.DispatcherCount)
+	require.False(t, report.RegistrationsStopped)
+
+	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
+	require.True(t, nodeLiveness.Store(liveness.CaptureStopping))
+	// Admission closes on registration too, without waiting for a broadcast.
+	info := newMockDispatcherInfoForTest(t)
+	info.onlyReuse = true
+	service.registerDispatcher(t.Context(), info)
+	require.Equal(t, messaging.TypeNotReusableEvent, (<-mc.GetMessageChannel()).Type)
+	service.reportDispatcherCount("new-log-coordinator")
+	message := <-mc.GetMessageChannel()
+	require.Equal(t, node.ID("new-log-coordinator"), message.To)
+	report = message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.Zero(t, report.DispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Empty(t, service.brokers)
 }
 
 func TestPendingHeartbeatWithoutBroker(t *testing.T) {

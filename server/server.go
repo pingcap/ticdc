@@ -216,7 +216,7 @@ func (c *server) initialize(ctx context.Context) error {
 		c.security,
 	)
 	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
-	eventService := eventservice.New(eventStore, schemaStore)
+	eventService := eventservice.New(eventStore, schemaStore, &c.liveness)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
 		Info:        c.info,
 		GCServiceID: c.EtcdClient.GetGCServiceID(),
