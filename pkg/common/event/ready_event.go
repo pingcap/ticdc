@@ -70,7 +70,7 @@ func (e *ReadyEvent) GetDispatcherID() common.DispatcherID {
 
 // GetCommitTs returns the commit timestamp
 func (e *ReadyEvent) GetCommitTs() common.Ts {
-	return common.Ts(e.ResolvedTs)
+	return e.ResolvedTs
 }
 
 // GetStartTs returns the start timestamp
