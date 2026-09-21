@@ -94,8 +94,8 @@ func TestEventBrokerDispatcherCountIOTypeRoundTrip(t *testing.T) {
 		message IOTypeT
 	}{
 		{TypeEventBrokerDispatcherCount, report},
-		{TypeEventBrokerDispatcherCountRequest, &logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: "capture", RequestId: 9}},
-		{TypeEventBrokerDispatcherCountResponse, &logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: "capture", RequestId: 9, Report: report, ReportAgeMs: 100}},
+		{TypeEventBrokerDispatcherCountRequest, &logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: "capture"}},
+		{TypeEventBrokerDispatcherCountResponse, &logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: "capture", Report: report}},
 	} {
 		t.Run(tc.kind.String(), func(t *testing.T) {
 			message := NewSingleTargetMessage("target", LogCoordinatorTopic, tc.message)

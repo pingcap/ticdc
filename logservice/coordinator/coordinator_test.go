@@ -47,7 +47,7 @@ func TestEventBrokerDispatcherCountReports(t *testing.T) {
 	query := func(target node.ID) *logservicepb.EventBrokerDispatcherCountResponse {
 		t.Helper()
 		message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic,
-			&logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: target.String(), RequestId: 9})
+			&logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: target.String()})
 		message.From = "coordinator"
 		require.NoError(t, c.handleMessage(t.Context(), message))
 		reply := <-mc.GetMessageChannel()
@@ -55,7 +55,6 @@ func TestEventBrokerDispatcherCountReports(t *testing.T) {
 		require.Equal(t, messaging.CoordinatorTopic, reply.Topic)
 		response := reply.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
 		require.Equal(t, target.String(), response.TargetNodeId)
-		require.Equal(t, uint64(9), response.RequestId)
 		return response
 	}
 	// A new log coordinator has no reports, including for captures with no brokers.
@@ -72,7 +71,7 @@ func TestEventBrokerDispatcherCountReports(t *testing.T) {
 	c.updateEventBrokerState(target, &logservicepb.EventBrokerDispatcherCount{})
 	require.Equal(t, uint32(3), query(target).Report.DispatcherCount)
 	state := c.eventBrokerStates.m[target]
-	state.receivedAt = time.Now().Add(-common.EventBrokerReportTTL)
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
 	c.eventBrokerStates.m[target] = state
 	require.Nil(t, query(target).Report)
 
@@ -263,7 +262,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	// must no longer be offered as reuse candidates, even after report expiry.
 	coordinator.updateEventBrokerState(nodeID2, &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true})
 	state := coordinator.eventBrokerStates.m[nodeID2]
-	state.receivedAt = time.Now().Add(-common.EventBrokerReportTTL)
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
 	coordinator.eventBrokerStates.m[nodeID2] = state
 	require.Empty(t, coordinator.getCandidateNodes(nodeID3, &span1, startTs))
 }

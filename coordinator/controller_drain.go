@@ -121,7 +121,7 @@ func (c *Controller) observeDrainEpochLocked(from node.ID, epoch uint64) {
 // maintainer manager:
 //   - unknown capability keeps returning non-zero while coordinator waits for
 //     bootstrap to complete for that node
-//   - any legacy capability bypasses the new orchestration and falls back to
+//   - any node without broker reporting bypasses the new orchestration and falls back to
 //     the historical hard-restart behavior used during mixed-version rolling patch
 //
 // Supported targets then use coordinator-driven orchestration: it ensures an active
@@ -171,10 +171,10 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 				zap.Stringer("blockingNodeID", blockingNodeID))
 			return 1, nil
 		}
-		if hasBlocker && !heartbeatpb.SupportsCoordinatorDrivenDrain(blockingVersion) {
-			message := "drain target does not support coordinator driven drain protocol, fall back to legacy hard restart"
+		if hasBlocker && !heartbeatpb.SupportsEventBrokerDrain(blockingVersion) {
+			message := "drain target does not support broker drain reports, fall back to legacy hard restart"
 			if blockingNodeID != target {
-				message = "drain cluster contains legacy peer that cannot participate in coordinator driven drain, fall back to legacy hard restart"
+				message = "drain cluster contains a peer without broker drain reports, fall back to legacy hard restart"
 			}
 			log.Info(message,
 				zap.Stringer("targetNodeID", target),
@@ -287,6 +287,7 @@ func (c *Controller) blockedByPreviousDrainTarget(target node.ID) (node.ID, uint
 // prevents coordinator-driven drain orchestration from being safe cluster-wide. Unknown
 // capability has higher priority than legacy fallback so bootstrap races never
 // silently degrade to hard-restart behavior.
+// Check every alive capture because the log coordinator may run on any of them.
 func (c *Controller) findDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
 	var legacyBlocker node.ID
 	var legacyVersion uint32
@@ -295,7 +296,7 @@ func (c *Controller) findDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
 		if !observed {
 			return id, 0, false, true
 		}
-		if !heartbeatpb.SupportsCoordinatorDrivenDrain(version) && legacyBlocker.IsEmpty() {
+		if !heartbeatpb.SupportsEventBrokerDrain(version) && legacyBlocker.IsEmpty() {
 			legacyBlocker = id
 			legacyVersion = version
 		}
@@ -344,8 +345,8 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
-	// Node liveness carries no broker count. Wait for a fresh, admission-closed
-	// report through the log coordinator before reporting drain completion.
+	// Require a broker report after STOPPING, without blocking the transition
+	// into STOPPING that closes registration admission.
 	if observation.stoppingObserved && !observation.eventBrokerDispatcherCountObserved {
 		observation.remaining = ensureDrainRemainingNonZero(observation.remaining)
 	}

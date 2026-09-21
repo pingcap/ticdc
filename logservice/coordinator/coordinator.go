@@ -41,6 +41,8 @@ const (
 	eventStoreTopic           = messaging.EventStoreTopic
 	logCoordinatorTopic       = messaging.LogCoordinatorTopic
 	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
+	// Missing or expired broker reports must not be returned as zero.
+	eventBrokerReportTTL = 3 * time.Second
 )
 
 type LogCoordinator interface {
@@ -269,15 +271,11 @@ func (c *logCoordinator) updateEventBrokerState(nodeID node.ID, report *logservi
 func (c *logCoordinator) sendEventBrokerDispatcherCount(target node.ID, req *logservicepb.EventBrokerDispatcherCountRequest) {
 	response := &logservicepb.EventBrokerDispatcherCountResponse{
 		TargetNodeId: req.TargetNodeId,
-		RequestId:    req.RequestId,
 	}
 	c.eventBrokerStates.Lock()
 	state, ok := c.eventBrokerStates.m[node.ID(req.TargetNodeId)]
-	age := time.Since(state.receivedAt)
-	if ok && age < common.EventBrokerReportTTL {
+	if ok && time.Since(state.receivedAt) < eventBrokerReportTTL {
 		response.Report = &state.report
-		// Round up so forwarding never extends the report's lifetime.
-		response.ReportAgeMs = uint64((age + time.Millisecond - 1) / time.Millisecond)
 	}
 	c.eventBrokerStates.Unlock()
 	// Missing or stale reports remain unknown; the coordinator retries its query.

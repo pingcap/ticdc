@@ -13,11 +13,6 @@
 
 package common
 
-import "time"
-
-// EventBrokerReportTTL bounds the age of a broker snapshot used for drain.
-const EventBrokerReportTTL = 3 * time.Second
-
 type LogCoordinatorBroadcastRequest struct{}
 
 func (l *LogCoordinatorBroadcastRequest) Marshal() ([]byte, error) {

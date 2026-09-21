@@ -52,13 +52,10 @@ message EventBrokerDispatcherCount {
 
 message EventBrokerDispatcherCountRequest {
     string TargetNodeId = 1;
-    uint64 RequestId = 2;
 }
 
 message EventBrokerDispatcherCountResponse {
     string TargetNodeId = 1;
-    uint64 RequestId = 2;
     // Missing when no fresh report for the requested capture is available.
-    EventBrokerDispatcherCount Report = 3;
-    uint64 ReportAgeMs = 4;
+    EventBrokerDispatcherCount Report = 2;
 }

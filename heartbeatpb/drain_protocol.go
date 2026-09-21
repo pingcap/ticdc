@@ -16,13 +16,19 @@ package heartbeatpb
 const (
 	// LegacyDrainProtocolVersion means the node only supports legacy hard-restart drain.
 	LegacyDrainProtocolVersion uint32 = 0
-	// CurrentDrainProtocolVersion requires broker drain reports through LogCoordinator.
-	// Version 1 nodes do not provide this reporting channel.
-	CurrentDrainProtocolVersion uint32 = 1
+	// CurrentDrainProtocolVersion adds broker drain reports through LogCoordinator.
+	// Version 1 supports drain control messages but cannot report broker counts.
+	CurrentDrainProtocolVersion uint32 = 2
 )
 
-// SupportsCoordinatorDrivenDrain checks support for the current drain workflow,
-// including broker reports through LogCoordinator, not just v1 liveness commands.
+// SupportsCoordinatorDrivenDrain checks support for the original drain control
+// messages. Version 1 nodes must still participate in stale drain-target cleanup.
 func SupportsCoordinatorDrivenDrain(version uint32) bool {
-	return version != CurrentDrainProtocolVersion
+	return version != LegacyDrainProtocolVersion
+}
+
+// SupportsEventBrokerDrain checks support for the broker reports required before
+// starting the current drain workflow. Older nodes use the legacy restart path.
+func SupportsEventBrokerDrain(version uint32) bool {
+	return version >= CurrentDrainProtocolVersion
 }

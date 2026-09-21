@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -140,79 +139,82 @@ func TestDrainControllerEventBrokerDispatcherCount(t *testing.T) {
 
 	req := c.NewEventBrokerDispatcherCountRequest(target)
 	require.NotNil(t, req)
-	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	// The periodic task can retry without waiting for a lost reply to time out.
+	require.Equal(t, req, c.NewEventBrokerDispatcherCountRequest(target))
 	response := &logservicepb.EventBrokerDispatcherCountResponse{
-		TargetNodeId: req.TargetNodeId, RequestId: req.RequestId,
-		Report: &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 2, RegistrationsStopped: true},
+		TargetNodeId: req.TargetNodeId,
+		Report:       &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 2, RegistrationsStopped: true},
 	}
 	c.ObserveEventBrokerDispatcherCountResponse(response)
 	count, observed := c.GetEventBrokerDispatcherCount(target)
 	require.True(t, observed)
 	require.Equal(t, 2, count)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
 
-	// Restarting creates a new capture ID. A delayed reply for the old capture
-	// must not satisfy the new capture's query, even with the same request ID.
-	c.RemoveNode(target)
-	target = node.ID("n2")
-	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 43})
-	req = c.NewEventBrokerDispatcherCountRequest(target)
-	require.Equal(t, response.RequestId, req.RequestId)
-	c.ObserveEventBrokerDispatcherCountResponse(response)
-	_, observed = c.GetEventBrokerDispatcherCount(target)
-	require.False(t, observed)
-	response.TargetNodeId, response.RequestId = req.TargetNodeId, req.RequestId
+	// An unknown reply must not erase an already reported positive count.
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+
 	response.Report.DispatcherCount = 0
 	c.ObserveEventBrokerDispatcherCountResponse(response)
 	count, observed = c.GetEventBrokerDispatcherCount(target)
 	require.True(t, observed)
 	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	// Late positive and unknown reports cannot undo an admission-closed zero.
+	response.Report.DispatcherCount = 3
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
 
-	c.nodes[target].eventBrokerReportExpiresAt = time.Now().Add(-time.Second)
+	// Restarting creates a new capture ID. Delayed reports for the old capture
+	// must not change the replacement capture's count.
+	c.RemoveNode(target)
 	_, observed = c.GetEventBrokerDispatcherCount(target)
 	require.False(t, observed)
+	target = node.ID("n2")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 43})
+	response.Report.DispatcherCount = 0
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	response.TargetNodeId = target.String()
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
 }
 
 func TestDrainControllerRejectsUnusableBrokerReports(t *testing.T) {
-	for _, name := range []string{"missing", "admission open", "stale report", "delayed response", "different capture", "different request"} {
+	for _, name := range []string{"missing", "admission open", "different capture", "not stopping"} {
 		t.Run(name, func(t *testing.T) {
 			c := NewController(messaging.NewMockMessageCenter())
 			target := node.ID("n1")
-			c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42})
-			req := c.NewEventBrokerDispatcherCountRequest(target)
+			state := heartbeatpb.NodeLiveness_STOPPING
+			if name == "not stopping" {
+				state = heartbeatpb.NodeLiveness_DRAINING
+			}
+			c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: state, NodeEpoch: 42})
 			response := &logservicepb.EventBrokerDispatcherCountResponse{
-				TargetNodeId: req.TargetNodeId, RequestId: req.RequestId,
-				Report: &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true},
+				TargetNodeId: target.String(),
+				Report:       &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true},
 			}
 			switch name {
 			case "missing":
 				response.Report = nil
 			case "admission open":
 				response.Report.RegistrationsStopped = false
-			case "stale report":
-				response.ReportAgeMs = uint64(common.EventBrokerReportTTL / time.Millisecond)
-			case "delayed response":
-				response.ReportAgeMs = 1000
-				c.nodes[target].eventBrokerRequestSentAt = time.Now().Add(-common.EventBrokerReportTTL + 500*time.Millisecond)
 			case "different capture":
 				response.TargetNodeId = "another-capture"
-			case "different request":
-				response.RequestId++
 			}
 			c.ObserveEventBrokerDispatcherCountResponse(response)
 			_, observed := c.GetEventBrokerDispatcherCount(target)
-			require.False(t, observed)
-
-			// Lost replies can be retried, but a reply to the old query cannot
-			// complete the new query, even if it reports an admission-closed zero.
-			c.nodes[target].eventBrokerRequestSentAt = time.Now().Add(-common.EventBrokerReportTTL)
-			next := c.NewEventBrokerDispatcherCountRequest(target)
-			require.Greater(t, next.RequestId, req.RequestId)
-			response.TargetNodeId = req.TargetNodeId
-			response.RequestId = req.RequestId
-			response.Report = &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true}
-			response.ReportAgeMs = 0
-			c.ObserveEventBrokerDispatcherCountResponse(response)
-			_, observed = c.GetEventBrokerDispatcherCount(target)
 			require.False(t, observed)
 		})
 	}
