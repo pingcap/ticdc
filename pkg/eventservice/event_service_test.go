@@ -246,11 +246,15 @@ func TestStopAcceptingRegistrations(t *testing.T) {
 	// delaying the log coordinator report or allowing it to report zero.
 	started := make(chan struct{})
 	resume := make(chan struct{})
+	registered := make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
 	schema.registerTableHook = func() { close(started); <-resume }
 	var wg sync.WaitGroup
 	t.Cleanup(func() { release(); wg.Wait() })
-	wg.Go(func() { service.registerDispatcher(t.Context(), info) })
+	wg.Go(func() {
+		service.registerDispatcher(t.Context(), info)
+		close(registered)
+	})
 	<-started
 	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
 	require.True(t, nodeLiveness.Store(liveness.CaptureStopping))
@@ -263,7 +267,17 @@ func TestStopAcceptingRegistrations(t *testing.T) {
 	report := message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
 	require.True(t, report.RegistrationsStopped)
 	require.Equal(t, uint32(1), report.DispatcherCount)
+	// Completing an admitted registration must not wait for a report reader
+	// holding the broker map lock.
+	service.brokersMu.RLock()
 	release()
+	select {
+	case <-registered:
+	case <-time.After(5 * time.Second):
+		service.brokersMu.RUnlock()
+		t.Fatal("registration completion blocked on the broker map lock")
+	}
+	service.brokersMu.RUnlock()
 	wg.Wait()
 	service.deregisterDispatcher(info)
 	// Only the next direct report can authorize completion.

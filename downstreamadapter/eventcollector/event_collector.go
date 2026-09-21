@@ -473,6 +473,12 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
 			if req.Message.Type == messaging.TypeDispatcherRequest {
+				// Failed sends go back to the queue tail, so a REGISTER retry can
+				// arrive after REMOVE and recreate an abandoned broker registration.
+				// Recheck the session before every send: the dispatcher may have been
+				// removed or stopped using this broker while the request was queued.
+				// Keep REMOVE requests even after local state disappears so remote
+				// cleanup can finish. Compact the batch in place, filtering only REGISTER.
 				requests := req.Message.Message[:0]
 				for _, payload := range req.Message.Message {
 					request := payload.(*messaging.DispatcherRequest)

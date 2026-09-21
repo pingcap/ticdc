@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -81,10 +82,11 @@ type eventService struct {
 	// clusterID -> eventBroker
 	brokers   map[uint64]*eventBroker
 	brokersMu sync.RWMutex
-	// Protected by brokersMu. In-flight registrations keep the drain count
-	// positive without blocking node heartbeats on schema initialization.
+	// Protected by brokersMu.
 	registrationsStopped bool
-	registering          int
+	// Incremented under brokersMu when admission succeeds; completion is lock-free.
+	// In-flight registrations keep the drain count positive during initialization.
+	registering atomic.Int64
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
@@ -197,11 +199,15 @@ func (s *eventService) GetDispatcherCount() int {
 }
 
 func (s *eventService) getDispatcherCountLocked() int {
+	// Snapshot in-flight registrations before broker counts: completion can
+	// publish a dispatcher and decrement registering without holding brokersMu.
+	// Reading in the opposite order could miss the registration in both counts.
+	registering := int(s.registering.Load())
 	count := 0
 	for _, broker := range s.brokers {
 		count += int(broker.dispatcherCount.Load())
 	}
-	return max(count, s.registering)
+	return max(count, registering)
 }
 
 // StopAcceptingRegistrations closes admission before an admission-closed report
@@ -296,18 +302,14 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 		}
 		return
 	}
-	s.registering++
+	s.registering.Inc()
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
 	s.brokersMu.Unlock()
-	defer func() {
-		s.brokersMu.Lock()
-		s.registering--
-		s.brokersMu.Unlock()
-	}()
+	defer s.registering.Dec()
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)

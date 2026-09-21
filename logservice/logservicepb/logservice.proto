@@ -47,24 +47,18 @@ message ReusableEventServiceResponse {
 // A capture-wide snapshot, including ordinary and table trigger dispatchers.
 message EventBrokerDispatcherCount {
     uint32 DispatcherCount = 1;
-    reserved 2;
-    reserved "NodeEpoch";
     bool RegistrationsStopped = 3;
 }
 
 message EventBrokerDispatcherCountRequest {
     string TargetNodeId = 1;
-    reserved 2;
-    reserved "NodeEpoch";
-    uint64 RequestId = 3;
+    uint64 RequestId = 2;
 }
 
 message EventBrokerDispatcherCountResponse {
     string TargetNodeId = 1;
-    reserved 2;
-    reserved "NodeEpoch";
-    uint64 RequestId = 3;
+    uint64 RequestId = 2;
     // Missing when no fresh report for the requested capture is available.
-    EventBrokerDispatcherCount Report = 4;
-    uint64 ReportAgeMs = 5;
+    EventBrokerDispatcherCount Report = 3;
+    uint64 ReportAgeMs = 4;
 }

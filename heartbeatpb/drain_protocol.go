@@ -18,10 +18,11 @@ const (
 	LegacyDrainProtocolVersion uint32 = 0
 	// CurrentDrainProtocolVersion requires broker drain reports through LogCoordinator.
 	// Version 1 nodes do not provide this reporting channel.
-	CurrentDrainProtocolVersion uint32 = 2
+	CurrentDrainProtocolVersion uint32 = 1
 )
 
-// SupportsCoordinatorDrivenDrain returns whether the node can run coordinator-driven drain.
+// SupportsCoordinatorDrivenDrain checks support for the current drain workflow,
+// including broker reports through LogCoordinator, not just v1 liveness commands.
 func SupportsCoordinatorDrivenDrain(version uint32) bool {
-	return version >= CurrentDrainProtocolVersion
+	return version != CurrentDrainProtocolVersion
 }
