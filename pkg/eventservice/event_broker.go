@@ -341,6 +341,13 @@ func (c *eventBroker) sendNotReusableEvent(
 	updateMetricEventServiceSendCommandCount(d.info.GetMode())
 }
 
+func (c *eventBroker) sendReadyEvent(d *dispatcherStat) {
+	ready := event.NewReadyEvent(d.id)
+	wrapEvent := newWrapReadyEvent(node.ID(d.info.GetServerID()), ready)
+	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
+	updateMetricEventServiceSendCommandCount(d.info.GetMode())
+}
+
 func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
 	if isRedo {
 		return c.redoMessageCh[workerIndex]
@@ -600,10 +607,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		if now-lastSendTime < currentInterval {
 			return false
 		}
-		remoteID := node.ID(task.info.GetServerID())
-		event := event.NewReadyEvent(task.info.GetID())
-		wrapEvent := newWrapReadyEvent(remoteID, event)
-		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
+		c.sendReadyEvent(task)
 		log.Debug("send ready event to dispatcher",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id))
 		task.lastReadySendTime.Store(now)
@@ -612,7 +616,6 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			newInterval = maxReadyEventIntervalSeconds
 		}
 		task.readyInterval.Store(newInterval)
-		updateMetricEventServiceSendCommandCount(task.info.GetMode())
 		return false
 	}
 	return true
@@ -1315,6 +1318,20 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	id := info.GetID()
+	// A pending heartbeat can overtake the initial REGISTER and cause a retry through
+	// a stale Removed response. Reuse the existing registration before acquiring store resources.
+	if existing := c.getDispatcher(id); existing != nil {
+		d := existing.Load()
+		if d.info.GetServerID() == info.GetServerID() {
+			// Reply even after handshake so the collector can finish its retry.
+			// RESET, rather than REGISTER, advances the existing dispatcher's epoch.
+			c.sendReadyEvent(d)
+			return nil
+		}
+		// A dispatcher keeps its ID when moving to another consumer. Release
+		// the previous consumer's resources before replacing its registration.
+		c.removeDispatcher(d.info)
+	}
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 

@@ -214,7 +214,7 @@ func TestEventServiceDispatcherCount(t *testing.T) {
 	ordinary := newMockDispatcherInfoForTest(t)
 	es.registerDispatcher(ctx, ordinary)
 	require.Equal(t, 1, es.GetDispatcherCount())
-	// Repeated registration replaces an entry without increasing the count.
+	// Repeated registration reuses the existing entry and its resources.
 	es.registerDispatcher(ctx, ordinary)
 	require.Equal(t, 1, es.GetDispatcherCount())
 
@@ -353,6 +353,74 @@ func TestPendingHeartbeatWithoutBroker(t *testing.T) {
 	response := (<-mc.GetMessageChannel()).Message[0].(*commonEvent.DispatcherHeartbeatResponse)
 	require.Equal(t, uint64(42), response.ClusterID)
 	require.Equal(t, []commonEvent.DispatcherState{commonEvent.NewDispatcherState(id, commonEvent.DSStateRemoved)}, response.DispatcherStates)
+}
+
+func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
+	for _, handshaked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("handshaked=%t", handshaked), func(t *testing.T) {
+			broker, store, schema, responses := newEventBrokerForTest()
+			// Drive both queues explicitly to reproduce the reordering without
+			// depending on the service loop's select or background scans.
+			broker.close()
+			service := &eventService{
+				brokers:             map[uint64]*eventBroker{broker.tidbClusterID: broker},
+				dispatcherInfoChan:  make(chan DispatcherInfo, 1),
+				dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 1),
+			}
+			var storeRegistrations, schemaReferences int
+			store.registerDispatcherHook = func() bool { storeRegistrations++; return true }
+			schema.registerTableHook = func() { schemaReferences++ }
+			schema.unregisterTableHook = func() { schemaReferences-- }
+
+			info := newMockDispatcherInfoForTest(t)
+			heartbeat := commonEvent.NewDispatcherHeartbeat()
+			heartbeat.ClusterID = info.clusterID
+			heartbeat.AddDispatcherProgress(info.id, 0, 0)
+			service.dispatcherInfoChan <- info
+			service.dispatcherHeartbeat <- &DispatcherHeartBeatWithServerID{serverID: info.serverID, heartbeat: heartbeat}
+			service.handleDispatcherHeartbeat(<-service.dispatcherHeartbeat)
+			service.registerDispatcher(t.Context(), <-service.dispatcherInfoChan)
+
+			if handshaked {
+				reset := *info
+				reset.epoch = 1
+				reset.actionType = eventpb.ActionType_ACTION_TYPE_RESET
+				require.NoError(t, broker.resetDispatcher(&reset))
+				broker.getDispatcher(info.id).Load().setHandshaked()
+			}
+			original := broker.getDispatcher(info.id).Load()
+
+			// Deliver the stale Removed response after registration succeeds.
+			// The collector responds by retrying the same REGISTER.
+			response := (<-responses).Message[0].(*commonEvent.DispatcherHeartbeatResponse)
+			require.Equal(t, []commonEvent.DispatcherState{commonEvent.NewDispatcherState(info.id, commonEvent.DSStateRemoved)}, response.DispatcherStates)
+			service.dispatcherInfoChan <- info
+			service.registerDispatcher(t.Context(), <-service.dispatcherInfoChan)
+
+			require.Equal(t, 1, storeRegistrations)
+			require.Equal(t, 1, schemaReferences)
+			require.Equal(t, 1, service.GetDispatcherCount())
+			require.Same(t, original, broker.getDispatcher(info.id).Load())
+			require.Equal(t, handshaked, original.isHandshaked())
+			// A retry must receive Ready even if the initial registration has
+			// already handshaked, so the collector can complete its retry.
+			readyCh := broker.getMessageCh(original.messageWorkerIndex, common.IsRedoMode(info.mode))
+			require.Len(t, readyCh, 1)
+			ready := <-readyCh
+			require.Equal(t, commonEvent.TypeReadyEvent, ready.msgType)
+			require.Equal(t, node.ID(info.serverID), ready.serverID)
+			ready.reset()
+
+			service.deregisterDispatcher(info)
+			require.Zero(t, service.GetDispatcherCount())
+			require.Zero(t, schemaReferences)
+			require.Equal(t, uint64(storeRegistrations), store.unregisterCount.Load())
+			_, registered := store.dispatcherMap.Load(info.id)
+			require.False(t, registered)
+			_, subscribed := store.spansMap.Load(info.span)
+			require.False(t, subscribed)
+		})
+	}
 }
 
 func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {

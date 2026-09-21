@@ -819,6 +819,11 @@ func TestTableTriggerDispatcherMetricCount(t *testing.T) {
 	require.NoError(t, broker.addDispatcher(info))
 	require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 
+	original := broker.getDispatcher(info.GetID()).Load()
+	require.NoError(t, broker.addDispatcher(info))
+	require.Same(t, original, broker.getDispatcher(info.GetID()).Load())
+	require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+
 	broker.removeDispatcher(info)
 	require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 }
@@ -1158,8 +1163,12 @@ func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
 }
 
 func TestCURDDispatcher(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
+	broker, store, schema, _ := newEventBrokerForTest()
 	defer broker.close()
+	var storeRegistrations, schemaReferences int
+	store.registerDispatcherHook = func() bool { storeRegistrations++; return true }
+	schema.registerTableHook = func() { schemaReferences++ }
+	schema.unregisterTableHook = func() { schemaReferences-- }
 
 	dispInfo := newMockDispatcherInfoForTest(t)
 	// Case 1: Add and get a dispatcher.
@@ -1191,9 +1200,24 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
 	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
 
-	// Case 3: Remove a dispatcher.
-	broker.removeDispatcher(dispInfo)
+	// Case 3: Moving the same ID to a new consumer replaces the registration
+	// after releasing its old resources; it must not be treated as a retry.
+	movedInfo := *dispInfo
+	movedInfo.serverID = "server2"
+	movedInfo.epoch = 0
+	require.NoError(t, broker.addDispatcher(&movedInfo))
+	require.True(t, disp.isRemoved.Load())
+	require.Equal(t, movedInfo.serverID, broker.getDispatcher(dispInfo.GetID()).Load().info.GetServerID())
+	require.Equal(t, int64(1), broker.dispatcherCount.Load())
+	require.Equal(t, 2, storeRegistrations)
+	require.Equal(t, uint64(1), store.unregisterCount.Load())
+	require.Equal(t, 1, schemaReferences)
+
+	// Case 4: Remove a dispatcher.
+	broker.removeDispatcher(&movedInfo)
 	require.Zero(t, broker.dispatcherCount.Load())
+	require.Equal(t, uint64(storeRegistrations), store.unregisterCount.Load())
+	require.Zero(t, schemaReferences)
 	dispPtr := broker.getDispatcher(dispInfo.GetID())
 	require.Nil(t, dispPtr)
 	// Check changefeedStatus after removing the only dispatcher
