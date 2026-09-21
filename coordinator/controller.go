@@ -704,24 +704,49 @@ func (c *Controller) handleSingleMaintainerStatus(
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
 ) *changefeedChange {
-	// Update the operator status first
+	cf := c.getChangefeed(cfID)
+	acceptMoveOriginCheckpoint := c.operatorController.AcceptsMoveOriginStopStatus(cfID, from, status)
+	handoffCheckpointAdvanced := false
+	if acceptMoveOriginCheckpoint &&
+		cf != nil &&
+		c.validateMaintainerNode(cf, from, cfID) {
+		// Advance the handoff checkpoint before the operator enters OriginStopped.
+		// This prevents a concurrent Schedule from creating the target maintainer
+		// with the checkpoint that preceded the terminal origin report.
+		handoffCheckpointAdvanced = cf.AdvanceCheckpointTs(status.CheckpointTs)
+	}
+
+	// Advance the operator after the handoff checkpoint is visible.
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
-	cf := c.getChangefeed(cfID)
 	if cf == nil {
 		c.handleNonExistentChangefeed(cfID, from, status)
 		return nil
 	}
 
-	if !c.validateMaintainerNode(cf, from, cfID) {
-		return nil
-	}
 	if !common.MaintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch) {
+		// A move bumps the owner epoch before the old maintainer is stopped. Its
+		// fenced terminal report is therefore expected to carry the previous
+		// epoch. Preserve the final committed checkpoint before adding the new
+		// owner, while continuing to reject all other stale-epoch reports.
+		if acceptMoveOriginCheckpoint && handoffCheckpointAdvanced {
+			log.Info("advance checkpoint from stopping maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("nodeID", from),
+				zap.Uint64("checkpointTs", status.CheckpointTs),
+				zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
+			return newChangefeedChange(cf, cf.GetInfo().State, ChangeTs, nil)
+		}
+
 		log.Warn("drop stale maintainer status",
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("node", from),
 			zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
+		return nil
+	}
+	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
 

@@ -55,25 +55,25 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-
-	client, err := kgo.NewClient(
+	consumer, err := kgo.NewClient(
 		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
 		kgo.ClientID("ticdc-integration-test-kafka-dump"),
+		// Direct consumption reads every partition without joining a group.
 		kgo.ConsumeTopics(*topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	)
 	if err != nil {
 		log.Fatalf("create Kafka consumer: %v", err)
 	}
-	defer client.Close()
+	defer consumer.Close()
 
 	// Wait until the cluster is reachable and the topic is visible before
 	// consuming, so a missing cluster or topic fails with a specific error
 	// instead of the generic timeout.
-	if err := waitFor(ctx, func() error { return client.Ping(ctx) }); err != nil {
+	if err := waitFor(ctx, func() error { return consumer.Ping(ctx) }); err != nil {
 		log.Fatalf("create Kafka consumer: %v", err)
 	}
-	admin := kadm.NewClient(client)
+	admin := kadm.NewClient(consumer)
 	if err := waitFor(ctx, func() error {
 		details, err := admin.ListTopics(ctx, *topic)
 		if err != nil {
@@ -96,52 +96,50 @@ func main() {
 
 	matched := 0
 	for {
-		fetches := client.PollFetches(ctx)
+		fetches := consumer.PollFetches(ctx)
 		if ctx.Err() != nil {
 			log.Fatalf("timeout: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
 		}
-		for _, fetchErr := range fetches.Errors() {
-			log.Printf("consume error: %v", fetchErr)
+		if fetches.IsClientClosed() {
+			log.Fatalf("consumer exited: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
 		}
-
-		done := false
-		fetches.EachRecord(func(record *kgo.Record) {
-			if done {
-				return
+		for _, err := range fetches.Errors() {
+			log.Printf("consume error: topic=%s partition=%d: %v", err.Topic, err.Partition, err.Err)
+		}
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			if ctx.Err() != nil {
+				log.Fatalf("timeout: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
 			}
-			key, value := record.Key, record.Value
+			r := iter.Next()
 			if *registryURL != "" {
-				decoded, err := avroDecoder.decode(ctx, value)
+				value, err := avroDecoder.decode(ctx, r.Value)
 				if err != nil {
 					log.Fatalf("decode Avro value: %v", err)
 				}
-				if len(key) > 0 {
-					decodedKey, err := avroDecoder.decode(ctx, key)
+				if len(r.Key) > 0 {
+					value["key"], err = avroDecoder.decode(ctx, r.Key)
 					if err != nil {
 						log.Fatalf("decode Avro key: %v", err)
 					}
-					decoded["key"] = decodedKey
 				}
-				value, err = json.Marshal(decoded)
+				r.Value, err = json.Marshal(value)
 				if err != nil {
 					log.Fatalf("marshal Avro dump: %v", err)
 				}
 			}
-			if _, err := os.Stdout.Write(value); err != nil {
+			if _, err := os.Stdout.Write(r.Value); err != nil {
 				log.Fatalf("write message: %v", err)
 			}
 			if _, err := os.Stdout.Write([]byte("\n")); err != nil {
 				log.Fatalf("write newline: %v", err)
 			}
-			if tableOf(value) == *untilTable {
+			if tableOf(r.Value) == *untilTable {
 				matched++
 				if matched >= *untilCount {
-					done = true
+					return
 				}
 			}
-		})
-		if done {
-			return
 		}
 	}
 }

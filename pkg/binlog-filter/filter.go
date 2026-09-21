@@ -125,13 +125,15 @@ const (
 	NullEvent EventType = ""
 )
 
-// ClassifyEvent classify event into dml/ddl
-func ClassifyEvent(event EventType) (EventType, error) {
+// ClassifyEvent classifies the event type into dml, ddl or incompatible ddl.
+// An event type that the filter does not know is classified as NullEvent, so
+// that a caller keeps replicating events it cannot classify instead of failing.
+func ClassifyEvent(event EventType) EventType {
 	switch event {
 	case InsertEvent,
 		UpdateEvent,
 		DeleteEvent:
-		return dml, nil
+		return dml
 	case CreateDatabase,
 		AlterDatabase,
 		AlterSchema,
@@ -141,10 +143,12 @@ func ClassifyEvent(event EventType) (EventType, error) {
 		DropView,
 		AlterTable,
 		CreateSchema,
-		AddTablePartition:
-		return ddl, nil
+		AddTablePartition,
+		AddFullTextIndex,
+		CreateHybridIndex:
+		return ddl
 	case NullEvent:
-		return NullEvent, nil
+		return NullEvent
 	case ValueRangeDecrease,
 		PrecisionDecrease,
 		ModifyColumn,
@@ -165,6 +169,9 @@ func ClassifyEvent(event EventType) (EventType, error) {
 		CoalescePartition,
 		SplitPartition,
 		ExchangePartition,
+
+		AddForeignKey,
+		DropForeignKey,
 
 		DropDatabase,
 		DropTable,
@@ -189,9 +196,9 @@ func ClassifyEvent(event EventType) (EventType, error) {
 		AlterTTLInfo,
 		AlterTTLRemove,
 		MultiSchemaChange:
-		return incompatibleDDL, nil
+		return incompatibleDDL
 	default:
-		return NullEvent, errors.NotValidf("event type %s", event)
+		return NullEvent
 	}
 }
 
@@ -326,10 +333,9 @@ func (b *BinlogEvent) Filter(schema, table string, event EventType, rawQuery str
 		return Do, nil
 	}
 
-	tp, err := ClassifyEvent(event)
-	if err != nil {
-		return Ignore, errors.Trace(err)
-	}
+	// An event type that cannot be classified is handled as an unknown event, so
+	// that only the sql pattern rules can match it.
+	tp := ClassifyEvent(event)
 
 	schemaL, tableL := schema, table
 	if !b.caseSensitive {
