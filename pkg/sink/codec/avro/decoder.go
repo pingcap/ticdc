@@ -80,6 +80,22 @@ func NewDecoder(
 	}
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with the
+// schema manager of this decoder: it caches the schemas fetched from the
+// registry, while the codec cache stays per decoder because an lru cache is not
+// thread safe and the restore runs on the resolve pipeline.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	codecs, _ := lru.New(decoderCodecCacheSize)
+	return &decoder{
+		idx:          d.idx,
+		config:       d.config,
+		topic:        d.topic,
+		schemaM:      d.schemaM,
+		codecs:       codecs,
+		upstreamTiDB: d.upstreamTiDB,
+	}
+}
+
 func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.key != nil || d.value != nil {
 		log.Panic("add key/value to the decoder failed, since it's already set")
@@ -410,9 +426,10 @@ func avroData2Columns(
 		data[colName] = value
 
 		tiCol := &timodel.ColumnInfo{
-			ID:    int64(idx),
-			Name:  ast.NewCIStr(colName),
-			State: timodel.StatePublic,
+			ID:     int64(idx),
+			Offset: idx,
+			Name:   ast.NewCIStr(colName),
+			State:  timodel.StatePublic,
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
@@ -445,16 +462,24 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	for _, col := range columns {
 		if _, ok := keyMap[col.Name.O]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name: col.Name,
+				Name:   col.Name,
+				Offset: col.Offset,
 			})
 		}
 	}
-	tidbTableInfo.Indices = []*timodel.IndexInfo{{
-		Primary: true,
-		Name:    ast.NewCIStr("primary"),
-		Columns: indexColumns,
-		State:   timodel.StatePublic,
-	}}
+	// A message without a key column carries no row locator: an empty primary
+	// index would tell the sink the row is located by the primary key while the
+	// WHERE clause has no column to compare.
+	if len(indexColumns) != 0 {
+		tidbTableInfo.Indices = []*timodel.IndexInfo{{
+			Primary: true,
+			Unique:  true,
+			Name:    ast.NewCIStr("primary"),
+			Columns: indexColumns,
+			State:   timodel.StatePublic,
+		}}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
+	}
 	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
 

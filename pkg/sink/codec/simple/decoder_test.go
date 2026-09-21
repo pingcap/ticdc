@@ -106,3 +106,46 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Equal(t, MessageTypeWatermark, decoder.msg.Type)
 	require.Equal(t, commitTs+1, decoder.msg.CommitTs)
 }
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// rebuilds from a table schema: a composite primary key must stay the handle key,
+// with the real column offsets, because that is what the MySQL sink locates rows
+// by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	schema := &TableSchema{
+		Schema: "test",
+		Table:  "t",
+		Columns: []*columnSchema{
+			{Name: "a", DataType: dataType{MySQLType: "INT"}},
+			{Name: "b", DataType: dataType{MySQLType: "INT"}},
+			{Name: "c", DataType: dataType{MySQLType: "VARCHAR"}},
+		},
+		Indexes: []*IndexSchema{
+			{Name: "PRIMARY", Unique: true, Primary: true, Columns: []string{"a", "b"}},
+		},
+	}
+
+	common.RequireRowLocatorByPrimaryKey(t, newTableInfo(schema), "a", "b")
+}
+
+// TestRestoreDecoderSharesTableInfo pins the schema state sharing of the spill
+// restore: the read loop's decoder stores the table info of the DDLs it decoded,
+// and the restore decoder, which never sees those DDLs, resolves the table info
+// version a spilled DML message names.
+func TestRestoreDecoderSharesTableInfo(t *testing.T) {
+	decoder, err := NewDecoder(t.Context(), common.NewConfig(config.ProtocolSimple), nil)
+	require.NoError(t, err)
+	read := decoder.(*Decoder)
+
+	tableInfo := &commonType.TableInfo{
+		TableName: commonType.TableName{Schema: "test", Table: "t", TableID: 1},
+		UpdateTS:  10,
+	}
+	read.memo.Write(tableInfo)
+
+	restore := read.NewRestoreDecoder().(*Decoder)
+	require.Same(t, read.memo, restore.memo, "the restore shares the table info state")
+	require.NotNil(t, restore.memo.Read("test", "t", 10))
+	require.Nil(t, restore.memo.Read("test", "t", 11))
+	require.NotSame(t, read, restore, "the restore decodes with a cursor of its own")
+}

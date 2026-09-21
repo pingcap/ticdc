@@ -70,6 +70,18 @@ func NewDecoder(
 	}
 }
 
+// NewRestoreDecoder returns a decoder that restores spilled payloads with a
+// cursor of its own. The debezium protocol carries the table info of every
+// message, so there is no schema state to share, but the restore still may not
+// decode with the cursor of the read loop.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	return &decoder{
+		idx:          d.idx,
+		config:       d.config,
+		upstreamTiDB: d.upstreamTiDB,
+	}
+}
+
 // AddKeyValue add the received key and values to the decoder
 func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.valuePayload != nil || d.valueSchema != nil {
@@ -357,6 +369,7 @@ func queryTableInfoFromPayload(
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, &timodel.ColumnInfo{
 			ID:        int64(idx),
+			Offset:    idx,
 			State:     timodel.StatePublic,
 			Name:      ast.NewCIStr(colName),
 			FieldType: *fieldType,
@@ -368,7 +381,9 @@ func queryTableInfoFromPayload(
 		Columns: indexColumns,
 		Unique:  true,
 		Primary: true,
+		State:   timodel.StatePublic,
 	})
+	commonType.SetHandleKeyFlags(tidbTableInfo)
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 	return result
 }

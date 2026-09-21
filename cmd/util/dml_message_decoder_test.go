@@ -14,17 +14,18 @@
 package util
 
 import (
+	"math"
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDMLMessageDecoderAttachesSharedData(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoder(decoder)
 
 	wrapped.AddKeyValue([]byte("key"), []byte("value"))
@@ -43,7 +44,7 @@ func TestDMLMessageDecoderAttachesSharedData(t *testing.T) {
 func TestDMLMessageDecoderSharesRestorerAcrossInputs(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoder(decoder)
 
 	wrapped.SetSourcePosition(100)
@@ -63,11 +64,11 @@ func TestDMLMessageDecoderSharesRestorerAcrossInputs(t *testing.T) {
 func TestDMLMessageDecoderKeepsCustomRestorersPerInput(t *testing.T) {
 	first := newTestDMLMessage(10)
 	second := newTestDMLMessage(11)
-	decoder := &dmlMessageDecoderStub{messages: []*codeccommon.DMLMessage{first, second}}
+	decoder := &dmlMessageDecoderStub{messages: []*codecCommon.DMLMessage{first, second}}
 	wrapped := NewDMLMessageDecoderWithDataFactory(decoder,
-		func(_ codeccommon.Decoder, key, value []byte) *codeccommon.DMLMessageData {
-			return codeccommon.NewDMLMessageData(key, value,
-				func([]byte) ([]*codeccommon.DMLMessage, error) { return nil, nil })
+		func(_ codecCommon.Decoder, key, value []byte) *codecCommon.DMLMessageData {
+			return codecCommon.NewDMLMessageData(key, value,
+				func([]byte) ([]*codecCommon.DMLMessage, error) { return nil, nil })
 		})
 
 	wrapped.AddKeyValue([]byte("first-key"), []byte("first-value"))
@@ -98,18 +99,18 @@ func TestSharedRestorerDecodesMultipleInputs(t *testing.T) {
 }
 
 type dmlMessageDecoderStub struct {
-	messages []*codeccommon.DMLMessage
+	messages []*codecCommon.DMLMessage
 }
 
 func (d *dmlMessageDecoderStub) AddKeyValue(_, _ []byte) {}
 
-func (d *dmlMessageDecoderStub) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, len(d.messages) > 0
+func (d *dmlMessageDecoderStub) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, len(d.messages) > 0
 }
 
 func (d *dmlMessageDecoderStub) NextResolvedEvent() uint64 { return 0 }
 
-func (d *dmlMessageDecoderStub) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *dmlMessageDecoderStub) NextDMLMessage() *codecCommon.DMLMessage {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -121,7 +122,7 @@ func (d *dmlMessageDecoderStub) NextDMLMessage() *codeccommon.DMLMessage {
 func (d *dmlMessageDecoderStub) NextDDLEvent() *commonEvent.DDLEvent { return nil }
 
 type resettableDMLDecoder struct {
-	message *codeccommon.DMLMessage
+	message *codecCommon.DMLMessage
 }
 
 func (d *resettableDMLDecoder) AddKeyValue(_, value []byte) {
@@ -132,16 +133,83 @@ func (d *resettableDMLDecoder) AddKeyValue(_, value []byte) {
 	d.message = newTestDMLMessage(uint64(value[0]))
 }
 
-func (d *resettableDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, d.message != nil
+func (d *resettableDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, d.message != nil
 }
 
 func (d *resettableDMLDecoder) NextResolvedEvent() uint64 { return 0 }
 
-func (d *resettableDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *resettableDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	message := d.message
 	d.message = nil
 	return message
 }
 
 func (d *resettableDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent { return nil }
+
+// TestRestoreUsesItsOwnDecoder pins the constraint the parallel resolve path has
+// to keep: the read loop decodes an input with the decoder of the partition
+// while the resolve pipeline restores spilled payloads, and one codec decoder
+// holds the cursor of the input it decodes, so a restore must not run on the
+// decoder of the read loop.
+func TestRestoreUsesItsOwnDecoder(t *testing.T) {
+	read := &recordingDMLDecoder{message: newTestDMLMessage(10)}
+	restore := &recordingDMLDecoder{message: newTestDMLMessage(10)}
+	created := 0
+	wrapped := NewDMLMessageDecoderWithRestoreFactory(read,
+		func() (codecCommon.Decoder, error) {
+			created++
+			return restore, nil
+		})
+
+	// The read loop decodes one input and keeps the message for the spill.
+	wrapped.AddKeyValue([]byte("key"), []byte("value"))
+	message := wrapped.NextDMLMessage()
+	require.NotNil(t, message)
+	require.Equal(t, 1, read.inputs)
+
+	// Resolving the spilled payload restores it with the decoder of the restore
+	// path, and leaves the decoder of the read loop alone.
+	store := NewSpillStore()
+	t.Cleanup(func() { require.NoError(t, store.Cleanup()) })
+	group := NewEventsGroup(0, 1, store)
+	require.NoError(t, group.AppendMessage(message))
+	require.Equal(t, 1, read.inputs)
+
+	batch, hasMore, err := group.PrepareResolve(math.MaxUint64, store.ResolveLimit())
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.NotNil(t, batch)
+	require.Len(t, batch.Messages, 1)
+	require.NoError(t, batch.Ack())
+
+	require.Equal(t, 1, created, "the restore decoder is built on the first restore")
+	require.Equal(t, 1, restore.inputs)
+	require.Equal(t, 1, read.inputs, "the read decoder stays with the read loop")
+}
+
+// recordingDMLDecoder counts the inputs it decodes and returns one message per
+// input, so a test can tell which decoder decoded or restored a payload.
+type recordingDMLDecoder struct {
+	message  *codecCommon.DMLMessage
+	inputs   int
+	returned bool
+}
+
+func (d *recordingDMLDecoder) AddKeyValue(_, _ []byte) {
+	d.inputs++
+	d.returned = false
+}
+
+func (d *recordingDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, !d.returned
+}
+
+func (d *recordingDMLDecoder) NextResolvedEvent() uint64 { return 0 }
+
+func (d *recordingDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
+	d.returned = true
+	return d.message
+}
+
+func (d *recordingDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent { return nil }

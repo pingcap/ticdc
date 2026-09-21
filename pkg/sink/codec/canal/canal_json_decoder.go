@@ -97,9 +97,13 @@ type decoder struct {
 
 	config *common.Config
 
-	storage        storeapi.Storage
-	upstreamTiDB   *sql.DB
-	tableInfoMu    sync.RWMutex
+	storage      storeapi.Storage
+	upstreamTiDB *sql.DB
+	// tableInfoMu, tableInfoCache and ddlCommitTs are the schema state of the
+	// stream: a decoder built for the restore path shares them (see
+	// NewRestoreDecoder), so its own input cursor can decode a spilled payload
+	// while the decoder of the read loop keeps filling the cache from the DDLs.
+	tableInfoMu    *sync.RWMutex
 	tableInfoCache map[tableKey]*commonType.TableInfo
 	ddlCommitTs    map[tableNameKey][]uint64
 }
@@ -134,9 +138,26 @@ func NewDecoder(
 		decoder:        newBufferedJSONDecoder(),
 		storage:        externalStorage,
 		upstreamTiDB:   db,
+		tableInfoMu:    new(sync.RWMutex),
 		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
 		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}, nil
+}
+
+// NewRestoreDecoder returns a decoder that restores spilled payloads with the
+// table info and the table ids this decoder learned from the DDLs it decoded.
+// The two decoders share the schema state and the table id allocator, but each
+// holds the cursor of the input it decodes.
+func (d *decoder) NewRestoreDecoder() common.Decoder {
+	return &decoder{
+		config:         d.config,
+		decoder:        newBufferedJSONDecoder(),
+		storage:        d.storage,
+		upstreamTiDB:   d.upstreamTiDB,
+		tableInfoMu:    d.tableInfoMu,
+		tableInfoCache: d.tableInfoCache,
+		ddlCommitTs:    d.ddlCommitTs,
+	}
 }
 
 // AddKeyValue implements the Decoder interface
@@ -590,7 +611,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		columns := newTiColumns(msg)
 		tidbTableInfo.Columns = columns
 		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-		tidbTableInfo.PKIsHandle = len(tidbTableInfo.Indices) != 0
+		commonType.SetHandleKeyFlags(tidbTableInfo)
 		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 		d.tableInfoCache[cacheKey] = tableInfo
 	}
@@ -655,6 +676,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		name := rawColumn.name
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
+		col.Offset = int(nextColumnID)
 		col.Name = ast.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
@@ -719,6 +741,7 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 		Columns: indexColumns,
 		Primary: true,
 		Unique:  true,
+		State:   timodel.StatePublic,
 	}
 	result = append(result, indexInfo)
 	return result

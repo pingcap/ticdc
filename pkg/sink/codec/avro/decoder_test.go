@@ -17,7 +17,9 @@ package avro
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +50,41 @@ func TestDecoderCodecCacheIsBounded(t *testing.T) {
 	require.Equal(t, decoderCodecCacheSize, decoder.codecs.Len())
 	require.True(t, decoder.codecs.Contains(firstID))
 	require.False(t, decoder.codecs.Contains(secondID))
+}
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// builds from an avro message schema: the key columns must stay the handle key,
+// with the real column offsets, because that is what the MySQL sink locates rows
+// by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	fields := []any{
+		map[string]any{"name": "a", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		map[string]any{"name": "c", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+	}
+	columns, _, err := avroData2Columns(map[string]any{
+		"a": int64(1), "b": int64(2), "c": int64(3),
+	}, fields)
+	require.NoError(t, err)
+
+	tableInfo := newTableInfo("test", "t", columns, map[string]any{"a": nil, "b": nil})
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "a", "b")
+}
+
+// TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator checks the empty key
+// case: without a key column the message carries no row locator, so the decoder
+// must not claim a primary key. An empty primary index would make the sink emit
+// a WHERE clause without a column to compare.
+func TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator(t *testing.T) {
+	fields := []any{
+		map[string]any{"name": "a", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+		map[string]any{"name": "b", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+	}
+	columns, _, err := avroData2Columns(map[string]any{"a": int64(1), "b": int64(2)}, fields)
+	require.NoError(t, err)
+
+	tableInfo := newTableInfo("test", "t", columns, nil)
+	require.False(t, tableInfo.PKIsHandle())
+	require.Empty(t, tableInfo.GetIndices())
+	require.Nil(t, sqlmodel.GetWhereHandle(tableInfo, tableInfo).UniqueNotNullIdx)
 }

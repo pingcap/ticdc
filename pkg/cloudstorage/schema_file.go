@@ -13,8 +13,9 @@
 package cloudstorage
 
 import (
+	"cmp"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -237,15 +238,27 @@ func (t *SchemaFile) TableInfo() *common.TableInfo {
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
+	indexColumns := make([]*model.IndexColumn, 0, 1)
 	for _, col := range t.Columns {
 		tiCol := col.toTiColumnInfo(nextMockID)
+		tiCol.Offset = len(tidbTableInfo.Columns)
 		if mysql.HasPriKeyFlag(tiCol.GetFlag()) {
-			// use PKIsHandle to make sure that the primary keys can be detected
-			tidbTableInfo.PKIsHandle = true
+			indexColumns = append(indexColumns, &model.IndexColumn{Name: tiCol.Name, Offset: tiCol.Offset})
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID++
 	}
+	if len(indexColumns) != 0 {
+		tidbTableInfo.Indices = append(tidbTableInfo.Indices, &model.IndexInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("primary"),
+			Primary: true,
+			Unique:  true,
+			State:   model.StatePublic,
+			Columns: indexColumns,
+		})
+	}
+	common.SetHandleKeyFlags(tidbTableInfo)
 	return common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
 }
 
@@ -261,11 +274,14 @@ func (t *SchemaFile) Marshal() []byte {
 
 // marshalForChecksum marshals fields covered by the path checksum.
 func (t *SchemaFile) marshalForChecksum() []byte {
-	// sort columns by name
-	sortedColumns := make([]TableCol, len(t.Columns))
-	copy(sortedColumns, t.Columns)
-	sort.Slice(sortedColumns, func(i, j int) bool {
-		return sortedColumns[i].Name < sortedColumns[j].Name
+	// Copy the columns and sort them by name. The copy keeps the shape of the
+	// payload of older versions: a schema file without columns marshals them as
+	// [] rather than null, and the checksum is part of the file path, so the
+	// files already written must keep the name they were written with.
+	sortedColumns := make([]TableCol, 0, len(t.Columns))
+	sortedColumns = append(sortedColumns, t.Columns...)
+	slices.SortStableFunc(sortedColumns, func(a, b TableCol) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 
 	payload := checksumPayload{

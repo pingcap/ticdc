@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
@@ -133,9 +134,26 @@ func getPartitionNum(o *option) (int32, error) {
 type consumer struct {
 	client *kgo.Client
 	writer *writer
+
+	// committedOffsets is the highest offset handed to the group coordinator for
+	// each topic-partition. A commit replaces the stored offset instead of taking
+	// its maximum, and a resolved message can be committed after records that
+	// follow it, so the read loop must not send a commit that moves an offset
+	// backwards: the group would replay records after a restart. Only the read
+	// loop touches the map.
+	committedOffsets map[topicPartition]int64
 }
 
-// newConsumer keeps manual commits, earliest reset, and the eager range assignor.
+// topicPartition identifies one partition of one topic.
+type topicPartition struct {
+	topic     string
+	partition int32
+}
+
+// newConsumer creates a consumer client. Offsets are committed from the read
+// loop only, the client never commits on its own, and a group without committed
+// offsets starts from the first message of every assigned partition, which are
+// the librdkafka settings the consumer used before.
 func newConsumer(ctx context.Context, o *option) *consumer {
 	opts, err := kafkaOptions(o)
 	if err != nil {
@@ -146,13 +164,20 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 		kgo.ConsumeTopics(consumerTopics(o)...),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
+		// Keep the eager range assignment the librdkafka default used, so a
+		// consumer group that still has a member on the old client keeps
+		// working while it rolls.
 		kgo.Balancers(kgo.RangeBalancer()),
 	)
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		log.Panic("create kafka consumer failed", zap.Error(err))
 	}
-	return &consumer{client: client, writer: newWriter(ctx, o)}
+	return &consumer{
+		writer:           newWriter(ctx, o),
+		client:           client,
+		committedOffsets: make(map[topicPartition]int64),
+	}
 }
 
 func (c *consumer) readMessage(ctx context.Context) error {
@@ -171,30 +196,60 @@ func (c *consumer) readMessage(ctx context.Context) error {
 				zap.String("topic", fetchErr.Topic), zap.Int32("partition", fetchErr.Partition),
 				zap.Error(fetchErr.Err))
 		}
-		iter := fetches.RecordIter()
-		for !iter.Done() {
-			record := iter.Next()
-			needCommit, err := c.writer.WriteMessage(ctx, record)
-			if err != nil {
-				return err
+
+		var writeErr error
+		fetches.EachRecord(func(record *kgo.Record) {
+			if writeErr != nil {
+				return
 			}
-			if !needCommit {
-				continue
+			if err := c.writer.WriteMessage(ctx, record); err != nil {
+				writeErr = err
 			}
-			// Commit only the record acknowledged by the writer, never the
-			// rest of the fetched batch. CommitRecords stores offset + 1.
-			if err := c.client.CommitRecords(ctx, record); err != nil {
-				log.Error("commit message failed, will continue",
-					zap.String("topic", record.Topic), zap.Int32("partition", record.Partition),
-					zap.Int64("offset", record.Offset), zap.Error(err))
-			}
+		})
+		if writeErr != nil {
+			return writeErr
+		}
+		// Resolved messages of the parallel resolve path are committed once
+		// their events reached the downstream.
+		for _, pending := range c.writer.takeCommittableMessages() {
+			c.commitMessage(ctx, pending)
 		}
 	}
+}
+
+// commitMessage marks the offset after the message as processed. The commit is
+// asynchronous, the read loop does not wait for the coordinator, which is what
+// the librdkafka consumer did as well.
+func (c *consumer) commitMessage(ctx context.Context, record *kgo.Record) {
+	tp := topicPartition{topic: record.Topic, partition: record.Partition}
+	offset := record.Offset + 1
+	if offset <= c.committedOffsets[tp] {
+		return
+	}
+	c.committedOffsets[tp] = offset
+	offsets := map[string]map[int32]kgo.EpochOffset{
+		record.Topic: {
+			record.Partition: {Epoch: record.LeaderEpoch, Offset: offset},
+		},
+	}
+	c.client.CommitOffsets(ctx, offsets,
+		func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+			if err != nil {
+				log.Error("commit message failed, just continue",
+					zap.String("topic", record.Topic), zap.Int32("partition", record.Partition),
+					zap.Int64("offset", record.Offset), zap.Error(err))
+				return
+			}
+			log.Debug("commit message success",
+				zap.String("topic", record.Topic), zap.Int32("partition", record.Partition),
+				zap.Int64("offset", record.Offset))
+		})
 }
 
 // Run the consumer, read data and write to the downstream target.
 func (c *consumer) Run(ctx context.Context) (err error) {
 	defer func() {
+		c.writer.pipeline.stop()
 		if cleanupErr := c.writer.cleanupEventsGroups(); err == nil && cleanupErr != nil {
 			err = cleanupErr
 		}

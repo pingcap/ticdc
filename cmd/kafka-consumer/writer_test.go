@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -24,12 +23,37 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+// drainResolvePipeline waits until everything submitted to the resolve pipeline
+// reached the sink.
+func drainResolvePipeline(t *testing.T, w *writer) {
+	t.Helper()
+	resume := w.pipeline.pause(t.Context())
+	resume()
+}
+
+// newTestWriter builds a writer whose resolve pipeline is running, so tests
+// exercise the same path the consumer runs.
+func newTestWriter(t *testing.T, w *writer) *writer {
+	t.Helper()
+
+	// The read loop and the resolve pipeline reach the spill store through
+	// getSpillStore, so create it before the pipeline starts: creating it
+	// lazily from two goroutines is a data race.
+	if w.spillStore == nil {
+		w.spillStore = util.NewSpillStore()
+	}
+	w.pipeline = newPipeline(w)
+	w.pipeline.run(t.Context())
+	t.Cleanup(w.pipeline.stop)
+	return w
+}
 
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	t.Helper()
@@ -38,7 +62,11 @@ func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	s := sinkmock.NewMockSink(ctrl)
 	ddls := make([]string, 0)
 
-	s.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	// Behave like a sink that applies immediately: the resolve pipeline waits for
+	// the flush callback before it acknowledges a batch.
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		event.PostFlush()
+	}).AnyTimes()
 	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
 		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
 			ddls = append(ddls, ddl.Query)
@@ -58,14 +86,14 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	//    commitTs > watermark.
 	// 2) Call writer.Write and expect the DDL is executed to advance downstream schema even without the
 	//    watermark catching up.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
 		},
 		mysqlSink: s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
@@ -82,7 +110,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, *ddls)
 	require.Empty(t, w.ddlList)
@@ -96,13 +124,13 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	// 1) Enqueue a blocking DDL followed by an independent CREATE TABLE DDL, with watermark behind the first DDL.
 	// 2) Call writer.Write and expect nothing executes.
 	// 3) Advance watermark beyond the first DDL and expect both execute in order.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
@@ -128,12 +156,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -149,13 +177,13 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	// 1) Enqueue a CREATE TABLE ... LIKE ... DDL with commitTs > watermark.
 	// 2) Call writer.Write and expect the DDL is NOT executed.
 	// 3) Advance watermark beyond the DDL commitTs and expect the DDL executes.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `test`.`t2` LIKE `test`.`t1`",
@@ -174,12 +202,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, *ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, *ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -193,13 +221,13 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	//    later DDL at the front is not yet eligible (commitTs > watermark).
 	// 2) Call writer.Write and expect all DDLs with commitTs <= watermark execute (in commit-ts order),
 	//    and only the truly "future" DDL remains pending.
-	ctx := context.Background()
+	ctx := t.Context()
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
-	}
+	})
 	w.ddlList = []*commonEvent.DDLEvent{
 		{
 			Query:      "CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -256,7 +284,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -269,7 +297,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 }
 
 func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	flushedCommitTs := make([]uint64, 0)
@@ -289,15 +317,15 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   0,
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:  []*partitionProgress{p},
 		mysqlSink:   s,
 		eventRouter: eventRouter,
 		protocol:    config.ProtocolOpen,
-	}
+	})
 
 	for _, item := range []struct {
-		message *codeccommon.DMLMessage
+		message *codecCommon.DMLMessage
 		offset  int64
 	}{
 		{newDMLMessageForWriterTest(20), 1},
@@ -308,9 +336,15 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}
 
 	p.watermark = 20
-	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	// The read loop publishes the watermark of the partition it just read from a
+	// resolved message, and that is what the resolve pipeline may apply up to.
+	w.publishWatermark()
+	needCommit, err := w.Write(ctx, codecCommon.MessageTypeResolved)
 	require.NoError(t, err)
 	require.True(t, needCommit)
+	// The resolve pipeline applies events off the read loop, so drain it before
+	// checking what the sink received.
+	drainResolvePipeline(t, w)
 	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
 	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
 }
@@ -328,14 +362,14 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
 		order = append(order, "dml")
 		event.PostFlush()
-	})
+	}).Times(2)
 	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(commonEvent.BlockEvent) error {
 		order = append(order, "ddl")
 		return nil
 	})
 
-	newMessage := func(tableID int64, table string) *codeccommon.DMLMessage {
-		message := codeccommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	newMessage := func(tableID int64, table string) *codecCommon.DMLMessage {
+		message := codecCommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 			return &commonEvent.DMLEvent{
 				PhysicalTableID: tableID,
 				CommitTs:        10,
@@ -346,8 +380,8 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 				},
 			}
 		})
-		data := codeccommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+		data := codecCommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		})
 		data.AttachDMLMessage(message)
 		return message
@@ -358,7 +392,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	unrelatedGroup := util.NewEventsGroup(1, unrelatedTableID)
 	require.NoError(t, unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other")))
 
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			{
 				partition: 0,
@@ -376,11 +410,11 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 			},
 		},
 		mysqlSink:              s,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-	}
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+	})
 	w.partitionTableAccessor.Add("test", "members")
 
-	err := w.flushDDLEvent(context.Background(), &commonEvent.DDLEvent{
+	err := w.flushDDLEvent(t.Context(), &commonEvent.DDLEvent{
 		Query:      "ALTER TABLE members DROP PARTITION p0",
 		SchemaName: "test",
 		TableName:  "members",
@@ -390,19 +424,24 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{logicalTableID},
 		},
-	})
+	}, true)
 	require.NoError(t, err)
-	require.Equal(t, []string{"dml", "ddl"}, order)
+	// Every event below the DDL commit ts is applied before the DDL, also for a
+	// table the upstream did not mark as blocked: the blocked tables are
+	// reconstructed from the ids the decoder allocated itself, so they can miss a
+	// table whose events the consumer has not decoded yet.
+	require.Len(t, order, 3)
+	require.Equal(t, []string{"ddl"}, order[2:])
 	partitionMessages, err := partitionGroup.GetAllMessages()
 	require.NoError(t, err)
 	require.Empty(t, partitionMessages)
 	unrelatedMessages, err := unrelatedGroup.GetAllMessages()
 	require.NoError(t, err)
-	require.Len(t, unrelatedMessages, 1)
+	require.Empty(t, unrelatedMessages)
 }
 
 func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
 	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
@@ -413,21 +452,16 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		watermark:   20,
 		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:      []*partitionProgress{progress},
 		mysqlSink:       s,
 		protocol:        config.ProtocolOpen,
 		maxBatchSize:    64,
 		maxMessageBytes: 1,
-	}
-
-	needCommit, err := w.WriteMessage(ctx, &kgo.Record{
-		Partition: 0,
-		Offset:    10,
 	})
-	require.NoError(t, err)
 
-	require.False(t, needCommit)
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 10})
+	require.NoError(t, err)
 	require.Nil(t, progress.eventsGroup[1])
 }
 
@@ -441,14 +475,14 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
 	}
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses: []*partitionProgress{
 			progress,
 			{partition: 1, watermark: 5},
 		},
 		eventRouter: eventRouter,
 		protocol:    config.ProtocolOpen,
-	}
+	})
 
 	message := newDMLMessageForWriterTest(10)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, 10))
@@ -465,12 +499,12 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, true)
 	require.NoError(t, err)
 
-	w := &writer{
+	w := newTestWriter(t, &writer{
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
-		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-	}
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+	})
 
 	ddl := &commonEvent.DDLEvent{
 		Query:      "CREATE TABLE `target`.`dst` LIKE `target`.`src`",
@@ -503,8 +537,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	}
 
 	progress := w.progresses[0]
-	first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
-	second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+	first := codecCommon.NewDMLMessageFromEvent(newDMLEvent(200))
+	second := codecCommon.NewDMLMessageFromEvent(newDMLEvent(100))
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
@@ -524,12 +558,12 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 			require.NoError(t, err)
 
-			w := &writer{
+			w := newTestWriter(t, &writer{
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,
-				partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
-			}
+				partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+			})
 
 			w.partitionTableAccessor.Add("target", "src")
 			ddl := &commonEvent.DDLEvent{
@@ -554,8 +588,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			}
 
 			progress := w.progresses[0]
-			first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
-			second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
+			first := codecCommon.NewDMLMessageFromEvent(newDMLEvent(200))
+			second := codecCommon.NewDMLMessageFromEvent(newDMLEvent(100))
 			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
 			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
@@ -567,8 +601,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	}
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+func newDMLMessageForWriterTest(commitTs uint64) *codecCommon.DMLMessage {
+	return codecCommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
 			PhysicalTableID: 1,
 			StartTs:         commitTs - 1,
@@ -582,10 +616,10 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	})
 }
 
-func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
-	messageData := codeccommon.NewDMLMessageData(nil, nil,
-		func([]byte) ([]*codeccommon.DMLMessage, error) {
-			return []*codeccommon.DMLMessage{message}, nil
+func attachDMLMessageDataForWriterTest(message *codecCommon.DMLMessage) *codecCommon.DMLMessage {
+	messageData := codecCommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codecCommon.DMLMessage, error) {
+			return []*codecCommon.DMLMessage{message}, nil
 		},
 	)
 	messageData.AttachDMLMessage(message)
@@ -593,12 +627,12 @@ func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codecco
 }
 
 type singleDMLDecoder struct {
-	message  *codeccommon.DMLMessage
+	message  *codecCommon.DMLMessage
 	consumed bool
 }
 
 type tableIDDecoder struct {
-	codeccommon.Decoder
+	codecCommon.Decoder
 	tableIDs []int64
 }
 
@@ -609,19 +643,231 @@ func (d *tableIDDecoder) GetTableIDs(string, string) []int64 {
 func (d *singleDMLDecoder) AddKeyValue(_, _ []byte) {
 }
 
-func (d *singleDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
-	return codeccommon.MessageTypeRow, !d.consumed
+func (d *singleDMLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeRow, !d.consumed
 }
 
 func (d *singleDMLDecoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-func (d *singleDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
+func (d *singleDMLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
 	d.consumed = true
 	return d.message
 }
 
 func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+// TestWriteMessageLeavesTheDDLCommitToTheNextWatermark pins the commit rule of
+// the DDL path: the DDL is applied while its message is read, but its offset is
+// not committed on its own. A record below it in the partition can hold events
+// above the DDL commit ts that the resolve pipeline has not applied yet, so
+// committing the DDL offset would skip them on a restart. The offset of the next
+// resolved message covers every record below it once its watermark was applied.
+func TestWriteMessageLeavesTheDDLCommitToTheNextWatermark(t *testing.T) {
+	ctx := t.Context()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().WriteBlockEvent(gomock.Any()).Return(nil)
+
+	const (
+		tableID   = int64(1)
+		watermark = uint64(20)
+	)
+	ddl := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE t ADD COLUMN c INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: watermark,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{tableID},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   watermark,
+		decoder:     util.NewDMLMessageDecoder(&singleDDLDecoder{ddl: ddl}),
+	}
+	w := newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{progress},
+		mysqlSink:          s,
+		protocol:           config.ProtocolOpen,
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 100})
+	require.NoError(t, err)
+	require.Empty(t, w.pendingCommits)
+
+	// The next resolved message of the partition commits its own offset, which
+	// covers the DDL record below it, once the applied watermark reached the
+	// watermark that message carries.
+	progress.decoder = util.NewDMLMessageDecoder(&singleResolvedDecoder{watermark: watermark})
+	err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 101})
+	require.NoError(t, err)
+	require.Len(t, w.pendingCommits, 1)
+	require.Equal(t, watermark, w.pendingCommits[0].watermark)
+	require.Equal(t, int64(101), w.pendingCommits[0].message.Offset)
+
+	require.Empty(t, w.takeCommittableMessages())
+	w.pipeline.appliedWatermarkValue.Store(watermark)
+	committable := w.takeCommittableMessages()
+	require.Len(t, committable, 1)
+	require.Equal(t, int64(101), committable[0].Offset,
+		"committing the resolved record advances past the DDL below it")
+}
+
+type singleDDLDecoder struct {
+	ddl      *commonEvent.DDLEvent
+	consumed bool
+}
+
+func (d *singleDDLDecoder) AddKeyValue(_, _ []byte) {
+}
+
+func (d *singleDDLDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeDDL, !d.consumed
+}
+
+func (d *singleDDLDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *singleDDLDecoder) NextDMLMessage() *codecCommon.DMLMessage {
+	return nil
+}
+
+func (d *singleDDLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	d.consumed = true
+	return d.ddl
+}
+
+// TestWriteMessageResolvedFlushesEligibleDDLBeforePublishingTheWatermark pins
+// the DDL flush trigger: a DDL read before its commit ts reached the watermark
+// waits in ddlList, and the resolved message that raises the watermark is what
+// makes it eligible. It must be applied before the new watermark becomes visible
+// to the resolve pipeline, otherwise the pipeline applies a DML above the DDL
+// commit ts before the DDL created its downstream table.
+func TestWriteMessageResolvedFlushesEligibleDDLBeforePublishingTheWatermark(t *testing.T) {
+	ctx := t.Context()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+
+	const (
+		tableID   = int64(1)
+		watermark = uint64(20)
+	)
+	var (
+		w              *writer
+		written        []string
+		publishedAtDDL []uint64
+	)
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			written = append(written, ddl.Query)
+			publishedAtDDL = append(publishedAtDDL, w.globalWatermarkValue.Load())
+		}
+		return nil
+	}).AnyTimes()
+
+	ddl := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE t ADD COLUMN c INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: watermark,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{tableID},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		decoder:     util.NewDMLMessageDecoder(&singleDDLDecoder{ddl: ddl}),
+	}
+	w = newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{progress},
+		mysqlSink:          s,
+		protocol:           config.ProtocolOpen,
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+
+	// The DDL is read while the watermark is still below its commit ts, so it
+	// waits for the watermark.
+	err := w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 0})
+	require.NoError(t, err)
+	require.Empty(t, written)
+	require.Len(t, w.ddlList, 1)
+
+	// The resolved message raises the watermark, which makes the DDL eligible.
+	progress.decoder = util.NewDMLMessageDecoder(&singleResolvedDecoder{watermark: watermark})
+	err = w.WriteMessage(ctx, &kgo.Record{Partition: 0, Offset: 1})
+	require.NoError(t, err)
+	require.Equal(t, []string{ddl.Query}, written)
+	require.Empty(t, w.ddlList)
+	// The DDL ran before the new watermark was published to the resolve pipeline.
+	require.Equal(t, []uint64{0}, publishedAtDDL)
+	require.Equal(t, watermark, w.globalWatermarkValue.Load())
+}
+
+type singleResolvedDecoder struct {
+	watermark uint64
+	consumed  bool
+}
+
+func (d *singleResolvedDecoder) AddKeyValue(_, _ []byte) {
+}
+
+func (d *singleResolvedDecoder) HasNext() (codecCommon.MessageType, bool) {
+	return codecCommon.MessageTypeResolved, !d.consumed
+}
+
+func (d *singleResolvedDecoder) NextResolvedEvent() uint64 {
+	d.consumed = true
+	return d.watermark
+}
+
+func (d *singleResolvedDecoder) NextDMLMessage() *codecCommon.DMLMessage {
+	return nil
+}
+
+func (d *singleResolvedDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
+}
+
+// TestAppendDDLIgnoresReplay pins the DDL replay filter: the upstream dispatches
+// a DDL once per dispatcher, so the same DDL reaches the topic more than once,
+// and executing it twice fails downstream with "table already exists", while a
+// replayed DML only writes the same rows again.
+func TestAppendDDLIgnoresReplay(t *testing.T) {
+	w := newTestWriter(t, &writer{
+		progresses:         []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	})
+	ddl := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	}
+	w.appendDDL(ddl)
+	w.appendDDL(ddl)
+	require.Len(t, w.ddlList, 1, "the second copy of the DDL is a replay")
+
+	// A DDL of the same table at a later commit ts is a new DDL, not a replay.
+	next := *ddl
+	next.Query = "ALTER TABLE `test`.`t` ADD COLUMN `c` INT"
+	next.FinishedTs = 20
+	w.appendDDL(&next)
+	require.Len(t, w.ddlList, 2)
 }

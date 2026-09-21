@@ -82,6 +82,18 @@ func NewEventDecoder(
 	return nil, nil
 }
 
+// NewRestoreDecoder returns the decoder used to restore spilled payloads. A
+// decoder that carries schema state hands out a decoder sharing that state with
+// an input cursor of its own, so the restore can resolve the table info the read
+// loop's decoder learned from the DDLs; see common.SchemaStateDecoder. The
+// result decodes spilled payloads only and must not be used for the stream.
+func NewRestoreDecoder(decoder common.Decoder) common.Decoder {
+	if sharing, ok := decoder.(common.SchemaStateDecoder); ok {
+		return sharing.NewRestoreDecoder()
+	}
+	return decoder
+}
+
 // NewTxnEventEncoder returns an TxnEventEncoderBuilder.
 func NewTxnEventEncoder(
 	c *common.Config,
