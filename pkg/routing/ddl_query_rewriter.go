@@ -24,30 +24,76 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/format"
 )
 
+type schemaNameChange struct {
+	from string
+	to   string
+}
+
+// ddlRoutePlan contains the rewritten query and routing semantics that cannot
+// be inferred from whether the query text changed.
+type ddlRoutePlan struct {
+	// query is the final DDL query after applying routing rules.
+	query string
+	// hasOutOfBandTableMetadata tells ApplyToDDLEvent to inspect table metadata
+	// such as MultipleTableInfos even when query itself is unchanged.
+	hasOutOfBandTableMetadata bool
+	// tableNamePreservingSchemaChanges records schema name changes whose routed
+	// tables must keep the same names before and after the schema change.
+	tableNamePreservingSchemaChanges []schemaNameChange
+}
+
+// ddlRouteSpec describes the routing-relevant semantics extracted from one
+// DDL AST before routing rules are applied.
+type ddlRouteSpec struct {
+	// sourceTables lists schema and table names extracted directly from the DDL
+	// query. A schema-level entry has an empty table name.
+	sourceTables []commonEvent.SchemaTableName
+	// hasOutOfBandTableMetadata marks a DDL whose event can carry routable table
+	// metadata, such as MultipleTableInfos, that is not named in the query.
+	hasOutOfBandTableMetadata bool
+	// tableNamePreservingSchemaChanges records schema name changes whose tables
+	// must resolve to the same routed table names on both sides.
+	tableNamePreservingSchemaChanges []schemaNameChange
+}
+
 // rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
 func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, error) {
+	plan, err := r.buildParserBackedDDLRoutePlan(ddl)
+	if err != nil {
+		return "", err
+	}
+	return plan.query, nil
+}
+
+func (r Router) buildParserBackedDDLRoutePlan(ddl *commonEvent.DDLEvent) (ddlRoutePlan, error) {
 	if len(r.rules) == 0 {
-		return ddl.Query, nil
+		return ddlRoutePlan{query: ddl.Query}, nil
 	}
 
 	queries, err := splitMultiStmtDDLQuery(ddl.Query)
 	if err != nil {
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return ddlRoutePlan{}, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	var (
 		builder strings.Builder
+		plan    ddlRoutePlan
 		routed  bool
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
+		singlePlan, err := r.buildSingleDDLRoutePlan(query, ddl.GetSchemaName())
 		if err != nil {
-			return "", err
+			return ddlRoutePlan{}, err
 		}
-		if newQuery != query {
+		plan.hasOutOfBandTableMetadata = plan.hasOutOfBandTableMetadata ||
+			singlePlan.hasOutOfBandTableMetadata
+		plan.tableNamePreservingSchemaChanges = append(
+			plan.tableNamePreservingSchemaChanges,
+			singlePlan.tableNamePreservingSchemaChanges...)
+		if singlePlan.query != query {
 			routed = true
-			query = newQuery
+			query = singlePlan.query
 		}
 		builder.WriteString(query)
 		if len(queries) > 1 && !strings.HasSuffix(query, ";") {
@@ -55,10 +101,12 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 		}
 	}
 	if !routed {
-		return ddl.Query, nil
+		plan.query = ddl.Query
+		return plan, nil
 	}
 
-	return builder.String(), nil
+	plan.query = builder.String()
+	return plan, nil
 }
 
 func splitMultiStmtDDLQuery(query string) ([]string, error) {
@@ -89,15 +137,29 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 //	route({source_db, t}) with rule source_db.* → target_db.{table}_r
 //	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
+	plan, err := r.buildSingleDDLRoutePlan(query, defaultSchema)
+	if err != nil {
+		return "", err
+	}
+	return plan.query, nil
+}
+
+func (r Router) buildSingleDDLRoutePlan(query string, defaultSchema string) (ddlRoutePlan, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return ddlRoutePlan{}, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	sourceTables := extractTableNames(stmt)
+	spec := extractDDLRouteSpec(stmt)
+	plan := ddlRoutePlan{
+		query:                            query,
+		hasOutOfBandTableMetadata:        spec.hasOutOfBandTableMetadata,
+		tableNamePreservingSchemaChanges: spec.tableNamePreservingSchemaChanges,
+	}
+	sourceTables := spec.sourceTables
 	if len(sourceTables) == 0 {
-		return query, nil
+		return plan, nil
 	}
 	fillDefaultSchema(sourceTables, defaultSchema)
 
@@ -108,7 +170,7 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	for _, srcTable := range sourceTables {
 		binding, err := r.Route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
-			return "", err
+			return ddlRoutePlan{}, err
 		}
 		if binding.routed() {
 			routed = true
@@ -120,14 +182,15 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	}
 
 	if !routed {
-		return query, nil
+		return plan, nil
 	}
 
 	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables)
 	if err != nil {
-		return "", err
+		return ddlRoutePlan{}, err
 	}
-	return newQuery, nil
+	plan.query = newQuery
+	return plan, nil
 }
 
 func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
@@ -172,14 +235,35 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 //	ALTER TABLE `db`.`t` ADD COLUMN `c` INT
 //	    → [{db, t}]
 func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
+	return extractDDLRouteSpec(stmt).sourceTables
+}
+
+func extractDDLRouteSpec(stmt ast.StmtNode) ddlRouteSpec {
 	// Special cases: schema related SQLs don't have tableName
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
+		return ddlRouteSpec{sourceTables: []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}}
 	case *ast.CreateDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
+		return ddlRouteSpec{sourceTables: []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}}
 	case *ast.DropDatabaseStmt:
-		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
+		return ddlRouteSpec{sourceTables: []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}}
+	case *ast.FlashBackDatabaseStmt:
+		spec := ddlRouteSpec{
+			sourceTables: []commonEvent.SchemaTableName{{SchemaName: v.DBName.O, TableName: ""}},
+			// FLASHBACK DATABASE restores tables that are carried by the DDL
+			// event metadata but are not named in the query.
+			hasOutOfBandTableMetadata: true,
+		}
+		if v.NewName != "" {
+			spec.sourceTables = append(
+				spec.sourceTables,
+				commonEvent.SchemaTableName{SchemaName: v.NewName, TableName: ""})
+			spec.tableNamePreservingSchemaChanges = []schemaNameChange{{
+				from: v.DBName.O,
+				to:   v.NewName,
+			}}
+		}
+		return spec
 	}
 
 	e := &tableNameExtractor{
@@ -187,7 +271,7 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	}
 	stmt.Accept(e)
 
-	return e.names
+	return ddlRouteSpec{sourceTables: e.names}
 }
 
 // tableRenameVisitor rewrites table names in a DDL AST.
@@ -334,6 +418,20 @@ func rewriteDDLStmtTables(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
+	case *ast.FlashBackDatabaseStmt:
+		expectedCount := 1
+		if v.NewName != "" {
+			expectedCount = 2
+		}
+		if len(targetTables) != expectedCount {
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got unexpected target table count: expected %d, got %d",
+				expectedCount, len(targetTables))
+		}
+		v.DBName = ast.NewCIStr(targetTables[0].SchemaName)
+		if expectedCount == 2 {
+			v.NewName = targetTables[1].SchemaName
+		}
 	default:
 		visitor := newTableRenameVisitor(sourceTables, targetTables)
 		stmt.Accept(visitor)
