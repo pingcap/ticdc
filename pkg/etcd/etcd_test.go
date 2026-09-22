@@ -120,7 +120,7 @@ func TestExtractChangefeedKeySuffix(t *testing.T) {
 	}
 }
 
-func TestCDCEtcdClientImplGetChangefeedInfoAndStatus(t *testing.T) {
+func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 	type fields struct {
 		Client        Client
 		ClusterID     string
@@ -272,7 +272,7 @@ func TestCDCEtcdClientImplGetChangefeedInfoAndStatus(t *testing.T) {
 	}
 }
 
-func TestCDCEtcdClientImplGetAllCDCInfo(t *testing.T) {
+func TestCDCEtcdClientImpl_GetAllCDCInfo(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -297,7 +297,7 @@ func TestCDCEtcdClientImplGetAllCDCInfo(t *testing.T) {
 	require.Equal(t, []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"), kvs[0].Key)
 }
 
-func TestCDCEtcdClientImplClearAllCDCInfo(t *testing.T) {
+func TestCDCEtcdClientImpl_ClearAllCDCInfo(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -312,7 +312,7 @@ func TestCDCEtcdClientImplClearAllCDCInfo(t *testing.T) {
 	require.NoError(t, etcdClient.ClearAllCDCInfo(ctx))
 }
 
-func TestCDCEtcdClientImplCheckMultipleCDCClusterExist(t *testing.T) {
+func TestCDCEtcdClientImpl_CheckMultipleCDCClusterExist(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
@@ -365,7 +365,7 @@ func TestCDCEtcdClientImplCheckMultipleCDCClusterExist(t *testing.T) {
 	}
 }
 
-func TestCDCEtcdClientImplGetLogCoordinatorRevision(t *testing.T) {
+func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
 	ctx := context.Background()
 	clusterID := "cluster-id"
 	captureID := "capture-1"

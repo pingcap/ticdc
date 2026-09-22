@@ -212,7 +212,7 @@ func TestNewController(t *testing.T) {
 	require.False(t, controller.enableTableAcrossNodes)
 }
 
-func TestControllerAddNewTable(t *testing.T) {
+func TestController_AddNewTable(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -250,7 +250,7 @@ func TestControllerAddNewTable(t *testing.T) {
 	require.Equal(t, 2, controller.TaskSize()) // Should still be 2
 }
 
-func TestControllerGetTaskByID(t *testing.T) {
+func TestController_GetTaskByID(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -305,7 +305,7 @@ func TestControllerGetTaskByID(t *testing.T) {
 	require.Nil(t, task)
 }
 
-func TestControllerGetTasksByTableID(t *testing.T) {
+func TestController_GetTasksByTableID(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -343,7 +343,7 @@ func TestControllerGetTasksByTableID(t *testing.T) {
 	require.Len(t, tasks, 0)
 }
 
-func TestControllerGetTasksBySchemaID(t *testing.T) {
+func TestController_GetTasksBySchemaID(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -385,7 +385,7 @@ func TestControllerGetTasksBySchemaID(t *testing.T) {
 	require.Len(t, tasks, 0)
 }
 
-func TestControllerUpdateSchemaID(t *testing.T) {
+func TestController_UpdateSchemaID(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -428,7 +428,7 @@ func TestControllerUpdateSchemaID(t *testing.T) {
 	require.Len(t, tasks, 1)
 }
 
-func TestControllerStatistics(t *testing.T) {
+func TestController_Statistics(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
@@ -465,7 +465,7 @@ func TestControllerStatistics(t *testing.T) {
 	require.Equal(t, 0, controller.GetTaskSizeBySchemaID(3))
 }
 
-func TestControllerMaintainerCommittedCheckpointMonotonic(t *testing.T) {
+func TestController_MaintainerCommittedCheckpointMonotonic(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)
@@ -478,7 +478,7 @@ func TestControllerMaintainerCommittedCheckpointMonotonic(t *testing.T) {
 	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
 }
 
-func TestControllerBindCommittedCheckpointToManagedSpan(t *testing.T) {
+func TestController_BindCommittedCheckpointToManagedSpan(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)

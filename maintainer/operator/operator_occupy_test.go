@@ -19,11 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOccupyOperatorNodeRemoved tests the scenario where:
+// TestOccupyOperator_NodeRemoved tests the scenario where:
 // 1. An occupy operator is created to hold a replica set
 // 2. Removing an unrelated node does not affect the operator
 // 3. Removing the replica's node marks the span absent and finishes the operator
-func TestOccupyOperatorNodeRemoved(t *testing.T) {
+func TestOccupyOperator_NodeRemoved(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -55,11 +55,11 @@ func TestOccupyOperatorNodeRemoved(t *testing.T) {
 	op.PostFinish()
 }
 
-// TestOccupyOperatorTaskRemoved tests the scenario where:
+// TestOccupyOperator_TaskRemoved tests the scenario where:
 // 1. An occupy operator is created to hold a replica set
 // 2. The task is removed (for example, due to DDL) while occupy operator is running
 // 3. Verify that the operator finishes without changing span state
-func TestOccupyOperatorTaskRemoved(t *testing.T) {
+func TestOccupyOperator_TaskRemoved(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 

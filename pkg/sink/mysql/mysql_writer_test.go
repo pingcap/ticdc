@@ -95,7 +95,7 @@ func newTestMockDB(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	return db, mock
 }
 
-func TestMysqlWriterFlushDML(t *testing.T) {
+func TestMysqlWriter_FlushDML(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -201,7 +201,7 @@ func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
 	require.False(t, writer.grantWrite())
 }
 
-func TestMysqlWriterFlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
+func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 	writer.cfg.EnableActiveActive = true
@@ -231,7 +231,7 @@ func TestMysqlWriterFlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMysqlWriterFlushDMLDuplicateEntryRetry(t *testing.T) {
+func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -271,7 +271,7 @@ func TestMysqlWriterFlushDMLDuplicateEntryRetry(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriterFlushMultiDML(t *testing.T) {
+func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -315,7 +315,7 @@ func TestMysqlWriterFlushMultiDML(t *testing.T) {
 // Test flush ddl event
 // Ensure the ddl query will be write to the databases
 // and the ddl_ts_v1 table will be updated with the ddl_ts and table_id
-func TestMysqlWriterFlushDDLEvent(t *testing.T) {
+func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -417,7 +417,7 @@ func TestMysqlWriterFlushDDLEvent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriterFlushEmptyEvents(t *testing.T) {
+func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -495,7 +495,7 @@ func TestMysqlWriterExecRecoverSchemaDDL(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMysqlWriterFlushSyncPointEvent(t *testing.T) {
+func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -608,7 +608,7 @@ func TestMysqlWriterFlushSyncPointEvent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriterRemoveDDLTsTable(t *testing.T) {
+func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -620,7 +620,7 @@ func TestMysqlWriterRemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWaitAsyncDDLDoneCreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
+func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
 
@@ -720,7 +720,7 @@ func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
 }
 
 // Test the async ddl can be write successfully
-func TestMysqlWriterAsyncDDL(t *testing.T) {
+func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
 	// waitDDLDone polls a running downstream DDL; keeping the production interval

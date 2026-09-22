@@ -45,7 +45,7 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 	require.Equal(t, "node1", msg.To.String())
 }
 
-func TestSpanReplicationNewAddDispatcherMessage(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
@@ -61,7 +61,7 @@ func TestSpanReplicationNewAddDispatcherMessage(t *testing.T) {
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageClampToCommittedCheckpoint(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_ClampToCommittedCheckpoint(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
@@ -73,7 +73,7 @@ func TestSpanReplicationNewAddDispatcherMessageClampToCommittedCheckpoint(t *tes
 	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageUseBlockTsForInFlightSyncPoint(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsForInFlightSyncPoint(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
@@ -90,7 +90,7 @@ func TestSpanReplicationNewAddDispatcherMessageUseBlockTsForInFlightSyncPoint(t 
 	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageUseSyncPointBlockTsWhenCommittedIsLower(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseSyncPointBlockTsWhenCommittedIsLower(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
@@ -108,7 +108,7 @@ func TestSpanReplicationNewAddDispatcherMessageUseSyncPointBlockTsWhenCommittedI
 	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageDontUseBlockTsAfterSyncPointDone(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_DontUseBlockTsAfterSyncPointDone(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 20, common.DefaultMode, false)
@@ -125,7 +125,7 @@ func TestSpanReplicationNewAddDispatcherMessageDontUseBlockTsAfterSyncPointDone(
 	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageUseBlockTsMinusOneForDDLInFlight(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsMinusOneForDDLInFlight(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
@@ -142,7 +142,7 @@ func TestSpanReplicationNewAddDispatcherMessageUseBlockTsMinusOneForDDLInFlight(
 	require.True(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageUseCommittedCheckpointForStaleDDLBarrier(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseCommittedCheckpointForStaleDDLBarrier(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
@@ -160,7 +160,7 @@ func TestSpanReplicationNewAddDispatcherMessageUseCommittedCheckpointForStaleDDL
 	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplicationNewAddDispatcherMessageUseCommittedCheckpointForStaleDDLBarrierWritingStage(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseCommittedCheckpointForStaleDDLBarrierWritingStage(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)

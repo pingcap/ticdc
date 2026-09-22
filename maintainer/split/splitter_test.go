@@ -53,8 +53,8 @@ func TestNewSplitter(t *testing.T) {
 	re.NotNil(splitter.writeBytesSplitter)
 }
 
-// TestSplitterSplitByRegion tests splitting by region count
-func TestSplitterSplitByRegion(t *testing.T) {
+// TestSplitter_Split_ByRegion tests splitting by region count
+func TestSplitter_Split_ByRegion(t *testing.T) {
 	re := require.New(t)
 
 	// Set up RegionCache service for testing

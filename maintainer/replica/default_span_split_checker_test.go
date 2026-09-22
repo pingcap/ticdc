@@ -40,7 +40,7 @@ func newTestDefaultChecker(t *testing.T, cfID common.ChangeFeedID, schedulerCfg 
 	return checker
 }
 
-func TestDefaultSpanSplitCheckerAddReplica(t *testing.T) {
+func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -72,7 +72,7 @@ func TestDefaultSpanSplitCheckerAddReplica(t *testing.T) {
 	require.Len(t, checker.allTasks, 1) // Should not add duplicate
 }
 
-func TestDefaultSpanSplitCheckerRemoveReplica(t *testing.T) {
+func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -96,7 +96,7 @@ func TestDefaultSpanSplitCheckerRemoveReplica(t *testing.T) {
 	require.NotContains(t, checker.allTasks, replica.ID)
 }
 
-func TestDefaultSpanSplitCheckerUpdateStatusTrafficCheck(t *testing.T) {
+func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
@@ -153,7 +153,7 @@ func TestDefaultSpanSplitCheckerUpdateStatusTrafficCheck(t *testing.T) {
 	require.Equal(t, 3, spanStatus.trafficScore) // Should not change
 }
 
-func TestDefaultSpanSplitCheckerUpdateStatusRegionCheck(t *testing.T) {
+func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -199,7 +199,7 @@ func TestDefaultSpanSplitCheckerUpdateStatusRegionCheck(t *testing.T) {
 	require.Contains(t, checker.splitReadyTasks, replica.ID)
 }
 
-func TestDefaultSpanSplitCheckerUpdateStatusRegionCheckError(t *testing.T) {
+func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -234,7 +234,7 @@ func TestDefaultSpanSplitCheckerUpdateStatusRegionCheckError(t *testing.T) {
 	require.Equal(t, 0, spanStatus.regionCount) // Should remain 0 due to error
 }
 
-func TestDefaultSpanSplitCheckerUpdateStatusNonWorkingStatus(t *testing.T) {
+func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -264,7 +264,7 @@ func TestDefaultSpanSplitCheckerUpdateStatusNonWorkingStatus(t *testing.T) {
 	require.Equal(t, 0, spanStatus.trafficScore) // Should not update due to non-working status
 }
 
-func TestDefaultSpanSplitCheckerCheckRegionSplit(t *testing.T) {
+func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -313,7 +313,7 @@ func TestDefaultSpanSplitCheckerCheckRegionSplit(t *testing.T) {
 	require.Equal(t, replica, results.([]DefaultSpanSplitCheckResult)[0].Span)
 }
 
-func TestDefaultSpanSplitCheckerCheckBatchLimit(t *testing.T) {
+func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -349,7 +349,7 @@ func TestDefaultSpanSplitCheckerCheckBatchLimit(t *testing.T) {
 	require.Len(t, results, 3) // Should respect batch limit
 }
 
-func TestDefaultSpanSplitCheckerCheckEmptyResults(t *testing.T) {
+func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -383,7 +383,7 @@ func TestDefaultSpanSplitCheckerCheckEmptyResults(t *testing.T) {
 	require.Len(t, results, 0)
 }
 
-func TestDefaultSpanSplitCheckerStat(t *testing.T) {
+func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

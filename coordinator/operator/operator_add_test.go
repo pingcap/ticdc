@@ -23,10 +23,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAddMaintainerOperatorOnNodeRemove verifies that removing a non-destination node
+// TestAddMaintainerOperator_OnNodeRemove verifies that removing a non-destination node
 // does not affect scheduling, while removing the destination node cancels the operator
 // and stops it from scheduling further commands.
-func TestAddMaintainerOperatorOnNodeRemove(t *testing.T) {
+func TestAddMaintainerOperator_OnNodeRemove(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 	op.OnNodeRemove("n2")
 	require.Equal(t, None, op.canceled.Load())
@@ -39,9 +39,9 @@ func TestAddMaintainerOperatorOnNodeRemove(t *testing.T) {
 	require.Nil(t, op.Schedule())
 }
 
-// TestAddMaintainerOperatorOnTaskRemoved verifies that removing the changefeed task
+// TestAddMaintainerOperator_OnTaskRemoved verifies that removing the changefeed task
 // cancels the operator and prevents any further scheduling.
-func TestAddMaintainerOperatorOnTaskRemoved(t *testing.T) {
+func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 
 	op.OnTaskRemoved()
@@ -51,9 +51,9 @@ func TestAddMaintainerOperatorOnTaskRemoved(t *testing.T) {
 	require.Nil(t, op.Schedule())
 }
 
-// TestAddMaintainerOperatorCheckRequiresBootstrapDone verifies that the operator only
+// TestAddMaintainerOperator_CheckRequiresBootstrapDone verifies that the operator only
 // completes after it observes a Working status with BootstrapDone from the destination node.
-func TestAddMaintainerOperatorCheckRequiresBootstrapDone(t *testing.T) {
+func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -77,7 +77,7 @@ func TestAddMaintainerOperatorCheckRequiresBootstrapDone(t *testing.T) {
 	require.True(t, op.finished.Load())
 }
 
-func TestAddMaintainerOperatorCheckAcceptsCompatEpochDuringRollingUpgrade(t *testing.T) {
+func TestAddMaintainerOperator_CheckAcceptsCompatEpochDuringRollingUpgrade(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,

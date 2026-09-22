@@ -24,7 +24,7 @@ import (
 )
 
 // go test -gcflags=all=-l
-func TestRunConfig2Model(t *testing.T) {
+func Test_runConfig2Model(t *testing.T) {
 	tests := []struct {
 		name       string
 		config     string
@@ -153,7 +153,7 @@ case-sensitive = false
 	}
 }
 
-func TestRunModel2Config(t *testing.T) {
+func Test_runModel2Config(t *testing.T) {
 	tests := []struct {
 		name         string
 		modelContent string

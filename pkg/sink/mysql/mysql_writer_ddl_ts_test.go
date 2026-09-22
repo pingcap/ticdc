@@ -186,8 +186,8 @@ func expectCreateDDLTsTableError(mock sqlmock.Sqlmock) {
 	mock.ExpectRollback()
 }
 
-// TestGetTableRecoveryInfoComprehensive - Comprehensive end-to-end test for GetTableRecoveryInfo
-func TestGetTableRecoveryInfoComprehensive(t *testing.T) {
+// TestGetTableRecoveryInfo_Comprehensive - Comprehensive end-to-end test for GetTableRecoveryInfo
+func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 	// Test scenarios:
 	// 1. Table not exists (should return all 0s)
 	// 2. Finished DDL for non-TiDB downstream
@@ -603,7 +603,7 @@ func TestGetTableRecoveryInfoComprehensive(t *testing.T) {
 	})
 }
 
-func TestRemoveDDLTsItemTableMissingFallback(t *testing.T) {
+func TestRemoveDDLTsItem_TableMissingFallback(t *testing.T) {
 	t.Run("StandardErrorCode", func(t *testing.T) {
 		writer, db, mock := newTestMysqlWriterForDDLTs(t)
 		defer db.Close()

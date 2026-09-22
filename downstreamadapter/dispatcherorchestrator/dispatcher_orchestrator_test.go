@@ -34,7 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOrchestratorShardCloseWaitsForRunningHandler(t *testing.T) {
+func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
@@ -81,7 +81,7 @@ func TestOrchestratorShardCloseWaitsForRunningHandler(t *testing.T) {
 	}
 }
 
-func TestOrchestratorShardRunIsIdempotent(t *testing.T) {
+func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{}, 2)
@@ -117,7 +117,7 @@ func TestOrchestratorShardRunIsIdempotent(t *testing.T) {
 	shard.Wait()
 }
 
-func TestDispatcherOrchestratorRecvMaintainerRequestRoutesDifferentShardsInParallel(t *testing.T) {
+func TestDispatcherOrchestrator_RecvMaintainerRequestRoutesDifferentShardsInParallel(t *testing.T) {
 	t.Parallel()
 
 	orchestrator := newTestDispatcherOrchestrator()
@@ -210,7 +210,7 @@ func newTestChangefeedID(seed int) common.ChangeFeedID {
 	}
 }
 
-func TestPendingMessageQueueTryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
+func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -239,7 +239,7 @@ func TestPendingMessageQueueTryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.
 	require.True(t, q.TryEnqueue(key, msg))
 }
 
-func TestPendingMessageQueueOrderPreservedAcrossKeys(t *testing.T) {
+func TestPendingMessageQueue_OrderPreservedAcrossKeys(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -261,7 +261,7 @@ func TestPendingMessageQueueOrderPreservedAcrossKeys(t *testing.T) {
 	require.Equal(t, key2.msgType, poppedMsg.Type)
 }
 
-func TestPendingMessageQueuePopReturnsAfterClose(t *testing.T) {
+func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -282,7 +282,7 @@ func TestPendingMessageQueuePopReturnsAfterClose(t *testing.T) {
 	}
 }
 
-func TestPendingMessageQueueCloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -313,7 +313,7 @@ func TestPendingMessageQueueCloseRequestRemovedTrueOverridesPendingFalse(t *test
 	require.True(t, req.Removed)
 }
 
-func TestPendingMessageQueueStaleRemovedCloseCannotOverrideNewerEpochClose(t *testing.T) {
+func TestPendingMessageQueue_StaleRemovedCloseCannotOverrideNewerEpochClose(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -352,7 +352,7 @@ func TestPendingMessageQueueStaleRemovedCloseCannotOverrideNewerEpochClose(t *te
 	require.False(t, req.Removed)
 }
 
-func TestPendingMessageQueueNewerMaintainerEpochOverridesPendingRequest(t *testing.T) {
+func TestPendingMessageQueue_NewerMaintainerEpochOverridesPendingRequest(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -382,7 +382,7 @@ func TestPendingMessageQueueNewerMaintainerEpochOverridesPendingRequest(t *testi
 	require.Equal(t, uint64(2), req.MaintainerEpoch)
 }
 
-func TestPendingMessageQueueCloseRequestUpgradeAfterPopRequeuesNextRound(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -437,7 +437,7 @@ func TestPendingMessageQueueCloseRequestUpgradeAfterPopRequeuesNextRound(t *test
 	}
 }
 
-func TestGetPendingMessageKeySupportedTypes(t *testing.T) {
+func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")

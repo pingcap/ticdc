@@ -19,9 +19,9 @@ import (
 )
 
 // Result:
-// BenchmarkRawKVEntryMarshalUnmarshal-10    	   51458	     22896 ns/op	    8828 B/op	       9 allocs/op
+// BenchmarkRawKVEntry_MarshalUnmarshal-10    	   51458	     22896 ns/op	    8828 B/op	       9 allocs/op
 // BenchmarkRawKVEntry_Msgp-10    	               1293561	       945.7 ns/op	    7048 B/op	       4 allocs/op
-// BenchmarkRawKVEntryEncodeDecode-10    	       2949572	       389.0 ns/op	    3456 B/op	       1 allocs/op
+// BenchmarkRawKVEntry_EncodeDecode-10    	       2949572	       389.0 ns/op	    3456 B/op	       1 allocs/op
 // Summary:
 // - encode/decode is the fastest, and the memory usage is also the lowest.
 // - json is the slowest, and the memory usage is the highest.
@@ -45,8 +45,8 @@ func getRawKVEntry() *RawKVEntry {
 	return res
 }
 
-// BenchmarkRawKVEntryMarshalUnmarshal-10    	   51458	     22896 ns/op	    8828 B/op	       9 allocs/op
-func BenchmarkRawKVEntryMarshalUnmarshal(b *testing.B) {
+// BenchmarkRawKVEntry_MarshalUnmarshal-10    	   51458	     22896 ns/op	    8828 B/op	       9 allocs/op
+func BenchmarkRawKVEntry_MarshalUnmarshal(b *testing.B) {
 	entry := getRawKVEntry()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -62,8 +62,8 @@ func BenchmarkRawKVEntryMarshalUnmarshal(b *testing.B) {
 	}
 }
 
-// BenchmarkRawKVEntryEncodeDecode-10    	 2949572	       389.0 ns/op	    3456 B/op	       1 allocs/op
-func BenchmarkRawKVEntryEncodeDecode(b *testing.B) {
+// BenchmarkRawKVEntry_EncodeDecode-10    	 2949572	       389.0 ns/op	    3456 B/op	       1 allocs/op
+func BenchmarkRawKVEntry_EncodeDecode(b *testing.B) {
 	entry := getRawKVEntry()
 
 	b.ResetTimer()

@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func TestGrpcModuleSearchLog(t *testing.T) {
+func TestGrpcModule_SearchLog(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "ticdc.log")
 	logContent := "[2025/12/30 00:00:00.000 +00:00] [INFO] hello world\n" +

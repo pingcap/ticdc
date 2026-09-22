@@ -34,7 +34,7 @@ func TestNewTableSpanRangeChecker(t *testing.T) {
 	}
 }
 
-func TestTableSpanRangeCheckerAddSubRange(t *testing.T) {
+func TestTableSpanRangeChecker_AddSubRange(t *testing.T) {
 	// Test the AddSubRange function
 	rc := NewTableSpanRangeChecker(0, []int64{1})
 	start := []byte{0x00}
@@ -49,7 +49,7 @@ func TestTableSpanRangeCheckerAddSubRange(t *testing.T) {
 	require.False(t, spanChecker.IsFullyCovered())
 }
 
-func TestTableSpanRangeCheckerIsFullyCovered(t *testing.T) {
+func TestTableSpanRangeChecker_IsFullyCovered(t *testing.T) {
 	// Test the IsFullyCovered function for TableSpanRangeChecker
 	tables := []int64{0, 1}
 	rc := NewTableSpanRangeChecker(0, tables)
@@ -75,7 +75,7 @@ func TestTableSpanRangeCheckerIsFullyCovered(t *testing.T) {
 	require.True(t, rc.IsFullyCovered())
 }
 
-func TestTableSpanRangeCheckerReset(t *testing.T) {
+func TestTableSpanRangeChecker_Reset(t *testing.T) {
 	// Test the Reset function
 	rc := NewTableSpanRangeChecker(0, []int64{1})
 	start := []byte{0x00}
@@ -90,7 +90,7 @@ func TestTableSpanRangeCheckerReset(t *testing.T) {
 	require.False(t, rc.tableSpans[1].IsFullyCovered())
 }
 
-func TestSpanCoverageCheckerAddSubRange(t *testing.T) {
+func TestSpanCoverageChecker_AddSubRange(t *testing.T) {
 	// Test the AddSubRange function for SpanCoverageChecker
 	start := []byte{0x00}
 	end := []byte{0xFF}
@@ -112,7 +112,7 @@ func TestSpanCoverageCheckerAddSubRange(t *testing.T) {
 	require.True(t, rc.IsFullyCovered())
 }
 
-func TestSpanCoverageCheckerIsFullyCovered(t *testing.T) {
+func TestSpanCoverageChecker_IsFullyCovered(t *testing.T) {
 	// Test the IsFullyCovered function
 	start := []byte{0x00}
 	end := []byte{0xFF}
@@ -132,7 +132,7 @@ func TestSpanCoverageCheckerIsFullyCovered(t *testing.T) {
 	require.False(t, rc.IsFullyCovered())
 }
 
-func TestSpanCoverageCheckerReset(t *testing.T) {
+func TestSpanCoverageChecker_Reset(t *testing.T) {
 	// Test the Reset function for SpanCoverageChecker
 	start := []byte{0x00}
 	end := []byte{0xFF}

@@ -67,7 +67,7 @@ func newOperatorControllerForTest(
 	return NewOperatorController(self, changefeedDB, backend, pdClient, 10), self, nodeManager
 }
 
-func TestControllerStopChangefeed(t *testing.T) {
+func TestController_StopChangefeed(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -91,7 +91,7 @@ func TestControllerStopChangefeed(t *testing.T) {
 	require.Len(t, oc.operators, 1)
 }
 
-func TestControllerPauseReplacedByRemove(t *testing.T) {
+func TestController_PauseReplacedByRemove(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -166,7 +166,7 @@ func TestControllerPauseReplacedByRemove(t *testing.T) {
 	}
 }
 
-func TestControllerStopChangefeedWithMaintainerEpoch(t *testing.T) {
+func TestController_StopChangefeedWithMaintainerEpoch(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -201,7 +201,7 @@ func TestControllerStopChangefeedWithMaintainerEpoch(t *testing.T) {
 	require.False(t, repeatedReq.Removed)
 }
 
-func TestControllerStopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
+func TestController_StopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -236,7 +236,7 @@ func TestControllerStopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
-func TestControllerStopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
+func TestController_StopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -266,7 +266,7 @@ func TestControllerStopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
 	require.Equal(t, uint64(20), currentReq.MaintainerEpoch)
 }
 
-func TestControllerAddOperator(t *testing.T) {
+func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -300,7 +300,7 @@ func TestControllerAddOperator(t *testing.T) {
 	require.False(t, oc.HasOperator(cf2ID.DisplayName))
 }
 
-func TestControllerHasOperatorInvolvingNode(t *testing.T) {
+func TestController_HasOperatorInvolvingNode(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -324,7 +324,7 @@ func TestControllerHasOperatorInvolvingNode(t *testing.T) {
 	require.False(t, oc.HasOperatorInvolvingNode("n3"))
 }
 
-func TestControllerCountMoveMaintainerOperatorsFromNodes(t *testing.T) {
+func TestController_CountMoveMaintainerOperatorsFromNodes(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -346,7 +346,7 @@ func TestControllerCountMoveMaintainerOperatorsFromNodes(t *testing.T) {
 	require.Equal(t, 0, oc.CountMoveMaintainerOperatorsFromNodes([]node.ID{"n3"}))
 }
 
-func TestControllerAddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
+func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 	testCases := []struct {
 		name    string
 		addToDB func(*changefeed.ChangefeedDB, *changefeed.Changefeed, node.ID)
@@ -429,7 +429,7 @@ func TestControllerAddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 	}
 }
 
-func TestControllerAddOperatorRejectsConcurrentEpochBump(t *testing.T) {
+func TestController_AddOperatorRejectsConcurrentEpochBump(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -487,7 +487,7 @@ func TestControllerAddOperatorRejectsConcurrentEpochBump(t *testing.T) {
 	require.NotNil(t, oc.GetOperator(cfID))
 }
 
-func TestControllerStopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
+func TestController_StopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
 	testCases := []struct {
 		name                    string
 		originStoppedBeforeStop bool
@@ -565,7 +565,7 @@ func TestControllerStopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
 	}
 }
 
-func TestControllerAddOperatorEpochBumpDoesNotBlockStatusAndStop(t *testing.T) {
+func TestController_AddOperatorEpochBumpDoesNotBlockStatusAndStop(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -663,7 +663,7 @@ func TestControllerAddOperatorEpochBumpDoesNotBlockStatusAndStop(t *testing.T) {
 	require.Equal(t, "stop", oc.GetOperator(cfID).Type())
 }
 
-func TestControllerStopChangefeedDuringAddOperator(t *testing.T) {
+func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	// Setup test environment
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)

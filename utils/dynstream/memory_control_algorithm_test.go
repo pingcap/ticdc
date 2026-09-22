@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPullerMemoryControlShouldPausePath(t *testing.T) {
+func TestPullerMemoryControl_ShouldPausePath(t *testing.T) {
 	tests := []struct {
 		name            string
 		paused          bool
@@ -96,7 +96,7 @@ func TestPullerMemoryControlShouldPausePath(t *testing.T) {
 	}
 }
 
-func TestPullerMemoryControlShouldPauseArea(t *testing.T) {
+func TestPullerMemoryControl_ShouldPauseArea(t *testing.T) {
 	tests := []struct {
 		name           string
 		paused         bool
@@ -161,7 +161,7 @@ func TestPullerMemoryControlShouldPauseArea(t *testing.T) {
 	}
 }
 
-func TestEventCollectorMemoryControlShouldPausePath(t *testing.T) {
+func TestEventCollectorMemoryControl_ShouldPausePath(t *testing.T) {
 	tests := []struct {
 		name            string
 		paused          bool
@@ -260,7 +260,7 @@ func TestEventCollectorMemoryControlShouldPausePath(t *testing.T) {
 	}
 }
 
-func TestEventCollectorMemoryControlShouldPauseArea(t *testing.T) {
+func TestEventCollectorMemoryControl_ShouldPauseArea(t *testing.T) {
 	tests := []struct {
 		name           string
 		paused         bool
@@ -316,7 +316,7 @@ func TestEventCollectorMemoryControlShouldPauseArea(t *testing.T) {
 	}
 }
 
-func TestEventCollectorMemoryControlCalculateThresholds(t *testing.T) {
+func TestEventCollectorMemoryControl_CalculateThresholds(t *testing.T) {
 	tests := []struct {
 		name               string
 		pathCount          int64

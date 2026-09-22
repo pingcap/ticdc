@@ -49,7 +49,7 @@ func newIndexInfo(name string, cols []*model.IndexColumn, isPrimary, isUnique bo
 }
 
 /*
-func TestColumnSchemaGetColumnList(t *testing.T) {
+func TestColumnSchema_GetColumnList(t *testing.T) {
 	tests := []struct {
 		name           string
 		columns        []*model.ColumnInfo
@@ -383,7 +383,7 @@ func TestHandleKey(t *testing.T) {
 	require.Equal(t, len(columnSchema.HandleColID), len(columnSchema.HandleKeyIDs))
 }
 
-func TestGetOrSetColumnSchemaSharedSchema(t *testing.T) {
+func TestGetOrSetColumnSchema_SharedSchema(t *testing.T) {
 	// Create two tables with the same schema
 	// Table 1: CREATE TABLE test1 (id INT PRIMARY KEY, name VARCHAR(255), age INT)
 
@@ -577,7 +577,7 @@ func TestGetOrSetColumnSchemaSharedSchema(t *testing.T) {
 	require.NotEqual(t, columnSchema1.Digest, columnSchema3.Digest, "Digest should be different for tables with different schema")
 }
 
-func TestGetOrSetColumnSchemaDifferentHandleFlags(t *testing.T) {
+func TestGetOrSetColumnSchema_DifferentHandleFlags(t *testing.T) {
 	storage := &SharedColumnSchemaStorage{
 		m: make(map[Digest][]ColumnSchemaWithCount),
 	}
@@ -631,7 +631,7 @@ func TestGetOrSetColumnSchemaDifferentHandleFlags(t *testing.T) {
 	require.False(t, nonCommonSchema.IsCommonHandle)
 }
 
-func TestGetOrSetColumnSchemaDifferentIndexState(t *testing.T) {
+func TestGetOrSetColumnSchema_DifferentIndexState(t *testing.T) {
 	storage := &SharedColumnSchemaStorage{
 		m: make(map[Digest][]ColumnSchemaWithCount),
 	}
@@ -670,7 +670,7 @@ func TestGetOrSetColumnSchemaDifferentIndexState(t *testing.T) {
 	require.NotEqual(t, publicSchema.Digest, writeOnlySchema.Digest, "Digest should differ when index state differs")
 }
 
-func TestGetOrSetColumnSchemaDifferentIndexColumnLength(t *testing.T) {
+func TestGetOrSetColumnSchema_DifferentIndexColumnLength(t *testing.T) {
 	storage := &SharedColumnSchemaStorage{
 		m: make(map[Digest][]ColumnSchemaWithCount),
 	}
@@ -717,7 +717,7 @@ func TestGetOrSetColumnSchemaDifferentIndexColumnLength(t *testing.T) {
 		"Digest should differ when index column length differs")
 }
 
-func TestGetOrSetColumnSchemaSameColumnsAndIndicesChecksAdditionalColumnAttrs(t *testing.T) {
+func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(t *testing.T) {
 	tests := []struct {
 		name             string
 		mutate           func(col *model.ColumnInfo) error

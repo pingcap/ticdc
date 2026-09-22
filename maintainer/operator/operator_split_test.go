@@ -24,12 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSplitOperatorOriginNodeRemovedBeforeStopped tests the scenario where:
+// TestSplitOperator_OriginNodeRemovedBeforeStopped tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. Before node A reports stopped status, node A is removed
 // 3. Verify that the operator is marked as finished and removed
 // 4. Verify that the span is marked as absent, and split is not executed
-func TestSplitOperatorOriginNodeRemovedBeforeStopped(t *testing.T) {
+func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -76,12 +76,12 @@ func TestSplitOperatorOriginNodeRemovedBeforeStopped(t *testing.T) {
 	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
 }
 
-// TestSplitOperatorOriginNodeRemovedAfterStopped tests the scenario where:
+// TestSplitOperator_OriginNodeRemovedAfterStopped tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. Node A reports stopped status first
 // 3. Then node A is removed
 // 4. Verify that the span is still marked as absent, and split is not executed
-func TestSplitOperatorOriginNodeRemovedAfterStopped(t *testing.T) {
+func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -134,11 +134,11 @@ func TestSplitOperatorOriginNodeRemovedAfterStopped(t *testing.T) {
 	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
 }
 
-// TestSplitOperatorSuccessfulSplitCreatesAbsentSpans tests the scenario where:
+// TestSplitOperator_SuccessfulSplitCreatesAbsentSpans tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. Node A reports stopped status
 // 3. Verify that PostFinish replaces the original span with new absent spans
-func TestSplitOperatorSuccessfulSplitCreatesAbsentSpans(t *testing.T) {
+func TestSplitOperator_SuccessfulSplitCreatesAbsentSpans(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -179,11 +179,11 @@ func TestSplitOperatorSuccessfulSplitCreatesAbsentSpans(t *testing.T) {
 	}
 }
 
-// TestSplitOperatorSuccessfulSplitToSchedulingTargets tests the scenario where:
+// TestSplitOperator_SuccessfulSplitToSchedulingTargets tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. Node A reports stopped status
 // 3. Verify that PostFinish replaces the original span with new scheduling spans with target nodes
-func TestSplitOperatorSuccessfulSplitToSchedulingTargets(t *testing.T) {
+func TestSplitOperator_SuccessfulSplitToSchedulingTargets(t *testing.T) {
 	spanController, changefeedID, _, nodeA, nodeB := setupTestEnvironment(t)
 
 	dispatcherID1 := common.NewDispatcherID()
@@ -273,12 +273,12 @@ func TestSplitOperatorSuccessfulSplitToSchedulingTargets(t *testing.T) {
 	require.True(t, nodeSeen[nodeB.String()])
 }
 
-// TestSplitOperatorPostFinishCallbackFailureMarksSpanAbsent tests the scenario where:
+// TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent tests the scenario where:
 // 1. A split operation is initiated with splitTargetNodes and a postFinish callback
 // 2. Node A reports stopped status
 // 3. postFinish fails for one new span
 // 4. Verify that the failed span is marked absent for rescheduling
-func TestSplitOperatorPostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
+func TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	spanController, changefeedID, _, nodeA, nodeB := setupTestEnvironment(t)
 
 	dispatcherID1 := common.NewDispatcherID()
@@ -370,12 +370,12 @@ func TestSplitOperatorPostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	require.True(t, hasEmpty)
 }
 
-// TestSplitOperatorPostFinishSkipsWhenTargetNodesMismatch tests the scenario where:
+// TestSplitOperator_PostFinishSkipsWhenTargetNodesMismatch tests the scenario where:
 //  1. A split operation is initiated with splitTargetNodes and a postFinish callback
 //  2. The actual split result produces a different number of spans than splitTargetNodes
 //  3. Verify that ReplaceReplicaSet falls back to absent spans and PostFinish skips invoking the callback
 //     to avoid racing add operators with the basic scheduler.
-func TestSplitOperatorPostFinishSkipsWhenTargetNodesMismatch(t *testing.T) {
+func TestSplitOperator_PostFinishSkipsWhenTargetNodesMismatch(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -426,11 +426,11 @@ func TestSplitOperatorPostFinishSkipsWhenTargetNodesMismatch(t *testing.T) {
 	}
 }
 
-// TestSplitOperatorTaskRemovedByDDLDoesNotSplit tests the scenario where:
+// TestSplitOperator_TaskRemovedByDDLDoesNotSplit tests the scenario where:
 // 1. A split operation is initiated to split dispatcher on node A
 // 2. The task is removed (for example, due to DDL) before the origin dispatcher stops
 // 3. Verify that PostFinish does not execute ReplaceReplicaSet and does not create new spans
-func TestSplitOperatorTaskRemovedByDDLDoesNotSplit(t *testing.T) {
+func TestSplitOperator_TaskRemovedByDDLDoesNotSplit(t *testing.T) {
 	spanController, _, replicaSet, _, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 

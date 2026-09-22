@@ -146,7 +146,7 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 	})
 }
 
-func TestPreCheckForSchedulerHandlerRemoveAllowedWhenDispatcherMissing(t *testing.T) {
+func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testing.T) {
 	t.Parallel()
 
 	// Scenario:
@@ -176,7 +176,7 @@ func TestPreCheckForSchedulerHandlerRemoveAllowedWhenDispatcherMissing(t *testin
 	require.Equal(t, dispatcherID, operatorKey)
 }
 
-func TestPreCheckForSchedulerHandlerCreateSkippedWhenDispatcherExists(t *testing.T) {
+func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testing.T) {
 	t.Parallel()
 
 	// Scenario:
@@ -205,7 +205,7 @@ func TestPreCheckForSchedulerHandlerCreateSkippedWhenDispatcherExists(t *testing
 	require.False(t, ok)
 }
 
-func TestPreCheckForSchedulerHandlerMaintainerEpochFence(t *testing.T) {
+func TestPreCheckForSchedulerHandler_MaintainerEpochFence(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()

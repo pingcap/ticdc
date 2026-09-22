@@ -80,12 +80,12 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 	return spanController, changefeedID, replicaSet, nodeA, nodeB
 }
 
-// TestMoveOperatorDestNodeRemovedBeforeOriginStopped tests the scenario where:
+// TestMoveOperator_DestNodeRemovedBeforeOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A, maintainer is also on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
 // 3. Before node A reports non-working status, node B is removed
 // 4. Verify that the move is aborted and the span is marked absent after origin is stopped
-func TestMoveOperatorDestNodeRemovedBeforeOriginStopped(t *testing.T) {
+func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -124,13 +124,13 @@ func TestMoveOperatorDestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-// TestMoveOperatorDestNodeRemovedAfterOriginStopped tests the scenario where:
+// TestMoveOperator_DestNodeRemovedAfterOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A, maintainer is also on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
 // 3. Node A reports non-working status first
 // 4. Then node B is removed
 // 5. Verify that the span is marked as absent for rescheduling
-func TestMoveOperatorDestNodeRemovedAfterOriginStopped(t *testing.T) {
+func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -156,12 +156,12 @@ func TestMoveOperatorDestNodeRemovedAfterOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-// TestMoveOperatorOriginNodeRemovedBeforeOriginStopped tests the scenario where:
+// TestMoveOperator_OriginNodeRemovedBeforeOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
 // 3. Before node A reports non-working status, node A is removed
 // 4. Verify that the operator waits for node B to report working status before finishing
-func TestMoveOperatorOriginNodeRemovedBeforeOriginStopped(t *testing.T) {
+func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
 	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
@@ -198,13 +198,13 @@ func TestMoveOperatorOriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
-// TestMoveOperatorOriginNodeRemovedAfterOriginStopped tests the scenario where:
+// TestMoveOperator_OriginNodeRemovedAfterOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
 // 3. Node A reports non-working status first
 // 4. Then node A is removed
 // 5. Verify that the operator waits for node B to report working status before finishing
-func TestMoveOperatorOriginNodeRemovedAfterOriginStopped(t *testing.T) {
+func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
 	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
@@ -246,7 +246,7 @@ func TestMoveOperatorOriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
-func TestMoveOperatorBothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNodeID(t *testing.T) {
+func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNodeID(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -265,12 +265,12 @@ func TestMoveOperatorBothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNod
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-// TestMoveOperatorDestThenOriginRemovedAbortsToAbsent tests the scenario where:
+// TestMoveOperator_DestThenOriginRemovedAbortsToAbsent tests the scenario where:
 // 1. A move operation is initiated to move a span from node A to node B
 // 2. Node B is removed first
 // 3. Node A is removed later
 // 4. Verify that the move is aborted and the span becomes absent for rescheduling
-func TestMoveOperatorDestThenOriginRemovedAbortsToAbsent(t *testing.T) {
+func TestMoveOperator_DestThenOriginRemovedAbortsToAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -294,11 +294,11 @@ func TestMoveOperatorDestThenOriginRemovedAbortsToAbsent(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-// TestMoveOperatorTaskRemovedByDDL tests the scenario where:
+// TestMoveOperator_TaskRemovedByDDL tests the scenario where:
 // 1. A move operation is initiated
 // 2. The task is removed (for example, due to DDL) while the operator is running
 // 3. Verify that the operator finishes and restores the span to replicating state without running PostFinish
-func TestMoveOperatorTaskRemovedByDDL(t *testing.T) {
+func TestMoveOperator_TaskRemovedByDDL(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 

@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStopChangefeedOperatorOnNodeRemove(t *testing.T) {
+func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -44,7 +44,7 @@ func TestStopChangefeedOperatorOnNodeRemove(t *testing.T) {
 	require.False(t, op.finished.Load())
 }
 
-func TestStopChangefeedOperatorOnTaskRemoved(t *testing.T) {
+func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -60,7 +60,7 @@ func TestStopChangefeedOperatorOnTaskRemoved(t *testing.T) {
 	require.True(t, op.canceled.Load())
 }
 
-func TestStopChangefeedOperatorPostFinish(t *testing.T) {
+func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{

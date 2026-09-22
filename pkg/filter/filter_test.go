@@ -1039,7 +1039,7 @@ func assertFilterInstancesDifferent(t *testing.T, filter1, filter2 Filter) {
 	require.NotEqual(t, filter1, filter2, "Filter instances should be different")
 }
 
-func TestSharedFilterStorageSameConfigSharesFilter(t *testing.T) {
+func TestSharedFilterStorage_SameConfigSharesFilter(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1062,7 +1062,7 @@ func TestSharedFilterStorageSameConfigSharesFilter(t *testing.T) {
 	assertFilterInstancesEqual(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageSameConfigContentSharesFilter(t *testing.T) {
+func TestSharedFilterStorage_SameConfigContentSharesFilter(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1086,7 +1086,7 @@ func TestSharedFilterStorageSameConfigContentSharesFilter(t *testing.T) {
 	assertFilterInstancesEqual(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageDifferentConfigCreatesNewFilter(t *testing.T) {
+func TestSharedFilterStorage_DifferentConfigCreatesNewFilter(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1132,7 +1132,7 @@ func TestSharedFilterStorageRemoveFilter(t *testing.T) {
 	require.NotSame(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageDifferentChangeFeedIDCreatesIndependentFilter(t *testing.T) {
+func TestSharedFilterStorage_DifferentChangeFeedIDCreatesIndependentFilter(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1156,7 +1156,7 @@ func TestSharedFilterStorageDifferentChangeFeedIDCreatesIndependentFilter(t *tes
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageCaseSensitiveFieldDifference(t *testing.T) {
+func TestSharedFilterStorage_CaseSensitiveFieldDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1176,7 +1176,7 @@ func TestSharedFilterStorageCaseSensitiveFieldDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageForceReplicateFieldDifference(t *testing.T) {
+func TestSharedFilterStorage_ForceReplicateFieldDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1196,7 +1196,7 @@ func TestSharedFilterStorageForceReplicateFieldDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageRulesFieldDifference(t *testing.T) {
+func TestSharedFilterStorage_RulesFieldDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1215,7 +1215,7 @@ func TestSharedFilterStorageRulesFieldDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageIgnoreTxnStartTsFieldDifference(t *testing.T) {
+func TestSharedFilterStorage_IgnoreTxnStartTsFieldDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1235,7 +1235,7 @@ func TestSharedFilterStorageIgnoreTxnStartTsFieldDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageEventFiltersFieldDifference(t *testing.T) {
+func TestSharedFilterStorage_EventFiltersFieldDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1254,7 +1254,7 @@ func TestSharedFilterStorageEventFiltersFieldDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageComplexEventFiltersDifference(t *testing.T) {
+func TestSharedFilterStorage_ComplexEventFiltersDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1281,7 +1281,7 @@ func TestSharedFilterStorageComplexEventFiltersDifference(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageEmptyConfigTest(t *testing.T) {
+func TestSharedFilterStorage_EmptyConfigTest(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1303,7 +1303,7 @@ func TestSharedFilterStorageEmptyConfigTest(t *testing.T) {
 	require.NotNil(t, filter)
 }
 
-func TestSharedFilterStorageConcurrentAccessTest(t *testing.T) {
+func TestSharedFilterStorage_ConcurrentAccessTest(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}
@@ -1340,7 +1340,7 @@ func TestSharedFilterStorageConcurrentAccessTest(t *testing.T) {
 	assertFilterInstancesEqual(t, filter1, filter2)
 }
 
-func TestSharedFilterStorageTimeZoneDifference(t *testing.T) {
+func TestSharedFilterStorage_TimeZoneDifference(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
 	}

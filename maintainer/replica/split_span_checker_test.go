@@ -94,7 +94,7 @@ func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgrepl
 	return checker
 }
 
-func TestSplitTableSpanIntoMultipleProperties(t *testing.T) {
+func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 	spanA := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
 	count := 10000
 	spans := splitTableSpanIntoMultiple(&spanA, count)
@@ -114,7 +114,7 @@ func TestSplitTableSpanIntoMultipleProperties(t *testing.T) {
 	}
 }
 
-func TestSplitSpanCheckerAddReplica(t *testing.T) {
+func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -150,7 +150,7 @@ func TestSplitSpanCheckerAddReplica(t *testing.T) {
 	require.Len(t, status.lastThreeTraffic, 3)
 }
 
-func TestSplitSpanCheckerRemoveReplica(t *testing.T) {
+func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -195,7 +195,7 @@ func TestSplitSpanCheckerRemoveReplica(t *testing.T) {
 	require.Len(t, checker.allTasks, 0)
 }
 
-func TestSplitSpanCheckerUpdateStatusTraffic(t *testing.T) {
+func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -272,7 +272,7 @@ func TestSplitSpanCheckerUpdateStatusTraffic(t *testing.T) {
 	require.Equal(t, 1500.0, spanStatus.lastThreeTraffic[2])
 }
 
-func TestSplitSpanCheckerUpdateStatusRegion(t *testing.T) {
+func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -326,7 +326,7 @@ func TestSplitSpanCheckerUpdateStatusRegion(t *testing.T) {
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
 }
 
-func TestSplitSpanCheckerUpdateStatusNonWorking(t *testing.T) {
+func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -368,7 +368,7 @@ func TestSplitSpanCheckerUpdateStatusNonWorking(t *testing.T) {
 	require.Equal(t, 0, spanStatus.trafficScore) // Should still not update
 }
 
-func TestSplitSpanCheckerChooseSplitSpansTraffic(t *testing.T) {
+func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -424,7 +424,7 @@ func TestSplitSpanCheckerChooseSplitSpansTraffic(t *testing.T) {
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
-func TestSplitSpanCheckerChooseSplitSpansRegion(t *testing.T) {
+func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -476,7 +476,7 @@ func TestSplitSpanCheckerChooseSplitSpansRegion(t *testing.T) {
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
-func TestSplitSpanCheckerCheckMergeWholeSingleNode(t *testing.T) {
+func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -522,7 +522,7 @@ func TestSplitSpanCheckerCheckMergeWholeSingleNode(t *testing.T) {
 	require.Contains(t, mergeResult.MergeSpans, replicas[2])
 }
 
-func TestSplitSpanCheckerCheckMergeWholeMultiNode(t *testing.T) {
+func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -569,7 +569,7 @@ func TestSplitSpanCheckerCheckMergeWholeMultiNode(t *testing.T) {
 	require.Len(t, moveResult.MoveSpans, 2)
 }
 
-func TestSplitSpanCheckerCheckMergeWholeThresholdNotMet(t *testing.T) {
+func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -613,7 +613,7 @@ func TestSplitSpanCheckerCheckMergeWholeThresholdNotMet(t *testing.T) {
 	require.Len(t, results, 0) // No merge operation
 }
 
-func TestSplitSpanCheckerCheckBalanceTrafficBalance(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -679,7 +679,7 @@ func TestSplitSpanCheckerCheckBalanceTrafficBalance(t *testing.T) {
 	require.True(t, moveResult.MoveSpans[0] == spanStatus2.SpanReplication)
 }
 
-func TestSplitSpanCheckerCheckBalanceTrafficNoBalanceNeeded(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -726,7 +726,7 @@ func TestSplitSpanCheckerCheckBalanceTrafficNoBalanceNeeded(t *testing.T) {
 	require.Len(t, results, 0) // No balance operation needed
 }
 
-func TestSplitSpanCheckerCheckBalanceTrafficSplitIfNoMove(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -781,7 +781,7 @@ func TestSplitSpanCheckerCheckBalanceTrafficSplitIfNoMove(t *testing.T) {
 	require.Equal(t, replicas[0], splitResult.SplitSpan) // Split the span from max traffic node
 }
 
-func TestSplitSpanCheckerCheckBalanceTrafficSingleNode(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -826,7 +826,7 @@ func TestSplitSpanCheckerCheckBalanceTrafficSingleNode(t *testing.T) {
 	require.Len(t, results, 0) // No balance operation needed
 }
 
-func TestSplitSpanCheckerCheckBalanceTrafficTrafficFluctuation(t *testing.T) {
+func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -899,7 +899,7 @@ func TestSplitSpanCheckerCheckBalanceTrafficTrafficFluctuation(t *testing.T) {
 	// even though the latest traffic shows significant imbalance
 }
 
-func TestSplitSpanCheckerChooseMergedSpansLargeLag(t *testing.T) {
+func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -937,7 +937,7 @@ func TestSplitSpanCheckerChooseMergedSpansLargeLag(t *testing.T) {
 	require.Len(t, results, 0)
 }
 
-func TestSplitSpanCheckerChooseMergedSpansContinuous(t *testing.T) {
+func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -994,7 +994,7 @@ func TestSplitSpanCheckerChooseMergedSpansContinuous(t *testing.T) {
 	require.Contains(t, mergeResult.MergeSpans, replicas[2])
 }
 
-func TestSplitSpanCheckerChooseMergedSpansLimitsMergeResultsPerGroup(t *testing.T) {
+func TestSplitSpanChecker_ChooseMergedSpans_LimitsMergeResultsPerGroup(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1046,7 +1046,7 @@ func TestSplitSpanCheckerChooseMergedSpansLimitsMergeResultsPerGroup(t *testing.
 	}
 }
 
-func TestSplitSpanCheckerChooseMergedSpansRespectsBatchSizeBelowMergeLimit(t *testing.T) {
+func TestSplitSpanChecker_ChooseMergedSpans_RespectsBatchSizeBelowMergeLimit(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1098,7 +1098,7 @@ func TestSplitSpanCheckerChooseMergedSpansRespectsBatchSizeBelowMergeLimit(t *te
 	}
 }
 
-func TestSplitSpanCheckerChooseMergedSpansZeroBatchReturnsNoResults(t *testing.T) {
+func TestSplitSpanChecker_ChooseMergedSpans_ZeroBatchReturnsNoResults(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1132,7 +1132,7 @@ func TestSplitSpanCheckerChooseMergedSpansZeroBatchReturnsNoResults(t *testing.T
 	require.Len(t, sortedSpans, len(replicas))
 }
 
-func TestSplitSpanCheckerChooseMoveSpansSimpleMove(t *testing.T) {
+func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1201,7 +1201,7 @@ func TestSplitSpanCheckerChooseMoveSpansSimpleMove(t *testing.T) {
 	require.Equal(t, replicas[2], moveResult.MoveSpans[0])
 }
 
-func TestSplitSpanCheckerChooseMoveSpansExchangeMove(t *testing.T) {
+func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1263,7 +1263,7 @@ func TestSplitSpanCheckerChooseMoveSpansExchangeMove(t *testing.T) {
 	}
 }
 
-func TestSplitSpanCheckerCheckFullFlow(t *testing.T) {
+func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1339,7 +1339,7 @@ func TestSplitSpanCheckerCheckFullFlow(t *testing.T) {
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
-func TestSplitSpanCheckerCheckFullFlowWriteThresholdZero(t *testing.T) {
+func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1415,7 +1415,7 @@ func TestSplitSpanCheckerCheckFullFlowWriteThresholdZero(t *testing.T) {
 	require.Equal(t, replicas[2], splitResult.SplitSpan)
 }
 
-func TestSplitSpanCheckerCheckFullFlowRegionThresholdZero(t *testing.T) {
+func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -1491,7 +1491,7 @@ func TestSplitSpanCheckerCheckFullFlowRegionThresholdZero(t *testing.T) {
 	require.Equal(t, replicas[0], splitResult.SplitSpan)
 }
 
-func TestSplitSpanCheckerCheckPerformanceWithManySpans(t *testing.T) {
+func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 

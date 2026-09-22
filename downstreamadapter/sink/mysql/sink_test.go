@@ -526,11 +526,11 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	require.Equal(t, int64(2), count.Load(), "Should have executed 2 callbacks (2 DML events)")
 }
 
-// TestGetTableRecoveryInfoStartTsGreaterThanDDLTs tests the critical scenario where
+// TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs tests the critical scenario where
 // input startTs is greater than ddlTs from the ddl_ts table.
 // This happens when the table has already progressed beyond the crash point.
 // In this case, all skip flags should be reset to false.
-func TestGetTableRecoveryInfoStartTsGreaterThanDDLTs(t *testing.T) {
+func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
 	_, sink, mock := getMysqlSinkWithDDLTs()
 
 	// Test scenario:
@@ -585,9 +585,9 @@ func TestGetTableRecoveryInfoStartTsGreaterThanDDLTs(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetTableRecoveryInfoRemoveDDLTs tests the scenario where removeDDLTs=true
+// TestGetTableRecoveryInfo_RemoveDDLTs tests the scenario where removeDDLTs=true
 // This happens when removing a changefeed, and we need to clean up ddl_ts records.
-func TestGetTableRecoveryInfoRemoveDDLTs(t *testing.T) {
+func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	_, sink, mock := getMysqlSinkWithDDLTs()
 
 	tableIDs := []int64{1, 2, 3}

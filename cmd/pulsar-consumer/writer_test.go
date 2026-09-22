@@ -49,7 +49,7 @@ func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	return s, &ddls
 }
 
-func TestWriterWriteExecutesIndependentCreateTableWithoutWatermark(t *testing.T) {
+func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: If upstream resolved-ts is held back (e.g. failpoints in integration tests), the consumer
 	// watermark can stall below CREATE TABLE / CREATE DATABASE commitTs. Independent CREATE TABLE DDLs don't
 	// depend on any existing table schema and should still be applied to advance downstream schema.
@@ -87,7 +87,7 @@ func TestWriterWriteExecutesIndependentCreateTableWithoutWatermark(t *testing.T)
 	require.Empty(t, w.ddlList)
 }
 
-func TestWriterWritePreservesOrderWhenBlockedDDLNotReady(t *testing.T) {
+func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	// Scenario: DDLs must execute in commitTs order. A later non-blocking DDL must not bypass an earlier
 	// blocking DDL that is waiting for watermark, even if the later DDL is an independent CREATE TABLE.
 	//
@@ -140,7 +140,7 @@ func TestWriterWritePreservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	require.Empty(t, w.ddlList)
 }
 
-func TestWriterWriteDoesNotBypassWatermarkForCreateTableLike(t *testing.T) {
+func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	// Scenario: CREATE TABLE ... LIKE ... depends on the referenced table schema being present and
 	// up-to-date downstream, so it must not bypass watermark gating.
 	//
@@ -183,7 +183,7 @@ func TestWriterWriteDoesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	require.Empty(t, w.ddlList)
 }
 
-func TestWriterWriteHandlesOutOfOrderDDLsByCommitTs(t *testing.T) {
+func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	// Scenario: In real topics, DDL messages can be received out of commit-ts order. A "future" DDL that
 	// is not yet eligible (commitTs > watermark) must not block earlier DDLs that are eligible; otherwise
 	// the subsequent watermark-based DML flush can observe an out-of-date downstream schema.
@@ -268,7 +268,7 @@ func TestWriterWriteHandlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-func TestWriterWriteSortsOutOfOrderDMLByWatermark(t *testing.T) {
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)

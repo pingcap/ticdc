@@ -153,37 +153,37 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkBatchDMLEvent100000-72    	       1	5509822685 ns/op	517733800 B/op	 1483694 allocs/op
-func BenchmarkBatchDMLEvent100000(b *testing.B) {
+// BenchmarkBatchDMLEvent_100000-72    	       1	5509822685 ns/op	517733800 B/op	 1483694 allocs/op
+func BenchmarkBatchDMLEvent_100000(b *testing.B) {
 	createBatchDMLEvent(b, 100000, 1)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkDMLEvents100000-72    	       1	6356767072 ns/op	912358968 B/op	20444518 allocs/op
-func BenchmarkDMLEvents100000(b *testing.B) {
+// BenchmarkDMLEvents_100000-72    	       1	6356767072 ns/op	912358968 B/op	20444518 allocs/op
+func BenchmarkDMLEvents_100000(b *testing.B) {
 	createDMLEvents(b, 100000, 1)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkBatchDMLEvent1000000-72    	       1	55271596300 ns/op	5128786216 B/op	14807291 allocs/op
-func BenchmarkBatchDMLEvent1000000(b *testing.B) {
+// BenchmarkBatchDMLEvent_1000000-72    	       1	55271596300 ns/op	5128786216 B/op	14807291 allocs/op
+func BenchmarkBatchDMLEvent_1000000(b *testing.B) {
 	createBatchDMLEvent(b, 1000000, 1)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkDMLEvents1000000-72    	       1	59282774010 ns/op	8879427720 B/op	203074980 allocs/op
-func BenchmarkDMLEvents1000000(b *testing.B) {
+// BenchmarkDMLEvents_1000000-72    	       1	59282774010 ns/op	8879427720 B/op	203074980 allocs/op
+func BenchmarkDMLEvents_1000000(b *testing.B) {
 	createDMLEvents(b, 1000000, 1)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkBatchDMLEvent100000x10-72    	       1	54880057654 ns/op	4887498240 B/op	13188528 allocs/op
-func BenchmarkBatchDMLEvent100000x10(b *testing.B) {
+// BenchmarkBatchDMLEvent_100000x10-72    	       1	54880057654 ns/op	4887498240 B/op	13188528 allocs/op
+func BenchmarkBatchDMLEvent_100000x10(b *testing.B) {
 	createBatchDMLEvent(b, 100000, 10)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkDMLEvents100000x10-72    	       1	53243358758 ns/op	3956960392 B/op	59664667 allocs/op
-func BenchmarkDMLEvents100000x10(b *testing.B) {
+// BenchmarkDMLEvents_100000x10-72    	       1	53243358758 ns/op	3956960392 B/op	59664667 allocs/op
+func BenchmarkDMLEvents_100000x10(b *testing.B) {
 	createDMLEvents(b, 100000, 10)
 }

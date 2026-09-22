@@ -59,7 +59,7 @@ func TestNewChangefeedRejectsInvalidInfo(t *testing.T) {
 	})
 }
 
-func TestChangefeedGetSetInfo(t *testing.T) {
+func TestChangefeed_GetSetInfo(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -80,7 +80,7 @@ func TestChangefeedGetSetInfo(t *testing.T) {
 	})
 }
 
-func TestChangefeedGetSetNodeID(t *testing.T) {
+func TestChangefeed_GetSetNodeID(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -94,7 +94,7 @@ func TestChangefeedGetSetNodeID(t *testing.T) {
 	require.Equal(t, nodeID, cf.GetNodeID())
 }
 
-func TestChangefeedUpdateStatus(t *testing.T) {
+func TestChangefeed_UpdateStatus(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -224,7 +224,7 @@ func TestBootstrapDoneRetryableError(t *testing.T) {
 	require.True(t, cf.backoff.isRestarting.Load())
 }
 
-func TestChangefeedIsMQSink(t *testing.T) {
+func TestChangefeed_IsMQSink(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -236,7 +236,7 @@ func TestChangefeedIsMQSink(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
-func TestChangefeedNeedCheckpointMysqlActiveActive(t *testing.T) {
+func TestChangefeed_NeedCheckpointMysqlActiveActive(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfg := config.GetDefaultReplicaConfig()
 	enable := true
@@ -251,7 +251,7 @@ func TestChangefeedNeedCheckpointMysqlActiveActive(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
-func TestChangefeedNeedCheckpointMysqlDisabled(t *testing.T) {
+func TestChangefeed_NeedCheckpointMysqlDisabled(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfg := config.GetDefaultReplicaConfig()
 	disable := false
@@ -266,7 +266,7 @@ func TestChangefeedNeedCheckpointMysqlDisabled(t *testing.T) {
 	require.False(t, cf.NeedCheckpointTsMessage())
 }
 
-func TestChangefeedGetSetLastSavedCheckPointTs(t *testing.T) {
+func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -280,7 +280,7 @@ func TestChangefeedGetSetLastSavedCheckPointTs(t *testing.T) {
 	require.Equal(t, newTs, cf.GetLastSavedCheckPointTs())
 }
 
-func TestChangefeedNewAddMaintainerMessage(t *testing.T) {
+func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -304,7 +304,7 @@ func TestChangefeedNewAddMaintainerMessage(t *testing.T) {
 	require.Equal(t, info.SinkURI, configInfo.SinkURI)
 }
 
-func TestChangefeedNewCheckpointTsMessage(t *testing.T) {
+func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -373,7 +373,7 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 	require.Equal(t, 0, len(clonedStatus.Err))
 }
 
-func TestChangefeedGetKeyspaceID(t *testing.T) {
+func TestChangefeed_GetKeyspaceID(t *testing.T) {
 	var c1 *Changefeed
 	require.Equal(t, uint32(0), c1.GetKeyspaceID())
 

@@ -1569,7 +1569,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
 }
 
-func TestHandleDispatcherHeartbeatInactiveDispatcherCleanup(t *testing.T) {
+func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	broker, _, _, outputCh := newEventBrokerForTest()
 	defer broker.close()
 
