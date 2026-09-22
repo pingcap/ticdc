@@ -1239,9 +1239,9 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	}
 }
 
-// TestDispatcher_SkipDMLAsStartTs_FilterCorrectly tests DML filtering during DDL crash recovery.
+// TestDispatcherSkipDMLAsStartTsFilterCorrectly tests DML filtering during DDL crash recovery.
 // When skipDMLAsStartTs=true and startTs=99, DML events at commitTs=100 (startTs+1) should be skipped.
-func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
+func TestDispatcherSkipDMLAsStartTsFilterCorrectly(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -1315,8 +1315,8 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	require.Greater(t, checkpointTs, uint64(99), "Checkpoint should advance beyond startTs")
 }
 
-// TestDispatcher_SkipDMLAsStartTs_Disabled tests that DML is not filtered when skipDMLAsStartTs=false
-func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
+// TestDispatcherSkipDMLAsStartTsDisabled tests that DML is not filtered when skipDMLAsStartTs=false
+func TestDispatcherSkipDMLAsStartTsDisabled(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 

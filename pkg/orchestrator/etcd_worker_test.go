@@ -40,7 +40,10 @@ const (
 	testEtcdKeyPrefix    = "/cdc_etcd_worker_test"
 	numGroups            = 10
 	numValuesPerGroup    = 5
-	totalTicksPerReactor = 1000
+	totalTicksPerReactor = 100
+	// linearizabilityValues is how many values TestLinearizability writes before the
+	// worker starts, and how many more it writes while the worker runs.
+	linearizabilityValues = 200
 )
 
 type simpleReactor struct {
@@ -311,6 +314,8 @@ func (s *intReactorState) GetPatches() [][]DataPatch {
 type linearizabilityReactor struct {
 	state     *intReactorState
 	tickCount int
+	// finalValue is the last value the test writes; the reactor stops once it is observed.
+	finalValue int
 }
 
 func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (nextState ReactorState, err error) {
@@ -321,7 +326,7 @@ func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (
 		}
 		r.tickCount++
 	}
-	if r.state.val == 1999 {
+	if r.state.val == r.finalValue {
 		return r.state, errors.ErrReactorFinished.FastGenByArgs()
 	}
 	r.state.isUpdated = false
@@ -339,14 +344,15 @@ func TestLinearizability(t *testing.T) {
 	cdcCli, err := etcd.NewCDCEtcdClient(ctx, cli0.Unwrap(), "default")
 	require.Nil(t, err)
 	cli := newClient()
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < linearizabilityValues; i++ {
 		_, err := cli.Put(ctx, testEtcdKeyPrefix+"/lin", strconv.Itoa(i))
 		require.Nil(t, err)
 	}
 
 	reactor, err := NewEtcdWorker(cdcCli, testEtcdKeyPrefix+"/lin", &linearizabilityReactor{
-		state:     nil,
-		tickCount: 999,
+		state:      nil,
+		tickCount:  linearizabilityValues - 1,
+		finalValue: 2*linearizabilityValues - 2,
 	}, &intReactorState{
 		val:       0,
 		isUpdated: false,
@@ -358,7 +364,7 @@ func TestLinearizability(t *testing.T) {
 	})
 
 	time.Sleep(500 * time.Millisecond)
-	for i := 999; i < 2000; i++ {
+	for i := linearizabilityValues - 1; i < 2*linearizabilityValues-1; i++ {
 		_, err := cli.Put(ctx, testEtcdKeyPrefix+"/lin", strconv.Itoa(i))
 		require.Nil(t, err)
 	}

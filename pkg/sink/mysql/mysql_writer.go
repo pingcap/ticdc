@@ -42,6 +42,8 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+	// defaultDDLPollInterval is how often a running downstream DDL is re-checked.
+	defaultDDLPollInterval = 5 * time.Second
 
 	dmlConnIdleTimeout = 5 * time.Minute
 )
@@ -92,7 +94,20 @@ type Writer struct {
 	// for dry-run mode
 	blockerTicker *time.Ticker
 
+	// ddlPollInterval is how often a running downstream DDL is re-checked;
+	// zero keeps defaultDDLPollInterval. Tests lower it to avoid paying the
+	// production poll interval.
+	ddlPollInterval time.Duration
+
 	writeGate *writelease.Gate
+}
+
+// ddlPollTickerInterval returns how often a running downstream DDL is re-checked.
+func (w *Writer) ddlPollTickerInterval() time.Duration {
+	if w.ddlPollInterval <= 0 {
+		return defaultDDLPollInterval
+	}
+	return w.ddlPollInterval
 }
 
 func NewWriter(
@@ -123,6 +138,7 @@ func NewWriter(
 		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 		activeActiveSyncStatsInterval:  cfg.ActiveActiveSyncStatsInterval,
+		ddlPollInterval:                defaultDDLPollInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {

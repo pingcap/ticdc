@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestRawKVEntryEncodeDecode_PutOperation(t *testing.T) {
+func TestRawKVEntryEncodeDecodePutOperation(t *testing.T) {
 	original := RawKVEntry{
 		OpType:   OpTypePut,            // 4 bytes
 		CRTs:     1234567890,           // 8 bytes
@@ -45,7 +45,7 @@ func TestRawKVEntryEncodeDecode_PutOperation(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
-func TestRawKVEntryEncodeDecode_DeleteOperation(t *testing.T) {
+func TestRawKVEntryEncodeDecodeDeleteOperation(t *testing.T) {
 	original := RawKVEntry{
 		OpType:   OpTypeDelete,
 		CRTs:     1111111111,
@@ -64,7 +64,7 @@ func TestRawKVEntryEncodeDecode_DeleteOperation(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
-func TestRawKVEntryEncodeDecode_ResolvedOperation(t *testing.T) {
+func TestRawKVEntryEncodeDecodeResolvedOperation(t *testing.T) {
 	original := RawKVEntry{
 		OpType:   OpTypeResolved,
 		CRTs:     3333333333,
@@ -125,7 +125,7 @@ func TestRawKVEntryDecodeFieldsDoNotShareAppendCapacity(t *testing.T) {
 	require.Equal(t, []byte("old"), decoded.OldValue)
 }
 
-func TestRawKVEntry_SplitUpdate_UpdateOperation(t *testing.T) {
+func TestRawKVEntrySplitUpdateUpdateOperation(t *testing.T) {
 	t.Parallel()
 	// Test case: Split an update operation
 	updateEntry := &RawKVEntry{
@@ -161,7 +161,7 @@ func TestRawKVEntry_SplitUpdate_UpdateOperation(t *testing.T) {
 	require.Equal(t, updateEntry.Value, insertRow.Value)
 }
 
-func TestRawKVEntry_SplitUpdate_NotUpdateOperation(t *testing.T) {
+func TestRawKVEntrySplitUpdateNotUpdateOperation(t *testing.T) {
 	t.Parallel()
 	// Test case: Put operation without old value (not an update)
 	putEntry := &RawKVEntry{
@@ -181,7 +181,7 @@ func TestRawKVEntry_SplitUpdate_NotUpdateOperation(t *testing.T) {
 	require.Nil(t, insertRow)
 }
 
-func TestRawKVEntry_IsUpdate(t *testing.T) {
+func TestRawKVEntryIsUpdate(t *testing.T) {
 	t.Parallel()
 
 	// Test case 1: Update operation (OpTypePut with both OldValue and Value)

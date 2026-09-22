@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestController_CountInflightDrainMovesFromNode(t *testing.T) {
+func TestControllerCountInflightDrainMovesFromNode(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -292,7 +292,7 @@ func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Inf
 	ptr.Store(&aliveCopy)
 }
 
-func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
+func TestControllerPostFinishCalledOnceOnReplace(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -317,7 +317,7 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	require.Equal(t, int32(1), op.postFinishCount.Load())
 }
 
-func TestController_AddOperatorAtomicallyRejectsConcurrentDuplicate(t *testing.T) {
+func TestControllerAddOperatorAtomicallyRejectsConcurrentDuplicate(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -364,7 +364,7 @@ func TestController_AddOperatorAtomicallyRejectsConcurrentDuplicate(t *testing.T
 	require.Len(t, oc.runningQueue, 1)
 }
 
-func TestController_AddOperatorAllowsMoveWithEmptyOrigin(t *testing.T) {
+func TestControllerAddOperatorAllowsMoveWithEmptyOrigin(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -398,7 +398,7 @@ func TestController_AddOperatorAllowsMoveWithEmptyOrigin(t *testing.T) {
 		msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 }
 
-func TestController_OnNodeRemoved_WithOccupyOperatorMarksSpanAbsent(t *testing.T) {
+func TestControllerOnNodeRemovedWithOccupyOperatorMarksSpanAbsent(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -417,7 +417,7 @@ func TestController_OnNodeRemoved_WithOccupyOperatorMarksSpanAbsent(t *testing.T
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
+func TestControllerAddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -488,7 +488,7 @@ func TestControllerRestoredMergeOperatorScheduleMaintainerEpoch(t *testing.T) {
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
 }
 
-func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
+func TestControllerRemoveReplicaSetReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
 	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
 	// Steps:
 	// 1) Add a remove operator with a post-finish hook (simulates move/split remove phase).
@@ -517,7 +517,7 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))
 }
 
-func TestController_RemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *testing.T) {
+func TestControllerRemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -608,7 +608,7 @@ func TestControllerStaleMergeRollbackDoesNotCancelReplacementRemove(t *testing.T
 		msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 }
 
-func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
+func TestControllerQuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
 	// Scenario: removing mode allows only the DDL close operator to keep running.
 	// Steps: quiesce the controller with one allowed dispatcher, then verify the
 	// allowed operator still accepts status and schedules, while the frozen operator
@@ -669,7 +669,7 @@ func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
 	require.Equal(t, 2, oc.OperatorSize())
 }
 
-func TestController_QuiesceExceptDropsBlockedOnlyQueueFromExecution(t *testing.T) {
+func TestControllerQuiesceExceptDropsBlockedOnlyQueueFromExecution(t *testing.T) {
 	// Scenario: after removing starts, the running queue can contain only frozen ordinary operators.
 	// Steps: poll a quiesced controller with one non-allowed operator and verify it leaves the heap,
 	// remains in the operator map for checkpoint safety, and the next poll terminates the Execute loop.
@@ -701,7 +701,7 @@ func TestController_QuiesceExceptDropsBlockedOnlyQueueFromExecution(t *testing.T
 	require.Equal(t, int32(0), blockedOp.scheduleCount.Load())
 }
 
-func TestController_QuiesceExceptWaitsForInFlightSchedule(t *testing.T) {
+func TestControllerQuiesceExceptWaitsForInFlightSchedule(t *testing.T) {
 	// Scenario: Execute has already passed the queue poll and is inside a normal operator's Schedule.
 	// Steps: block Schedule with a channel, start QuiesceExcept, verify quiesce cannot return until
 	// Schedule/SendCommand leaves the admission boundary, then verify later Execute calls do not reschedule it.
@@ -766,7 +766,7 @@ func TestController_QuiesceExceptWaitsForInFlightSchedule(t *testing.T) {
 	require.Len(t, messageCenter.GetMessageChannel(), 1)
 }
 
-func TestController_QuiesceExceptWaitsForInFlightPush(t *testing.T) {
+func TestControllerQuiesceExceptWaitsForInFlightPush(t *testing.T) {
 	// Scenario: a normal operator has passed admission and is inside Start while removing mode begins.
 	// Steps: block Start with a channel, start QuiesceExcept, verify quiesce cannot return until Start
 	// finishes, then verify a later ordinary operator is rejected without being started.

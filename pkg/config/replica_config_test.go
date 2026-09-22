@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
+func TestReplicaConfigEnableSplittableCheckAutoAdjust(t *testing.T) {
 	tests := []struct {
 		name          string
 		sinkURI       string
@@ -189,7 +189,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 	}
 }
 
-func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
+func TestReplicaConfigEnableSplittableCheckDefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
@@ -262,7 +262,7 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }
 
-func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
+func TestReplicaConfigEnableRedoIOCheckDefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
 }
@@ -291,7 +291,7 @@ func TestConsistentConfigSpoolDiskQuota(t *testing.T) {
 	require.NoError(t, cfg.validateAndAdjust(false))
 }
 
-func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
+func TestReplicaConfigEnableRedoIOCheckDefaultEnabled(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	config.Consistent.Level = util.AddressOf("eventual")
 	config.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
@@ -301,7 +301,7 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	require.Error(t, config.ValidateAndAdjust(sinkURI))
 }
 
-func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
+func TestReplicaConfigEnableRedoIOCheckCanDisableForCLI(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	config.EnableRedoIOCheck = util.AddressOf(false)
 	config.Consistent.Level = util.AddressOf("eventual")

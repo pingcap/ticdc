@@ -292,7 +292,7 @@ func TestMatchMatchCachedRollbackRow(t *testing.T) {
 	require.Empty(t, matcher.unmatchedValue)
 }
 
-func TestMatcher_TryCleanUnmatchedValue(t *testing.T) {
+func TestMatcherTryCleanUnmatchedValue(t *testing.T) {
 	tests := []struct {
 		name         string
 		setupMatcher func() *matcher

@@ -49,7 +49,7 @@ func expectDDLExec(mock sqlmock.Sqlmock, event *commonEvent.DDLEvent, timezone s
 	}
 }
 
-func TestExecDDL_UsesOriginDefaultTimestampForCurrentTimestampDefault(t *testing.T) {
+func TestExecDDLUsesOriginDefaultTimestampForCurrentTimestampDefault(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 	writer.cfg.Timezone = "\"UTC\""
@@ -80,7 +80,7 @@ func TestExecDDL_UsesOriginDefaultTimestampForCurrentTimestampDefault(t *testing
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestExecDDL_DoesNotSetTimestampWhenNoCurrentTimestampDefault(t *testing.T) {
+func TestExecDDLDoesNotSetTimestampWhenNoCurrentTimestampDefault(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 	writer.cfg.Timezone = "\"UTC\""

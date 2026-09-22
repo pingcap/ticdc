@@ -577,7 +577,7 @@ func TestHandleNodeChange(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestHandleNodeChange_CleanState(t *testing.T) {
+func TestHandleNodeChangeCleanState(t *testing.T) {
 	c := newLogCoordinatorForTest()
 	nodeID1 := node.ID("node-1")
 	nodeID2 := node.ID("node-2")

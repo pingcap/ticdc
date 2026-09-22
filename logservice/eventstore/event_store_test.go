@@ -1986,7 +1986,7 @@ func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
 	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
 }
 
-func TestEventStoreIter_NextWithFiltering(t *testing.T) {
+func TestEventStoreIterNextWithFiltering(t *testing.T) {
 	t.Parallel()
 
 	// Define a set of reusable events for different test cases.

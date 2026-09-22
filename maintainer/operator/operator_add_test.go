@@ -46,12 +46,12 @@ func newAddTestReplicaSet(
 	return replicaSet
 }
 
-// TestAddOperator_DestNodeRemoved tests the scenario where:
+// TestAddOperatorDestNodeRemoved tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node A
 // 2. Before node A reports working status, node A is removed
 // 3. Verify that the operator is marked as finished and removed
 // 4. Verify that the span is marked as absent for rescheduling
-func TestAddOperator_DestNodeRemoved(t *testing.T) {
+func TestAddOperatorDestNodeRemoved(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
@@ -81,11 +81,11 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 	require.Equal(t, 1, spanController.GetAbsentSize())
 }
 
-// TestAddOperator_DestReportsWorking tests the scenario where:
+// TestAddOperatorDestReportsWorking tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node B
 // 2. Node B reports working status
 // 3. Verify that the operator finishes and marks the span replicating
-func TestAddOperator_DestReportsWorking(t *testing.T) {
+func TestAddOperatorDestReportsWorking(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
@@ -113,11 +113,11 @@ func TestAddOperator_DestReportsWorking(t *testing.T) {
 	require.Equal(t, nodeB, absentReplicaSet.GetNodeID())
 }
 
-// TestAddOperator_DestReportsRemoved tests the scenario where:
+// TestAddOperatorDestReportsRemoved tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node B
 // 2. Node B reports removed status
 // 3. Verify that the operator finishes and marks the span absent for rescheduling
-func TestAddOperator_DestReportsRemoved(t *testing.T) {
+func TestAddOperatorDestReportsRemoved(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
@@ -143,11 +143,11 @@ func TestAddOperator_DestReportsRemoved(t *testing.T) {
 	require.Equal(t, "", absentReplicaSet.GetNodeID().String())
 }
 
-// TestAddOperator_StoppedStatusIgnored tests the scenario where:
+// TestAddOperatorStoppedStatusIgnored tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node B
 // 2. Node B reports stopped status
 // 3. Verify that the operator keeps running and continues scheduling create requests
-func TestAddOperator_StoppedStatusIgnored(t *testing.T) {
+func TestAddOperatorStoppedStatusIgnored(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
@@ -170,11 +170,11 @@ func TestAddOperator_StoppedStatusIgnored(t *testing.T) {
 	require.Equal(t, nodeB.String(), msg.To.String())
 }
 
-// TestAddOperator_TaskRemovedDoesNotReintroduceSpan tests the scenario where:
+// TestAddOperatorTaskRemovedDoesNotReintroduceSpan tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node B
 // 2. The span is removed from spanController before the operator is finalized
 // 3. Verify that PostFinish does not mark the span absent again
-func TestAddOperator_TaskRemovedDoesNotReintroduceSpan(t *testing.T) {
+func TestAddOperatorTaskRemovedDoesNotReintroduceSpan(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 

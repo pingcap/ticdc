@@ -430,7 +430,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	wg.Wait()
 }
 
-func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
+func TestMaintainerGetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

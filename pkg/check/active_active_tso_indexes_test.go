@@ -46,7 +46,7 @@ func (m *mockPDHTTPClient) GetConfig(ctx context.Context) (map[string]any, error
 
 func (m *mockPDHTTPClient) Close() {}
 
-func TestValidateActiveActiveTSOIndexes_SkipWhenDisabled(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesSkipWhenDisabled(t *testing.T) {
 	err := ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: false,
@@ -54,7 +54,7 @@ func TestValidateActiveActiveTSOIndexes_SkipWhenDisabled(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestValidateActiveActiveTSOIndexes_SkipNonMySQLScheme(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesSkipNonMySQLScheme(t *testing.T) {
 	err := ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		SinkURI:            "kafka://127.0.0.1:9092/topic",
 		EnableActiveActive: true,
@@ -62,7 +62,7 @@ func TestValidateActiveActiveTSOIndexes_SkipNonMySQLScheme(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestValidateActiveActiveTSOIndexes_DownstreamMissingKey(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesDownstreamMissingKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -85,7 +85,7 @@ func TestValidateActiveActiveTSOIndexes_DownstreamMissingKey(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_DownstreamInconsistentAcrossInstances(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesDownstreamInconsistentAcrossInstances(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -111,7 +111,7 @@ func TestValidateActiveActiveTSOIndexes_DownstreamInconsistentAcrossInstances(t 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_UpstreamReadError(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesUpstreamReadError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -137,7 +137,7 @@ func TestValidateActiveActiveTSOIndexes_UpstreamReadError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_UpstreamMissingKey(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesUpstreamMissingKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -165,7 +165,7 @@ func TestValidateActiveActiveTSOIndexes_UpstreamMissingKey(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_Mismatch(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesMismatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -194,7 +194,7 @@ func TestValidateActiveActiveTSOIndexes_Mismatch(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_MaxIndexMismatch(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesMaxIndexMismatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -223,7 +223,7 @@ func TestValidateActiveActiveTSOIndexes_MaxIndexMismatch(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_Success(t *testing.T) {
+func TestValidateActiveActiveTSOIndexesSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })

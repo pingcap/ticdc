@@ -21,11 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRemoveOperator_NodeRemovedBeforeStopped tests the scenario where:
+// TestRemoveOperatorNodeRemovedBeforeStopped tests the scenario where:
 // 1. A remove operation is initiated to remove dispatcher from node A
 // 2. Before node A reports stopped status, node A is removed
 // 3. Verify that the operator is marked as finished immediately
-func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
+func TestRemoveOperatorNodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
@@ -51,7 +51,7 @@ func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	op.PostFinish()
 }
 
-func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
+func TestRemoveOperatorSnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
@@ -74,7 +74,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
-func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
+func TestRemoveOperatorNotFinishedOnWaitingMerge(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
@@ -97,7 +97,7 @@ func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 	require.True(t, op.IsFinished())
 }
 
-func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
+func TestRemoveOperatorFinishedOnRemovedStatus(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)

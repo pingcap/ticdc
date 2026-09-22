@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
+func TestMoveMaintainerOperatorOnNodeRemove(t *testing.T) {
 	t.Run("dest removed before origin stopped keeps removing origin", func(t *testing.T) {
 		changefeedDB, cf := newMoveMaintainerTestChangefeed(t, "dest-before-origin-stopped")
 		op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
@@ -142,7 +142,7 @@ func newMoveMaintainerTestChangefeed(t *testing.T, name string) (*changefeed.Cha
 	return changefeedDB, cf
 }
 
-func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
+func TestMoveMaintainerOperatorOnTaskRemoved(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -158,7 +158,7 @@ func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	op.PostFinish()
 }
 
-func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
+func TestMoveMaintainerOperatorCheckRequiresDestBootstrapDone(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -190,7 +190,7 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 	require.Nil(t, op.Schedule())
 }
 
-func TestMoveMaintainerOperator_CheckAcceptsCompatDestEpochDuringRollingUpgrade(t *testing.T) {
+func TestMoveMaintainerOperatorCheckAcceptsCompatDestEpochDuringRollingUpgrade(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -217,7 +217,7 @@ func TestMoveMaintainerOperator_CheckAcceptsCompatDestEpochDuringRollingUpgrade(
 	require.True(t, op.IsFinished())
 }
 
-func TestMoveMaintainerOperator_OnNodeRemoveAfterFinishMarksAbsent(t *testing.T) {
+func TestMoveMaintainerOperatorOnNodeRemoveAfterFinishMarksAbsent(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{

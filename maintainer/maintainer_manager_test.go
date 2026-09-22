@@ -138,7 +138,7 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 	t.Cleanup(cleanup)
 }
 
-func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
+func TestManagerMaintainerSetAddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("reject-live-newer-epoch", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
@@ -162,7 +162,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	require.Equal(t, float64(123), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 }
 
-func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testing.T) {
+func TestManagerMaintainerSetAddMaintainerAfterStoppedKeepsReplacement(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("stopped-maintainer-replacement", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
@@ -197,7 +197,7 @@ func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testi
 	require.False(t, ok)
 }
 
-func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T) {
+func TestManagerMaintainerSetAddMaintainerKeepsCompatibilityEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
@@ -213,7 +213,7 @@ func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T)
 	require.True(t, compatMaintainer == compatMaintainerAfterRetry)
 }
 
-func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
+func TestManagerMaintainerSetAddMaintainerRejectsOlderEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
@@ -234,7 +234,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
 	require.True(t, currentMaintainer == maintainerAfterCompatAdd)
 }
 
-func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *testing.T) {
+func TestManagerMaintainerSetAddMaintainerDoesNotCreateRejectedDuplicate(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
@@ -260,7 +260,7 @@ func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *tes
 	}
 }
 
-func TestManagerMaintainerSet_RemoveMissingMaintainerReportsRequestEpoch(t *testing.T) {
+func TestManagerMaintainerSetRemoveMissingMaintainerReportsRequestEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
 	cfID := common.NewChangeFeedIDWithName("remove-missing", common.DefaultKeyspaceName)
 	req := &heartbeatpb.RemoveMaintainerRequest{

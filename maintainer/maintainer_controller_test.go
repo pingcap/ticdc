@@ -141,7 +141,7 @@ func TestNewControllerInitializesMaintainerEpoch(t *testing.T) {
 // This case test the scenario that the balance scheduler when a new node join in.
 // In this case, the num of split tables is more than the num of nodes,
 // and we can select appropriate split spans to move
-func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
+func TestBalanceGroupsNewNodeAddSplitsTableMoreThanNodeNum(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -272,7 +272,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 // This case test the scenario that the balance scheduler when a new node join in.
 // In this case, the num of split tables is less than the num of nodes,
 // and we should choose span to split.
-func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
+func TestBalanceGroupsNewNodeAddSplitsTableLessThanNodeNum(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}

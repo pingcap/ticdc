@@ -95,7 +95,7 @@ func newTestMockDB(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	return db, mock
 }
 
-func TestMysqlWriter_FlushDML(t *testing.T) {
+func TestMysqlWriterFlushDML(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -201,7 +201,7 @@ func TestMysqlWriterGrantWriteRejectsAfterShutdown(t *testing.T) {
 	require.False(t, writer.grantWrite())
 }
 
-func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
+func TestMysqlWriterFlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 	writer.cfg.EnableActiveActive = true
@@ -231,7 +231,7 @@ func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
+func TestMysqlWriterFlushDMLDuplicateEntryRetry(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -271,7 +271,7 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriter_FlushMultiDML(t *testing.T) {
+func TestMysqlWriterFlushMultiDML(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -315,7 +315,7 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 // Test flush ddl event
 // Ensure the ddl query will be write to the databases
 // and the ddl_ts_v1 table will be updated with the ddl_ts and table_id
-func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
+func TestMysqlWriterFlushDDLEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -417,7 +417,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
+func TestMysqlWriterFlushEmptyEvents(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -495,7 +495,7 @@ func TestMysqlWriterExecRecoverSchemaDDL(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
+func TestMysqlWriterFlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -608,7 +608,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
+func TestMysqlWriterRemoveDDLTsTable(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -620,7 +620,7 @@ func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
+func TestWaitAsyncDDLDoneCreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
 
@@ -720,9 +720,12 @@ func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
 }
 
 // Test the async ddl can be write successfully
-func TestMysqlWriter_AsyncDDL(t *testing.T) {
+func TestMysqlWriterAsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
+	// waitDDLDone polls a running downstream DDL; keeping the production interval
+	// would make this test wait a full 5s before the first state check.
+	writer.ddlPollInterval = 10 * time.Millisecond
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -791,7 +794,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	log.Info("before add index")
 	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(10 * time.Second).WillReturnError(mysql.ErrInvalidConn)
+	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(200 * time.Millisecond).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
 	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).

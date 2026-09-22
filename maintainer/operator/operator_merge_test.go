@@ -138,13 +138,13 @@ func setupLargeMergeTestEnvironment(
 	return spanController, toMergedReplicaSets, occupyOperators, nodeA
 }
 
-// TestMergeOperator_NodeRemovedBeforeWorking tests the scenario where:
+// TestMergeOperatorNodeRemovedBeforeWorking tests the scenario where:
 // 1. A merge operation is initiated to merge multiple spans on node A
 // 2. Before the new merged dispatcher reports working status, node A is removed
 // 3. Verify that the operator is marked as finished and removed
 // 4. Verify that all original spans are marked as absent
 // 5. Verify that occupy operators are marked as finished
-func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
+func TestMergeOperatorNodeRemovedBeforeWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
@@ -179,13 +179,13 @@ func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
 	}
 }
 
-// TestMergeOperator_TaskRemovedByDDLBeforeWorking tests the scenario where:
+// TestMergeOperatorTaskRemovedByDDLBeforeWorking tests the scenario where:
 // 1. A merge operation is initiated to merge multiple spans on node A
 // 2. Before the merged dispatcher reports working status, a DDL removes the task
 // 3. Verify that the operator is marked as finished and does not mark original spans as absent
 // 4. Verify that the merged span is removed from span controller
 // 5. Verify that occupy operators are marked as finished
-func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
+func TestMergeOperatorTaskRemovedByDDLBeforeWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
@@ -215,7 +215,7 @@ func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
 	}
 }
 
-func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testing.T) {
+func TestMergeOperatorNewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironmentWithCheckpointTs(t, 1500, 1000)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
@@ -224,11 +224,11 @@ func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testi
 	require.Equal(t, uint64(1000), op.newReplicaSet.GetStatus().GetCheckpointTs())
 }
 
-// TestMergeOperator_SuccessfulMerge tests the scenario where:
+// TestMergeOperatorSuccessfulMerge tests the scenario where:
 // 1. A merge operation is initiated to merge multiple spans on node A
 // 2. The new merged dispatcher reports working status
 // 3. Verify that PostFinish removes the old spans and marks the merged span replicating
-func TestMergeOperator_SuccessfulMerge(t *testing.T) {
+func TestMergeOperatorSuccessfulMerge(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
@@ -259,7 +259,7 @@ func TestMergeOperator_SuccessfulMerge(t *testing.T) {
 	}
 }
 
-func TestMergeOperator_PostFinishReleasesOccupyAfterRemovingOldReplicas(t *testing.T) {
+func TestMergeOperatorPostFinishReleasesOccupyAfterRemovingOldReplicas(t *testing.T) {
 	previousMaxProcs := runtime.GOMAXPROCS(2)
 	t.Cleanup(func() {
 		runtime.GOMAXPROCS(previousMaxProcs)
@@ -304,11 +304,11 @@ func TestMergeOperator_PostFinishReleasesOccupyAfterRemovingOldReplicas(t *testi
 	}
 }
 
-// TestMergeOperator_NodeRemovedAfterWorking tests the scenario where:
+// TestMergeOperatorNodeRemovedAfterWorking tests the scenario where:
 // 1. A merge operation is initiated and the merged dispatcher reports working status
 // 2. Then the origin node is removed before PostFinish runs
 // 3. Verify that the merge is aborted and the old spans become absent for rescheduling
-func TestMergeOperator_NodeRemovedAfterWorking(t *testing.T) {
+func TestMergeOperatorNodeRemovedAfterWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
@@ -341,11 +341,11 @@ func TestMergeOperator_NodeRemovedAfterWorking(t *testing.T) {
 	}
 }
 
-// TestMergeOperator_TaskRemovedByDDLAfterWorking tests the scenario where:
+// TestMergeOperatorTaskRemovedByDDLAfterWorking tests the scenario where:
 // 1. A merge operation is initiated and the merged dispatcher reports working status
 // 2. Then a DDL removes the task before PostFinish runs
 // 3. Verify that the operator does not clear node binding of old spans
-func TestMergeOperator_TaskRemovedByDDLAfterWorking(t *testing.T) {
+func TestMergeOperatorTaskRemovedByDDLAfterWorking(t *testing.T) {
 	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
 
 	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)

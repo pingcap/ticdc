@@ -173,7 +173,7 @@ func getSecondaryIndexNames(tableInfo *common.TableInfo) []string {
 	return indexNames
 }
 
-func TestExecDDL_RestoreAnonymousIndexToNamedIndex(t *testing.T) {
+func TestExecDDLRestoreAnonymousIndexToNamedIndex(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 
@@ -288,7 +288,7 @@ func TestRestoreAnonymousIndexToNamedIndexWithNamedAndAnonymousIndexes(t *testin
 	require.Equal(t, mixedQuery, unchangedQuery)
 }
 
-func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testing.T) {
+func TestExecDDLRestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
 

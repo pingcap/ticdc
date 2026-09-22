@@ -39,7 +39,7 @@ func withRedactMode(t *testing.T, mode string) func() {
 	}
 }
 
-func TestParseRedactMode_internal(t *testing.T) {
+func TestParseRedactModeInternal(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
@@ -78,7 +78,7 @@ func TestParseRedactMode_internal(t *testing.T) {
 	}
 }
 
-func TestIsValidRedactMode_internal(t *testing.T) {
+func TestIsValidRedactModeInternal(t *testing.T) {
 	tests := []struct {
 		input    string
 		parsed   string

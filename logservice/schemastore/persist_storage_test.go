@@ -4299,7 +4299,7 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 	}
 }
 
-func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+func TestBuildDDLEventForNewTableDDLCreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name       string
 		query      string
@@ -4509,7 +4509,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(
 	}
 }
 
-func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) {
+func TestBuildDDLEventForNewTableDDLCreateTableLikeBlockedTables(t *testing.T) {
 	rawEvent := &PersistedDDLEvent{
 		Type:         byte(model.ActionCreateTable),
 		SchemaID:     1,
@@ -4532,7 +4532,7 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) 
 	require.ElementsMatch(t, []int64{common.DDLSpanTableID, 111, 112}, ddlEvent.BlockedTables.TableIDs)
 }
 
-func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTablesRespectFilter(t *testing.T) {
+func TestBuildDDLEventForNewTableDDLCreateTableLikeBlockedTablesRespectFilter(t *testing.T) {
 	rawEvent := &PersistedDDLEvent{
 		Type:         byte(model.ActionCreateTable),
 		SchemaID:     1,
@@ -4561,7 +4561,7 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTablesRespectFilter(t
 	require.Empty(t, ddlEvent.BlockedTables)
 }
 
-func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {
+func TestUpdateDDLHistoryForAddDropTableCreateTableLikeAddsReferTable(t *testing.T) {
 	args := updateDDLHistoryFuncArgs{
 		ddlEvent: &PersistedDDLEvent{
 			Type:         byte(model.ActionCreateTable),
@@ -4587,7 +4587,7 @@ func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testin
 	require.Empty(t, args.tablesDDLHistory[101])
 }
 
-func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(t *testing.T) {
+func TestExtractTableInfoFuncForSingleTableDDLCreateTableLikeReferTableIgnored(t *testing.T) {
 	rawEvent := &PersistedDDLEvent{
 		Type:         byte(model.ActionCreateTable),
 		TableID:      140,

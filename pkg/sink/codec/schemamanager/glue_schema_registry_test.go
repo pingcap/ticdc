@@ -31,7 +31,7 @@ func newClueSchemaManagerForTest() *glueSchemaManager {
 	return res
 }
 
-func TestGlueSchemaManager_Register(t *testing.T) {
+func TestGlueSchemaManagerRegister(t *testing.T) {
 	ctx := context.Background()
 	m := newClueSchemaManagerForTest()
 
@@ -53,7 +53,7 @@ func TestGlueSchemaManager_Register(t *testing.T) {
 	require.NotEqual(t, schemaID.glueSchemaID, schemaID3.glueSchemaID)
 }
 
-func TestGlueSchemaManager_Lookup(t *testing.T) {
+func TestGlueSchemaManagerLookup(t *testing.T) {
 	ctx := context.Background()
 	m := newClueSchemaManagerForTest()
 
@@ -67,7 +67,7 @@ func TestGlueSchemaManager_Lookup(t *testing.T) {
 	require.Equal(t, schemaDefinition, lookedUpSchema)
 }
 
-func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
+func TestGlueSchemaManagerGetCachedOrRegister(t *testing.T) {
 	ctx := context.Background()
 	m := newClueSchemaManagerForTest()
 
@@ -94,14 +94,14 @@ func TestGlueSchemaManager_GetCachedOrRegister(t *testing.T) {
 	require.Equal(t, routedSchemaDefinition, lookedUpSchema)
 }
 
-func TestGlueSchemaManager_RegistryType(t *testing.T) {
+func TestGlueSchemaManagerRegistryType(t *testing.T) {
 	m := newClueSchemaManagerForTest()
 
 	registryType := m.RegistryType()
 	require.Equal(t, common.SchemaRegistryTypeGlue, registryType)
 }
 
-func TestGlueSchemaManager_getMsgHeader(t *testing.T) {
+func TestGlueSchemaManagerGetMsgHeader(t *testing.T) {
 	ctx := context.Background()
 	m := newClueSchemaManagerForTest()
 
