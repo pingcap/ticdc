@@ -321,6 +321,8 @@ function run_route_admission_failover_case() {
 	echo "[$(date)] <<<<<< run table route admission maintainer failover case >>>>>>"
 	cleanup_name_change_route_databases
 	render_name_change_route_config "$changefeed_config"
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -440,7 +442,7 @@ function run_mysql() {
 
 	start_tidb_cluster --workdir "$WORK_DIR"
 
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 	local normal_changefeed_id="table-route-mysql"
@@ -450,7 +452,9 @@ function run_mysql() {
 
 	verify_table_route_result "$WORK_DIR"
 	run_sql_file "$CUR/data/exchange_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 	cdc_cli_changefeed remove -c "$normal_changefeed_id"
@@ -465,7 +469,9 @@ function run_mysql() {
 	verify_table_route_split_effective "$split_changefeed_id"
 	run_sql "INSERT INTO source_db.users VALUES (6, 'Split', 'split@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 	cdc_cli_changefeed remove -c "$split_changefeed_id"
@@ -491,7 +497,7 @@ function run_storage_case() {
 
 	start_tidb_cluster --workdir "$work_dir"
 
-	run_cdc_server --workdir "$work_dir" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$work_dir" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	cdc_cli_changefeed create --sink-uri="$sink_uri" --config="$CUR/conf/changefeed.toml"
 
@@ -504,6 +510,7 @@ function run_storage_case() {
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 
+	check_cdc_server_guard --workdir "$work_dir"
 	stop_test "$work_dir"
 	check_logs "$work_dir"
 }
@@ -600,7 +607,7 @@ function run_kafka() {
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 	start_schema_registry
 	start_tidb_cluster --workdir "$WORK_DIR"
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	local case_entry
 	for case_entry in "${cases[@]}"; do
@@ -643,6 +650,8 @@ function run_kafka() {
 		verify_table_route_drop_database "target_${protocol_case}_db" "target_${protocol_case}_extra_db"
 	done
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 	check_logs "$WORK_DIR"
 }

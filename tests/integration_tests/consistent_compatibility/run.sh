@@ -36,7 +36,7 @@ function run() {
 	echo "Starting with old arch"
 	export TICDC_NEWARCH=false
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_compatibility.server1
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_compatibility.server1
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" | grep '^ID:' | head -n1 | awk '{print $2}')
@@ -106,6 +106,8 @@ function run() {
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	ensure 300 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	export GO_FAILPOINTS=''
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "consistent_compatibility.server1"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	export TICDC_NEWARCH=true
 
