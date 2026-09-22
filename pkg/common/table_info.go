@@ -693,7 +693,12 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 // GetOrderedHandleKeyColumnIDs returns the ordered handle-key column IDs.
 // It prefers the primary key columns (PKIndex) when available; otherwise,
 // it falls back to the not-null unique key selected during schema init.
+// A table info without column schema, such as a placeholder for a DML decoded
+// before its DDL, has no handle key.
 func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.HandleKeyIDList
 }
 
