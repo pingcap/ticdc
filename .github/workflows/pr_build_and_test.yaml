@@ -43,6 +43,18 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+          # Cached explicitly below with a per-job key, see "Cache Go".
+          cache: false
+
+      - name: Cache Go
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-check
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
 
       - name: Cache Tools
         id: cache-tools
@@ -70,8 +82,10 @@ jobs:
       matrix:
         task:
           - name: Build Classic CDC
+            cache-key: build-classic
             command: make cdc
           - name: Classic Unit Tests
+            cache-key: ut-classic
             command: make unit_test_in_verify_ci
     name: ${{ matrix.task.name }}
     steps:
@@ -82,6 +96,18 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+          # Cached explicitly below with a per-task key, see "Cache Go".
+          cache: false
+
+      - name: Cache Go
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ matrix.task.cache-key }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
 
       - name: Cache Tools
         id: cache-tools
@@ -105,8 +131,10 @@ jobs:
       matrix:
         task:
           - name: Build Next Gen CDC
+            cache-key: build-nextgen
             command: NEXT_GEN=1 make cdc
           - name: Next Gen Unit Tests
+            cache-key: ut-nextgen
             command: make unit_test_in_verify_ci_next_gen
     name: ${{ matrix.task.name }}
     steps:
@@ -117,6 +145,18 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+          # Cached explicitly below with a per-task key, see "Cache Go".
+          cache: false
+
+      - name: Cache Go
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ matrix.task.cache-key }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
 
       - name: Cache Tools
         id: cache-tools
