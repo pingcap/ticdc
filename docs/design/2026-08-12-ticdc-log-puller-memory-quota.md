@@ -47,7 +47,8 @@ The design has the following goals:
 1. Bound the growth of retained Region entry events when downstream is slow.
 2. Reduce the number of new low-priority initial scans before event memory
    reaches the receive-path hard limit.
-3. Preserve progress for high-priority recovery and caught-up workloads.
+3. Preserve progress for high-priority recovery and caught-up workloads until
+   memory pressure reaches the emergency scan-admission limit.
 4. Keep event accounting inexpensive because it runs once per received entry
    batch.
 5. Wake blocked goroutines without lost notifications during release,
@@ -125,10 +126,12 @@ The following thresholds are derived internally:
 | Pause low-priority scans | `ceil(0.15 * Q)` | Enter scan throttling early. |
 | Resume low-priority scans | `floor(0.05 * Q)` | Resume with hysteresis. |
 | Event receive hard limit | `2 * Q` | Block additional entry events. |
+| Pause all scans | `3 * Q` | Stop starting new initial scans. |
 | Maximum scan estimate | `16 * B` | Bound one scan's predicted charge. |
 
 With the defaults, low-priority scan admission pauses around 153.6 MiB,
-resumes around 51.2 MiB, and event receiving blocks around 2 GiB.
+resumes around 51.2 MiB, event receiving blocks around 2 GiB, and all new scan
+admission pauses at 3 GiB.
 
 `memory-quota` is called a soft capacity because high-priority scans may pass
 the scan gate and already-owned event memory is not discarded. The receive
@@ -249,12 +252,13 @@ true:
 Other scans are LOW priority. Priority is also sent to TiKV/CSE and controls
 the local Region request queue and request-worker window.
 
-The memory quota controller has two admission states:
+The memory quota controller has three admission states:
 
 | State | LOW priority | HIGH priority |
 | --- | --- | --- |
 | `normal` | Admitted | Admitted |
 | `pauseLowPriority` | Waits on `scanReady` | Admitted |
+| `pauseAll` | Waits on `scanReady` | Waits on `scanReady` |
 
 The transition rules use `pressure = max(used, scanUsed)`:
 
@@ -263,17 +267,22 @@ stateDiagram-v2
     [*] --> normal
     normal --> pauseLowPriority: pressure >= 15% of Q
     pauseLowPriority --> normal: pressure <= 5% of Q
+    normal --> pauseAll: pressure >= 300% of Q
+    pauseLowPriority --> pauseAll: pressure >= 300% of Q
+    pauseAll --> pauseLowPriority: pressure < 300% of Q and > 5% of Q
+    pauseAll --> normal: pressure <= 5% of Q
 ```
 
-Hysteresis prevents scans from repeatedly stopping and starting around one
-threshold. HIGH priority scans are an escape path: they remain eligible while
+Hysteresis prevents low-priority scans from repeatedly stopping and starting
+around one threshold. HIGH priority scans are an escape path while only the
 LOW priority backlog is paused, subject to the request worker's maximum
-window.
+window. Once pressure reaches 300% of the quota, all new scans wait until
+pressure falls below that threshold; already-admitted scans continue running.
 
 Admission is decided using pressure before adding the new scan estimate. This
-allows one LOW priority scan to cross the pause threshold and make progress;
-subsequent LOW priority scans wait. HIGH priority scans can continue increasing
-`scanUsed` beyond the soft threshold.
+allows one scan to cross an admission threshold and make progress. Subsequent
+LOW priority scans wait above the low-priority threshold, and all subsequent
+scans wait at or above the 300% threshold.
 
 ### 6.3 Interaction with the Region request window
 
@@ -285,9 +294,9 @@ Both conditions must allow a scan:
 
 LOW priority requests use the ordinary window. HIGH priority requests can use
 the larger window configured by `region-request-max-window-multiplier` and also
-bypass `pauseLowPriority`. These two controls serve different purposes: the
-window bounds per-worker concurrency, while the quota coordinates memory
-pressure across all workers.
+bypass `pauseLowPriority`, but they cannot bypass `pauseAll`. These two controls
+serve different purposes: the window bounds per-worker concurrency, while the
+quota coordinates memory pressure across all workers.
 
 ### 6.4 Scan lease lifecycle
 
@@ -312,7 +321,10 @@ Rejected scans wait on the current `scanReady` channel. The controller closes
 and replaces this channel when a transition can make scans eligible:
 
 - Event usage falls far enough to change `pauseLowPriority` to `normal`.
-- Releasing a scan estimate changes the state to `normal`.
+- Event usage falls below 300% and changes `pauseAll` to a less restrictive
+  state.
+- Releasing a scan estimate changes the admission state to a less restrictive
+  state.
 - Subscription stop or client shutdown explicitly calls `WakeAll()`.
 
 The waiting admission loop always rechecks the worker window, span state, and
@@ -389,8 +401,9 @@ Operationally:
   are being intentionally paced.
 - Rising `used` with event waiters means downstream retention has reached the
   receive hard limit.
-- Persistent HIGH `scan_estimated` without scan waiters can be expected when active
-  requests are HIGH priority, because they bypass the soft scan gate.
+- Persistent HIGH `scan_estimated` without scan waiters can be expected below
+  300% when active requests are HIGH priority, because they bypass the soft
+  scan gate.
 
 ## 10. Limitations and trade-offs
 
@@ -403,8 +416,9 @@ Puller quota state, not exact heap usage.
 ### 10.2 Progress over a strict cap
 
 One oversized event can enter an empty controller, and HIGH priority scans can
-continue above the soft quota. These exceptions avoid deadlock and protect
-recovery progress, at the cost of allowing temporary overshoot.
+continue above the soft quota until pressure reaches 300%. These exceptions
+avoid deadlock and protect recovery progress, at the cost of allowing temporary
+overshoot.
 
 ### 10.3 Global rather than per-subscription fairness
 
