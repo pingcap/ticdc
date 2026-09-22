@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -404,6 +405,7 @@ func (c *Controller) onPeriodTask() {
 	// Drain liveness transitions and drain-target broadcasts are retry-based
 	// control loops. Drive them from the periodic task so they keep progressing
 	// even when no fresh heartbeat or node-change event arrives.
+	c.requestEventBrokerDispatcherCount()
 	c.advanceActiveDrainLiveness()
 	c.maybeBroadcastDispatcherDrainTarget(false)
 }
@@ -432,6 +434,8 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		c.syncDrainSchedulingPolicy()
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
+	case messaging.TypeEventBrokerDispatcherCountResponse:
+		c.drainController.ObserveEventBrokerDispatcherCountResponse(msg.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
