@@ -168,6 +168,7 @@ type subscribersWithIdleTime struct {
 
 type subscriptionStat struct {
 	subID          logpuller.SubscriptionID
+	bdrMode        bool
 	lowLatencyMode bool
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
@@ -552,7 +553,7 @@ func (e *eventStore) RegisterDispatcher(
 		tableKey := newTableStatsKey(dispatcherSpan)
 		if subStats, ok := e.dispatcherMeta.tableStats[tableKey]; ok {
 			for _, subStat := range subStats {
-				if subStat.lowLatencyMode != lowLatencyMode {
+				if subStat.bdrMode != bdrMode || subStat.lowLatencyMode != lowLatencyMode {
 					continue
 				}
 				// Check if this subStat's span contains the dispatcherSpan
@@ -628,6 +629,7 @@ func (e *eventStore) RegisterDispatcher(
 	chIndex := common.HashTableSpan(dispatcherSpan, len(e.chs))
 	subStat := &subscriptionStat{
 		subID:          e.subClient.AllocSubscriptionID(),
+		bdrMode:        bdrMode,
 		lowLatencyMode: lowLatencyMode,
 		tableSpan:      dispatcherSpan,
 		dbIndex:        chIndex,
