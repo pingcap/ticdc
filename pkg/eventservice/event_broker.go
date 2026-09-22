@@ -114,9 +114,6 @@ type eventBroker struct {
 
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
-	// dispatcherCount is conservative: it is incremented before a dispatcher
-	// becomes visible in the registry and decremented after it is removed.
-	dispatcherCount atomic.Int32
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
@@ -1075,12 +1072,6 @@ func (c *eventBroker) close() {
 	_ = c.g.Wait()
 }
 
-// getDispatcherCount returns the number of dispatchers registered in this
-// event broker, including table trigger dispatchers.
-func (c *eventBroker) getDispatcherCount() int {
-	return int(c.dispatcherCount.Load())
-}
-
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, commitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
 		d.lastReceivedResolvedTsTime.Store(time.Now())
@@ -1342,7 +1333,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		c.dispatcherCount.Inc()
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
 		c.metricsCollector.metricDispatcherCount.Inc()
 		log.Info("table trigger dispatcher register dispatcher",
@@ -1409,7 +1399,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		return err
 	}
-	c.dispatcherCount.Inc()
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
@@ -1453,7 +1442,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	} else {
 		c.dispatchers.Delete(id)
 	}
-	c.dispatcherCount.Dec()
 
 	stat.changefeedStat.removeDispatcher(id)
 	c.metricsCollector.metricDispatcherCount.Dec()

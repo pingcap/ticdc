@@ -160,7 +160,7 @@ func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
 		CompressionThreshold:  16384, // 16KB
 		EnableZstdCompression: false,
-		EnableDataSharing:     true,
+		EnableDataSharing:     false,
 	}
 }
 
@@ -207,7 +207,7 @@ type EventServiceConfig struct {
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
-		ScanLimitInBytes:         1024 * 1024 * 1024, // 1GB
+		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		LargeTxnThresholdInBytes: 1024 * 1024 * 1, // 1MB
