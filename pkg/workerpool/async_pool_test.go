@@ -72,7 +72,7 @@ func TestEventuallyRun(t *testing.T) {
 		defer cancelLoop()
 		for i := 0; i < 10; i++ {
 			log.Info("running pool")
-			err := runForDuration(ctx, time.Millisecond*500, func(ctx context.Context) error {
+			err := runForDuration(ctx, time.Millisecond*50, func(ctx context.Context) error {
 				return pool.Run(ctx)
 			})
 			if err != nil {

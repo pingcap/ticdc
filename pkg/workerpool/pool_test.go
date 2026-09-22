@@ -408,13 +408,16 @@ func TestCancelByAddEventContext(t *testing.T) {
 	defer cancel()
 	errg, ctx := errgroup.WithContext(ctx)
 
+	var producers sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		handler := pool.RegisterEvent(func(ctx context.Context, event interface{}) error {
 			<-ctx.Done()
 			return ctx.Err()
 		})
 
+		producers.Add(1)
 		errg.Go(func() error {
+			defer producers.Done()
 			for j := 0; j < 64; j++ {
 				err := handler.AddEvent(ctx, j)
 				if err != nil {
@@ -433,7 +436,9 @@ func TestCancelByAddEventContext(t *testing.T) {
 		})
 	}
 
-	time.Sleep(5 * time.Second)
+	// Wait until every event is accepted instead of sleeping a fixed duration:
+	// cancelling earlier would fail AddEvent and mask the cancellation path.
+	producers.Wait()
 	cancel()
 
 	err := errg.Wait()

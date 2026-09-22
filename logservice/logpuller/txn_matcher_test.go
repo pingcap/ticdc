@@ -293,10 +293,15 @@ func TestMatchMatchCachedRollbackRow(t *testing.T) {
 }
 
 func TestMatcherTryCleanUnmatchedValue(t *testing.T) {
+	// stalePrewriteTime is older than the clean threshold, so the matcher can be
+	// driven into the clean path without waiting for wall clock time to pass.
+	stalePrewriteTime := func() time.Time {
+		return time.Now().Add(-(clearCacheDelayInSecond + 1) * time.Second)
+	}
+
 	tests := []struct {
 		name         string
 		setupMatcher func() *matcher
-		wait         time.Duration
 		wantNilMap   bool
 	}{
 		{
@@ -306,7 +311,6 @@ func TestMatcherTryCleanUnmatchedValue(t *testing.T) {
 				m.unmatchedValue = nil
 				return m
 			},
-			wait:       6 * time.Second,
 			wantNilMap: true,
 		},
 		{
@@ -316,28 +320,25 @@ func TestMatcherTryCleanUnmatchedValue(t *testing.T) {
 				m.lastPrewriteTime = time.Now()
 				return m
 			},
-			wait:       1 * time.Second,
 			wantNilMap: false,
 		},
 		{
 			name: "should not clean when has values",
 			setupMatcher: func() *matcher {
 				m := newMatcher()
-				m.lastPrewriteTime = time.Now()
+				m.lastPrewriteTime = stalePrewriteTime()
 				m.unmatchedValue[matchKey{startTs: 1, key: "test"}] = &cdcpb.Event_Row{}
 				return m
 			},
-			wait:       6 * time.Second,
 			wantNilMap: false,
 		},
 		{
 			name: "should clean when time reached and empty",
 			setupMatcher: func() *matcher {
 				m := newMatcher()
-				m.lastPrewriteTime = time.Now()
+				m.lastPrewriteTime = stalePrewriteTime()
 				return m
 			},
-			wait:       6 * time.Second,
 			wantNilMap: true,
 		},
 	}
@@ -345,7 +346,6 @@ func TestMatcherTryCleanUnmatchedValue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.setupMatcher()
-			time.Sleep(tt.wait)
 			m.tryCleanUnmatchedValue()
 
 			if tt.wantNilMap {
