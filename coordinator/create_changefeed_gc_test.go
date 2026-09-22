@@ -227,6 +227,11 @@ func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) 
 }
 
 func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	if !kerneltype.IsClassic() {
 		t.Skip("classic mode only")
 	}
@@ -275,6 +280,11 @@ func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
 }
 
 func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	if !kerneltype.IsClassic() {
 		t.Skip("classic mode only")
 	}
