@@ -1,6 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.26.0
+go 1.26.8
 
 // Keep the Go 1.25 default behaviors that Go 1.26 changed:
 //   - urlstrictcolons=0: the sink URI may carry several Kafka broker endpoints
