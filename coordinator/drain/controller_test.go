@@ -38,8 +38,7 @@ func TestEventBrokerDispatcherCountFallsBackWhenOldLogCoordinatorDoesNotRespond(
 	// Avoid sleeping in the test while exercising the no-response path. In
 	// this path ObserveEventBrokerDispatcherCountResponse is never called.
 	c.mu.Lock()
-	c.ensureNodeStateLocked(target).eventBrokerDispatcherCountUnavailableSince =
-		time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
+	c.ensureNodeStateLocked(target).eventBrokerDispatcherCountUnavailableSince = time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
 	c.mu.Unlock()
 
 	count, observed = c.GetEventBrokerDispatcherCount(target)
@@ -57,8 +56,7 @@ func TestEventBrokerDispatcherCountFreshResponseResetsCoordinatorFallback(t *tes
 
 	c.mu.Lock()
 	st := c.ensureNodeStateLocked(target)
-	st.eventBrokerDispatcherCountUnavailableSince =
-		time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
+	st.eventBrokerDispatcherCountUnavailableSince = time.Now().Add(-eventBrokerDispatcherCountNoReportTimeout - time.Second)
 	c.mu.Unlock()
 
 	count, observed := c.GetEventBrokerDispatcherCount(target)

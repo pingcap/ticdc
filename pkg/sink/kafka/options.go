@@ -41,9 +41,9 @@ const (
 	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
-	// KafkaClientFranz is the default Kafka client implementation.
+	// KafkaClientFranz is the franz-go based Kafka client implementation.
 	KafkaClientFranz = "franz"
-	// KafkaClientSarama keeps the master implementation available as a fallback.
+	// KafkaClientSarama is the default Kafka client implementation.
 	KafkaClientSarama = "sarama"
 )
 
@@ -184,7 +184,7 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
-		Client:             KafkaClientFranz,
+		Client:             KafkaClientSarama,
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,

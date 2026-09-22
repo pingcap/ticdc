@@ -42,7 +42,7 @@ const (
 
 func TestKafkaClientSelection(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
-	require.Equal(t, KafkaClientFranz, NewOptions().Client)
+	require.Equal(t, KafkaClientSarama, NewOptions().Client)
 
 	for _, test := range []struct {
 		name     string
