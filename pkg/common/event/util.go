@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,10 +72,35 @@ type EventTestHelper struct {
 	partitionIDs map[string]map[string]int64
 }
 
+// Bootstrapping a mockstore (session.BootstrapSession) is what makes this helper
+// expensive: the first call on a store takes seconds because it creates and
+// populates the TiDB system tables, while a later call on the same store only
+// creates a domain and costs a fraction of that. A test binary creates hundreds
+// of helpers, so share one bootstrapped store per test binary and only create a
+// domain per helper. Close drops the user schemas so that helpers stay
+// isolated from each other.
+var (
+	sharedStoreMu sync.Mutex
+	sharedStore   kv.Storage
+	// liveHelpers counts helpers that are not closed yet, so that helpers which
+	// overlap in time (parallel tests) do not drop each other's schemas.
+	liveHelpers int
+)
+
+func sharedMockStore(t testing.TB) kv.Storage {
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedStore == nil {
+		store, err := mockstore.NewMockStore()
+		require.NoError(t, err)
+		sharedStore = store
+	}
+	return sharedStore
+}
+
 // NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
 func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestHelper {
-	store, err := mockstore.NewMockStore()
-	require.NoError(t, err)
+	store := sharedMockStore(t)
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
 		conf.AlterPrimaryKey = true
 	})
@@ -95,6 +121,11 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
+
+	sharedStoreMu.Lock()
+	liveHelpers++
+	sharedStoreMu.Unlock()
+
 	return &EventTestHelper{
 		t:                      t,
 		tk:                     tk,
@@ -105,6 +136,20 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 		tableInfos:             make(map[string]*common.TableInfo),
 		partitionIDs:           make(map[string]map[string]int64),
 	}
+}
+
+// CloseSharedEventTestStore closes the mock store that the helpers of a test
+// binary share. The store is kept open for the whole test binary to avoid
+// bootstrapping TiDB again for every helper, so a test binary that checks for
+// leaked goroutines has to close it after all tests finished.
+func CloseSharedEventTestStore() {
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedStore == nil {
+		return
+	}
+	sharedStore.Close() //nolint:errcheck
+	sharedStore = nil
 }
 
 // NewEventTestHelper creates a SchemaTestHelper
@@ -780,9 +825,41 @@ func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 
 // Close closes the helper
 func (s *EventTestHelper) Close() {
+	sharedStoreMu.Lock()
+	liveHelpers--
+	lastHelper := liveHelpers == 0
+	sharedStoreMu.Unlock()
+	if lastHelper {
+		// The store outlives the helpers of this test binary, so the schemas
+		// created by this helper have to be dropped to give the next helper the
+		// empty database it expects.
+		s.dropUserSchemas()
+	}
 	s.domain.Close()
-	s.storage.Close() //nolint:errcheck
 	vardef.EnableDistTask.Store(s.originalEnableDistTask)
+}
+
+// dropUserSchemas removes every schema that a test may have created, so the next
+// helper starts from the state of a freshly bootstrapped store.
+func (s *EventTestHelper) dropUserSchemas() {
+	// The session of a fresh helper does not see the schemas yet (its schema
+	// version is not loaded), so enumerate them through the domain infoschema.
+	for _, dbInfo := range s.domain.InfoSchema().AllSchemas() {
+		name := dbInfo.Name.L
+		if isSystemSchema(name) {
+			continue
+		}
+		s.tk.MustExec("drop database if exists `" + name + "`")
+	}
+	s.tk.MustExec("create database if not exists test")
+}
+
+func isSystemSchema(name string) bool {
+	switch strings.ToLower(name) {
+	case "information_schema", "performance_schema", "metrics_schema", "mysql", "sys":
+		return true
+	}
+	return false
 }
 
 func toTableInfosKey(schema, table string) string {
