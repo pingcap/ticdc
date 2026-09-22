@@ -418,7 +418,9 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 	defer func() {
 		require.NoError(t, batch.Close())
 	}()
-	addSchemaInfoToBatch(batch, snapshotTs, dbInfo)
+	require.NoError(t, addSchemaInfoToBatchWithEncryption(
+		context.Background(), batch, snapshotTs, dbInfo, nil, 0,
+	))
 	for _, info := range []*model.TableInfo{tableInfo, viewInfo} {
 		_, _, _, _, err := addTableInfoToBatchWithEncryption(
 			context.Background(), batch, snapshotTs, dbInfo, info, nil, 0, nil)
