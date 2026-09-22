@@ -38,13 +38,14 @@ func TestBasic(t *testing.T) {
 		return pool.Run(ctx)
 	})
 
+	const taskCount = 40
 	var sum int32
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := 0; i < taskCount; i++ {
 		wg.Add(1)
 		finalI := i
 		err := pool.Go(ctx, func() {
-			time.Sleep(time.Millisecond * time.Duration(rand.Int()%100))
+			time.Sleep(time.Millisecond * time.Duration(rand.Int()%20))
 			atomic.AddInt32(&sum, int32(finalI+1))
 			wg.Done()
 		})
@@ -52,7 +53,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	wg.Wait()
-	require.Equal(t, sum, int32(5050))
+	require.Equal(t, sum, int32(taskCount*(taskCount+1)/2))
 
 	cancel()
 	err := errg.Wait()

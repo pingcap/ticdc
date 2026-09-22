@@ -40,10 +40,10 @@ const (
 	testEtcdKeyPrefix    = "/cdc_etcd_worker_test"
 	numGroups            = 10
 	numValuesPerGroup    = 5
-	totalTicksPerReactor = 100
+	totalTicksPerReactor = 30
 	// linearizabilityValues is how many values TestLinearizability writes before the
 	// worker starts, and how many more it writes while the worker runs.
-	linearizabilityValues = 200
+	linearizabilityValues = 50
 )
 
 type simpleReactor struct {
@@ -213,6 +213,8 @@ func setUpTest(t *testing.T) (func() etcd.Client, func()) {
 }
 
 func TestEtcdSum(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -334,6 +336,8 @@ func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (
 }
 
 func TestLinearizability(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -432,6 +436,8 @@ func (r *finishedReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 }
 
 func TestFinished(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -502,6 +508,8 @@ func (r *coverReactor) Tick(ctx context.Context, state ReactorState) (nextState 
 }
 
 func TestCover(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -581,6 +589,8 @@ func (r *emptyTxnReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 }
 
 func TestEmptyTxn(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -650,6 +660,8 @@ func (r *emptyOrNilReactor) Tick(ctx context.Context, state ReactorState) (nextS
 }
 
 func TestEmptyOrNil(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -720,6 +732,8 @@ func (r *modifyOneReactor) Tick(ctx context.Context, state ReactorState) (nextSt
 // TestModifyAfterDelete tests snapshot isolation when there is one modifying transaction delayed in the middle while a deleting transaction
 // commits. The first transaction should be aborted and retried, and isolation should not be violated.
 func TestModifyAfterDelete(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 

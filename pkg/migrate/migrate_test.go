@@ -558,6 +558,8 @@ func TestMigrateGcServiceSafePoint(t *testing.T) {
 }
 
 func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
+	// The test counts the retries of the safepoint update, so it needs a
+	// context that outlives them.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mockClient := newMockPDClient(true)
@@ -598,7 +600,8 @@ func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
 }
 
 func TestListServiceSafePointFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	// The PD API client retries with backoff, the test only needs the failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	mockClient := newMockPDClient(true)
 

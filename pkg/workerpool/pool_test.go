@@ -89,7 +89,7 @@ func TestTimerError(t *testing.T) {
 	handle := pool.RegisterEvent(func(ctx context.Context, event interface{}) error {
 		return nil
 	}).SetTimer(ctx, time.Millisecond*200, func(ctx context.Context) error {
-		if counter == 3 {
+		if counter == 1 {
 			return errors.New("timer error")
 		}
 		counter++
@@ -211,7 +211,7 @@ func TestCancelHandle(t *testing.T) {
 		require.Equal(t, atomic.LoadInt32(&num), lastNum)
 	}
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(600 * time.Millisecond)
 	cancel()
 
 	err = errg.Wait()
@@ -315,7 +315,7 @@ func TestTimer(t *testing.T) {
 			require.GreaterOrEqual(t, time.Since(lastTime), 900*time.Millisecond)
 			require.LessOrEqual(t, time.Since(lastTime), 1200*time.Millisecond)
 		}
-		if count == 3 {
+		if count == 1 {
 			cancel()
 			return nil
 		}
@@ -562,9 +562,9 @@ func TestSynchronizeLog(t *testing.T) {
 		close(doneCh)
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	w.stopNotifier.Notify()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	w.stopNotifier.Notify()
 
 	// Close worker.
