@@ -11,9 +11,9 @@ SINK_TYPE="$1"
 function ensure_downstream_contains() {
 	local sql=$1
 	local expected=$2
-	local retries=${3:-60}
-	ensure "$retries" run_sql "$sql" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains "$expected"
+	local retry=${3:-60}
+
+	ensure "$retry" "run_sql \"$sql\" \"$DOWN_TIDB_HOST\" \"$DOWN_TIDB_PORT\" && check_contains \"$expected\""
 }
 
 function cleanup_flashback_route_databases() {
