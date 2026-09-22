@@ -206,8 +206,8 @@ if [[ "$restart" == "true" ]]; then
 	fi
 
 	guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
-	# A later test phase may reuse the log suffix while this guard is exiting.
-	guard_stop_file="$workdir/cdc$logsuffix.guard_stopped.$pid"
+	# Keep stop state across phases that reuse a suffix or recreate the workdir.
+	guard_stop_file="$OUT_DIR/.cdc_guard_stopped.$TEST_NAME.$pid"
 	guard_lock_dir="$guard_stop_file.lock"
 	rm -f "$guard_failure_file" "$guard_stop_file"
 	guard_registry="$OUT_DIR/.cdc_guard_stops.$TEST_NAME"
