@@ -68,7 +68,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20260814130643-17c0dd0fe42b
 	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260813153327-eadd1201d6e3
-	github.com/pingcap/tiflow v0.0.0-20260907022136-3d51014e1bdc
+	github.com/pingcap/tiflow v0.0.0-20260723070929-e8736df4fe74
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/r3labs/diff v1.1.0
@@ -400,8 +400,5 @@ require (
 	sourcegraph.com/sourcegraph/appdash-data v0.0.0-20151005221446-73f23eafcf67 // indirect
 )
 
-replace (
-	// copy from TiDB
-	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tiflow => github.com/3AceShowHand/tiflow v0.0.0-20260907022136-3d51014e1bdc
-)
+// copy from TiDB
+replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
