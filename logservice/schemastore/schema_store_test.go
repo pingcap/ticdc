@@ -114,6 +114,27 @@ func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
 	}
 }
 
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	keyspaceCtx, keyspaceCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {
+				ctx:    keyspaceCtx,
+				cancel: keyspaceCancel,
+			},
+		},
+		tombstoneKeyspaces: make(map[uint32]struct{}),
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
+
 func TestRemoveTombstoneKeyspace(t *testing.T) {
 	const keyspaceID = uint32(42)
 	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
