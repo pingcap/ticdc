@@ -89,6 +89,133 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	require.Equal(t, e, reverseEvent)
 }
 
+func TestDMLEventChecksumEncodeAndDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		checksums []*integrity.Checksum
+	}{
+		{name: "nil"},
+		{name: "empty", checksums: []*integrity.Checksum{}},
+		{
+			name: "mixed",
+			checksums: []*integrity.Checksum{
+				{Current: 123, Version: 1},
+				{Current: 456, Previous: 123, Version: 2, Corrupted: true},
+				{Previous: 456, Version: 1},
+				nil,
+				{},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
+			input.RowTypes = []common.RowType{
+				common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeUpdate,
+				common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert,
+			}
+			input.RowKeys = [][]byte{
+				[]byte("insert"), []byte("update"), []byte("update"),
+				[]byte("delete"), []byte("no-checksum"), []byte("zero-checksum"),
+			}
+			input.Length = 5
+			input.Checksum = tc.checksums
+			data, err := input.Marshal()
+			require.NoError(t, err)
+
+			output := &DMLEvent{
+				Checksum:       []*integrity.Checksum{{Current: 789}},
+				checksumOffset: 1,
+			}
+			require.NoError(t, output.Unmarshal(data))
+			require.Equal(t, input.Checksum, output.Checksum)
+			output.eventSize = 0
+			require.Equal(t, input, output)
+		})
+	}
+}
+
+func TestDMLEventChecksumCompatibility(t *testing.T) {
+	// A legacy V1 event with zero-valued metadata, no row types, and no row keys.
+	legacyPayload := make([]byte, 80)
+	data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, legacyPayload)
+	require.NoError(t, err)
+	output := &DMLEvent{
+		Checksum:       []*integrity.Checksum{{Current: 123}},
+		checksumOffset: 1,
+	}
+	require.NoError(t, output.Unmarshal(data))
+	require.Nil(t, output.Checksum)
+	require.Zero(t, output.checksumOffset)
+	roundTrip, err := output.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, data, roundTrip, "events without checksums must retain the legacy encoding")
+}
+
+func TestDMLEventChecksumDecodeInvalidData(t *testing.T) {
+	input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
+	input.Checksum = []*integrity.Checksum{{Current: 123, Previous: 456, Version: 2, Corrupted: true}}
+	payload, err := input.encodeV1()
+	require.NoError(t, err)
+	// The first 80 bytes contain the metadata and empty row type/key lists.
+	// Every nonempty, incomplete checksum suffix should return a decode error.
+	for end := 81; end < len(payload); end++ {
+		data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload[:end])
+		require.NoError(t, err)
+		output := &DMLEvent{}
+		require.ErrorContains(t, output.Unmarshal(data), "incomplete DML checksum", "payload length: %d", end)
+	}
+	// Reject an oversized count before allocating the checksum slice.
+	binary.BigEndian.PutUint32(payload[80:84], ^uint32(0))
+	data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload)
+	require.NoError(t, err)
+	output := &DMLEvent{}
+	require.ErrorContains(t, output.Unmarshal(data), "incomplete DML checksum entries")
+}
+
+func TestBatchDMLEventChecksumEncodeAndDecode(t *testing.T) {
+	tableInfo := newTestTableInfo(t, false, false)
+	batch := NewBatchDMLEvent()
+	for _, checksums := range [][]*integrity.Checksum{
+		{{Current: 123, Version: 1}, {Current: 456, Previous: 123, Version: 2, Corrupted: true}, {Previous: 456, Version: 1}},
+		{nil, {}, {Previous: 789, Version: 2}},
+		nil,
+	} {
+		dml := newDMLEventForTest(t, tableInfo,
+			[]common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeDelete},
+			[][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}})
+		dml.Checksum = checksums
+		rows := dml.Rows
+		require.NoError(t, batch.AppendDMLEvent(dml))
+		batch.Rows.Append(rows, 0, rows.NumRows())
+	}
+	data, err := batch.Marshal()
+	require.NoError(t, err)
+	output := &BatchDMLEvent{}
+	require.NoError(t, output.Unmarshal(data))
+	output.AssembleRows(tableInfo)
+	require.Len(t, output.DMLEvents, len(batch.DMLEvents))
+	for i, expected := range batch.DMLEvents {
+		actual := output.DMLEvents[i]
+		require.Equal(t, expected.Checksum, actual.Checksum)
+		for range expected.Len() {
+			expectedRow, ok := expected.GetNextRow()
+			require.True(t, ok)
+			actualRow, ok := actual.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, expectedRow.RowType, actualRow.RowType)
+			require.Equal(t, expectedRow.Checksum, actualRow.Checksum)
+			if !expectedRow.Row.IsEmpty() {
+				require.Equal(t, expectedRow.Row.GetInt64(0), actualRow.Row.GetInt64(0))
+			}
+			if !expectedRow.PreRow.IsEmpty() {
+				require.Equal(t, expectedRow.PreRow.GetInt64(0), actualRow.PreRow.GetInt64(0))
+			}
+		}
+		_, ok := actual.GetNextRow()
+		require.False(t, ok)
+	}
+}
+
 // TestBatchDMLEvent test the Marshal and Unmarshal of BatchDMLEvent.
 func TestBatchDMLEvent(t *testing.T) {
 	helper := NewEventTestHelper(t)

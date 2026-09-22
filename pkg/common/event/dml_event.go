@@ -39,6 +39,8 @@ const (
 	DMLEventVersion1 = 1
 	// BatchDMLEventVersion1 is the version of the BatchDMLEvent struct.
 	BatchDMLEventVersion1 = 1
+	// dmlChecksumSize includes presence(1), current(4), previous(4), version(8), and corrupted(1).
+	dmlChecksumSize = 1 + 4 + 4 + 8 + 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -898,6 +900,9 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
 	}
+	if t.Checksum != nil {
+		size += 4 + len(t.Checksum)*dmlChecksumSize
+	}
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -948,6 +953,25 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 		offset += 4
 		copy(buf[offset:], rowKey)
 		offset += len(rowKey)
+	}
+	// Append optional checksum metadata. Older V1 readers ignore trailing fields.
+	if t.Checksum != nil {
+		binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.Checksum)))
+		offset += 4
+		for _, checksum := range t.Checksum {
+			entry := buf[offset : offset+dmlChecksumSize]
+			offset += dmlChecksumSize
+			if checksum == nil {
+				continue
+			}
+			entry[0] = 1
+			binary.BigEndian.PutUint32(entry[1:5], checksum.Current)
+			binary.BigEndian.PutUint32(entry[5:9], checksum.Previous)
+			binary.BigEndian.PutUint64(entry[9:17], uint64(checksum.Version))
+			if checksum.Corrupted {
+				entry[17] = 1
+			}
+		}
 	}
 	return buf, nil
 }
@@ -1004,6 +1028,34 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 		t.RowKeys[i] = make([]byte, len)
 		copy(t.RowKeys[i], data[offset:offset+int(len)])
 		offset += int(len)
+	}
+	// Older V1 payloads end after RowKeys and have no checksum metadata.
+	t.Checksum = nil
+	t.checksumOffset = 0
+	if offset == len(data) {
+		return nil
+	}
+	if len(data)-offset < 4 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML checksum count")
+	}
+	checksumCount := binary.BigEndian.Uint32(data[offset:])
+	offset += 4
+	if uint64(checksumCount) > uint64((len(data)-offset)/dmlChecksumSize) {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML checksum entries")
+	}
+	t.Checksum = make([]*integrity.Checksum, int(checksumCount))
+	for i := range t.Checksum {
+		entry := data[offset : offset+dmlChecksumSize]
+		offset += dmlChecksumSize
+		if entry[0] == 0 {
+			continue
+		}
+		t.Checksum[i] = &integrity.Checksum{
+			Current:   binary.BigEndian.Uint32(entry[1:5]),
+			Previous:  binary.BigEndian.Uint32(entry[5:9]),
+			Version:   int(binary.BigEndian.Uint64(entry[9:17])),
+			Corrupted: entry[17] != 0,
+		}
 	}
 	return nil
 }
