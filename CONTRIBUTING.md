@@ -14,7 +14,7 @@ your contribution accepted.
 
 Developing TiCDC requires:
 
-* [Go 1.23+](https://go.dev/doc/code)
+* [Go 1.26.8+](https://go.dev/doc/code)
 * An internet connection to download the dependencies
 
 Simply run `make cdc` to build the program.

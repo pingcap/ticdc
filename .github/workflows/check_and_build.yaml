@@ -66,7 +66,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: tools/bin
-          key: macos-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+          key: macos-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
 
       - name: ${{ matrix.task.name }}
         run: ${{ matrix.task.command }}
