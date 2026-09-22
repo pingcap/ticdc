@@ -99,6 +99,16 @@ func TestScanRequestCoalescing(t *testing.T) {
 	require.False(t, disp.isScanBusy())
 	e := <-broker.messageCh[0]
 	require.Equal(t, event.TypeReadyEvent, e.msgType)
+	ready, ok := e.e.(*event.ReadyEvent)
+	require.True(t, ok)
+	require.Equal(t, uint64(102), ready.ResolvedTs)
+
+	// While waiting for RESET, retries must carry the latest progress.
+	disp.receivedResolvedTs.Store(103)
+	disp.lastReadySendTime.Store(0)
+	require.False(t, broker.checkAndSendReady(disp))
+	e = <-broker.messageCh[0]
+	require.Equal(t, uint64(103), e.e.(*event.ReadyEvent).ResolvedTs)
 }
 
 type scanLifecycleTrackingContext struct {
@@ -213,17 +223,24 @@ func TestNotifyFastPathSerializesRunningNotification(t *testing.T) {
 	messageCh <- nil
 	broker.messageCh[disp.messageWorkerIndex] = messageCh
 
+	// The schema lookup happens after the scan range is captured. Observing
+	// Running alone does not guarantee that the first notification captured 200.
+	scanRangeReady := make(chan struct{})
+	schemaStore.onGetTableDDLEventState = sync.OnceFunc(func() {
+		close(scanRangeReady)
+	})
+
 	done := make(chan struct{})
 	go func() {
 		broker.onNotify(disp, 200, 0)
 		close(done)
 	}()
 
-	require.Eventually(t, func() bool {
-		disp.scanMu.Lock()
-		defer disp.scanMu.Unlock()
-		return disp.scanState == dispatcherScanRunning
-	}, time.Second, time.Millisecond)
+	select {
+	case <-scanRangeReady:
+	case <-time.After(time.Second):
+		t.Fatal("first notification did not capture its scan range")
+	}
 
 	broker.onNotify(disp, 201, 0)
 	disp.scanMu.Lock()

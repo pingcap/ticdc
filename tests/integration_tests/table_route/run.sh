@@ -14,6 +14,25 @@ ROUTE_NAME_EXTRA_TARGET_DB=route_name_extra_target
 ROUTE_FAILPOINT_BLOCK_BEFORE_WRITE=github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite
 ROUTE_CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 
+# verify_correlated_view <target_extra_db> <view> <expected fragments...>
+# Checks the routed view definition and compares upstream and downstream rows;
+# users 2 and 4 have no orders, so a lost correlation changes the row set.
+function verify_correlated_view() {
+	local target_extra_db=$1
+	local view=$2
+	shift 2
+
+	check_table_not_exists "source_extra_db.${view}" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "SHOW CREATE VIEW ${target_extra_db}.${view}_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	for fragment in "$@"; do
+		check_contains "$fragment"
+	done
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM source_extra_db.${view}" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+	run_sql "SELECT GROUP_CONCAT(id ORDER BY id) AS matched_ids FROM ${target_extra_db}.${view}_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains 'matched_ids: 1,3'
+}
+
 function verify_table_route_result() {
 	local work_dir=$1
 	local target_db=${2:-target_db}
@@ -47,7 +66,30 @@ function verify_table_route_result() {
 	check_contains "orders_column_view_from_default_routed"
 	check_contains "\`${target_db}\`.\`orders_routed\`.\`id\`"
 	check_contains "FROM \`${target_db}\`.\`orders_routed\`"
+	verify_correlated_view "$target_extra_db" correlated_users_view \
+		"\`${target_db}\`.\`orders_routed\`.\`user_id\`" \
+		"\`${target_db}\`.\`users_routed\`.\`id\`"
+
+	# Aliased correlated references keep the alias while the table is routed.
+	verify_correlated_view "$target_extra_db" aliased_correlated_view \
+		"FROM \`${target_db}\`.\`users_routed\` AS \`u\`" \
+		"\`o\`.\`user_id\`=\`u\`.\`id\`"
+
+	# The nested view references `users` two SELECTs out, and the parent alias `o1`.
+	verify_correlated_view "$target_extra_db" nested_correlated_view \
+		"\`${target_db}\`.\`users_routed\`.\`id\`" \
+		"\`o1\`.\`user_id\`=\`${target_db}\`.\`users_routed\`.\`id\`"
 	check_table_not_exists "$target_db.transient_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
+	# Compare view results explicitly: table data checks alone cannot detect a
+	# CTE accidentally reading an existing physical table, lost correlations,
+	# or qualifiers routed differently from their FROM declaration.
+	sed 's/_routed//g' "$CUR/data/cte_query.sql" |
+		mysql -uroot -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -Dsource_db -N -B >"$work_dir/cte_upstream.txt"
+	mysql -uroot -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -D"$target_db" -N -B \
+		<"$CUR/data/cte_query.sql" >"$work_dir/cte_downstream.txt"
+	diff -u "$CUR/data/cte_query.result" "$work_dir/cte_upstream.txt"
+	diff -u "$work_dir/cte_upstream.txt" "$work_dir/cte_downstream.txt"
 }
 
 function drop_table_route_source_databases() {
@@ -327,6 +369,72 @@ function run_route_admission_failover_case() {
 	cleanup_name_change_route_databases
 }
 
+function cleanup_flashback_route_databases() {
+	run_sql "DROP DATABASE IF EXISTS source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS new_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS table_only_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS old_target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS new_target_db;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+}
+
+function run_flashback_database_case() {
+	local changefeed_id=table-route-flashback-database
+	local start_ts
+
+	echo "[$(date)] <<<<<< run table route FLASHBACK DATABASE case >>>>>>"
+	cleanup_flashback_route_databases
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$CUR/conf/flashback_changefeed.toml"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	run_sql "CREATE DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE source_db.t1 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_db.t1 VALUES (1, 'before flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "target_db.t1_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE source_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "target_db.t1_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM target_db.t1_routed WHERE id = 1;" "before flashback" 90
+	run_sql "INSERT INTO source_db.t1 VALUES (2, 'after flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM target_db.t1_routed WHERE id = 2;" "after flashback" 90
+
+	run_sql "CREATE DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE table_only_db.t2 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO table_only_db.t2 VALUES (1, 'before table-only flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "table_only_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "table_only_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE table_only_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "table_only_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM table_only_db.t2_routed WHERE id = 1;" "before table-only flashback" 90
+	run_sql "INSERT INTO table_only_db.t2 VALUES (2, 'after table-only flashback');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM table_only_db.t2_routed WHERE id = 2;" "after table-only flashback" 90
+
+	run_sql "CREATE DATABASE old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "CREATE TABLE old_db.t2 (id INT PRIMARY KEY, value VARCHAR(50));" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO old_db.t2 VALUES (1, 'before flashback to');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "old_target_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql "DROP DATABASE old_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_db_not_exists "old_target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	run_sql "FLASHBACK DATABASE old_db TO new_db;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "new_target_db.t2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_db_not_exists "old_target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	ensure_downstream_contains "SELECT value FROM new_target_db.t2_routed WHERE id = 1;" "before flashback to" 90
+	run_sql "INSERT INTO new_db.t2 VALUES (2, 'after flashback to');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT value FROM new_target_db.t2_routed WHERE id = 2;" "after flashback to" 90
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	cdc_cli_changefeed remove -c "$changefeed_id"
+	cleanup_flashback_route_databases
+}
+
 function run_mysql() {
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 
@@ -341,6 +449,8 @@ function run_mysql() {
 	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	verify_table_route_result "$WORK_DIR"
+	run_sql_file "$CUR/data/exchange_partition.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 	cdc_cli_changefeed remove -c "$normal_changefeed_id"
@@ -361,6 +471,7 @@ function run_mysql() {
 	cdc_cli_changefeed remove -c "$split_changefeed_id"
 
 	run_pause_resume_name_change_case
+	run_flashback_database_case
 	run_route_admission_failover_case
 
 	cleanup_process "$CDC_BINARY"
