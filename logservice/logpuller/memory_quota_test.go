@@ -172,11 +172,20 @@ func TestMemoryQuotaPausesAllScansAtThreeTimesCapacity(t *testing.T) {
 	)
 	require.False(t, admitted)
 
+	quota.ReleaseEvent(99)
+	select {
+	case <-retry:
+		t.Fatal("scan admission resumed above 200%")
+	default:
+	}
+	state = getMemoryQuotaTestState(quota)
+	require.Equal(t, admissionPauseAll, state.level)
+
 	quota.ReleaseEvent(1)
 	select {
 	case <-retry:
 	default:
-		t.Fatal("scan admission was not notified after memory fell below 300%")
+		t.Fatal("scan admission was not notified after memory fell to 200%")
 	}
 	state = getMemoryQuotaTestState(quota)
 	require.Equal(t, admissionPauseLowPriority, state.level)
@@ -184,7 +193,7 @@ func TestMemoryQuotaPausesAllScansAtThreeTimesCapacity(t *testing.T) {
 	scanBytes, _, admitted = quota.AcquireScan(highPriorityRegion, currentTs)
 	require.True(t, admitted)
 	quota.ReleaseScan(scanBytes)
-	quota.ReleaseEvent(299)
+	quota.ReleaseEvent(200)
 }
 
 func TestMemoryQuotaPausesAllScansFromScanEstimates(t *testing.T) {
@@ -213,7 +222,7 @@ func TestMemoryQuotaPausesAllScansFromScanEstimates(t *testing.T) {
 	select {
 	case <-retry:
 	default:
-		t.Fatal("scan admission was not notified after scan estimates fell below 300%")
+		t.Fatal("scan admission was not notified after scan estimates fell to 200%")
 	}
 	scanBytes, _, admitted := quota.AcquireScan(highPriorityRegion, currentTs)
 	require.True(t, admitted)
@@ -247,6 +256,7 @@ func TestMemoryQuotaDerivedLimitsSaturate(t *testing.T) {
 	quota := newMemoryQuotaController(math.MaxUint64, math.MaxUint64/2+1)
 	require.Equal(t, uint64(math.MaxUint64), quota.hardLimit)
 	require.Equal(t, uint64(math.MaxUint64), quota.pauseAllScansLimit)
+	require.Equal(t, uint64(math.MaxUint64), quota.resumeAllScansLimit)
 
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, 24*time.Hour)

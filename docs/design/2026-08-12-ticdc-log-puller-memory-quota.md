@@ -48,7 +48,7 @@ The design has the following goals:
 2. Reduce the number of new low-priority initial scans before event memory
    reaches the receive-path hard limit.
 3. Preserve progress for high-priority recovery and caught-up workloads until
-   memory pressure reaches the emergency scan-admission limit.
+   memory pressure reaches the upper scan-admission limit.
 4. Keep event accounting inexpensive because it runs once per received entry
    batch.
 5. Wake blocked goroutines without lost notifications during release,
@@ -127,11 +127,12 @@ The following thresholds are derived internally:
 | Resume low-priority scans | `floor(0.05 * Q)` | Resume with hysteresis. |
 | Event receive hard limit | `2 * Q` | Block additional entry events. |
 | Pause all scans | `3 * Q` | Stop starting new initial scans. |
+| Resume high-priority scans | `2 * Q` | Resume with hysteresis. |
 | Maximum scan estimate | `16 * B` | Bound one scan's predicted charge. |
 
 With the defaults, low-priority scan admission pauses around 153.6 MiB,
 resumes around 51.2 MiB, event receiving blocks around 2 GiB, and all new scan
-admission pauses at 3 GiB.
+admission pauses at 3 GiB and resumes at 2 GiB.
 
 `memory-quota` is called a soft capacity because high-priority scans may pass
 the scan gate and already-owned event memory is not discarded. The receive
@@ -269,7 +270,7 @@ stateDiagram-v2
     pauseLowPriority --> normal: pressure <= 5% of Q
     normal --> pauseAll: pressure >= 300% of Q
     pauseLowPriority --> pauseAll: pressure >= 300% of Q
-    pauseAll --> pauseLowPriority: pressure < 300% of Q and > 5% of Q
+    pauseAll --> pauseLowPriority: pressure <= 200% of Q and > 5% of Q
     pauseAll --> normal: pressure <= 5% of Q
 ```
 
@@ -277,7 +278,7 @@ Hysteresis prevents low-priority scans from repeatedly stopping and starting
 around one threshold. HIGH priority scans are an escape path while only the
 LOW priority backlog is paused, subject to the request worker's maximum
 window. Once pressure reaches 300% of the quota, all new scans wait until
-pressure falls below that threshold; already-admitted scans continue running.
+pressure falls to 200%; already-admitted scans continue running.
 
 Admission is decided using pressure before adding the new scan estimate. This
 allows one scan to cross an admission threshold and make progress. Subsequent
@@ -321,7 +322,7 @@ Rejected scans wait on the current `scanReady` channel. The controller closes
 and replaces this channel when a transition can make scans eligible:
 
 - Event usage falls far enough to change `pauseLowPriority` to `normal`.
-- Event usage falls below 300% and changes `pauseAll` to a less restrictive
+- Event usage falls to 200% and changes `pauseAll` to a less restrictive
   state.
 - Releasing a scan estimate changes the admission state to a less restrictive
   state.

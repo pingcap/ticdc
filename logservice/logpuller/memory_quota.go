@@ -38,6 +38,10 @@ const (
 	// reaches 300% of the soft capacity.
 	defaultPauseAllScansRatio uint64 = 3
 
+	// defaultResumeAllScansRatio resumes high-priority scans after memory
+	// pressure falls to 200% of the soft capacity.
+	defaultResumeAllScansRatio uint64 = 2
+
 	// defaultHardLimitRatio blocks receiving more events when accounted event
 	// memory reaches twice the soft capacity.
 	defaultHardLimitRatio = 2.0
@@ -164,6 +168,7 @@ type memoryQuotaController struct {
 	pauseLowPriorityLimit  uint64
 	resumeLowPriorityLimit uint64
 	pauseAllScansLimit     uint64
+	resumeAllScansLimit    uint64
 	hardLimit              uint64
 
 	scanEstimate uint64
@@ -178,12 +183,17 @@ func newMemoryQuotaController(capacity, scanBaseSize uint64) *memoryQuotaControl
 	if capacity <= math.MaxUint64/defaultPauseAllScansRatio {
 		pauseAllScansLimit = capacity * defaultPauseAllScansRatio
 	}
+	resumeAllScansLimit := uint64(math.MaxUint64)
+	if capacity <= math.MaxUint64/defaultResumeAllScansRatio {
+		resumeAllScansLimit = capacity * defaultResumeAllScansRatio
+	}
 	c := &memoryQuotaController{
 		capacity:               capacity,
 		level:                  admissionNormal,
 		pauseLowPriorityLimit:  uint64(math.Ceil(float64(capacity) * defaultPauseLowPriorityRatio)),
 		resumeLowPriorityLimit: uint64(float64(capacity) * defaultResumeLowPriorityRatio),
 		pauseAllScansLimit:     pauseAllScansLimit,
+		resumeAllScansLimit:    resumeAllScansLimit,
 		hardLimit:              hardLimit,
 		scanEstimate:           scanBaseSize,
 		eventNotifier:          newEventMemoryNotifier(),
@@ -293,7 +303,7 @@ func (c *memoryQuotaController) ReleaseEvent(bytes uint64) {
 		}
 	}
 	if crossesDown(previousUsed, used, c.resumeLowPriorityLimit) ||
-		crossesBelow(previousUsed, used, c.pauseAllScansLimit) {
+		crossesDown(previousUsed, used, c.resumeAllScansLimit) {
 		c.refreshAdmissionAndNotify()
 	}
 	c.eventNotifier.notify()
@@ -384,7 +394,7 @@ func (c *memoryQuotaController) refreshLevelLocked() {
 	pressure := max(c.used.Load(), c.scanUsed)
 	switch c.level {
 	case admissionPauseAll:
-		if pressure < c.pauseAllScansLimit {
+		if pressure <= c.resumeAllScansLimit {
 			if pressure <= c.resumeLowPriorityLimit {
 				c.level = admissionNormal
 			} else {
@@ -412,10 +422,6 @@ func wouldExceed(used, bytes, limit uint64) bool {
 
 func crossesDown(previous, current, threshold uint64) bool {
 	return previous > threshold && current <= threshold
-}
-
-func crossesBelow(previous, current, threshold uint64) bool {
-	return previous >= threshold && current < threshold
 }
 
 func subtractFloor(value, delta uint64) uint64 {
