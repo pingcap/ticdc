@@ -38,11 +38,10 @@ type mockSchemaStore struct {
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 
-	registerTableError  error
 	registerTableHook   func()
 	unregisterTableHook func()
 	getTableInfoError   error
-	registerTableError error
+	registerTableError  error
 
 	onGetTableDDLEventState func()
 }
