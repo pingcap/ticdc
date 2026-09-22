@@ -209,7 +209,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 	clusterID := info.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
-		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
+		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz)
 		s.brokers[clusterID] = c
 	}
 

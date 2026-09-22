@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -103,7 +102,7 @@ type eventBroker struct {
 	// eventStore is the source of the events, eventBroker get the events from the eventStore.
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
-	mounter     event.Mounter
+	tz          *time.Location
 	timezone    string
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
@@ -153,7 +152,6 @@ func newEventBroker(
 	schemaStore schemastore.SchemaStore,
 	mc messaging.MessageSender,
 	tz *time.Location,
-	integrity *integrity.Config,
 ) *eventBroker {
 	// These numbers are define by real test result.
 	// We noted that:
@@ -177,7 +175,7 @@ func newEventBroker(
 		tidbClusterID:           id,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
-		mounter:                 event.NewMounter(tz, integrity),
+		tz:                      tz,
 		timezone:                tz.String(),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
@@ -811,7 +809,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
+	scanner := newEventScanner(c.eventStore, c.schemaStore, task.changefeedStat.mounter, task.info.GetMode())
 	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
 	defer finishActiveScan()
 	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
@@ -1645,6 +1643,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
+	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)
