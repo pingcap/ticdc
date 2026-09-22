@@ -49,6 +49,9 @@ func main() {
 	defer client.Close()
 	admin := kadm.NewClient(client)
 	ctx := context.Background()
+	if err := client.Ping(ctx); err != nil {
+		log.Fatalf("create Kafka admin client: %v", err)
+	}
 
 	if *alter {
 		// Preserve the full-state AlterConfigs behavior of the original tool.
