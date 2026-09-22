@@ -402,6 +402,25 @@ func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestMysqlWriterExecRecoverSchemaDDL(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRecoverSchema),
+		SchemaName: "test",
+		Query:      "FLASHBACK DATABASE `test`",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("FLASHBACK DATABASE `test`").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(ddlEvent))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()

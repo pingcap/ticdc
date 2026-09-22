@@ -309,6 +309,9 @@ func TestShouldDiscardDDL(t *testing.T) {
 	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionCreateSchema, nil))
 	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionCreateTable, nil))
 	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionCreateTable, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionRecoverSchema, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionRecoverSchema, nil))
+	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionRecoverSchema, nil))
 }
 
 func TestShouldIgnoreDDL(t *testing.T) {
@@ -614,7 +617,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 41)
+	require.Len(t, ddlWhiteListMap, 42)
 	type testCase struct {
 		model.ActionType
 		allowed bool
@@ -639,6 +642,7 @@ func TestIsSchemaDDL(t *testing.T) {
 		{model.ActionCreateSchema, true},
 		{model.ActionDropSchema, true},
 		{model.ActionModifySchemaCharsetAndCollate, true},
+		{model.ActionRecoverSchema, true},
 		{model.ActionCreateTable, false},
 		{model.ActionDropTable, false},
 		{model.ActionTruncateTable, false},

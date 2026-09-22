@@ -409,10 +409,12 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	if len(event.GetTargetSchemaName()) == 0 {
 		return false
 	}
-	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
+	switch event.GetDDLType() {
+	case timodel.ActionCreateSchema, timodel.ActionDropSchema, timodel.ActionRecoverSchema:
 		return false
+	default:
+		return true
 	}
-	return true
 }
 
 func getTiDBVersion(db *sql.DB) version.ServerInfo {

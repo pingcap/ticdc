@@ -251,6 +251,36 @@ func buildDropSchemaJobForTest(schemaID int64, finishedTs uint64) *model.Job {
 	}
 }
 
+func buildRecoverSchemaJobForTest(schemaID int64, schemaName string, tableInfos []*model.TableInfo, finishedTs uint64) *model.Job {
+	recoverTableInfos := make([]*model.RecoverTableInfo, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
+		recoverTableInfos = append(recoverTableInfos, &model.RecoverTableInfo{
+			SchemaID:      schemaID,
+			TableInfo:     tableInfo,
+			SnapshotTS:    finishedTs,
+			OldSchemaName: schemaName,
+			OldTableName:  tableInfo.Name.O,
+		})
+	}
+	job := &model.Job{
+		Version:  model.JobVersion2,
+		Type:     model.ActionRecoverSchema,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+	job.FillArgs(&model.RecoverArgs{
+		RecoverInfo: &model.RecoverSchemaInfo{
+			DBInfo:            &model.DBInfo{ID: schemaID, Name: ast.NewCIStr(schemaName)},
+			RecoverTableInfos: recoverTableInfos,
+			SnapshotTS:        finishedTs,
+			OldSchemaName:     ast.NewCIStr(schemaName),
+		},
+	})
+	return job
+}
+
 func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateTable,
