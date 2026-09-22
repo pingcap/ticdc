@@ -19,14 +19,55 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
+// newInsertEventForTest builds an insert event by hand: bootstrapping the TiDB
+// mock store just to get a table info dominates this package's test time.
+func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
+	nameFieldType.SetFlen(32)
+
+	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("t"),
+		UpdateTS: 100,
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("id"), FieldType: *idFieldType, State: model.StatePublic, Offset: 0},
+			{ID: 2, Name: ast.NewCIStr("name"), FieldType: *nameFieldType, State: model.StatePublic, Offset: 1},
+		},
+	})
+	require.NotNil(t, tableInfo)
+
+	event := commonEvent.NewDMLEvent(
+		commonType.NewDispatcherID(),
+		tableInfo.TableName.TableID,
+		1,
+		2,
+		tableInfo,
+	)
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendRow(chunk.MutRowFromValues(int64(1), "test").ToRow())
+	rows.AppendRow(chunk.MutRowFromValues(int64(2), "test2").ToRow())
+	event.SetRows(rows)
+	event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+	event.Length = 2
+	event.TableInfoVersion = tableInfo.GetUpdateTS()
+	return event
+}
+
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
+	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -35,18 +76,10 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	var count atomic.Int32
 	count.Swap(0)
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
 	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      "create table t (id int primary key, name varchar(32))",
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 1,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -59,9 +92,9 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	}
 
 	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      "create table t (id int primary key, name varchar(32))",
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 4,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -73,7 +106,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent := newInsertEventForTest(t)
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
@@ -83,7 +116,9 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
 	ddlEvent2.PostFlush()
 
@@ -91,7 +126,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
+	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
 	require.NoError(t, err)
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
