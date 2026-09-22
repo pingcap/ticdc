@@ -366,13 +366,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		require.Eventually(t, func() bool {
 			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.True(t, ok)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetSchedulingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 4,
 		maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID))
 
@@ -408,22 +408,24 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		},
 	})
 
-	time.Sleep(5 * time.Second)
+	// The checks below wait for the scheduling to settle, so give the
+	// schedulers a moment instead of a fixed 5s wait.
+	time.Sleep(500 * time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	log.Info("Pass case 2: Add new nodes")
 
@@ -439,13 +441,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	log.Info("Pass case 3: Remove 2 nodes")
 
@@ -453,7 +455,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	maintainer.controller.operatorController.RemoveTasksByTableIDs(2, 3)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	// Dropping tables removes their spans but does not necessarily trigger an immediate
 	// rebalance of the remaining spans. Here we only assert that the remaining two spans
 	// stay on the two alive nodes (and do not leak back to removed nodes). Balancing is
@@ -461,7 +463,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID)+
 			maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID))
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID))
 	log.Info("Pass case 4: Remove 2 tables")
@@ -477,7 +479,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	}, 3)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	// Adding tables should only schedule new spans to currently alive nodes.
 	// We don't assert an exact 2/2 distribution here because the exact table-to-node
 	// mapping depends on prior scheduling decisions (e.g., which specific tables were
@@ -485,7 +487,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID)+
 			maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID))
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID))
 
@@ -495,18 +497,18 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	err = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB(), Cascade: true}))
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		return maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	_, ok = manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
 			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok == false
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.False(t, ok)
 	log.Info("Pass case 6: Remove maintainer")
@@ -610,16 +612,16 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		require.Eventually(t, func() bool {
 			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.True(t, ok)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	require.Len(t, remotedIds, 2)
 	foundSize := 0
@@ -720,7 +722,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		require.Eventually(t, func() bool {
 			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return !ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.False(t, ok)
 	cancel()
