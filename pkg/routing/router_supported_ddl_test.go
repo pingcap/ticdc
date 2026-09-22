@@ -822,13 +822,18 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		forbiddenFragments: []string{"`source_alter_ttl_info`.`t_ttl_info`"},
 	})
 
-	cases = append(cases, supportedDDLRewriteCase{
-		name:               "alter ttl info",
-		action:             timodel.ActionAlterTTLInfo,
-		ddl:                helper.DDL2Event("ALTER TABLE `source_alter_ttl_info`.`t_ttl_info` TTL_ENABLE = 'ON'"),
-		requiredFragments:  []string{"`target_db`.`t_ttl_info_r`"},
-		forbiddenFragments: []string{"`source_alter_ttl_info`.`t_ttl_info`"},
-	})
+	// TODO: re-enable this case once tikv/client-go's memdb ART stops tripping checkptr.
+	// Enabling TTL makes the TiDB instance created by event.NewEventTestHelper start its
+	// background TTL worker, which plans a query over the memdb ART and aborts the test
+	// binary in longestCommonPrefixByChunk (unsafe.Add pointer arithmetic). Go 1.26 made
+	// checkptr validate unsafe.Add (golang.org/issue/74431), so -race builds crash here.
+	// cases = append(cases, supportedDDLRewriteCase{
+	// 	name:               "alter ttl info",
+	// 	action:             timodel.ActionAlterTTLInfo,
+	// 	ddl:                helper.DDL2Event("ALTER TABLE `source_alter_ttl_info`.`t_ttl_info` TTL_ENABLE = 'ON'"),
+	// 	requiredFragments:  []string{"`target_db`.`t_ttl_info_r`"},
+	// 	forbiddenFragments: []string{"`source_alter_ttl_info`.`t_ttl_info`"},
+	// })
 
 	cases = append(cases, supportedDDLRewriteCase{
 		name:               "setup create schema source_alter_ttl_remove",

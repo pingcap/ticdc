@@ -49,7 +49,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: tools/bin
-          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
 
       - name: Check
         run: make check
@@ -88,7 +88,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: tools/bin
-          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
 
       - name: ${{ matrix.task.name }}
         run: ${{ matrix.task.command }}
@@ -123,7 +123,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: tools/bin
-          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
 
       - name: ${{ matrix.task.name }}
         run: ${{ matrix.task.command }}
