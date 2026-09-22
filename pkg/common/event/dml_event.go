@@ -1032,9 +1032,15 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 	if offset == len(data) {
 		return nil
 	}
+	if len(data)-offset < 4 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML checksum count")
+	}
 	checksumCount := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 	checksumData := data[offset:]
+	if uint64(checksumCount) > uint64(len(checksumData)/dmlChecksumSize) {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML checksum entries")
+	}
 	t.Checksum = make([]*integrity.Checksum, int(checksumCount))
 	for i := range t.Checksum {
 		entry := checksumData[:dmlChecksumSize]
