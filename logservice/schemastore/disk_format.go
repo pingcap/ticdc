@@ -688,12 +688,6 @@ func isTableRawKey(key []byte) bool {
 	return strings.HasPrefix(string(key), mTablePrefix)
 }
 
-func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
-	if err := addSchemaInfoToBatchWithEncryption(context.Background(), batch, ts, info, nil, 0); err != nil {
-		log.Fatal("add schema info to batch failed", zap.Error(err))
-	}
-}
-
 // addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
 func addSchemaInfoToBatchWithEncryption(
 	ctx context.Context,
