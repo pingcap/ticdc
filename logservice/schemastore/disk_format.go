@@ -689,11 +689,20 @@ func isTableRawKey(key []byte) bool {
 }
 
 func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
-	addSchemaInfoToBatchWithEncryption(batch, ts, info, nil, 0)
+	if err := addSchemaInfoToBatchWithEncryption(context.Background(), batch, ts, info, nil, 0); err != nil {
+		log.Fatal("add schema info to batch failed", zap.Error(err))
+	}
 }
 
 // addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
-func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *model.DBInfo, encMgr encryption.EncryptionManager, keyspaceID uint32) {
+func addSchemaInfoToBatchWithEncryption(
+	ctx context.Context,
+	batch *pebble.Batch,
+	ts uint64,
+	info *model.DBInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) error {
 	schemaKey, err := schemaInfoKey(ts, info.ID)
 	if err != nil {
 		log.Fatal("generate schema key failed", zap.Error(err))
@@ -706,9 +715,9 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
-		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, schemaValue)
+		encryptedValue, err := encMgr.EncryptData(ctx, keyspaceID, schemaValue)
 		if err != nil {
-			log.Fatal("encrypt schema info failed", zap.Error(err))
+			return err
 		}
 		schemaValue = encryptedValue
 		keyMask |= encryptionLayerKeyMask
@@ -716,10 +725,12 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 
 	schemaKey = keyWithMask(schemaKey, keyMask)
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
+	return nil
 }
 
 // addTableInfoToBatchWithEncryption encrypts and adds table info to batch if encryption is enabled
 func addTableInfoToBatchWithEncryption(
+	ctx context.Context,
 	batch *pebble.Batch,
 	ts uint64,
 	dbInfo *model.DBInfo,
@@ -751,9 +762,9 @@ func addTableInfoToBatchWithEncryption(
 	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
-		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, tableInfoEntryValue)
+		encryptedValue, err := encMgr.EncryptData(ctx, keyspaceID, tableInfoEntryValue)
 		if err != nil {
-			log.Fatal("encrypt table info entry failed", zap.Error(err))
+			return 0, "", nil, marshalBuf, err
 		}
 		tableInfoEntryValue = encryptedValue
 		keyMask |= encryptionLayerKeyMask
@@ -842,7 +853,12 @@ func persistSchemaSnapshotWithEncryption(
 			}
 			for {
 				batch := db.NewBatch()
-				addSchemaInfoToBatchWithEncryption(batch, snapTs, dbInfo, encMgr, keyspaceID)
+				if err := addSchemaInfoToBatchWithEncryption(
+					ctx, batch, snapTs, dbInfo, encMgr, keyspaceID,
+				); err != nil {
+					_ = batch.Close()
+					return nil, nil, nil, err
+				}
 				var tablesInDB map[int64]bool
 				if collectMetaInfo {
 					tablesInDB = make(map[int64]bool)
@@ -855,7 +871,7 @@ func persistSchemaSnapshotWithEncryption(
 						return err
 					}
 					tableID, tableName, partitionIDs, marshalBuf, err := addTableInfoToBatchWithEncryption(
-						batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
+						ctx, batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
 						tableInfoEntryMarshalBuf)
 					tableInfoEntryMarshalBuf = marshalBuf
 					if err != nil {

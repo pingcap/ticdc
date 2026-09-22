@@ -133,7 +133,7 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 		addSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
 		for _, tableInfo := range dbInfo.tables {
 			_, _, _, _, _ = addTableInfoToBatchWithEncryption(
-				batch, snapTs, dbInfo.dbInfo, tableInfo, nil, 0, nil)
+				context.Background(), batch, snapTs, dbInfo.dbInfo, tableInfo, nil, 0, nil)
 		}
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {

@@ -40,6 +40,30 @@ type countingEncryptionManagerForTest struct {
 	decryptCalls int
 }
 
+type blockingEncryptionManagerForTest struct {
+	blockOnCall int
+	calls       int
+	started     chan struct{}
+}
+
+func (m *blockingEncryptionManagerForTest) EncryptData(
+	ctx context.Context, keyspaceID uint32, data []byte,
+) ([]byte, error) {
+	m.calls++
+	if m.calls != m.blockOnCall {
+		return data, nil
+	}
+	close(m.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *blockingEncryptionManagerForTest) DecryptData(
+	ctx context.Context, keyspaceID uint32, data []byte,
+) ([]byte, error) {
+	return data, nil
+}
+
 func (m *countingEncryptionManagerForTest) EncryptData(
 	ctx context.Context, keyspaceID uint32, data []byte,
 ) ([]byte, error) {
@@ -91,6 +115,64 @@ func TestPersistSchemaSnapshotStopsRetryingWhenCanceled(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		require.FailNow(t, "schema snapshot initialization did not stop")
+	}
+}
+
+func TestPersistSchemaSnapshotStopsEncryptionWhenCanceled(t *testing.T) {
+	tikvStore, err := mockstore.NewMockStore()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tikvStore.Close()) }()
+
+	dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	txn, err := tikvStore.Begin()
+	require.NoError(t, err)
+	metaMutator := meta.NewMutator(txn)
+	require.NoError(t, metaMutator.CreateDatabase(dbInfo))
+	require.NoError(t, metaMutator.CreateTableOrView(dbInfo.ID, tableInfo))
+	require.NoError(t, txn.Commit(context.Background()))
+
+	version, err := tikvStore.CurrentVersion(kv.GlobalTxnScope)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name        string
+		blockOnCall int
+	}{
+		{name: "schema encryption", blockOnCall: 1},
+		{name: "table encryption", blockOnCall: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, db.Close()) }()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			manager := &blockingEncryptionManagerForTest{
+				blockOnCall: tc.blockOnCall,
+				started:     make(chan struct{}),
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, _, _, err := persistSchemaSnapshotWithEncryption(
+					ctx, db, tikvStore, version.Ver, true, manager, 42,
+				)
+				done <- err
+			}()
+
+			select {
+			case <-manager.started:
+			case <-time.After(time.Second):
+				cancel()
+				require.FailNow(t, "schema snapshot encryption did not start")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				require.FailNow(t, "schema snapshot encryption did not stop")
+			}
+		})
 	}
 }
 
@@ -339,7 +421,7 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 	addSchemaInfoToBatch(batch, snapshotTs, dbInfo)
 	for _, info := range []*model.TableInfo{tableInfo, viewInfo} {
 		_, _, _, _, err := addTableInfoToBatchWithEncryption(
-			batch, snapshotTs, dbInfo, info, nil, 0, nil)
+			context.Background(), batch, snapshotTs, dbInfo, info, nil, 0, nil)
 		require.NoError(t, err)
 	}
 	require.NoError(t, batch.Commit(pebble.NoSync))
@@ -455,13 +537,13 @@ func TestAddTableInfoToBatchReusesMarshalBuffer(t *testing.T) {
 	}()
 
 	_, _, _, marshalBuf, err := addTableInfoToBatchWithEncryption(
-		batch, snapshotTs, dbInfo, tableInfo, nil, 0, nil)
+		context.Background(), batch, snapshotTs, dbInfo, tableInfo, nil, 0, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, marshalBuf)
 	firstByte := &marshalBuf[0]
 
 	_, _, _, marshalBuf, err = addTableInfoToBatchWithEncryption(
-		batch, snapshotTs, dbInfo, tableInfo, nil, 0, marshalBuf)
+		context.Background(), batch, snapshotTs, dbInfo, tableInfo, nil, 0, marshalBuf)
 	require.NoError(t, err)
 	require.NotEmpty(t, marshalBuf)
 	require.Same(t, firstByte, &marshalBuf[0])
