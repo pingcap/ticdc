@@ -612,6 +612,15 @@ func (s *schemaStore) RegisterKeyspace(
 ) error {
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
+	// Close cancels the schema store context before acquiring keyspaceLocker.
+	// Check it synchronously so registration cannot restart after Close releases
+	// the lock. This must precede the existing-keyspace check because Close does
+	// not remove closed keyspaces from the map.
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	// If the keyspace has already been registered
 	// No need to register again
 	if _, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]; ok {
