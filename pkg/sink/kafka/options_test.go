@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 )
 
 const (
@@ -42,6 +43,7 @@ const (
 	mockMinInsyncReplicas              = "1"
 )
 
+<<<<<<< HEAD
 type kafkaAdminFixture struct {
 	admin        *MockClusterAdminClient
 	topics       map[string]TopicDetail
@@ -170,6 +172,78 @@ func (f *kafkaAdminFixture) setMinInsyncReplicas(minInsyncReplicas string) {
 
 func (f *kafkaAdminFixture) dropBrokerConfig(configName string) {
 	delete(f.brokerConfig, configName)
+=======
+func TestKafkaClientSelection(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
+	require.Equal(t, KafkaClientSarama, NewOptions().Client)
+
+	for _, test := range []struct {
+		name     string
+		uri      string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "URI selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:     "URI value is case insensitive",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=FRANZ",
+			expected: KafkaClientFranz,
+		},
+		{
+			name:    "invalid client",
+			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, &config.SinkConfig{})
+			if test.wantErr {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, options.Client)
+		})
+	}
+}
+
+func TestFactorySelection(t *testing.T) {
+	const topic = "factory-selection"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "factory-selection")
+	for _, test := range []struct {
+		client   string
+		expected Factory
+	}{
+		{client: KafkaClientFranz, expected: &franzFactory{}},
+		{client: KafkaClientSarama, expected: &saramaFactory{}},
+	} {
+		t.Run(test.client, func(t *testing.T) {
+			o := NewOptions()
+			o.Client = test.client
+			o.ClientID = "ticdc-test"
+			o.BrokerEndpoints = cluster.ListenAddrs()
+			o.Topic = topic
+
+			factory, err := NewFactory(context.Background(), o, changefeedID)
+			require.NoError(t, err)
+			require.IsType(t, test.expected, factory)
+
+			factory.Close()
+		})
+	}
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 }
 
 func TestCompleteOptions(t *testing.T) {
@@ -432,6 +506,7 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+<<<<<<< HEAD
 			adminFixture := newKafkaAdminFixture(t)
 			adminClient := adminFixture.admin
 
@@ -440,6 +515,24 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				NumPartitions: 3,
 			}
 			err := adminClient.CreateTopic(detail)
+=======
+			ctrl := gomock.NewController(t)
+			adminClient := NewMockAdminClient(ctrl)
+			gomock.InOrder(
+				adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{topicName}, true).Return(
+					map[string]TopicDetail{
+						topicName: {Name: topicName, NumPartitions: 3},
+					}, nil),
+				adminClient.EXPECT().GetTopicConfig(gomock.Any(), topicName, TopicMaxMessageBytesConfigName).
+					Return("", false, nil),
+				adminClient.EXPECT().GetBrokerConfig(gomock.Any(), BrokerMessageMaxBytesConfigName).
+					Return(mockBrokerMessageMaxBytes, true, nil),
+			)
+			sinkURI, err := url.Parse(fmt.Sprintf(
+				"kafka://127.0.0.1:9092/%s?max-message-bytes=%d",
+				topicName, test.configuredMaxMessageBytes,
+			))
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 			require.NoError(t, err)
 
 			options := NewOptions()
@@ -450,8 +543,12 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 				adminFixture.brokerMessageMaxBytes(),
 			)
 
+<<<<<<< HEAD
 			ctx := context.Background()
 			err = adjustOptions(changefeedID, adminClient, options, topicName)
+=======
+			err = adjustOptions(t.Context(), changefeedID, adminClient, options, topicName)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 			require.NoError(t, err)
 
 			saramaConfig, err := newSaramaConfig(ctx, options)
@@ -464,16 +561,27 @@ func TestAdjustConfigFallsBackToBrokerMessageMaxBytesWhenTopicConfigMissing(t *t
 }
 
 func TestValidateReplicationFactor(t *testing.T) {
+<<<<<<< HEAD
 	adminFixture := newKafkaAdminFixture(t)
 	adminClient := adminFixture.admin
 	adminFixture.setMinInsyncReplicas("2")
+=======
+	ctrl := gomock.NewController(t)
+	adminClient := NewMockAdminClient(ctrl)
+	gomock.InOrder(
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
+			Return("2", true, nil),
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
+			Return("", false, nil),
+	)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 
 	topicConfig := &AutoCreateTopicConfig{
 		AutoCreate:        true,
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForAll,
 	}
-	err := topicConfig.ValidateReplicationFactor(adminClient)
+	err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.Regexp(
 		t,
 		".*`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker.*",
@@ -485,7 +593,7 @@ func TestValidateReplicationFactor(t *testing.T) {
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForLocal,
 	}
-	err = localAcksConfig.ValidateReplicationFactor(adminClient)
+	err = localAcksConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.NoError(t, err)
 
 	adminFixture.dropBrokerConfig(MinInsyncReplicasConfigName)
@@ -494,10 +602,11 @@ func TestValidateReplicationFactor(t *testing.T) {
 		ReplicationFactor: 1,
 		RequiredAcks:      WaitForAll,
 	}
-	err = missingBrokerConfig.ValidateReplicationFactor(adminClient)
+	err = missingBrokerConfig.ValidateReplicationFactor(t.Context(), adminClient)
 	require.NoError(t, err)
 }
 
+<<<<<<< HEAD
 func TestCreateProducerFailed(t *testing.T) {
 	options := NewOptions()
 	options.Version = "invalid"
@@ -505,6 +614,56 @@ func TestCreateProducerFailed(t *testing.T) {
 	saramaConfig, err := newSaramaConfig(context.Background(), options)
 	require.Regexp(t, "invalid version.*", errors.Cause(err))
 	require.Nil(t, saramaConfig)
+=======
+	t.Run("replication factor satisfies min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
+			Return("2", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid min insync replicas", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
+			Return("invalid", true, nil)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 3,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+	})
+
+	t.Run("broker config lookup failure skips validation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		adminClient := NewMockAdminClient(ctrl)
+		lookupErr := errors.ErrKafkaAdminAPI.GenWithStackByArgs(
+			"describe-config",
+			MinInsyncReplicasConfigName,
+		)
+		adminClient.EXPECT().GetBrokerConfig(gomock.Any(), MinInsyncReplicasConfigName).
+			Return("", false, lookupErr)
+
+		topicConfig := &AutoCreateTopicConfig{
+			ReplicationFactor: 1,
+			RequiredAcks:      WaitForAll,
+		}
+
+		err := topicConfig.ValidateReplicationFactor(t.Context(), adminClient)
+		require.NoError(t, err)
+	})
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 }
 
 func TestConfigurationCombinations(t *testing.T) {
@@ -673,14 +832,38 @@ func TestConfigurationCombinations(t *testing.T) {
 			require.True(t, ok)
 			require.NotEqual(t, "", topic)
 
+<<<<<<< HEAD
 			sourceMaxMessageBytes := adminFixture.brokerMessageMaxBytes()
 			if _, exists := adminFixture.topics[topic]; exists {
 				sourceMaxMessageBytes = adminFixture.topicMaxMessageBytes(topic)
+=======
+			ctrl := gomock.NewController(t)
+			adminClient := NewMockAdminClient(ctrl)
+			metadataCall := adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{topic}, true)
+			sourceMaxMessageBytes := a.brokerMessageMaxBytes
+			if topic == defaultMockTopicName {
+				metadataCall.Return(map[string]TopicDetail{
+					topic: {Name: topic, NumPartitions: defaultPartitionNum},
+				}, nil)
+				gomock.InOrder(
+					metadataCall,
+					adminClient.EXPECT().GetTopicConfig(gomock.Any(), topic, TopicMaxMessageBytesConfigName).
+						Return(a.topicMaxMessageBytes, true, nil),
+				)
+				sourceMaxMessageBytes = a.topicMaxMessageBytes
+			} else {
+				metadataCall.Return(map[string]TopicDetail{}, nil)
+				gomock.InOrder(
+					metadataCall,
+					adminClient.EXPECT().GetBrokerConfig(gomock.Any(), BrokerMessageMaxBytesConfigName).
+						Return(a.brokerMessageMaxBytes, true, nil),
+				)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 			}
 			expectedMaxMessageBytes := expectedAdjustedMaxMessageBytes(options.MaxMessageBytes, sourceMaxMessageBytes)
 
 			changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
-			err = adjustOptions(changefeedID, adminClient, options, topic)
+			err = adjustOptions(t.Context(), changefeedID, adminClient, options, topic)
 			require.Nil(t, err)
 			require.Equal(t, expectedMaxMessageBytes, options.MaxMessageBytes)
 

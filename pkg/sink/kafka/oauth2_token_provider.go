@@ -15,12 +15,13 @@ package kafka
 
 import (
 	"context"
+<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
 	"net/url"
+=======
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/clientcredentials"
 )
 
 // tokenProvider is a user-defined callback for generating
@@ -52,6 +53,7 @@ func (t *tokenProvider) Token() (*sarama.AccessToken, error) {
 }
 
 func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvider, error) {
+<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
 	// grant_type is by default going to be set to 'client_credentials' by the
 	// client credentials library as defined by the spec, however non-compliant
 	// auth server implementations may want a custom type
@@ -67,9 +69,13 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	}
 
 	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
+=======
+	tokenSource, err := newOAuthTokenSource(ctx, o.sasl.oauth2)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, err
 	}
+<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
 
 	cfg := clientcredentials.Config{
 		ClientID:       o.SASL.OAuth2.ClientID,
@@ -81,4 +87,7 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 	return &tokenProvider{
 		tokenSource: cfg.TokenSource(ctx),
 	}, nil
+=======
+	return &tokenProvider{tokenSource: tokenSource}, nil
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 }
