@@ -1,6 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.25.12
+go 1.25.14
 
 require (
 	cloud.google.com/go/kms v1.21.0
@@ -51,13 +51,13 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260724054804-059694ae4472
+	github.com/pingcap/kvproto v0.0.0-20260820070758-623e58e60fa9
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20260814130643-17c0dd0fe42b
+	github.com/pingcap/tidb v1.1.0-beta.0.20260907032637-a514a92784c9
 	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20260813153327-eadd1201d6e3
-	github.com/pingcap/tiflow v0.0.0-20260723070929-e8736df4fe74
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260907032637-a514a92784c9
+	github.com/pingcap/tiflow v0.0.0-20260922062921-20f7694229d0
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/r3labs/diff v1.1.0
@@ -69,7 +69,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20260807103401-b75f6efa8ddd
+	github.com/tikv/client-go/v2 v2.0.8-0.20260831103552-e4905600583b
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
 	github.com/tinylib/msgp v1.5.0
@@ -97,6 +97,15 @@ require (
 	google.golang.org/api v0.230.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
+)
+
+require (
+	github.com/clbanning/mxj v1.8.4 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/mozillazg/go-httpheader v0.2.1 // indirect
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.142 // indirect
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.74 // indirect
 )
 
 replace (
@@ -134,7 +143,6 @@ require (
 	github.com/alibabacloud-go/tea v1.3.11 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.7 // indirect
 	github.com/alibabacloud-go/tea-xml v1.1.3 // indirect
-	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1581 // indirect
 	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.2.3 // indirect
 	github.com/aliyun/credentials-go v1.4.7 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
@@ -291,7 +299,7 @@ require (
 	github.com/pingcap/check v0.0.0-20211026125417-57bd13f7b5f0 // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
-	github.com/pingcap/metering_sdk v0.0.0-20260324055927-14fead745f1d // indirect
+	github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf // indirect
 	github.com/pingcap/tipb v0.0.0-20260623093813-5f9928e91afe // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -358,12 +366,12 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.60.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0 // indirect
-	go.opentelemetry.io/otel v1.43.0 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.22.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.22.0 // indirect
-	go.opentelemetry.io/otel/metric v1.43.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
