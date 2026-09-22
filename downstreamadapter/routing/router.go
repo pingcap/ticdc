@@ -225,7 +225,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		zap.String("keyspace", r.changefeedID.Keyspace()),
 		zap.String("changefeed", r.changefeedID.Name()),
 		zap.String("originalQuery", ddl.Query),
-		zap.String("newQuery", newQuery))
+		zap.String("newQuery", plan.query))
 
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
@@ -240,10 +240,6 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	), nil
 }
 
-<<<<<<< HEAD:downstreamadapter/routing/router.go
-// route returns the source-to-target table name binding.
-func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
-=======
 // validateTableNamePreservingSchemaChanges verifies that a schema name change
 // can be represented downstream without renaming any tables inside the schema.
 func (r Router) validateTableNamePreservingSchemaChanges(
@@ -256,11 +252,11 @@ func (r Router) validateTableNamePreservingSchemaChanges(
 				continue
 			}
 			tableName := tableInfo.GetTableName()
-			oldBinding, err := r.Route(change.from, tableName)
+			oldBinding, err := r.route(change.from, tableName)
 			if err != nil {
 				return err
 			}
-			newBinding, err := r.Route(change.to, tableName)
+			newBinding, err := r.route(change.to, tableName)
 			if err != nil {
 				return err
 			}
@@ -275,9 +271,8 @@ func (r Router) validateTableNamePreservingSchemaChanges(
 	return nil
 }
 
-// Route returns the source-to-target table name binding.
-func (r Router) Route(originSchema, originTable string) (binding RouteBinding, err error) {
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258)):pkg/routing/router.go
+// route returns the source-to-target table name binding.
+func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
 	// In CDC runtime, table names should always carry schema.
 	// Empty schema means this name pair is absent, so keep it unchanged.
 	// This also prevents wildcard rules like *.* from matching it.

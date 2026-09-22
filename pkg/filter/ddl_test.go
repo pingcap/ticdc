@@ -16,11 +16,8 @@ package filter
 import (
 	"testing"
 
-<<<<<<< HEAD
-=======
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 	"github.com/stretchr/testify/require"
 )
 

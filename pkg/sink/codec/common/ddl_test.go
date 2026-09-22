@@ -32,23 +32,6 @@ func init() {
 	}
 }
 
-<<<<<<< HEAD
-=======
-func TestModifyTableComment(t *testing.T) {
-	allocator := NewTableIDAllocator()
-	allocator.AddBlockTableID("test", "t", 1)
-	ddl := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionModifyTableComment),
-		SchemaName: "test",
-		TableName:  "t",
-		Query:      "alter table t comment 'test'",
-	}
-
-	blockedTables := GetBlockedTables(allocator, ddl)
-	require.Equal(t, commonEvent.InfluenceTypeNormal, blockedTables.InfluenceType)
-	require.Equal(t, []int64{1}, blockedTables.TableIDs)
-}
-
 func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
 	allocator := NewTableIDAllocator()
 	ddl := &commonEvent.DDLEvent{
@@ -62,7 +45,6 @@ func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
 	require.Empty(t, blockedTables.TableIDs)
 }
 
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 func TestGetDDLActionType(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

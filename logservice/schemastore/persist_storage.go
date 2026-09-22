@@ -746,17 +746,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-<<<<<<< HEAD
-	writePersistedDDLEvent(p.db, &ddlEvent)
-=======
-	err = writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
+	err = writePersistedDDLEvent(p.db, &ddlEvent)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	failpoint.Inject("afterPersistingDDL", func() {
-		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
-	})
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

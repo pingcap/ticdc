@@ -23,12 +23,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -102,14 +98,7 @@ type persistStorageDDLHandler struct {
 	// prepareJobFunc prepares job arguments before building the persisted DDL event.
 	prepareJobFunc func(storage *persistentStorage, job *model.Job) error
 	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
-<<<<<<< HEAD
-	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
-=======
 	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error)
-	// enrichPersistedDDLEventFunc supplies the lookup to avoid an initialization cycle between
-	// allDDLHandlers and getTableInfoAtTs, which also uses allDDLHandlers.
-	enrichPersistedDDLEventFunc func(getTableInfo func(int64, uint64) (*common.TableInfo, error), event *PersistedDDLEvent) error
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateFullTableInfoFunc update the full table info map according to the ddl event
@@ -704,12 +693,8 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) (P
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
-<<<<<<< HEAD
 	normalizeCreateViewQueryWithStoredSelect(&event)
-	return event
-=======
 	return event, nil
->>>>>>> 9ea68a2e7 (schemastore: support FLASHBACK DATABASE DDL (#6258))
 }
 
 func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
