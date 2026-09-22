@@ -735,9 +735,9 @@ func (s *schemaStore) newKeyspaceContext(ctx context.Context) (context.Context, 
 	if s.ctx == nil {
 		return storeCtx, cancel
 	}
-	stopModuleCancel := context.AfterFunc(s.ctx, cancel)
+	stopCancelOnSchemaStoreClose := context.AfterFunc(s.ctx, cancel)
 	return storeCtx, func() {
-		stopModuleCancel()
+		stopCancelOnSchemaStoreClose()
 		cancel()
 	}
 }
