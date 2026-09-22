@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -29,6 +28,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
@@ -298,11 +298,11 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 
 	for _, item := range []struct {
 		message *codeccommon.DMLMessage
-		offset  kafka.Offset
+		offset  int64
 	}{
-		{newDMLMessageForWriterTest(20), kafka.Offset(1)},
-		{newDMLMessageForWriterTest(10), kafka.Offset(2)},
-		{newDMLMessageForWriterTest(20), kafka.Offset(3)},
+		{newDMLMessageForWriterTest(20), 1},
+		{newDMLMessageForWriterTest(10), 2},
+		{newDMLMessageForWriterTest(20), 3},
 	} {
 		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(item.message), p, item.offset))
 	}
@@ -421,8 +421,9 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		maxMessageBytes: 1,
 	}
 
-	needCommit, err := w.WriteMessage(ctx, &kafka.Message{
-		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
+	needCommit, err := w.WriteMessage(ctx, &kgo.Record{
+		Partition: 0,
+		Offset:    10,
 	})
 	require.NoError(t, err)
 
@@ -450,7 +451,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 	}
 
 	message := newDMLMessageForWriterTest(10)
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, kafka.Offset(10)))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, 10))
 
 	require.NotNil(t, progress.eventsGroup[1])
 	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
@@ -504,8 +505,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	progress := w.progresses[0]
 	first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
 	second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
 	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.NoError(t, err)
@@ -555,8 +556,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			progress := w.progresses[0]
 			first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
 			second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
-			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
-			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
 			resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
 			require.NoError(t, err)

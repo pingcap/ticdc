@@ -42,6 +42,9 @@ type mockSchemaStore struct {
 	registerTableHook   func()
 	unregisterTableHook func()
 	getTableInfoError   error
+	registerTableError error
+
+	onGetTableDDLEventState func()
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
@@ -118,6 +121,9 @@ func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta,
 }
 
 func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
+	if m.onGetTableDDLEventState != nil {
+		m.onGetTableDDLEventState()
+	}
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
 		MaxEventCommitTs: m.maxDDLCommitTs,

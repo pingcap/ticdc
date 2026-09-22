@@ -403,6 +403,7 @@ func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDL
 		ddlEvent.Query,
 		ddlEvent.TableInfo.View.SelectStmt,
 		ddlEvent.SchemaName,
+		nil,
 	)
 	require.NoError(s.t, err)
 	ddlEvent.Query = query
