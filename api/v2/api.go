@@ -16,17 +16,19 @@ package v2
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/server"
 )
 
 // OpenAPIV2 provides CDC v2 APIs
 type OpenAPIV2 struct {
-	server server.Server
+	server              server.Server
+	pullerDebugProvider logpuller.DebugInfoProvider
 }
 
 // NewOpenAPIV2 creates a new OpenAPIV2.
 func NewOpenAPIV2(c server.Server) OpenAPIV2 {
-	return OpenAPIV2{c}
+	return OpenAPIV2{server: c}
 }
 
 // RegisterOpenAPIV2Routes registers routes for OpenAPI
@@ -51,25 +53,31 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	debugGroup.POST("/failpoints", api.EnableFailpoint)
 	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
 	debugGroup.GET("/failpoints", api.ListFailpoints)
+	debugGroup.GET("/puller", api.GetPullerDebugInfo)
+	debugGroup.GET(
+		"/puller/subscriptions/:subscription_id/regions/:region_id",
+		api.GetPullerDebugRegion,
+	)
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()
+	keyspaceNameCheckerMiddleware := middleware.KeyspaceNameCheckerMiddleware()
 	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
 	changefeedGroup := v2.Group("/changefeeds")
-	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, keyspaceCheckerMiddleware, api.GetChangeFeed)
+	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.GetChangeFeed)
 	// The authenticateMiddleware will retire the KeyspaceMeta from the context,
 	// which is set by the keyspaceCheckerMiddleware.
 	// Therefore, the The authenticateMiddleware must be called after the keyspaceCheckerMiddleware.
 	changefeedGroup.POST("", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("create"), keyspaceCheckerMiddleware, authenticateMiddleware, api.CreateChangefeed)
-	changefeedGroup.GET("", coordinatorMiddleware, keyspaceCheckerMiddleware, api.ListChangeFeeds)
+	changefeedGroup.GET("", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.ListChangeFeeds)
 	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("update"), keyspaceCheckerMiddleware, authenticateMiddleware, api.UpdateChangefeed)
 	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("resume"), keyspaceCheckerMiddleware, authenticateMiddleware, api.ResumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("pause"), keyspaceCheckerMiddleware, authenticateMiddleware, api.PauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("delete"), keyspaceCheckerMiddleware, authenticateMiddleware, api.DeleteChangefeed)
-	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.status)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("pause"), keyspaceNameCheckerMiddleware, api.PauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("delete"), keyspaceNameCheckerMiddleware, api.DeleteChangefeed)
+	changefeedGroup.GET("/:changefeed_id/status", coordinatorMiddleware, keyspaceNameCheckerMiddleware, api.status)
 	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, keyspaceCheckerMiddleware, authenticateMiddleware, api.synced)
 
 	// internal APIs

@@ -558,6 +558,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
 				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
 			}
+			if c.Sink.DebeziumConfig.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.DecimalHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BigintUnsignedHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BinaryHandlingMode)
+			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
 		if c.Sink.OpenProtocolConfig != nil {
@@ -934,6 +943,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			}
 			if cloned.Sink.Debezium.IncludeStartTs != nil {
 				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
+			}
+			if cloned.Sink.Debezium.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*cloned.Sink.Debezium.DecimalHandlingMode)
+			}
+			if cloned.Sink.Debezium.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BigintUnsignedHandlingMode)
+			}
+			if cloned.Sink.Debezium.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
@@ -1685,8 +1703,11 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue *bool `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
-	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+	OutputOldValue             *bool   `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
+	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
+	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
+	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
 }
 
 // SimpleConfig represents the configurations for simple protocol encoding
