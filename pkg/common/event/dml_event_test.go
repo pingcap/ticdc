@@ -102,7 +102,6 @@ func TestDMLEventChecksumEncodeAndDecode(t *testing.T) {
 				{Current: 123, Version: 1},
 				{Current: 456, Previous: 123, Version: 2, Corrupted: true},
 				{Previous: 456, Version: 1},
-				nil,
 				{},
 			},
 		},
@@ -111,13 +110,13 @@ func TestDMLEventChecksumEncodeAndDecode(t *testing.T) {
 			input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
 			input.RowTypes = []common.RowType{
 				common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeUpdate,
-				common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert,
+				common.RowTypeDelete, common.RowTypeInsert,
 			}
 			input.RowKeys = [][]byte{
 				[]byte("insert"), []byte("update"), []byte("update"),
-				[]byte("delete"), []byte("no-checksum"), []byte("zero-checksum"),
+				[]byte("delete"), []byte("zero-checksum"),
 			}
-			input.Length = 5
+			input.Length = 4
 			input.Checksum = tc.checksums
 			data, err := input.Marshal()
 			require.NoError(t, err)
@@ -177,12 +176,12 @@ func TestBatchDMLEventChecksumEncodeAndDecode(t *testing.T) {
 	batch := NewBatchDMLEvent()
 	for _, checksums := range [][]*integrity.Checksum{
 		{{Current: 123, Version: 1}, {Current: 456, Previous: 123, Version: 2, Corrupted: true}, {Previous: 456, Version: 1}},
-		{nil, {}, {Previous: 789, Version: 2}},
+		{{Current: 789, Version: 2}, {}, {Previous: 789, Version: 2}},
 		nil,
 	} {
 		dml := newDMLEventForTest(t, tableInfo,
 			[]common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeDelete},
-			[][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}})
+			[][]any{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}})
 		dml.Checksum = checksums
 		rows := dml.Rows
 		require.NoError(t, batch.AppendDMLEvent(dml))

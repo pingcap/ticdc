@@ -39,8 +39,8 @@ const (
 	DMLEventVersion1 = 1
 	// BatchDMLEventVersion1 is the version of the BatchDMLEvent struct.
 	BatchDMLEventVersion1 = 1
-	// dmlChecksumSize includes presence(1), current(4), previous(4), version(8), and corrupted(1).
-	dmlChecksumSize = 1 + 4 + 4 + 8 + 1
+	// dmlChecksumSize includes current(4), previous(4), version(8), and corrupted(1).
+	dmlChecksumSize = 4 + 4 + 8 + 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -435,6 +435,7 @@ type DMLEvent struct {
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
+	// Entries in the slice are non-nil.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
 }
@@ -961,15 +962,11 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 		for _, checksum := range t.Checksum {
 			entry := buf[offset : offset+dmlChecksumSize]
 			offset += dmlChecksumSize
-			if checksum == nil {
-				continue
-			}
-			entry[0] = 1
-			binary.BigEndian.PutUint32(entry[1:5], checksum.Current)
-			binary.BigEndian.PutUint32(entry[5:9], checksum.Previous)
-			binary.BigEndian.PutUint64(entry[9:17], uint64(checksum.Version))
+			binary.BigEndian.PutUint32(entry[0:4], checksum.Current)
+			binary.BigEndian.PutUint32(entry[4:8], checksum.Previous)
+			binary.BigEndian.PutUint64(entry[8:16], uint64(checksum.Version))
 			if checksum.Corrupted {
-				entry[17] = 1
+				entry[16] = 1
 			}
 		}
 	}
@@ -1037,18 +1034,16 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 	}
 	checksumCount := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
+	checksumData := data[offset:]
 	t.Checksum = make([]*integrity.Checksum, int(checksumCount))
 	for i := range t.Checksum {
-		entry := data[offset : offset+dmlChecksumSize]
-		offset += dmlChecksumSize
-		if entry[0] == 0 {
-			continue
-		}
+		entry := checksumData[:dmlChecksumSize]
+		checksumData = checksumData[dmlChecksumSize:]
 		t.Checksum[i] = &integrity.Checksum{
-			Current:   binary.BigEndian.Uint32(entry[1:5]),
-			Previous:  binary.BigEndian.Uint32(entry[5:9]),
-			Version:   int(binary.BigEndian.Uint64(entry[9:17])),
-			Corrupted: entry[17] != 0,
+			Current:   binary.BigEndian.Uint32(entry[0:4]),
+			Previous:  binary.BigEndian.Uint32(entry[4:8]),
+			Version:   int(binary.BigEndian.Uint64(entry[8:16])),
+			Corrupted: entry[16] != 0,
 		}
 	}
 	return nil
