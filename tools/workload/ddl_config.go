@@ -31,6 +31,7 @@ type DDLConfig struct {
 	Mode          string           `toml:"mode"`
 	RatePerMinute DDLRatePerMinute `toml:"rate_per_minute"`
 	Tables        []string         `toml:"tables"`
+	TablePatterns []string         `toml:"table_patterns"`
 }
 
 type DDLRatePerMinute struct {
@@ -68,7 +69,7 @@ func LoadDDLConfig(path string) (*DDLConfig, error) {
 func (c *DDLConfig) normalize() {
 	c.Mode = strings.ToLower(strings.TrimSpace(c.Mode))
 	if c.Mode == "" {
-		if len(c.Tables) > 0 {
+		if len(c.Tables) > 0 || len(c.TablePatterns) > 0 {
 			c.Mode = ddlModeFixed
 		} else {
 			c.Mode = ddlModeRandom
@@ -84,14 +85,23 @@ func (c *DDLConfig) normalize() {
 		}
 	}
 	c.Tables = tables
+
+	patterns := make([]string, 0, len(c.TablePatterns))
+	for _, pattern := range c.TablePatterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern != "" {
+			patterns = append(patterns, pattern)
+		}
+	}
+	c.TablePatterns = patterns
 }
 
 func (c *DDLConfig) validate() error {
 	if c.Mode != ddlModeFixed && c.Mode != ddlModeRandom {
 		return errors.Errorf("unsupported ddl mode: %s", c.Mode)
 	}
-	if c.Mode == ddlModeFixed && len(c.Tables) == 0 {
-		return errors.New("ddl mode fixed requires tables")
+	if c.Mode == ddlModeFixed && len(c.Tables) == 0 && len(c.TablePatterns) == 0 {
+		return errors.New("ddl mode fixed requires tables or table_patterns")
 	}
 
 	if err := validateRate("add_column", c.RatePerMinute.AddColumn); err != nil {
