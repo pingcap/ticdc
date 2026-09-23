@@ -885,6 +885,10 @@ func (s *EventTestHelper) Close() {
 func (s *EventTestHelper) dropUserSchemas() {
 	// The session of a fresh helper does not see the schemas yet (its schema
 	// version is not loaded), so enumerate them through the domain infoschema.
+	// A table in one schema may be referenced by a foreign key in another.
+	// All user schemas are discarded here, so allow dropping either one first.
+	s.tk.MustExec("set @@session.foreign_key_checks = 0")
+	defer s.tk.MustExec("set @@session.foreign_key_checks = 1")
 	for _, dbInfo := range s.domain.InfoSchema().AllSchemas() {
 		name := dbInfo.Name.L
 		if isSystemSchema(name) {
