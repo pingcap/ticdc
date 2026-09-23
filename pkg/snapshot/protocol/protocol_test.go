@@ -51,13 +51,28 @@ func TestRustGoldenAndCorruption(t *testing.T) {
 	require.NoError(t, os.WriteFile(f, b, 0o600))
 	ref.ObjectRef, err = Ref(f)
 	require.NoError(t, err)
+	got = nil
+	_, err = DecodeChunk(ref, expected, span, func(k, v []byte) error {
+		got = append(got, string(k))
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, got)
 	bad = append([]byte(nil), b...)
 	bad[len(bad)/2] ^= 1
-	require.NoError(t, os.WriteFile(f, bad, 0o600))
-	called := false
-	_, err = DecodeChunk(ref, expected, span, func([]byte, []byte) error { called = true; return nil })
+	for _, data := range [][]byte{bad, b[:len(b)-1], append(append([]byte(nil), b...), 0)} {
+		require.NoError(t, os.WriteFile(f, data, 0o600))
+		called := false
+		_, err = DecodeChunk(ref, expected, span, func([]byte, []byte) error { called = true; return nil })
+		require.Error(t, err)
+		require.False(t, called)
+	}
+	ref.Size = (64 << 20) + 1
+	_, err = DecodeChunk(ref, expected, span, func([]byte, []byte) error {
+		t.Fatal("oversized chunk must not emit rows")
+		return nil
+	})
 	require.Error(t, err)
-	require.False(t, called)
 }
 
 func TestStateRoundTrip(t *testing.T) {

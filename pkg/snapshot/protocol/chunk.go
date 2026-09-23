@@ -10,32 +10,37 @@ import (
 )
 
 // DecodeChunk first verifies the entire immutable object before emitting rows.
-// The local artifact backend doubles as a bounded spool (64 MiB per object).
+// Keep the verified bytes in a bounded buffer (64 MiB per object), so decoding
+// needs no second file read and cannot observe different bytes after validation.
 func DecodeChunk(ref Chunk, expected Header, span Span, emit func([]byte, []byte) error) (Footer, error) {
 	var zero Footer
 	if ref.Size < 0 || ref.Size > 64<<20 {
 		return zero, Invalid("chunk exceeds demo size limit")
-	}
-	info, err := os.Stat(ref.URI)
-	if err != nil {
-		return zero, Wrap(err)
-	}
-	if info.Size() != ref.Size {
-		return zero, Invalid("chunk size mismatch")
-	}
-	actual, err := Ref(ref.URI)
-	if err != nil {
-		return zero, err
-	}
-	if actual != ref.ObjectRef {
-		return zero, Invalid("chunk checksum/size mismatch")
 	}
 	f, err := os.Open(ref.URI)
 	if err != nil {
 		return zero, Wrap(err)
 	}
 	defer f.Close()
-	return decode(f, expected, span, ref, emit)
+	info, err := f.Stat()
+	if err != nil {
+		return zero, Wrap(err)
+	}
+	if info.Size() != ref.Size {
+		return zero, Invalid("chunk size mismatch")
+	}
+	b := make([]byte, int(ref.Size))
+	if _, err := io.ReadFull(f, b); err != nil {
+		return zero, Wrap(err)
+	}
+	var tail [1]byte
+	if n, err := f.Read(tail[:]); n != 0 || err != io.EOF {
+		return zero, Invalid("chunk size changed while reading")
+	}
+	if Digest(b) != ref.Digest {
+		return zero, Invalid("chunk checksum/size mismatch")
+	}
+	return decode(bytes.NewReader(b), expected, span, ref, emit)
 }
 
 func readN(r io.Reader, n uint32, max uint32) ([]byte, error) {
