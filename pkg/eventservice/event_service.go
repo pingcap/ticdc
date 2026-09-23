@@ -15,22 +15,26 @@ package eventservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -71,11 +75,18 @@ type DispatcherHeartBeatWithServerID struct {
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
-	mc          messaging.MessageCenter
-	eventStore  eventstore.EventStore
-	schemaStore schemastore.SchemaStore
+	mc           messaging.MessageCenter
+	eventStore   eventstore.EventStore
+	schemaStore  schemastore.SchemaStore
+	nodeLiveness *liveness.Liveness
 	// clusterID -> eventBroker
-	brokers map[uint64]*eventBroker
+	brokers   map[uint64]*eventBroker
+	brokersMu sync.RWMutex
+	// Protected by brokersMu.
+	registrationsStopped bool
+	// Incremented under brokersMu when admission succeeds; completion is lock-free.
+	// In-flight registrations keep the drain count positive during initialization.
+	registering atomic.Int64
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
@@ -84,7 +95,11 @@ type eventService struct {
 	tz *time.Location
 }
 
-func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
+func New(
+	eventStore eventstore.EventStore,
+	schemaStore schemastore.SchemaStore,
+	nodeLiveness *liveness.Liveness,
+) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	serverConfig := config.GetGlobalServerConfig()
 	tzName := serverConfig.TZ
@@ -111,6 +126,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
+		nodeLiveness:        nodeLiveness,
 		tz:                  tz,
 		brokers:             make(map[uint64]*eventBroker),
 		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
@@ -141,6 +157,17 @@ func (s *eventService) Run(ctx context.Context) error {
 		case <-ticker.C:
 			dispatcherChanSize.Set(float64(len(s.dispatcherInfoChan)))
 			heartbeatChanSize.Set(float64(len(s.dispatcherHeartbeat)))
+			// Serialize timeout removal with REGISTER/REMOVE/RESET. Store resources
+			// are keyed by dispatcher ID and must be released before ID reuse.
+			s.brokersMu.RLock()
+			brokers := make([]*eventBroker, 0, len(s.brokers))
+			for _, broker := range s.brokers {
+				brokers = append(brokers, broker)
+			}
+			s.brokersMu.RUnlock()
+			for _, broker := range brokers {
+				broker.removeInactiveDispatchers()
+			}
 		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
@@ -160,15 +187,76 @@ func (s *eventService) Run(ctx context.Context) error {
 
 func (s *eventService) Close(_ context.Context) error {
 	log.Info("event service is closing")
+	s.brokersMu.RLock()
+	brokers := make([]*eventBroker, 0, len(s.brokers))
 	for _, c := range s.brokers {
+		brokers = append(brokers, c)
+	}
+	s.brokersMu.RUnlock()
+	for _, c := range brokers {
 		c.close()
 	}
 	log.Info("event service is closed")
 	return nil
 }
 
+// GetDispatcherCount returns the number of dispatchers registered in all local
+// event brokers, including table trigger dispatchers. It cannot report zero
+// while an admitted registration is still in progress.
+func (s *eventService) GetDispatcherCount() int {
+	s.brokersMu.RLock()
+	defer s.brokersMu.RUnlock()
+	return s.getDispatcherCountLocked()
+}
+
+func (s *eventService) getDispatcherCountLocked() int {
+	// Snapshot in-flight registrations before broker counts: completion can
+	// publish a dispatcher and decrement registering without holding brokersMu.
+	// Reading in the opposite order could miss the registration in both counts.
+	registering := int(s.registering.Load())
+	count := 0
+	for _, broker := range s.brokers {
+		count += int(broker.dispatcherCount.Load())
+	}
+	return max(count, registering)
+}
+
+// StopAcceptingRegistrations closes admission before an admission-closed report
+// can report zero. Registrations admitted earlier remain visible in the count.
+func (s *eventService) StopAcceptingRegistrations() {
+	s.brokersMu.Lock()
+	defer s.brokersMu.Unlock()
+	s.stopAcceptingRegistrationsLocked()
+}
+
+func (s *eventService) stopAcceptingRegistrationsLocked() {
+	s.registrationsStopped = true
+	for _, broker := range s.brokers {
+		broker.stopping.Store(true)
+	}
+}
+
+// Reporting is handled by the message-center handler, independently of the
+// request loop that may be waiting for schema initialization. Even an empty
+// broker registry must explicitly report zero after closing admission.
+func (s *eventService) reportDispatcherCount(target node.ID) {
+	if s.nodeLiveness != nil && s.nodeLiveness.Load() == liveness.CaptureStopping {
+		s.StopAcceptingRegistrations()
+	}
+	s.brokersMu.RLock()
+	report := &logservicepb.EventBrokerDispatcherCount{
+		DispatcherCount:      uint32(s.getDispatcherCountLocked()),
+		RegistrationsStopped: s.registrationsStopped,
+	}
+	s.brokersMu.RUnlock()
+	// The next LogCoordinator broadcast retries a lost report.
+	_ = s.mc.SendEvent(messaging.NewSingleTargetMessage(target, messaging.LogCoordinatorTopic, report))
+}
+
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
+	case messaging.TypeLogCoordinatorBroadcastRequest:
+		s.reportDispatcherCount(msg.From)
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
 		for _, info := range infos {
@@ -207,11 +295,32 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 
 func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherInfo) {
 	clusterID := info.GetClusterID()
+	s.brokersMu.Lock()
+	if s.nodeLiveness != nil && s.nodeLiveness.Load() == liveness.CaptureStopping {
+		s.stopAcceptingRegistrationsLocked()
+	}
+	if s.registrationsStopped {
+		s.brokersMu.Unlock()
+		if info.IsOnlyReuse() {
+			topic := messaging.EventCollectorTopic
+			if common.IsRedoMode(info.GetMode()) {
+				topic = messaging.RedoEventCollectorTopic
+			}
+			rejection := event.NewNotReusableEvent(info.GetID())
+			msg := messaging.NewSingleTargetMessage(node.ID(info.GetServerID()), topic, &rejection)
+			// A lost rejection is retried when the pending consumer heartbeats.
+			_ = s.mc.SendEvent(msg)
+		}
+		return
+	}
+	s.registering.Inc()
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz, info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
+	s.brokersMu.Unlock()
+	defer s.registering.Dec()
 
 	// FIXME: Send message to the dispatcherManager to handle the error.
 	err := c.addDispatcher(info)
@@ -222,7 +331,9 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 
 func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}
@@ -231,7 +342,9 @@ func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	clusterID := dispatcherInfo.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}
@@ -241,8 +354,22 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 
 func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	clusterID := heartbeat.heartbeat.ClusterID
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
+		response := event.NewDispatcherHeartbeatResponse()
+		response.ClusterID = clusterID
+		if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
+			for _, progress := range heartbeat.heartbeat.DispatcherProgresses {
+				response.Append(event.NewDispatcherState(progress.DispatcherID, event.DSStateRemoved))
+			}
+		} else {
+			for _, progress := range heartbeat.heartbeat.DispatcherProgressesLegacy {
+				response.Append(event.NewDispatcherState(progress.DispatcherID, event.DSStateRemoved))
+			}
+		}
+		_ = s.mc.SendCommand(messaging.NewSingleTargetMessage(node.ID(heartbeat.serverID), messaging.EventCollectorTopic, response))
 		return
 	}
 	c.handleDispatcherHeartbeat(heartbeat)
@@ -250,7 +377,9 @@ func (s *eventService) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatW
 
 func (s *eventService) handleCongestionControl(from node.ID, m *event.CongestionControl) {
 	clusterID := m.GetClusterID()
+	s.brokersMu.RLock()
 	c, ok := s.brokers[clusterID]
+	s.brokersMu.RUnlock()
 	if !ok {
 		return
 	}

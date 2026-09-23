@@ -24,9 +24,10 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
+	# Node 0 is deliberately stopped later to verify scale-in.
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -69,7 +70,11 @@ main() {
 
 	sleep 60
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le # 6 * 5 + 5 + 1
 
@@ -84,6 +89,9 @@ main() {
 
 	query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le # 4 * 5 + 5 + 1
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
@@ -106,7 +114,11 @@ main_with_consistent() {
 
 	sleep 60
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 
 	query_dispatcher_count "127.0.0.1:8300" "test" 36 100 le 1 # 6 * 5 + 5 + 1
 
@@ -121,6 +133,9 @@ main_with_consistent() {
 
 	query_dispatcher_count "127.0.0.1:8301" "test" 26 100 le 1 # 4 * 5 + 5 + 1
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

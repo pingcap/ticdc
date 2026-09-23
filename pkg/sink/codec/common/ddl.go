@@ -133,6 +133,8 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionDropIndex
 	case *ast.DropDatabaseStmt:
 		return timodel.ActionDropSchema
+	case *ast.FlashBackDatabaseStmt:
+		return timodel.ActionRecoverSchema
 	case *ast.FlashBackTableStmt, *ast.RecoverTableStmt:
 		return timodel.ActionRecoverTable
 	case *ast.RenameTableStmt:
@@ -199,8 +201,8 @@ func GetBlockedTables(
 	}
 
 	switch action {
-	// create schema means the database not exist yet, so should not block tables.
-	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
+	// These DDLs only add schemas or tables, so they do not block existing tables.
+	case timodel.ActionCreateSchema, timodel.ActionRecoverSchema, timodel.ActionCreateTable:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 		}

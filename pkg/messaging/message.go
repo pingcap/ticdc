@@ -112,15 +112,24 @@ const (
 	TypeGetAllPhysicalTablesResponse IOType = 52
 
 	// Node drain related
-	TypeNodeHeartbeatRequest            IOType = 42
-	TypeSetNodeLivenessRequest          IOType = 43
-	TypeSetNodeLivenessResponse         IOType = 44
-	TypeSetDispatcherDrainTargetRequest IOType = 45
-	TypeNodeHeartbeatResponse           IOType = 46
+	TypeNodeHeartbeatRequest               IOType = 42
+	TypeSetNodeLivenessRequest             IOType = 43
+	TypeSetNodeLivenessResponse            IOType = 44
+	TypeSetDispatcherDrainTargetRequest    IOType = 45
+	TypeNodeHeartbeatResponse              IOType = 46
+	TypeEventBrokerDispatcherCount         IOType = 47
+	TypeEventBrokerDispatcherCountRequest  IOType = 48
+	TypeEventBrokerDispatcherCountResponse IOType = 49
 )
 
 func (t IOType) String() string {
 	switch t {
+	case TypeEventBrokerDispatcherCount:
+		return "EventBrokerDispatcherCount"
+	case TypeEventBrokerDispatcherCountRequest:
+		return "EventBrokerDispatcherCountRequest"
+	case TypeEventBrokerDispatcherCountResponse:
+		return "EventBrokerDispatcherCountResponse"
 	case TypeBatchDMLEvent:
 		return "BatchDMLEvent"
 	case TypeDDLEvent:
@@ -349,6 +358,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &common.LogCoordinatorBroadcastRequest{}
 	case TypeEventStoreState:
 		m = &logservicepb.EventStoreState{}
+	case TypeEventBrokerDispatcherCount:
+		m = &logservicepb.EventBrokerDispatcherCount{}
+	case TypeEventBrokerDispatcherCountRequest:
+		m = &logservicepb.EventBrokerDispatcherCountRequest{}
+	case TypeEventBrokerDispatcherCountResponse:
+		m = &logservicepb.EventBrokerDispatcherCountResponse{}
 	case TypeReusableEventServiceRequest:
 		m = &logservicepb.ReusableEventServiceRequest{}
 	case TypeReusableEventServiceResponse:
@@ -481,6 +496,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorBroadcastRequest
 	case *logservicepb.EventStoreState:
 		ioType = TypeEventStoreState
+	case *logservicepb.EventBrokerDispatcherCount:
+		ioType = TypeEventBrokerDispatcherCount
+	case *logservicepb.EventBrokerDispatcherCountRequest:
+		ioType = TypeEventBrokerDispatcherCountRequest
+	case *logservicepb.EventBrokerDispatcherCountResponse:
+		ioType = TypeEventBrokerDispatcherCountResponse
 	case *logservicepb.ReusableEventServiceRequest:
 		ioType = TypeReusableEventServiceRequest
 	case *logservicepb.ReusableEventServiceResponse:
