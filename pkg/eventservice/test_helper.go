@@ -38,8 +38,10 @@ type mockSchemaStore struct {
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 
-	registerTableError error
-	getTableInfoError  error
+	registerTableHook   func()
+	unregisterTableHook func()
+	getTableInfoError   error
+	registerTableError  error
 
 	onGetTableDDLEventState func()
 }
@@ -132,10 +134,16 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
+	if m.registerTableHook != nil {
+		m.registerTableHook()
+	}
 	return m.registerTableError
 }
 
 func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, _ int64) error {
+	if m.unregisterTableHook != nil {
+		m.unregisterTableHook()
+	}
 	return nil
 }
 
