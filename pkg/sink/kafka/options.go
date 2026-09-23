@@ -631,21 +631,6 @@ func adjustOptions(
 		return err
 	}
 
-	// adjust keepConnAliveInterval by `connections.max.idle.ms` broker config.
-	idleMs, found, err := admin.GetBrokerConfig(BrokerConnectionsMaxIdleMsConfigName)
-	if err != nil {
-		log.Warn("GetBrokerConfig failed for connections.max.idle.ms", zap.Error(err))
-	} else if found {
-		idleMsInt, err := strconv.Atoi(idleMs)
-		if err != nil || idleMsInt <= 0 {
-			log.Warn("invalid broker config",
-				zap.String("configName", BrokerConnectionsMaxIdleMsConfigName), zap.String("configValue", idleMs))
-			return errors.Trace(err)
-		}
-		options.KeepConnAliveInterval = time.Duration(idleMsInt/3) * time.Millisecond
-		log.Info("Adjust KeepConnAliveInterval", zap.Duration("KeepConnAliveInterval", options.KeepConnAliveInterval))
-	}
-
 	info, exists := topics[topic]
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
