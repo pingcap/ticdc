@@ -30,8 +30,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
@@ -987,6 +990,130 @@ func TestDispatcherClose(t *testing.T) {
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
 	}
+}
+
+func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
+	ctx := t.Context()
+
+	serverID := node.NewID()
+	mc := messaging.NewMessageCenter(ctx, serverID, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
+	mc.Run(ctx)
+	t.Cleanup(mc.Close)
+
+	t.Cleanup(client.SetSchemaStoreClientForTest(client.New(mc, serverID)))
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job1 := helper.DDL2Job("create table t1(id int primary key, v int)")
+	job2 := helper.DDL2Job("create table t2(id int primary key, v int)")
+
+	tableInfo1 := helper.GetTableInfo(job1)
+	tableInfo2 := helper.GetTableInfo(job2)
+
+	tableInfoByID := map[int64]*common.TableInfo{
+		tableInfo1.TableName.TableID: tableInfo1,
+		tableInfo2.TableName.TableID: tableInfo2,
+	}
+
+	bootstrapCtx, cancelBootstrap := context.WithCancel(t.Context())
+	defer cancelBootstrap()
+	var cancelOnRequest atomic.Bool
+	cancelOnRequest.Store(true)
+	var omitResponse atomic.Bool
+	omitResponse.Store(true)
+	handlerErrCh := make(chan error, 1)
+	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
+		req := msg.Message[0].(*schemastore.GetTableInfosRequest)
+		if cancelOnRequest.Load() {
+			cancelBootstrap()
+			return nil
+		}
+		resp := &schemastore.GetTableInfosResponse{RequestID: req.RequestID}
+		for _, tableID := range req.TableIDs {
+			if omitResponse.Load() && tableID == tableInfo2.TableName.TableID {
+				continue
+			}
+			data, err := tableInfoByID[tableID].Marshal()
+			if err != nil {
+				handlerErrCh <- err
+				return err
+			}
+			resp.TableInfos = append(resp.TableInfos, schemastore.TableInfoResult{TableID: tableID, TableInfo: data})
+		}
+		return mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, resp))
+	})
+
+	ddlTableSpan := common.KeyspaceDDLSpan(getTestingKeyspaceID())
+	testSink := newDispatcherTestSink(t, common.KafkaSinkType)
+	var events []commonEvent.BlockEvent
+	testSink.SetWriteBlockEventHook(func(event commonEvent.BlockEvent) error {
+		events = append(events, event)
+		event.PostFlush()
+		return nil
+	})
+	dispatcher := newDispatcherForTest(testSink.Sink(), ddlTableSpan)
+
+	ok, err := dispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{
+		{
+			SchemaID:   1,
+			SchemaName: "test",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: tableInfo1.TableName.TableID, TableName: "t1"},
+				{TableID: tableInfo2.TableName.TableID, TableName: "t2"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	dispatcher.BootstrapState = BootstrapNotStarted
+	canceled := make(chan bool, 1)
+	go func() { canceled <- dispatcher.EmitBootstrap(bootstrapCtx, func() bool { return false }) }()
+	select {
+	case success := <-canceled:
+		require.False(t, success)
+	case <-time.After(time.Second):
+		t.Fatal("bootstrap did not stop waiting for its schema request")
+	}
+	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
+	require.Empty(t, events)
+	require.Empty(t, dispatcher.sharedInfo.errCh, "closing bootstrap must not report a changefeed error")
+	cancelOnRequest.Store(false)
+	// A batch with one missing table must not emit a partial bootstrap.
+	require.False(t, dispatcher.EmitBootstrap(t.Context(), func() bool { return false }))
+	require.Equal(t, BootstrapNotStarted, loadBootstrapState(&dispatcher.BootstrapState))
+	require.Empty(t, events)
+	select {
+	case err := <-dispatcher.sharedInfo.errCh:
+		require.True(t, errors.ErrSchemaStoreRequestFailed.Equal(err))
+	default:
+		t.Fatal("incomplete schema response did not report a bootstrap error")
+	}
+
+	omitResponse.Store(false)
+	require.True(t, dispatcher.EmitBootstrap(t.Context(), func() bool { return false }))
+	require.Equal(t, BootstrapFinished, loadBootstrapState(&dispatcher.BootstrapState))
+
+	select {
+	case handlerErr := <-handlerErrCh:
+		require.NoError(t, handlerErr)
+	default:
+	}
+
+	require.Len(t, events, 2)
+
+	gotTableIDs := make(map[int64]bool)
+	for _, e := range events {
+		ddl, ok := e.(*commonEvent.DDLEvent)
+		require.True(t, ok)
+		require.True(t, ddl.IsBootstrap)
+		require.NotNil(t, ddl.TableInfo)
+		gotTableIDs[ddl.TableInfo.TableName.TableID] = true
+	}
+	require.True(t, gotTableIDs[tableInfo1.TableName.TableID])
+	require.True(t, gotTableIDs[tableInfo2.TableName.TableID])
 }
 
 // TestBatchDMLEventsPartialFlush tests that wakeCallback is called correctly

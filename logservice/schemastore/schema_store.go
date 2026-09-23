@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -334,6 +335,8 @@ type schemaStore struct {
 	pdCli   pd.Client
 	root    string
 
+	messageHandler *schemaStoreMessageHandler
+
 	// keyspaceSchemaStoreMap is a map to store *keyspaceSchemaStore for every keyspace.
 	// The key is keyspaceID
 	keyspaceSchemaStoreMap map[uint32]*keyspaceSchemaStore
@@ -352,6 +355,8 @@ func New(root string, pdCli pd.Client) SchemaStore {
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
+	s.messageHandler = newSchemaStoreMessageHandler(context.Background(), s,
+		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter), schemaStoreRequestWorkers)
 	return s
 }
 
@@ -416,6 +421,13 @@ func (s *schemaStore) Run(ctx context.Context) error {
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
+	if s.messageHandler != nil {
+		s.messageHandler.stop()
+		// Closing keyspaces releases workers waiting for resolved ts. Wait after
+		// keyspaceLocker is unlocked so in-flight acquisitions can also finish.
+		defer s.messageHandler.wg.Wait()
+	}
+
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 

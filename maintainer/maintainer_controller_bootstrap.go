@@ -21,18 +21,16 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/schemastore/client"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -438,15 +436,9 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
-	if err != nil {
-		return nil, errors.Cause(err)
-	}
-
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := schemaStore.GetAllPhysicalTables(c.keyspaceMeta, startTs, f)
-	return tables, err
+	return client.GetSchemaStoreClient().GetAllPhysicalTables(
+		context.Background(), c.keyspaceMeta, startTs, c.replicaConfig.Filter,
+		util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
