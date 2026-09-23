@@ -1737,12 +1737,14 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	ctx := context.Background()
 	cacheMap := make(map[node.ID]*resolvedTsCache)
-	wrapEvent := &wrapEvent{
-		serverID:        "test",
-		resolvedTsEvent: event.NewResolvedEvent(100, dispInfo.GetID(), 0),
-	}
 	// handle resolvedTsCacheSize resolvedTs events, so the cache is full.
 	for i := 0; i < resolvedTsCacheSize+1; i++ {
+		// handleResolvedTs releases the event back to the pool, so each
+		// iteration needs its own event instead of reusing one.
+		wrapEvent := &wrapEvent{
+			serverID:        "test",
+			resolvedTsEvent: event.NewResolvedEvent(100, dispInfo.GetID(), 0),
+		}
 		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex, messaging.EventCollectorTopic)
 	}
 

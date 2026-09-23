@@ -720,9 +720,12 @@ func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
 }
 
 // Test the async ddl can be write successfully
-func TestMysqlWriter_AsyncDDL(t *testing.T) {
+func TestWriterAsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
+	// waitDDLDone polls a running downstream DDL; keeping the production interval
+	// would make this test wait a full 5s before the first state check.
+	writer.ddlPollInterval = 10 * time.Millisecond
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -791,7 +794,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	log.Info("before add index")
 	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(10 * time.Second).WillReturnError(mysql.ErrInvalidConn)
+	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(200 * time.Millisecond).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
 	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).

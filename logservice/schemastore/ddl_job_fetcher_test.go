@@ -160,7 +160,10 @@ func TestDDLJobFetcherInputLegacyFormat(t *testing.T) {
 }
 
 func TestDDLJobFetcherInputJobTableFormat(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
+	// The test inserts a synthetic row into mysql.tidb_ddl_job, which the DDL
+	// worker of a shared test store cannot process, so it needs a store of its
+	// own.
+	helper := commonEvent.NewEventTestHelperWithPrivateStore(t)
 	t.Cleanup(helper.Close)
 	job := &model.Job{
 		ID:         101,

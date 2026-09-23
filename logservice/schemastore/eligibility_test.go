@@ -180,6 +180,11 @@ func TestDDLReplicationKeyFiltering(t *testing.T) {
 }
 
 func TestDDLReplicationKeyTransitions(t *testing.T) {
+	// Bootstrapping the TiDB mock store dominates this test, so share one helper
+	// across subtests instead of creating one per subtest.
+	helper := commonEvent.NewEventTestHelper(t)
+	t.Cleanup(helper.Close)
+	helper.Tk().MustExec("use test")
 	for _, tc := range []struct {
 		name       string
 		createSQL  string
@@ -197,9 +202,7 @@ func TestDDLReplicationKeyTransitions(t *testing.T) {
 		{"another usable key", "create table a (id bigint primary key nonclustered, v bigint not null unique)", "alter table a drop primary key", "alter table a add primary key (id) nonclustered", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			helper := commonEvent.NewEventTestHelper(t)
-			t.Cleanup(helper.Close)
-			helper.Tk().MustExec("use test")
+			helper.Tk().MustExec("drop table if exists a")
 			create := helper.DDL2Job(tc.createSQL)
 			lose := helper.DDL2Job(tc.loseSQL)
 			acquire := helper.DDL2Job(tc.acquireSQL)
@@ -314,6 +317,11 @@ func TestEnrichPersistedDDLEventLookupError(t *testing.T) {
 }
 
 func TestDDLTableBecomesEligible(t *testing.T) {
+	// Bootstrapping the TiDB mock store dominates this test, so share one helper
+	// across subtests instead of creating one per subtest.
+	helper := commonEvent.NewEventTestHelper(t)
+	t.Cleanup(helper.Close)
+	helper.Tk().MustExec("use test")
 	for _, tc := range []struct {
 		name           string
 		createSQL      string
@@ -331,9 +339,7 @@ func TestDDLTableBecomesEligible(t *testing.T) {
 		{"nullable unique index", "create table a (pk bigint)", "create unique index uk on a (pk)", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			helper := commonEvent.NewEventTestHelper(t)
-			t.Cleanup(helper.Close)
-			helper.Tk().MustExec("use test")
+			helper.Tk().MustExec("drop table if exists a, b")
 			createJob := helper.DDL2Job(tc.createSQL)
 			alterJob := helper.DDL2Job(tc.alterSQL)
 			expectedQuery, err := transformDDLJobQuery(alterJob)

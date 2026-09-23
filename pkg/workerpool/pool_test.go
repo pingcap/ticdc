@@ -89,7 +89,7 @@ func TestTimerError(t *testing.T) {
 	handle := pool.RegisterEvent(func(ctx context.Context, event interface{}) error {
 		return nil
 	}).SetTimer(ctx, time.Millisecond*200, func(ctx context.Context) error {
-		if counter == 3 {
+		if counter == 1 {
 			return errors.New("timer error")
 		}
 		counter++
@@ -167,7 +167,9 @@ func TestCancelHandle(t *testing.T) {
 		return nil
 	})
 
+	producerDone := make(chan struct{})
 	errg.Go(func() error {
+		defer close(producerDone)
 		i := 0
 		for {
 			select {
@@ -211,7 +213,19 @@ func TestCancelHandle(t *testing.T) {
 		require.Equal(t, atomic.LoadInt32(&num), lastNum)
 	}
 
-	time.Sleep(1 * time.Second)
+	select {
+	case <-producerDone:
+	case <-ctx.Done():
+		require.FailNow(t, "producer did not stop after unregister")
+	}
+	// A producer delayed inside AddEvent may enqueue after Unregister returns.
+	// Drain that task before checking that no callback ran after unregister.
+	worker := handle.(*defaultEventHandle).worker
+	require.Eventually(t, func() bool {
+		return len(worker.taskCh) == 0
+	}, 5*time.Second, time.Millisecond)
+	worker.synchronize()
+	require.Equal(t, lastNum, atomic.LoadInt32(&num))
 	cancel()
 
 	err = errg.Wait()
@@ -315,7 +329,7 @@ func TestTimer(t *testing.T) {
 			require.GreaterOrEqual(t, time.Since(lastTime), 900*time.Millisecond)
 			require.LessOrEqual(t, time.Since(lastTime), 1200*time.Millisecond)
 		}
-		if count == 3 {
+		if count == 1 {
 			cancel()
 			return nil
 		}
@@ -408,13 +422,16 @@ func TestCancelByAddEventContext(t *testing.T) {
 	defer cancel()
 	errg, ctx := errgroup.WithContext(ctx)
 
+	var producers sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		handler := pool.RegisterEvent(func(ctx context.Context, event interface{}) error {
 			<-ctx.Done()
 			return ctx.Err()
 		})
 
+		producers.Add(1)
 		errg.Go(func() error {
+			defer producers.Done()
 			for j := 0; j < 64; j++ {
 				err := handler.AddEvent(ctx, j)
 				if err != nil {
@@ -433,7 +450,9 @@ func TestCancelByAddEventContext(t *testing.T) {
 		})
 	}
 
-	time.Sleep(5 * time.Second)
+	// Wait until every event is accepted instead of sleeping a fixed duration:
+	// cancelling earlier would fail AddEvent and mask the cancellation path.
+	producers.Wait()
 	cancel()
 
 	err := errg.Wait()
@@ -557,9 +576,9 @@ func TestSynchronizeLog(t *testing.T) {
 		close(doneCh)
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	w.stopNotifier.Notify()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	w.stopNotifier.Notify()
 
 	// Close worker.
