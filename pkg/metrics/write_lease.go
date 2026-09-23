@@ -77,7 +77,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "server",
 			Name:      "capture_safe_to_reschedule_delay_seconds",
-			Help:      "Delay after capture lease-key deletion before removal is published.",
+			Help:      "Conservative fallback delay after capture lease-key deletion before removal is published.",
 		})
 	CaptureP2PWitnessAvailable = prometheus.NewGauge(
 		prometheus.GaugeOpts{
