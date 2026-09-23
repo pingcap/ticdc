@@ -16,6 +16,20 @@ package kafka
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
+	bufferedProduceBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "sink",
+		Name:      "kafka_franz_producer_buffered_bytes",
+		Help:      "Current franz-go buffered produce key, value, and header bytes, including records awaiting acknowledgement.",
+	}, []string{"namespace", "changefeed"})
+
+	bufferedProduceRecords = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "sink",
+		Name:      "kafka_franz_producer_buffered_records",
+		Help:      "Current franz-go records buffered for producing, including records awaiting acknowledgement.",
+	}, []string{"namespace", "changefeed"})
+
 	requestsInFlight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",

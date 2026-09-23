@@ -36,6 +36,8 @@ import (
 const (
 	defaultInputChanSize  = 128
 	defaultMetricInterval = 15 * time.Second
+	// Prime to the default encoder concurrency, so samples rotate across workers.
+	encoderMetricSampleInterval = 257
 )
 
 // EncoderGroup manages a group of encoders
@@ -63,6 +65,11 @@ type encoderGroup struct {
 	outputCh chan *future
 
 	bootstrapWorker *bootstrapWorker
+
+	encodeDuration      prometheus.Observer
+	inputBlockDuration  prometheus.Observer
+	outputBlockDuration prometheus.Observer
+	readyWaitDuration   prometheus.Observer
 }
 
 // NewEncoderGroup creates a new EncoderGroup instance
@@ -111,13 +118,17 @@ func NewEncoderGroup(
 	}
 
 	return &encoderGroup{
-		changefeedID:     changefeedID,
-		rowEventEncoders: rowEventEncoders,
-		concurrency:      concurrency,
-		inputCh:          inputCh,
-		index:            0,
-		outputCh:         outCh,
-		bootstrapWorker:  bw,
+		changefeedID:        changefeedID,
+		rowEventEncoders:    rowEventEncoders,
+		concurrency:         concurrency,
+		inputCh:             inputCh,
+		index:               0,
+		outputCh:            outCh,
+		bootstrapWorker:     bw,
+		encodeDuration:      encoderGroupEncodeDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		inputBlockDuration:  encoderGroupInputBlockDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		outputBlockDuration: encoderGroupOutputBlockDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		readyWaitDuration:   encoderGroupReadyWaitDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}, nil
 }
 
@@ -176,6 +187,10 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return nil
 		case future := <-inputCh:
+			var encodeStart time.Time
+			if future.metricsGroup != nil {
+				encodeStart = time.Now()
+			}
 			for _, event := range future.events {
 				err := g.rowEventEncoders[idx].AppendRowChangedEvent(ctx, future.Key.Topic, event)
 				if err != nil {
@@ -187,6 +202,9 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 				return errors.Annotatef(errors.Trace(err),
 					"message rows count mismatches row events, keyspace:%s, changefeed:%s, messageCount:%d, eventCount:%d",
 					g.changefeedID.Keyspace(), g.changefeedID.Name(), len(future.Messages), len(future.events))
+			}
+			if future.metricsGroup != nil {
+				g.encodeDuration.Observe(time.Since(encodeStart).Seconds())
 			}
 			// TODO: Is it necessary to clear after use?
 			close(future.done)
@@ -208,17 +226,35 @@ func (g *encoderGroup) AddEvents(
 	}
 
 	future := newFuture(key, events...)
-	index := atomic.AddUint64(&g.index, 1) % uint64(g.concurrency)
+	sequence := atomic.AddUint64(&g.index, 1)
+	index := sequence % uint64(g.concurrency)
+	if sequence%encoderMetricSampleInterval == 0 {
+		future.metricsGroup = g
+	}
+	var inputStart time.Time
+	if future.metricsGroup != nil {
+		inputStart = time.Now()
+	}
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
 	case g.inputCh[index] <- future:
 	}
+	if future.metricsGroup != nil {
+		g.inputBlockDuration.Observe(time.Since(inputStart).Seconds())
+	}
 
+	var outputStart time.Time
+	if future.metricsGroup != nil {
+		outputStart = time.Now()
+	}
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
 	case g.outputCh <- future:
+	}
+	if future.metricsGroup != nil {
+		g.outputBlockDuration.Observe(time.Since(outputStart).Seconds())
 	}
 
 	return nil
@@ -233,16 +269,21 @@ func (g *encoderGroup) cleanMetrics() {
 		encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
 	}
 	encoderGroupOutputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
+	encoderGroupEncodeDuration.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
+	encoderGroupInputBlockDuration.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
+	encoderGroupOutputBlockDuration.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
+	encoderGroupReadyWaitDuration.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	common.CleanMetrics(g.changefeedID)
 }
 
 // future is a wrapper of the result of encoding events
 // It's used to notify the caller that the result is ready.
 type future struct {
-	Key      commonEvent.TopicPartitionKey
-	events   []*commonEvent.RowEvent
-	Messages []*common.Message
-	done     chan struct{}
+	Key          commonEvent.TopicPartitionKey
+	events       []*commonEvent.RowEvent
+	Messages     []*common.Message
+	done         chan struct{}
+	metricsGroup *encoderGroup
 }
 
 func newFuture(key commonEvent.TopicPartitionKey,
@@ -257,10 +298,17 @@ func newFuture(key commonEvent.TopicPartitionKey,
 
 // Ready waits until the response is ready, should be called before consuming the future.
 func (p *future) Ready(ctx context.Context) error {
+	var waitStart time.Time
+	if p.metricsGroup != nil {
+		waitStart = time.Now()
+	}
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
 	case <-p.done:
+	}
+	if p.metricsGroup != nil {
+		p.metricsGroup.readyWaitDuration.Observe(time.Since(waitStart).Seconds())
 	}
 	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
@@ -32,6 +33,7 @@ type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	client       *kgo.Client
 	closed       atomic.Bool
+	metricsMu    sync.Mutex
 }
 
 func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
@@ -121,10 +123,11 @@ func (f *franzFactory) Close() {
 	if f.client != nil {
 		f.client.Close()
 	}
+	f.metricsMu.Lock()
 	cleanupMetrics(f.changefeedID)
+	f.metricsMu.Unlock()
 }
 
 func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {
-	// franz-go reports producer metrics through hooks, so there is nothing to poll.
-	return nil
+	return &franzMetricsCollector{factory: f}
 }

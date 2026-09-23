@@ -33,6 +33,8 @@ func TestMetricsHook(t *testing.T) {
 	cleanupMetrics(changefeedID)
 	t.Cleanup(func() { cleanupMetrics(changefeedID) })
 	hook := newMetricsHook(changefeedID)
+	bufferedProduceBytes.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()).Set(12)
+	bufferedProduceRecords.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()).Set(3)
 	meta := kgo.BrokerMetadata{NodeID: 1}
 
 	hook.OnBrokerWrite(meta, 0, 12, 0, 0, nil)
@@ -77,6 +79,8 @@ func TestMetricsHook(t *testing.T) {
 		}
 	}
 	require.ElementsMatch(t, []string{
+		"ticdc_sink_kafka_franz_producer_buffered_bytes",
+		"ticdc_sink_kafka_franz_producer_buffered_records",
 		"ticdc_sink_kafka_franz_producer_compressed_bytes_total",
 		"ticdc_sink_kafka_franz_producer_in_flight_requests",
 		"ticdc_sink_kafka_franz_producer_outgoing_bytes_total",
@@ -128,6 +132,8 @@ func TestMetricsHook(t *testing.T) {
 	require.InDelta(t, 0.06, throttleHistogram.GetHistogram().GetSampleSum(), 0.000001)
 	keyspace, changefeed, broker := changefeedID.Keyspace(), changefeedID.Name(), "1"
 	cleanupMetrics(changefeedID)
+	require.False(t, bufferedProduceBytes.DeleteLabelValues(keyspace, changefeed))
+	require.False(t, bufferedProduceRecords.DeleteLabelValues(keyspace, changefeed))
 	require.False(t, outgoingBytesTotal.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
 	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultWriteError))

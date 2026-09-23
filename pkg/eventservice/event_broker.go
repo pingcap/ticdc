@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/utils/notifyqueue"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -61,37 +60,6 @@ const (
 type schemaBlockedDispatcherBucket struct {
 	dispatchers sync.Map // *dispatcherStat -> struct{}
 	dirty       atomic.Bool
-}
-
-type scanTaskQueue struct {
-	mu    sync.Mutex
-	queue *notifyqueue.Queue[scanTask]
-}
-
-func newScanTaskQueue() *scanTaskQueue {
-	return &scanTaskQueue{queue: notifyqueue.New[scanTask]()}
-}
-
-func (q *scanTaskQueue) push(task scanTask) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.queue.Push(task)
-}
-
-func (q *scanTaskQueue) pop() (scanTask, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.queue.TryPop()
-}
-
-func (q *scanTaskQueue) ready() <-chan struct{} {
-	return q.queue.Ready()
-}
-
-func (q *scanTaskQueue) len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.queue.Len()
 }
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -129,8 +97,8 @@ type eventBroker struct {
 	// large transaction spill cleanup needs another attempt.
 	pendingLargeTxnCleanup sync.Map
 
-	// scanTaskQueues are unbounded so scheduling never waits for worker capacity.
-	scanTaskQueues []*scanTaskQueue
+	// taskChan is used to send the scan tasks to the scan workers.
+	taskChan []chan scanTask
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -170,6 +138,7 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
+	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
 	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
@@ -191,7 +160,7 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
-		scanTaskQueues:          make([]*scanTaskQueue, scanWorkerCount),
+		taskChan:                make([]chan scanTask, scanWorkerCount),
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
@@ -216,9 +185,10 @@ func newEventBroker(
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
-		c.scanTaskQueues[i] = newScanTaskQueue()
+		taskChan := make(chan scanTask, scanTaskQueueSize)
+		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			return c.runScanWorker(ctx, i)
+			return c.runScanWorker(ctx, taskChan)
 		})
 	}
 
@@ -380,22 +350,13 @@ func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, workerIndex int) error {
-	queue := c.scanTaskQueues[workerIndex]
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		default:
-		}
-		if task, ok := queue.pop(); ok {
+		case task := <-taskChan:
 			c.doScan(ctx, task)
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-queue.ready():
 		}
 	}
 }
@@ -768,6 +729,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		metrics.EventServiceSkipScanCount.WithLabelValues("rate_limit").Inc()
 		log.Debug("scan rate limit exceeded",
 			zap.Stringer("dispatcher", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
@@ -817,6 +779,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
+
+	metrics.EventServiceEffectiveScanLimitBytes.Observe(float64(sl.maxDMLBytes))
+	scanStart := time.Now()
+	defer func() {
+		metrics.EventServiceActiveScanTaskDuration.Observe(time.Since(scanStart).Seconds())
+	}()
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
@@ -1099,7 +1067,8 @@ func (c *eventBroker) requestScanFromNotify(d *dispatcherStat) {
 	}
 
 	d.scanMu.Lock()
-	if d.isRemoved.Load() {
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
 		d.scanMu.Unlock()
 		return
 	}
@@ -1144,7 +1113,8 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 	}
 
 	d.scanMu.Lock()
-	if d.isRemoved.Load() {
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
 		d.schemaBlockedUntilTs = 0
 		d.scanMu.Unlock()
 		return
@@ -1157,7 +1127,9 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 	d.schemaBlockedUntilTs = 0
 	d.scanMu.Unlock()
 
-	c.scanTaskQueues[d.scanWorkerIndex].push(d)
+	// Only the external EventStore notify path may wait for capacity. Scan workers
+	// use requestScan so that they never block on their own queue.
+	c.taskChan[d.scanWorkerIndex] <- d
 }
 
 func (c *eventBroker) requestScan(d *dispatcherStat) {
@@ -1168,19 +1140,27 @@ func (c *eventBroker) requestScan(d *dispatcherStat) {
 
 	d.scanMu.Lock()
 	defer d.scanMu.Unlock()
-	if d.isRemoved.Load() {
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
 		return
 	}
 	if d.scanState == dispatcherScanIdle {
-		c.enqueueScanLocked(d)
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
 	} else if d.changefeedStat.lowLatencyMode && d.scanState == dispatcherScanRunning {
 		d.scanState = dispatcherScanRunningPending
 	}
 }
 
-func (c *eventBroker) enqueueScanLocked(d *dispatcherStat) {
+func (c *eventBroker) tryEnqueueScanLocked(d *dispatcherStat, fallback dispatcherScanState) bool {
 	d.scanState = dispatcherScanQueued
-	c.scanTaskQueues[d.scanWorkerIndex].push(d)
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- d:
+		return true
+	default:
+		metrics.EventServiceDroppedScanTaskCount.Inc()
+		d.scanState = fallback
+		return false
+	}
 }
 
 func (c *eventBroker) finishScan(
@@ -1191,7 +1171,8 @@ func (c *eventBroker) finishScan(
 ) {
 	d.scanMu.Lock()
 	defer d.scanMu.Unlock()
-	if d.isRemoved.Load() {
+	if d.isRemoved.Load() || d.scanState == dispatcherScanRemoved {
+		d.scanState = dispatcherScanRemoved
 		d.schemaBlockedUntilTs = 0
 		return
 	}
@@ -1201,7 +1182,7 @@ func (c *eventBroker) finishScan(
 
 	if interrupted {
 		d.schemaBlockedUntilTs = 0
-		c.enqueueScanLocked(d)
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
 		return
 	}
 	if d.changefeedStat.lowLatencyMode && schemaBlocked {
@@ -1214,7 +1195,7 @@ func (c *eventBroker) finishScan(
 	}
 	if d.scanState == dispatcherScanRunningPending {
 		d.schemaBlockedUntilTs = 0
-		c.enqueueScanLocked(d)
+		c.tryEnqueueScanLocked(d, dispatcherScanIdle)
 		return
 	}
 
@@ -1284,6 +1265,7 @@ func (c *eventBroker) scanSchemaBlockedDispatchers(lastSchemaResolvedTs map[comm
 			lastSchemaResolvedTs[keyspaceMeta] = ddlState.ResolvedTs
 		}
 
+		retry := false
 		bucket.dispatchers.Range(func(key, _ any) bool {
 			d := key.(*dispatcherStat)
 			d.scanMu.Lock()
@@ -1295,11 +1277,17 @@ func (c *eventBroker) scanSchemaBlockedDispatchers(lastSchemaResolvedTs map[comm
 			if ddlState.ResolvedTs <= d.schemaBlockedUntilTs {
 				return true
 			}
-			c.enqueueScanLocked(d)
-			d.schemaBlockedUntilTs = 0
-			bucket.dispatchers.Delete(d)
+			if c.tryEnqueueScanLocked(d, dispatcherScanSchemaBlocked) {
+				d.schemaBlockedUntilTs = 0
+				bucket.dispatchers.Delete(d)
+			} else {
+				retry = true
+			}
 			return true
 		})
+		if retry {
+			bucket.dirty.Store(true)
+		}
 		return true
 	})
 }
@@ -1346,7 +1334,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 
 	status := c.getOrSetChangefeedStatus(info)
-	dispatcher := newDispatcherStat(info, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), nil, status)
+	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
@@ -1573,7 +1561,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 	status := c.getOrSetChangefeedStatus(dispatcherInfo)
 
-	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), tableInfo, status)
+	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
 	for {
