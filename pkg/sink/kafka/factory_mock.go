@@ -129,6 +129,18 @@ func (mr *MockSyncProducerMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSyncProducer)(nil).Close))
 }
 
+// Heartbeat mocks base method.
+func (m *MockSyncProducer) Heartbeat() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Heartbeat")
+}
+
+// Heartbeat indicates an expected call of Heartbeat.
+func (mr *MockSyncProducerMockRecorder) Heartbeat() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockSyncProducer)(nil).Heartbeat))
+}
+
 // SendMessage mocks base method.
 func (m *MockSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	m.ctrl.T.Helper()
@@ -218,4 +230,16 @@ func (m *MockAsyncProducer) Close() {
 func (mr *MockAsyncProducerMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockAsyncProducer)(nil).Close))
+}
+
+// Heartbeat mocks base method.
+func (m *MockAsyncProducer) Heartbeat() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Heartbeat")
+}
+
+// Heartbeat indicates an expected call of Heartbeat.
+func (mr *MockAsyncProducerMockRecorder) Heartbeat() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockAsyncProducer)(nil).Heartbeat))
 }

@@ -16,17 +16,66 @@ package kafka
 import (
 	"context"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/rcrowley/go-metrics"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+func TestSyncProducerMaxRetryFromSinkURI(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t).SetApiKeys(
+			[]sarama.ApiVersionsResponseKey{
+				{ApiKey: 0},
+				{ApiKey: 1},
+				{ApiKey: 2},
+				{ApiKey: 3, MaxVersion: 9},
+			}),
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()),
+	})
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	tests := []struct {
+		name     string
+		query    string
+		expected int
+	}{
+		{name: "default"},
+		{name: "zero", query: "&max-retry=0"},
+		{name: "positive", query: "&max-retry=7", expected: 7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/test?kafka-version=2.4.0" + test.query)
+			require.NoError(t, err)
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink)
+			require.NoError(t, err)
+			factory := &saramaFactory{
+				changefeedID:   changefeedID,
+				option:         options,
+				metricRegistry: metrics.NewRegistry(),
+			}
+			producer, err := factory.SyncProducer(t.Context())
+			require.NoError(t, err)
+			defer producer.Close()
+			client := producer.(*saramaSyncProducer).client.(sarama.Client)
+			require.Equal(t, test.expected, client.Config().Producer.Retry.Max)
+		})
+	}
+}
 
 func TestProducerRejectsSendAfterClose(t *testing.T) {
 	t.Parallel()

@@ -134,6 +134,13 @@ func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) err
 	return errors.WrapError(errors.ErrKafkaSendMessage, err.Err)
 }
 
+func (p *saramaAsyncProducer) Heartbeat() {
+	brokers := p.client.Brokers()
+	for _, b := range brokers {
+		_, _ = b.ApiVersions(&sarama.ApiVersionsRequest{})
+	}
+}
+
 // AsyncSend is the input channel for the user to write messages to that they
 // wish to send.
 func (p *saramaAsyncProducer) AsyncSend(

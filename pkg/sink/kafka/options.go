@@ -36,8 +36,8 @@ import (
 const (
 	// defaultPartitionNum specifies the default number of partitions when we create the topic.
 	defaultPartitionNum = 3
-	// defaultMaxRetry is the default retry budget for Kafka producers.
-	defaultMaxRetry = 5
+	// defaultMaxRetry disables producer retries unless explicitly configured.
+	defaultMaxRetry = 0
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
 
@@ -174,9 +174,10 @@ type options struct {
 	SASL               *security.SASL
 
 	// Timeout for network configurations, default to `10s`
-	DialTimeout  time.Duration
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
+	DialTimeout           time.Duration
+	WriteTimeout          time.Duration
+	ReadTimeout           time.Duration
+	KeepConnAliveInterval time.Duration
 }
 
 // NewOptions returns a default Kafka configuration
@@ -264,7 +265,10 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 
-	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
+	if urlParameter.MaxRetry != nil {
+		if *urlParameter.MaxRetry < 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("max-retry must be greater than or equal to zero")
+		}
 		o.MaxRetry = *urlParameter.MaxRetry
 	}
 

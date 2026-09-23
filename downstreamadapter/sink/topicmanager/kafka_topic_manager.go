@@ -116,13 +116,17 @@ func (m *kafkaTopicManager) GetPartitionNum(
 }
 
 func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
-	ticker := time.NewTicker(metaRefreshInterval)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	metaRefreshTicker := time.NewTicker(metaRefreshInterval)
+	defer metaRefreshTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			m.admin.Heartbeat()
+		case <-metaRefreshTicker.C:
 			// We ignore the error here, because the error may be caused by the
 			// network problem, and we can try to get the metadata next time.
 			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum()

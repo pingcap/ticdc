@@ -70,7 +70,7 @@ func NewSaramaFactory(
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),
 		zap.String("compression", config.Producer.Compression.String()),
 		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
-		zap.Int("maxRetry", o.MaxRetry),
+		zap.Int("maxRetry", config.Producer.Retry.Max),
 		zap.Duration("dialTimeout", o.DialTimeout),
 		zap.Duration("readTimeout", o.ReadTimeout),
 		zap.Duration("writeTimeout", o.WriteTimeout))
