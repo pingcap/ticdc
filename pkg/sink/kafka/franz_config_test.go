@@ -71,17 +71,31 @@ func TestFranzRequiredAcks(t *testing.T) {
 }
 
 func TestClientOptions(t *testing.T) {
-	t.Run("timeouts", func(t *testing.T) {
-		o := testOptions([]string{"127.0.0.1:9092"})
-		o.ReadTimeout = 3 * time.Second
-		o.WriteTimeout = 2 * time.Second
-		client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
-		require.NoError(t, err)
-		defer client.Close()
+	for _, tc := range []struct {
+		name       string
+		configured time.Duration
+		expected   time.Duration
+	}{
+		{"below minimum", 50 * time.Millisecond, 10 * time.Second},
+		{"at minimum", 10 * time.Second, 10 * time.Second},
+		{"within range", 2 * time.Minute, 2 * time.Minute},
+		{"at maximum", 15 * time.Minute, 15 * time.Minute},
+		{"above maximum", 30 * time.Minute, 15 * time.Minute},
+	} {
+		t.Run("timeouts "+tc.name, func(t *testing.T) {
+			o := testOptions([]string{"127.0.0.1:9092"})
+			o.ReadTimeout = tc.configured
+			o.WriteTimeout = tc.configured
+			client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
+			require.NoError(t, err)
+			defer client.Close()
 
-		require.Equal(t, 2*time.Second, client.OptValue(kgo.RequestTimeoutOverhead))
-		require.Equal(t, 3*time.Second, client.OptValue(kgo.ProduceRequestTimeout))
-	})
+			require.Equal(t, tc.expected, client.OptValue(kgo.RequestTimeoutOverhead))
+			require.Equal(t, tc.expected, client.OptValue(kgo.ProduceRequestTimeout))
+			require.Equal(t, tc.configured, o.WriteTimeout)
+			require.Equal(t, tc.configured, o.ReadTimeout)
+		})
+	}
 
 	t.Run("TLS", func(t *testing.T) {
 		ca, err := security.NewCA()
