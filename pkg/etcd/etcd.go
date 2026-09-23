@@ -16,6 +16,7 @@ package etcd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -74,6 +75,17 @@ func GetEtcdKeyChangeFeedInfo(clusterID string, changefeedID common.ChangeFeedDi
 		changefeedID.Keyspace), changefeedID.Name)
 }
 
+// GetEtcdKeyChangeFeedRuntime keeps runtime outside the legacy metadata prefix,
+// whose readers do not recognize runtime keys during rolling upgrades.
+func GetEtcdKeyChangeFeedRuntime(clusterID string, changefeedID common.ChangeFeedDisplayName) string {
+	return fmt.Sprintf("%s%s/%s", ChangefeedRuntimeKeyPrefix(clusterID), changefeedID.Keyspace, changefeedID.Name)
+}
+
+// ChangefeedRuntimeKeyPrefix returns the runtime prefix across all keyspaces.
+func ChangefeedRuntimeKeyPrefix(clusterID string) string {
+	return NewCDCBaseKey(clusterID) + "/changefeed/runtime/"
+}
+
 // GetEtcdKeyCaptureInfo returns the key of a capture info
 func GetEtcdKeyCaptureInfo(clusterID, id string) string {
 	return CaptureInfoKeyPrefix(clusterID) + "/" + id
@@ -113,8 +125,14 @@ type CDCEtcdClient interface {
 
 	GetAllCDCInfo(ctx context.Context) ([]*mvccpb.KeyValue, error)
 
-	// GetChangefeedInfoAndStatus returns kv revision and a map mapping from changefeedID to changefeed info and status
-	GetChangefeedInfoAndStatus(ctx context.Context) (revision int64, statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, err error)
+	// GetChangefeedInfoAndStatus returns info, status and runtime from the same etcd revision
+	GetChangefeedInfoAndStatus(ctx context.Context) (
+		revision int64,
+		statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+		infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+		runtimeMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+		err error,
+	)
 
 	// GetAllChangeFeedInfo queries all changefeed information
 	GetChangeFeedInfo(ctx context.Context,
@@ -182,6 +200,10 @@ func (c *CDCEtcdClientImpl) Close() error {
 // ClearAllCDCInfo delete all keys created by CDC
 func (c *CDCEtcdClientImpl) ClearAllCDCInfo(ctx context.Context) error {
 	_, err := c.Client.Delete(ctx, clusterPrefix(c.ClusterID), clientv3.WithPrefix())
+	if err != nil {
+		return errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+	_, err = c.Client.Delete(ctx, ChangefeedRuntimeKeyPrefix(c.ClusterID), clientv3.WithPrefix())
 	return errors.WrapError(errors.ErrPDEtcdAPIError, err)
 }
 
@@ -202,7 +224,12 @@ func (c *CDCEtcdClientImpl) GetAllCDCInfo(ctx context.Context) ([]*mvccpb.KeyVal
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 	}
-	return resp.Kvs, nil
+	runtimeResp, err := c.Client.Get(ctx, ChangefeedRuntimeKeyPrefix(c.ClusterID),
+		clientv3.WithPrefix(), clientv3.WithRev(resp.Header.Revision))
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+	return append(resp.Kvs, runtimeResp.Kvs...), nil
 }
 
 // CheckMultipleCDCClusterExist checks if other cdc clusters exists,
@@ -236,13 +263,19 @@ func (c *CDCEtcdClientImpl) CheckMultipleCDCClusterExist(ctx context.Context) er
 	return nil
 }
 
-// GetChangefeedInfoAndStatus returns kv revision and a map mapping from changefeedID to changefeed info and status
-func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (revision int64, statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, err error) {
+// GetChangefeedInfoAndStatus returns info, status and runtime from the same etcd revision
+func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (
+	revision int64,
+	statusMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+	infoMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+	runtimeMap map[common.ChangeFeedDisplayName]*mvccpb.KeyValue,
+	err error,
+) {
 	allDataPrefix := clusterPrefix(c.ClusterID)
 	// TODO tenfyzhong 2025-09-30 17:00:57 We should obtain data by page
 	resp, err := c.Client.Get(ctx, allDataPrefix, clientv3.WithPrefix())
 	if err != nil {
-		return 0, nil, nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+		return 0, nil, nil, nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 	}
 	revision = resp.Header.Revision
 	statusMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, 0)
@@ -258,7 +291,30 @@ func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (rev
 			infoMap[common.NewChangeFeedDisplayName(cf, ks)] = kv
 		}
 	}
-	return revision, statusMap, infoMap, nil
+	// Legacy feeds need no runtime read. Unknown runtime keys are ignored unless
+	// the corresponding info explicitly opts in.
+	for _, kv := range infoMap {
+		var marker struct {
+			UseRuntime bool `json:"use-runtime"`
+		}
+		if json.Unmarshal(kv.Value, &marker) != nil || !marker.UseRuntime {
+			continue
+		}
+		runtimeResp, err := c.Client.Get(ctx, ChangefeedRuntimeKeyPrefix(c.ClusterID),
+			clientv3.WithPrefix(), clientv3.WithRev(revision))
+		if err != nil {
+			return 0, nil, nil, nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+		}
+		runtimeMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue)
+		for _, runtimeKV := range runtimeResp.Kvs {
+			parts := strings.Split(string(runtimeKV.Key), "/")
+			if len(parts) == 8 && parts[4] == "changefeed" && parts[5] == "runtime" {
+				runtimeMap[common.NewChangeFeedDisplayName(parts[7], parts[6])] = runtimeKV
+			}
+		}
+		break
+	}
+	return revision, statusMap, infoMap, runtimeMap, nil
 }
 
 // GetChangeFeeds returns kv revision and a map mapping from changefeedID to changefeed detail mvccpb.KeyValue
@@ -266,7 +322,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 	int64,
 	map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error,
 ) {
-	revision, _, detail, err := c.GetChangefeedInfoAndStatus(ctx)
+	revision, _, detail, _, err := c.GetChangefeedInfoAndStatus(ctx)
 	return revision, detail, err
 }
 
@@ -274,7 +330,7 @@ func (c *CDCEtcdClientImpl) GetChangeFeeds(ctx context.Context) (
 func (c *CDCEtcdClientImpl) GetAllChangeFeedInfo(ctx context.Context) (
 	map[common.ChangeFeedDisplayName]*config.ChangeFeedInfo, error,
 ) {
-	_, details, err := c.GetChangeFeeds(ctx)
+	_, _, details, runtimes, err := c.GetChangefeedInfoAndStatus(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -283,6 +339,15 @@ func (c *CDCEtcdClientImpl) GetAllChangeFeedInfo(ctx context.Context) (
 		info := &config.ChangeFeedInfo{}
 		if err = info.Unmarshal(rawDetail.Value); err != nil {
 			return nil, errors.Trace(err)
+		}
+		if info.UseRuntime {
+			var data []byte
+			if kv := runtimes[id]; kv != nil {
+				data = kv.Value
+			}
+			if err := info.UnmarshalRuntime(data); err != nil {
+				return nil, err
+			}
 		}
 		allFeedInfo[id] = info
 	}
@@ -303,8 +368,25 @@ func (c *CDCEtcdClientImpl) GetChangeFeedInfo(ctx context.Context,
 		return nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(key)
 	}
 	detail := &config.ChangeFeedInfo{}
-	err = detail.Unmarshal(resp.Kvs[0].Value)
-	return detail, errors.Trace(err)
+	if err := detail.Unmarshal(resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	if detail.UseRuntime {
+		// Read at the info snapshot to avoid mixing metadata across a config
+		// migration, deletion or recreation of the same changefeed name.
+		runtimeResp, err := c.Client.Get(ctx, GetEtcdKeyChangeFeedRuntime(c.ClusterID, id),
+			clientv3.WithRev(resp.Header.Revision))
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+		}
+		if len(runtimeResp.Kvs) == 0 {
+			return nil, errors.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("missing runtime for changefeed %s", id))
+		}
+		if err := detail.UnmarshalRuntime(runtimeResp.Kvs[0].Value); err != nil {
+			return nil, err
+		}
+	}
+	return detail, nil
 }
 
 // DeleteChangeFeedInfo deletes a changefeed config from etcd

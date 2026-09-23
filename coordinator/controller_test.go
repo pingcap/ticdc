@@ -920,6 +920,8 @@ func TestUpdateChangefeed(t *testing.T) {
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
 		State:        config.StateStopped,
+		Epoch:        42,
+		Error:        &config.RunningError{Code: "latest"},
 		SinkURI:      "mysql://127.0.0.1:3306",
 	}, 1, true)
 	changefeedDB.AddStoppedChangefeed(cf)
@@ -938,10 +940,18 @@ func TestUpdateChangefeed(t *testing.T) {
 	require.NotNil(t, controller.UpdateChangefeed(context.Background(), newConfig))
 	require.Equal(t, false, changefeedDB.GetByID(cfID).NeedCheckpointTsMessage())
 
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, info *config.ChangeFeedInfo, _ uint64, _ config.Progress) error {
+			require.Equal(t, config.StateStopped, info.State)
+			require.Equal(t, uint64(42), info.Epoch)
+			require.Equal(t, "latest", info.Error.Code)
+			info.UseRuntime = true
+			return nil
+		}).Times(1)
 	require.Nil(t, controller.UpdateChangefeed(context.Background(), newConfig))
 	require.Equal(t, true, changefeedDB.GetByID(cfID).NeedCheckpointTsMessage())
 	require.Equal(t, 1, changefeedDB.GetStoppedSize())
+	require.True(t, changefeedDB.GetByID(cfID).GetInfo().UseRuntime)
 }
 
 func TestGetChangefeed(t *testing.T) {

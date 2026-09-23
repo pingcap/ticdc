@@ -275,6 +275,9 @@ type ChangeFeedInfo struct {
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch uint64 `json:"epoch"`
+	// UseRuntime selects the separate etcd runtime key for State, Error and Epoch.
+	// It is enabled only when a new coordinator creates or updates the config.
+	UseRuntime bool `json:"use-runtime,omitempty"`
 
 	// The changefeed belongs to the keyspace.  In classic mode, it will always be 0.
 	KeyspaceID uint32 `json:"keyspace-id"`
@@ -388,6 +391,60 @@ func (info *ChangeFeedInfo) GetTargetTs() uint64 {
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
 	return info.MarshalWithTruncation(true)
+}
+
+// MarshalForStorage omits runtime fields from migrated info values. Marshal and
+// Clone still include them so in-memory copies and API responses stay complete.
+func (info *ChangeFeedInfo) MarshalForStorage() (string, error) {
+	if !info.UseRuntime {
+		return info.Marshal()
+	}
+	type infoAlias ChangeFeedInfo
+	data, err := json.Marshal(struct {
+		*infoAlias
+		State *FeedState    `json:"state,omitempty"`
+		Error *RunningError `json:"error,omitempty"`
+		Epoch *uint64       `json:"epoch,omitempty"`
+	}{infoAlias: (*infoAlias)(info)})
+	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+}
+
+// ChangeFeedRuntime contains the frequently updated part of changefeed metadata.
+type ChangeFeedRuntime struct {
+	State FeedState     `json:"state"`
+	Error *RunningError `json:"error"`
+	Epoch uint64        `json:"epoch"`
+}
+
+// GetRuntime returns the runtime fields without copying the replica config.
+func (info *ChangeFeedInfo) GetRuntime() *ChangeFeedRuntime {
+	return &ChangeFeedRuntime{State: info.State, Error: info.Error, Epoch: info.Epoch}
+}
+
+// UnmarshalRuntime restores runtime fields only when the info selects runtime
+// storage. A missing or malformed runtime must not fall back to stale info.
+func (info *ChangeFeedInfo) UnmarshalRuntime(data []byte) error {
+	if !info.UseRuntime {
+		return nil
+	}
+	var runtime ChangeFeedRuntime
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		return cerror.WrapError(cerror.ErrUnmarshalFailed, err)
+	}
+	info.State, info.Error, info.Epoch = runtime.State, runtime.Error, runtime.Epoch
+	return nil
+}
+
+// Marshal serializes runtime using the same error truncation as info storage.
+func (runtime *ChangeFeedRuntime) Marshal() (string, error) {
+	copy := *runtime
+	if copy.Error != nil && len(copy.Error.Message) > 100 {
+		errorCopy := *copy.Error
+		errorCopy.Message = errorCopy.Message[:100] + "..."
+		copy.Error = &errorCopy
+	}
+	data, err := json.Marshal(&copy)
+	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
 // MarshalWithTruncation allows controlling whether to truncate error messages
