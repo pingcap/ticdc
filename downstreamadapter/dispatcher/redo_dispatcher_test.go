@@ -404,6 +404,17 @@ func TestRedoIncompleteSpanDispatcher(t *testing.T) {
 }
 
 func TestTableTriggerRedoDispatcher(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	require.NotNil(t, dmlEvent)
+	tableInfo := dmlEvent.TableInfo
+
 	for _, tc := range []struct {
 		name     string
 		sinkType common.SinkType
@@ -417,17 +428,6 @@ func TestTableTriggerRedoDispatcher(t *testing.T) {
 			ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 			testSink := newDispatcherTestSink(t, tc.sinkType)
 			tableTriggerEventDispatcher := newRedoDispatcherForTest(testSink.Sink(), ddlTableSpan, 0, 0)
-
-			helper := commonEvent.NewEventTestHelper(t)
-			defer helper.Close()
-
-			helper.Tk().MustExec("use test")
-			ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
-			require.NotNil(t, ddlJob)
-
-			dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
-			require.NotNil(t, dmlEvent)
-			tableInfo := dmlEvent.TableInfo
 
 			// basic ddl event(non-block)
 			ddlEvent := &commonEvent.DDLEvent{

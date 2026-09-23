@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -145,8 +144,8 @@ func TestListGcServiceSafePointInvalidJSON(t *testing.T) {
 
 	_, err = pc.ListGcServiceSafePoint(t.Context())
 	require.ErrorIs(t, err, cerror.ErrReachMaxTry)
-	_, ok := errors.AsType[*json.SyntaxError](err)
-	require.True(t, ok)
+	var syntaxErr *json.SyntaxError
+	require.ErrorAs(t, err, &syntaxErr)
 }
 
 // LabelRulePatch is the patch to update the label rules.
