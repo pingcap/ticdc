@@ -785,6 +785,11 @@ func expectResumeChangefeed(
 }
 
 func TestPauseChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -821,7 +826,8 @@ func TestPauseChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	backend.EXPECT().PauseChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
@@ -961,6 +967,11 @@ func TestGetChangefeedReturnedInfoMutationDoesNotRaceWithStoredInfo(t *testing.T
 }
 
 func TestRemoveChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -992,7 +1003,8 @@ func TestRemoveChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
