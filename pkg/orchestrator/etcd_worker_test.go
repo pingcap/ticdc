@@ -348,7 +348,7 @@ func TestLinearizability(t *testing.T) {
 	cdcCli, err := etcd.NewCDCEtcdClient(ctx, cli0.Unwrap(), "default")
 	require.Nil(t, err)
 	cli := newClient()
-	for i := 0; i < linearizabilityValues; i++ {
+	for i := range linearizabilityValues {
 		_, err := cli.Put(ctx, testEtcdKeyPrefix+"/lin", strconv.Itoa(i))
 		require.Nil(t, err)
 	}

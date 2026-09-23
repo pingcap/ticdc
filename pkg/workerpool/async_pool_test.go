@@ -41,7 +41,7 @@ func TestBasic(t *testing.T) {
 	const taskCount = 40
 	var sum int32
 	var wg sync.WaitGroup
-	for i := 0; i < taskCount; i++ {
+	for i := range taskCount {
 		wg.Add(1)
 		finalI := i
 		err := pool.Go(ctx, func() {
