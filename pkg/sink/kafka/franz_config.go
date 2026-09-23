@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"strings"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -42,6 +43,17 @@ const (
 // producerMaxRequestBytes matches franz-go's default BrokerMaxWriteBytes and Kafka's default socket.request.max.bytes.
 const producerMaxRequestBytes = 100 << 20
 
+const (
+	minFranzTimeout = 10 * time.Second
+	// franz-go rejects RequestTimeoutOverhead values above 15m. Both sink
+	// timeout options use this ceiling to keep their effective range consistent.
+	maxFranzTimeout = 15 * time.Minute
+)
+
+func normalizeTimeout(timeout time.Duration) time.Duration {
+	return max(minFranzTimeout, min(timeout, maxFranzTimeout))
+}
+
 // The shared client uses these options for all Kafka requests. Producer options
 // below apply only to Produce requests and buffered records.
 func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
@@ -52,7 +64,7 @@ func clientOptions(ctx context.Context, o *options) ([]kgo.Opt, error) {
 		// franz-go does not expose an independent socket read timeout. This value
 		// sets the socket write deadline and is added to each request-specific
 		// Broker processing timeout to form the socket read deadline.
-		kgo.RequestTimeoutOverhead(o.WriteTimeout),
+		kgo.RequestTimeoutOverhead(normalizeTimeout(o.WriteTimeout)),
 	}
 
 	if o.EnableTLS {
@@ -105,7 +117,7 @@ func producerOptions(o *options) []kgo.Opt {
 		// context remains the end-to-end bound. A processing timeout returns
 		// REQUEST_TIMED_OUT, which franz-go retries and which can duplicate a record
 		// while idempotent writes are disabled.
-		kgo.ProduceRequestTimeout(o.ReadTimeout),
+		kgo.ProduceRequestTimeout(normalizeTimeout(o.ReadTimeout)),
 		kgo.ProducerLinger(0),
 		compressionOption(o.Compression),
 	}
