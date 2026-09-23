@@ -188,7 +188,7 @@ u32-LE JSON-footer length, footer, `SNAPEND1`. Each record has u32-LE key/value
 lengths, key, value. JSON byte fields are base64, counts are JSON u64. SHA-256
 covers the entire stored chunk. Footer and exact length/checksum are mandatory.
 
-This profile uses uncompressed 1 MiB blocks, 4 MiB target chunks (configurable
+This profile uses uncompressed 1 MiB blocks, 64 MiB target chunks (configurable
 1–64 MiB in CSE), 16 MiB record ceiling plus the selected chunk budget, 64 KiB
 header/footer, 4 MiB metadata and 512 MiB source file-memory quota. Metadata is
 bounded before full allocation. Empty ranges publish a zero-row export/receipt.

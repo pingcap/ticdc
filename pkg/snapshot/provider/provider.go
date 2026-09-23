@@ -316,7 +316,7 @@ func (s *Server) materialize(ctx context.Context, id string, j Job, r protocol.S
 		return e
 	}
 	if v == "" {
-		ref, e := s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 4 << 20})
+		ref, e := s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 64 << 20})
 		if e != nil {
 			return e
 		}
