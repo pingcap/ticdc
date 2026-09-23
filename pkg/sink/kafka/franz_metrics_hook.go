@@ -107,6 +107,8 @@ func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	}
 
 	outgoingBytesTotal.DeletePartialMatch(labels)
+	bufferedProduceBytes.DeletePartialMatch(labels)
+	bufferedProduceRecords.DeletePartialMatch(labels)
 	requestsTotal.DeletePartialMatch(labels)
 	responsesTotal.DeletePartialMatch(labels)
 	requestsInFlight.DeletePartialMatch(labels)

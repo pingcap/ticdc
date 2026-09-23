@@ -761,6 +761,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+		metrics.EventServiceSkipScanCount.WithLabelValues("rate_limit").Inc()
 		log.Debug("scan rate limit exceeded",
 			zap.Stringer("dispatcher", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),

@@ -29,6 +29,33 @@ type MetricsCollector interface {
 	Run(ctx context.Context)
 }
 
+type franzMetricsCollector struct {
+	factory *franzFactory
+}
+
+func (m *franzMetricsCollector) Run(ctx context.Context) {
+	keyspace := m.factory.changefeedID.Keyspace()
+	changefeed := m.factory.changefeedID.Name()
+	ticker := time.NewTicker(refreshMetricsInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.factory.metricsMu.Lock()
+			if m.factory.closed.Load() {
+				m.factory.metricsMu.Unlock()
+				return
+			}
+			bufferedProduceBytes.WithLabelValues(keyspace, changefeed).Set(float64(m.factory.client.BufferedProduceBytes()))
+			bufferedProduceRecords.WithLabelValues(keyspace, changefeed).Set(float64(m.factory.client.BufferedProduceRecords()))
+			m.factory.metricsMu.Unlock()
+		}
+	}
+}
+
 const (
 	// refreshMetricsInterval specifies the interval of refresh kafka client metrics.
 	refreshMetricsInterval = 5 * time.Second
