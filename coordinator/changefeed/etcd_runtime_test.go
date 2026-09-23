@@ -215,7 +215,7 @@ func TestBumpRuntimeEpochRetriesOnCASConflict(t *testing.T) {
 				}, nil)
 				if info.UseRuntime {
 					client.EXPECT().Get(gomock.Any(), runtimeKey).Return(&clientv3.GetResponse{
-						Kvs: []*mvccpb.KeyValue{{Value: []byte(fmt.Sprintf(`{"state":"warning","epoch":%d}`, 8+attempt)), ModRevision: int64(2 + attempt)}},
+						Kvs: []*mvccpb.KeyValue{{Value: fmt.Appendf(nil, `{"state":"warning","epoch":%d}`, 8+attempt), ModRevision: int64(2 + attempt)}},
 					}, nil)
 				}
 				cmps := []clientv3.Cmp{

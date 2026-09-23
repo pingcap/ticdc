@@ -458,7 +458,7 @@ func TestChangeFeedRuntimeSnapshot(t *testing.T) {
 				runtimeKey := GetEtcdKeyChangeFeedRuntime("test", id)
 				infoKV := &mvccpb.KeyValue{
 					Key: []byte(infoKey), ModRevision: 1,
-					Value: []byte(fmt.Sprintf(`{"use-runtime":%t,"state":"stopped","epoch":1}`, useRuntime)),
+					Value: fmt.Appendf(nil, `{"use-runtime":%t,"state":"stopped","epoch":1}`, useRuntime),
 				}
 				response := &clientv3.GetResponse{
 					Header: &etcdserverpb.ResponseHeader{Revision: 10}, Count: 1,

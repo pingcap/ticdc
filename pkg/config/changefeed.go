@@ -437,13 +437,13 @@ func (info *ChangeFeedInfo) UnmarshalRuntime(data []byte) error {
 
 // Marshal serializes runtime using the same error truncation as info storage.
 func (runtime *ChangeFeedRuntime) Marshal() (string, error) {
-	copy := *runtime
-	if copy.Error != nil && len(copy.Error.Message) > 100 {
-		errorCopy := *copy.Error
+	runtimeCopy := *runtime
+	if runtimeCopy.Error != nil && len(runtimeCopy.Error.Message) > 100 {
+		errorCopy := *runtimeCopy.Error
 		errorCopy.Message = errorCopy.Message[:100] + "..."
-		copy.Error = &errorCopy
+		runtimeCopy.Error = &errorCopy
 	}
-	data, err := json.Marshal(&copy)
+	data, err := json.Marshal(&runtimeCopy)
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
