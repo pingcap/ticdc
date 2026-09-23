@@ -12,9 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/snapshot/store"
@@ -167,7 +170,24 @@ func (s *Server) batch(ctx context.Context, id, command string, task map[string]
 	cmd := exec.CommandContext(ctx, s.Binary, "snapshot", command, "--task-spec", taskFile)
 	cmd.Stdout = log
 	cmd.Stderr = log
-	if e = cmd.Run(); e != nil {
+	started := time.Now()
+	e = cmd.Run()
+	// Observability only: worker resource accounting is not part of the export
+	// protocol and must never turn a completed export into a failed attempt.
+	if state := cmd.ProcessState; state != nil {
+		stats := map[string]any{"command": command, "pid": state.Pid(), "started_at": started.UnixNano(), "finished_at": time.Now().UnixNano(), "user_cpu_seconds": state.UserTime().Seconds(), "system_cpu_seconds": state.SystemTime().Seconds(), "success": state.Success()}
+		if usage, ok := state.SysUsage().(*syscall.Rusage); ok {
+			peakRSS := usage.Maxrss
+			if runtime.GOOS != "darwin" {
+				peakRSS *= 1024
+			}
+			stats["peak_rss_bytes"] = peakRSS
+		}
+		if data, err := json.Marshal(stats); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, "worker-stats.json"), data, 0o600)
+		}
+	}
+	if e != nil {
 		return protocol.ObjectRef{}, protocol.Wrap(e)
 	}
 	name := "candidate.json"
