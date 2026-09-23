@@ -36,6 +36,8 @@ import (
 const (
 	// defaultPartitionNum specifies the default number of partitions when we create the topic.
 	defaultPartitionNum = 3
+	// defaultMaxRetry disables producer retries unless explicitly configured.
+	defaultMaxRetry = 0
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
 
@@ -117,6 +119,7 @@ type urlConfig struct {
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
 	MaxMessageBytes              *int    `form:"max-message-bytes"`
+	MaxRetry                     *int    `form:"max-retry"`
 	Compression                  *string `form:"compression"`
 	KafkaClientID                *string `form:"kafka-client-id"`
 	AutoCreateTopic              *bool   `form:"auto-create-topic"`
@@ -156,6 +159,7 @@ type options struct {
 	IsAssignedVersion bool
 	RequestVersion    int16
 	MaxMessageBytes   int
+	MaxRetry          int
 	Compression       string
 	ClientID          string
 	RequiredAcks      RequiredAcks
@@ -182,6 +186,7 @@ func NewOptions() *options {
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
+		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
 		Compression:        "none",
 		RequiredAcks:       WaitForAll,
@@ -258,6 +263,13 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
+	}
+
+	if urlParameter.MaxRetry != nil {
+		if *urlParameter.MaxRetry < 0 {
+			return errors.ErrKafkaInvalidConfig.GenWithStack("max-retry must be greater than or equal to zero")
+		}
+		o.MaxRetry = *urlParameter.MaxRetry
 	}
 
 	if urlParameter.Compression != nil {

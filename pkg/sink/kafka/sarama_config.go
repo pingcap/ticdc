@@ -60,7 +60,8 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	// According to the https://github.com/IBM/sarama/issues/2619,
 	// sarama may send message out of order even set the `config.Net.MaxOpenRequest` to 1,
 	// when the kafka cluster is unhealthy and trigger the internal retry mechanism.
-	config.Producer.Retry.Max = 0
+	// Keep retries disabled by default, but allow an explicit max-retry override.
+	config.Producer.Retry.Max = o.MaxRetry
 	config.Producer.Retry.Backoff = 100 * time.Millisecond
 
 	// make sure sarama producer flush messages as soon as possible.

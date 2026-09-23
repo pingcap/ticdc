@@ -263,6 +263,45 @@ func TestCompleteOptions(t *testing.T) {
 	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
 }
 
+func TestOptionsMaxRetry(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		query    string
+		expected int
+		wantErr  bool
+	}{
+		{name: "default"},
+		{name: "zero", query: "max-retry=0"},
+		{name: "positive", query: "max-retry=7", expected: 7},
+		{name: "negative", query: "max-retry=-1", wantErr: true},
+		{name: "non integer", query: "max-retry=abc", wantErr: true},
+		{name: "overflow", query: "max-retry=9223372036854775808", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := NewOptions()
+			require.Zero(t, options.MaxRetry)
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/test?" + test.query)
+			require.NoError(t, err)
+			err = options.Apply(common.NewChangefeedID4Test("test", "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+			if test.wantErr {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.expected, options.MaxRetry)
+
+			// Config validation does not need to detect the version from a real broker.
+			options.BrokerEndpoints = nil
+			saramaConfig, err := newSaramaConfig(t.Context(), options)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, saramaConfig.Producer.Retry.Max)
+		})
+	}
+}
+
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")

@@ -134,7 +134,6 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 		return nil, err
 	}
 	config.MetricRegistry = f.metricRegistry
-	config.Producer.Retry.Max = 3
 
 	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
 	if err != nil {
