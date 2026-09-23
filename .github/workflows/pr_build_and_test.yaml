@@ -48,7 +48,7 @@ jobs:
           cache: false
 
       - name: Cache Go
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/go/pkg/mod
@@ -59,7 +59,7 @@ jobs:
 
       - name: Cache Tools
         id: cache-tools
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tools/bin
           key: check-tools-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum', 'tools/Makefile') }}
@@ -70,7 +70,7 @@ jobs:
         run: find tools/bin -maxdepth 1 -type f -exec touch {} +
 
       - name: Cache golangci-lint analysis
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/golangci-lint
           key: golangci-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', '.golangci.yml', 'tools/check/go.mod', 'tools/check/go.sum') }}-${{ github.sha }}
@@ -114,7 +114,7 @@ jobs:
           cache: false
 
       - name: Cache Go
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/go/pkg/mod
@@ -125,7 +125,7 @@ jobs:
 
       - name: Cache Tools
         id: cache-tools
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
@@ -163,7 +163,7 @@ jobs:
           cache: false
 
       - name: Cache Go
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/go/pkg/mod
@@ -174,7 +174,7 @@ jobs:
 
       - name: Cache Tools
         id: cache-tools
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum') }}
