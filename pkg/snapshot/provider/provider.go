@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/snapshot/store"
+	"golang.org/x/sync/errgroup"
 )
 
 type Job struct {
@@ -43,6 +43,9 @@ type Request struct {
 type Server struct {
 	Objects store.Local
 	Binary  string
+	// Workers bounds concurrent local materialize-range processes per job.
+	// Configure before serving requests; values below one retain serial execution.
+	Workers int
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
 }
@@ -136,11 +139,15 @@ func (s *Server) start(id string) {
 }
 
 func (s *Server) batch(ctx context.Context, id, command string, task map[string]any) (protocol.ObjectRef, error) {
-	attempt := fmt.Sprintf("%d", time.Now().UnixNano())
-	dir := filepath.Join(s.Objects.Root, "br", id, "attempts", attempt)
-	if e := os.MkdirAll(dir, 0o700); e != nil {
+	parent := filepath.Join(s.Objects.Root, "br", id, "attempts")
+	if e := os.MkdirAll(parent, 0o700); e != nil {
 		return protocol.ObjectRef{}, protocol.Wrap(e)
 	}
+	dir, e := os.MkdirTemp(parent, "")
+	if e != nil {
+		return protocol.ObjectRef{}, protocol.Wrap(e)
+	}
+	attempt := filepath.Base(dir)
 	task["protocol_version"] = 1
 	task["output_dir"] = dir
 	task["attempt_id"] = attempt
@@ -175,15 +182,10 @@ func (s *Server) run(ctx context.Context, id string) error {
 	if _, e := s.Objects.Read(key(id), &j); e != nil {
 		return e
 	}
-	active := func(j *Job) error {
-		if j.Phase == "CANCELED" || j.Phase == "FAILED" {
-			return protocol.Invalid("terminal source job")
-		}
-		return nil
-	}
+
 	if j.PlanRef.URI == "" {
 		if e := s.update(id, func(j *Job) error {
-			if e := active(j); e != nil {
+			if e := activeJob(j); e != nil {
 				return e
 			}
 			j.Phase = "PLANNING"
@@ -206,7 +208,7 @@ func (s *Server) run(ctx context.Context, id string) error {
 			return protocol.Invalid("demo supports at most 256 ranges")
 		}
 		if e = s.update(id, func(j *Job) error {
-			if e := active(j); e != nil {
+			if e := activeJob(j); e != nil {
 				return e
 			}
 			if j.PlanRef.URI == "" {
@@ -225,74 +227,17 @@ func (s *Server) run(ctx context.Context, id string) error {
 	if e := protocol.Read(j.PlanRef, &plan); e != nil {
 		return e
 	}
-	// A deterministic URI is the completion authority. On recovery, reconcile it
-	// before launching work, including the export-published/control-not-saved gap.
-	for _, r := range plan.Ranges {
-		if e := ctx.Err(); e != nil {
-			return protocol.Wrap(e)
-		}
-		exportKey := "br/" + id + "/range-exports/" + r.RangeID + ".json"
-		var ex protocol.Export
-		v, e := s.Objects.Read(exportKey, &ex)
-		if e != nil {
-			return e
-		}
-		if v == "" {
-			ref, e := s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 4 << 20})
-			if e != nil {
-				return e
-			}
-			if e = protocol.Read(ref, &ex); e != nil {
-				return e
-			}
-			if e = protocol.ValidateExport(j.Spec, j.PlanRef, r, ex); e != nil {
-				return e
-			}
-			for _, chunk := range ex.Chunks {
-				info, e := os.Stat(chunk.URI)
-				if e != nil {
-					return protocol.Wrap(e)
-				}
-				if info.Size() != chunk.Size {
-					return protocol.Invalid("incomplete upload")
-				}
-			}
-			_, e = s.Objects.CAS(exportKey, "", ex)
-			if e != nil {
-				return e
-			}
-			if _, e = s.Objects.Read(exportKey, &ex); e != nil {
-				return e
-			}
-		}
-		if e = protocol.ValidateExport(j.Spec, j.PlanRef, r, ex); e != nil {
-			return e
-		}
-		path, _ := s.Objects.Path(exportKey)
-		ref, e := protocol.Ref(path)
-		if e != nil {
-			return e
-		}
-		if e = s.update(id, func(j *Job) error {
-			if e := active(j); e != nil {
-				return e
-			}
-			for _, old := range j.Exports {
-				if old.URI == ref.URI {
-					if old != ref {
-						return protocol.Invalid("export winner changed")
-					}
-					return nil
-				}
-			}
-			j.Exports = append(j.Exports, ref)
-			return nil
-		}); e != nil {
-			return e
-		}
+	workers := s.Workers
+	if workers < 1 {
+		workers = 1
+	}
+	if e := materializeRanges(ctx, workers, plan.Ranges, func(ctx context.Context, r protocol.Span) error {
+		return s.materialize(ctx, id, j, r)
+	}); e != nil {
+		return e
 	}
 	return s.update(id, func(j *Job) error {
-		if e := active(j); e != nil {
+		if e := activeJob(j); e != nil {
 			return e
 		}
 		if len(j.Exports) != len(plan.Ranges) {
@@ -301,6 +246,109 @@ func (s *Server) run(ctx context.Context, id string) error {
 		j.Phase = "SOURCE_COMPLETE"
 		return nil
 	})
+}
+
+func activeJob(j *Job) error {
+	if j.Phase == "CANCELED" || j.Phase == "FAILED" {
+		return protocol.Invalid("terminal source job")
+	}
+	return nil
+}
+
+// Cancel and join all workers before the caller records a terminal job state.
+func materializeRanges(ctx context.Context, workers int, ranges []protocol.Span, run func(context.Context, protocol.Span) error) error {
+	group, ctx := errgroup.WithContext(ctx)
+	jobs := make(chan protocol.Span)
+	group.Go(func() error {
+		defer close(jobs)
+		for _, r := range ranges {
+			select {
+			case <-ctx.Done():
+				return protocol.Wrap(ctx.Err())
+			case jobs <- r:
+			}
+		}
+		return nil
+	})
+	for i := 0; i < workers; i++ {
+		group.Go(func() error {
+			for r := range jobs {
+				if e := ctx.Err(); e != nil {
+					return protocol.Wrap(e)
+				}
+				if e := run(ctx, r); e != nil {
+					return e
+				}
+			}
+			return nil
+		})
+	}
+	return group.Wait()
+}
+
+func (s *Server) materialize(ctx context.Context, id string, j Job, r protocol.Span) error {
+	// A deterministic URI is the completion authority. Recover a published
+	// winner before launching work, then reconcile the append-only journal.
+	exportKey := "br/" + id + "/range-exports/" + r.RangeID + ".json"
+	var ex protocol.Export
+	v, e := s.Objects.Read(exportKey, &ex)
+	if e != nil {
+		return e
+	}
+	if v == "" {
+		ref, e := s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 4 << 20})
+		if e != nil {
+			return e
+		}
+		if e = protocol.Read(ref, &ex); e != nil {
+			return e
+		}
+		if e = protocol.ValidateExport(j.Spec, j.PlanRef, r, ex); e != nil {
+			return e
+		}
+		for _, chunk := range ex.Chunks {
+			info, e := os.Stat(chunk.URI)
+			if e != nil {
+				return protocol.Wrap(e)
+			}
+			if info.Size() != chunk.Size {
+				return protocol.Invalid("incomplete upload")
+			}
+		}
+		_, e = s.Objects.CAS(exportKey, "", ex)
+		if e != nil {
+			return e
+		}
+		if _, e = s.Objects.Read(exportKey, &ex); e != nil {
+			return e
+		}
+	}
+	if e = protocol.ValidateExport(j.Spec, j.PlanRef, r, ex); e != nil {
+		return e
+	}
+	path, _ := s.Objects.Path(exportKey)
+	ref, e := protocol.Ref(path)
+	if e != nil {
+		return e
+	}
+	if e = s.update(id, func(j *Job) error {
+		if e := activeJob(j); e != nil {
+			return e
+		}
+		for _, old := range j.Exports {
+			if old.URI == ref.URI {
+				if old != ref {
+					return protocol.Invalid("export winner changed")
+				}
+				return nil
+			}
+		}
+		j.Exports = append(j.Exports, ref)
+		return nil
+	}); e != nil {
+		return e
+	}
+	return nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

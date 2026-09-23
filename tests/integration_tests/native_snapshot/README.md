@@ -87,7 +87,7 @@ python3 tests/integration_tests/native_snapshot/demo.py stop --root "$OLD_RUN"
 # A Python environment with boto3 is needed only for prepare; credentials are
 # read from the existing CSE config and never put in the manifest or sink URI.
 python3 tests/integration_tests/native_snapshot/demo.py prepare --root "$RUN" --reset-fixture
-python3 tests/integration_tests/native_snapshot/demo.py start --root "$RUN" --cluster-id unique-demo-cluster
+python3 tests/integration_tests/native_snapshot/demo.py start --root "$RUN" --cluster-id unique-demo-cluster --provider-workers 1
 python3 tests/integration_tests/native_snapshot/demo.py create --root "$RUN" --name unique-demo-feed --topic unique-demo-topic
 python3 tests/integration_tests/native_snapshot/demo.py wait --root "$RUN" --name unique-demo-feed
 python3 tests/integration_tests/native_snapshot/demo.py verify --root "$RUN" --name unique-demo-feed --topic unique-demo-topic
@@ -200,3 +200,17 @@ go test -tags=intest ./maintainer ./coordinator ./api/v2 ./downstreamadapter/dis
 cargo test -p cse-ctl snapshot
 cargo test -p native_br packed_reader
 ```
+
+### Local parallel export workers
+
+`demo.py start --provider-workers 4` runs up to four `cse-ctl snapshot
+materialize-range` processes concurrently per job. The standalone Provider flag
+is `-workers 4` (default 1; accepted range 1–32). Planning still runs once, and
+TiCDC retains its existing snapshot consumption path. This is local process
+concurrency, not Kubernetes scheduling or multiple TiCDC captures.
+
+Each worker has a separate attempt directory. Completed exports are validated
+and published through the existing immutable winner/CAS journal. A worker error
+cancels and joins the other workers before the job becomes FAILED; previously
+published valid results remain durable. Recovery reconciles those winners
+without exporting them again.

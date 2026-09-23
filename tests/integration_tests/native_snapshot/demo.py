@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--sql-port", default="4400")
     parser.add_argument("--broker", default="10.2.15.7:9092")
     parser.add_argument("--server", default="http://127.0.0.1:18300")
+    parser.add_argument("--provider-workers", type=int, default=1)
     parser.add_argument("--provider", default="http://127.0.0.1:18400")
     parser.add_argument("--worker", default="http://127.0.0.1:39000")
     parser.add_argument("--name", default="native-snapshot-demo")
@@ -96,7 +97,7 @@ def main():
         env.update(DFS_S3_KEY_ID=config("s3-key-id"), DFS_S3_SECRET_KEY=config("s3-secret-key"))
         from urllib.parse import urlsplit
         commands = {
-            "provider": [str(root/"bin/snapshot-provider"), "-root", str(root/"artifacts"), "-cse-binary", args.cse_binary, "-listen", urlsplit(args.provider).netloc],
+            "provider": [str(root/"bin/snapshot-provider"), "-root", str(root/"artifacts"), "-cse-binary", args.cse_binary, "-listen", urlsplit(args.provider).netloc, "-workers", str(args.provider_workers)],
             "cdc": [str(root/"bin/cdc"), "server", "--pd="+args.pd, "--addr=0.0.0.0:"+str(urlsplit(args.server).port), "--advertise-addr="+args.advertise_addr, "--cluster-id="+args.cluster_id, "--data-dir="+str(root/"cdc-data"), "--log-file="+str(root/"logs/cdc.log"), "--config="+str(root/"cdc.toml")],
         }
         for name, command in commands.items():
