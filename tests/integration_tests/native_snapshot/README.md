@@ -214,3 +214,9 @@ and published through the existing immutable winner/CAS journal. A worker error
 cancels and joins the other workers before the job becomes FAILED; previously
 published valid results remain durable. Recovery reconciles those winners
 without exporting them again.
+
+Completed child processes also leave a diagnostic `worker-stats.json` in their
+attempt directory, including user/system CPU seconds, peak RSS, elapsed wall
+boundaries, and exit status. This file is optional observability data, not an
+export receipt or part of the shared artifact protocol. A failure to write it
+does not invalidate an otherwise completed export.
