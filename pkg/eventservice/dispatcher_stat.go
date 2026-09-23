@@ -48,8 +48,8 @@ const (
 // from Idle. In low-latency mode, a request received while Running changes it
 // to RunningPending, and completion queues one coalesced continuation. A scan
 // stopped by SchemaStore changes to SchemaBlocked and is queued again after the
-// schema frontier advances. isRemoved is the terminal lifecycle flag and is
-// independent of scanState.
+// schema frontier advances. Queue-full fallback restores Idle, except that a
+// schema retry remains SchemaBlocked. Removed is terminal for this dispatcherStat.
 type dispatcherScanState uint8
 
 const (
@@ -58,6 +58,7 @@ const (
 	dispatcherScanRunning
 	dispatcherScanRunningPending
 	dispatcherScanSchemaBlocked
+	dispatcherScanRemoved
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -247,9 +248,6 @@ func (a *dispatcherStat) beginScan() bool {
 func (a *dispatcherStat) isScanBusy() bool {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
-	if a.isRemoved.Load() {
-		return false
-	}
 	return a.scanState == dispatcherScanQueued ||
 		a.scanState == dispatcherScanRunning ||
 		a.scanState == dispatcherScanRunningPending
@@ -284,6 +282,7 @@ func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Contex
 func (a *dispatcherStat) markRemoved() {
 	a.isRemoved.Store(true)
 	a.scanMu.Lock()
+	a.scanState = dispatcherScanRemoved
 	a.schemaBlockedUntilTs = 0
 	a.scanMu.Unlock()
 
