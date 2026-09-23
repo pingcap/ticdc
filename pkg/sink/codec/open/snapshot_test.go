@@ -11,18 +11,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotEnvelopeKeepsIdentityAndInlineSchema(t *testing.T) {
+func TestSnapshotEnvelopeKeepsIdentityWithoutInlineSchema(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.DDL2Job("create table test.snap (id int primary key, v int)")
 	event := helper.DML2Event("test", "snap", "insert into test.snap values(1,10)")
 	row, ok := event.GetNextRow()
 	require.True(t, ok)
-	e := &commonEvent.RowEvent{PhysicalTableID: event.PhysicalTableID, TableInfo: event.TableInfo, Event: row, CommitTs: 42, ColumnSelector: columnselector.NewDefaultColumnSelector(), Snapshot: &commonEvent.SnapshotRow{ID: "stable", SnapshotID: "generation", Timestamp: 42, Schema: "c2NoZW1h"}}
+	e := &commonEvent.RowEvent{PhysicalTableID: event.PhysicalTableID, TableInfo: event.TableInfo, Event: row, CommitTs: 42, ColumnSelector: columnselector.NewDefaultColumnSelector(), Snapshot: &commonEvent.SnapshotRow{ID: "stable", SnapshotID: "generation", Timestamp: 42}}
 	key, _, _, err := encodeRowChangedEvent(e, initColumnFlags(e.TableInfo), common.NewConfig(config.ProtocolOpen), false, "")
 	require.NoError(t, err)
 	require.Contains(t, string(key), `"snapshot_record_id":"stable"`)
-	require.Contains(t, string(key), `"snapshot_schema":"c2NoZW1h"`)
+	require.NotContains(t, string(key), "snapshot_schema")
+	require.Contains(t, string(key), `"snapshot_id":"generation"`)
+	require.Contains(t, string(key), `"snapshot_ts":42`)
 	e.Snapshot = nil
 	key, _, _, err = encodeRowChangedEvent(e, initColumnFlags(e.TableInfo), common.NewConfig(config.ProtocolOpen), false, "")
 	require.NoError(t, err)

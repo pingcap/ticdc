@@ -83,3 +83,34 @@ func TestStateRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(b, &out))
 	require.Equal(t, state, out)
 }
+
+func TestVerifiedBufferTruncationAndRetainedRows(t *testing.T) {
+	b, err := os.ReadFile("testdata/rust-v1.skv")
+	require.NoError(t, err)
+	expected := Header{Version: 1, Compression: "none", JobID: "golden", SnapshotID: "golden", SnapshotTS: 42, PlanDigest: "golden", RangeID: "r0", AttemptID: "a0", TableID: 1}
+	ref := Chunk{KVCount: 2, LogicalBytes: 12, First: []byte("a"), Last: []byte("b")}
+	span := Span{Start: []byte("a"), End: []byte("z")}
+	for i := 0; i < len(b); i++ {
+		_, err := decode(&bufferReader{data: b[:i]}, expected, span, ref, func([]byte, []byte) error { return nil })
+		require.Error(t, err, "truncation at %d", i)
+	}
+	var keys, values [][]byte
+	_, err = decode(&bufferReader{data: b}, expected, span, ref, func(k, v []byte) error { keys = append(keys, k); values = append(values, v); return nil })
+	require.NoError(t, err)
+	require.Equal(t, []byte("a"), keys[0])
+	require.Equal(t, []byte("b"), keys[1])
+	for _, row := range append(keys, values...) {
+		require.Equal(t, len(row), cap(row), "append must not overwrite the following frame")
+	}
+}
+
+func TestRuntimeLimits(t *testing.T) {
+	var defaults *Config
+	require.NoError(t, defaults.ValidateRuntime())
+	require.Equal(t, 4, defaults.ApplyConcurrency())
+	require.EqualValues(t, 64<<20, defaults.InflightLimit())
+	for _, c := range []Config{{ApplyWorkers: -1}, {ApplyWorkers: 33}, {InflightBytes: 1}, {InflightBytes: (1 << 30) + 1}} {
+		require.Error(t, c.ValidateRuntime())
+	}
+	require.NoError(t, (&Config{ApplyWorkers: 16, InflightBytes: 32 << 20}).ValidateRuntime())
+}

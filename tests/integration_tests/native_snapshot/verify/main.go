@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
@@ -16,12 +15,14 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/snapshot/bootstrap"
 	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 )
 
 type key struct {
+	DB         string `json:"scm"`
 	TS         uint64 `json:"ts"`
 	Type       int    `json:"t"`
 	Table      string `json:"tbl"`
@@ -71,7 +72,31 @@ func main() {
 	topic := flag.String("topic", "", "single partition topic")
 	out := flag.String("output", "verify.json", "result JSON")
 	seed := flag.Int("seed", 3000, "expected unique snapshot rows")
+	specFile := flag.String("spec", "", "immutable snapshot spec.json (schema remains external to row messages)")
 	flag.Parse()
+	specRef, err := protocol.Ref(*specFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var spec protocol.Spec
+	if err := protocol.Read(specRef, &spec); err != nil {
+		log.Fatal(err)
+	}
+	var bundle bootstrap.SchemaBundle
+	if err := protocol.Read(spec.SchemaRef, &bundle); err != nil {
+		log.Fatal(err)
+	}
+	if bundle.SnapshotTS != spec.SnapshotTS {
+		log.Fatal("schema boundary mismatch")
+	}
+	tableIDs := map[string]int64{}
+	for _, frozen := range bundle.Tables {
+		ti, err := common.UnmarshalJSONToTableInfo(frozen.Data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		tableIDs[ti.GetSchemaName()+"."+ti.GetTableName()] = frozen.TableID
+	}
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_4_0_0
 	config.Consumer.Return.Errors = true
@@ -162,16 +187,13 @@ func main() {
 						log.Fatal("snapshot boundary changed")
 					}
 					boundary = k.TS
-					schema, err := base64.StdEncoding.DecodeString(k.Schema)
-					if err != nil {
-						log.Fatal(err)
+
+					tableID := tableIDs[k.DB+"."+k.Table]
+					if k.Schema != "" || tableID == 0 || k.Snapshot != spec.SnapshotID || k.SnapshotTS != spec.SnapshotTS {
+						log.Fatal("snapshot metadata mismatch")
 					}
-					ti, err := common.UnmarshalJSONToTableInfo(schema)
-					if err != nil {
-						log.Fatal(err)
-					}
-					rawKey := tablecodec.EncodeRowKeyWithHandle(ti.TableName.TableID, kv.IntHandle(id))
-					if protocol.RecordID(k.Snapshot, ti.TableName.TableID, rawKey) != k.ID {
+					rawKey := tablecodec.EncodeRowKeyWithHandle(tableID, kv.IntHandle(id))
+					if protocol.RecordID(k.Snapshot, tableID, rawKey) != k.ID {
 						log.Fatal("record ID differs from domain hash")
 					}
 					if id < 1 || id > int64(*seed) || number(cols["balance"].Value) != id*10 || cols["note"].Value != fmt.Sprintf("snapshot-%d", id) || len(cols) != 3 {

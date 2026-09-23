@@ -25,6 +25,10 @@ func (m *Maintainer) snapshotBeforeBootstrap(responses map[node.ID]*heartbeatpb.
 		return false
 	}
 	cfg := m.info.Config.Snapshot
+	if err := cfg.ValidateRuntime(); err != nil {
+		m.handleError(err)
+		return false
+	}
 	uri, err := url.Parse(m.info.SinkURI)
 	if err != nil {
 		m.handleError(protocol.Wrap(err))

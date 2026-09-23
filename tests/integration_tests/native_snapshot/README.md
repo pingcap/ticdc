@@ -160,9 +160,22 @@ journal-not-updated boundary; status/list polls restart reconciliation.
 ## Contract and demo limits
 
 Snapshot metadata keys in Kafka open protocol are `snapshot_record_id`,
-`snapshot_id`, `snapshot_ts`, `snapshot_schema` and `snapshot_schema_encoding`.
-Schema encoding is `ticdc-table-info-base64-v1`: base64 of the existing TiCDC
-`TableInfo.Marshal()` bytes, decoded with `UnmarshalJSONToTableInfo`.
+`snapshot_id` and `snapshot_ts`. Full TableInfo is **not** repeated in Kafka rows
+or SnapshotKV records. The immutable `schema.json` bundle is referenced by
+`Spec.SchemaRef` (size + SHA-256), using the existing `TableInfo.Marshal()` bytes.
+Capture verifies and caches it once per snapshot, decoded with
+`UnmarshalJSONToTableInfo`. The verifier receives `-spec <spec.json>` to validate
+record identities against this same frozen metadata.
+
+Capture `[snapshot]` options `apply-workers` (default 4, range 1–32) and
+`inflight-bytes` (default 64 MiB, range 32 MiB–1 GiB) are independent of Provider
+`-workers`. Mounted batches share one capture-side byte budget, released only by
+sink PostFlush callbacks. Each worker additionally holds at most one input chunk
+(up to 64 MiB) and one batch (up to 256 rows or about 1 MiB, plus one oversized
+record bounded by the 16 MiB record limit). Kafka encoding buffers and the rest
+of the capture have their own memory overhead; this budget is not a total RSS
+limit. Range workers join before abort or global commit. Per-row RecordIDs remain
+independent of batching and concurrency.
 Normal incremental event keys remain unchanged.
 
 Record ID is lowercase SHA-256 of `snapshot-key-v1\0`, u32-BE snapshot-ID byte

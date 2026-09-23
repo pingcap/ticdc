@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/snapshot/provider"
 	"github.com/pingcap/ticdc/pkg/snapshot/store"
+	"golang.org/x/sync/errgroup"
 )
 
 type Controller struct {
@@ -27,6 +29,9 @@ type Controller struct {
 }
 
 func (c Controller) Run(ctx context.Context) (result error) {
+	if err := c.Config.ValidateRuntime(); err != nil {
+		return err
+	}
 	objects := store.Local{Root: c.Config.ArtifactDir}
 	dir := filepath.Join(objects.Root, "cdc", c.ID.ID().String())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -138,34 +143,18 @@ func (c Controller) Run(ctx context.Context) (result error) {
 			return err
 		}
 		applied := 0
+		var ready []store.Task
 		for _, task := range all {
 			if task.State == "APPLIED" {
 				applied++
-				continue
+			} else if task.State == "READY" {
+				ready = append(ready, task)
 			}
-			if task.State != "READY" {
-				continue
-			}
-			assigned, err := tasks.Assign(task.Range.RangeID)
-			if err != nil {
-				return err
-			}
-			var ex protocol.Export
-			if err = protocol.Read(assigned.Export, &ex); err != nil {
-				return err
-			}
-			if err = protocol.ValidateExport(spec, state.PlanRef, task.Range, ex); err != nil {
-				return err
-			}
-			rows, err := c.Capture.ApplySnapshot(ctx, c.ID, c.Epoch, spec, state.PlanRef, ex)
-			if err != nil {
-				return err
-			}
-			if err = tasks.Commit(task.Range.RangeID, assigned.Lease, rows); err != nil {
-				return err
-			}
-			applied++
 		}
+		if err = c.applyReady(ctx, tasks, spec, state.PlanRef, ready); err != nil {
+			return err
+		}
+		applied += len(ready)
 		state.Applied = applied
 		if err = save(); err != nil {
 			return err
@@ -236,4 +225,63 @@ func (c Controller) Run(ctx context.Context) (result error) {
 	state.Marker = &protocol.Marker{SnapshotTS: spec.SnapshotTS, SnapshotID: spec.SnapshotID, PlanDigest: state.PlanRef.Digest, OutputFence: "single-capture-all-broker-acks"}
 	state.Phase = "SNAPSHOT_COMMITTED"
 	return save()
+}
+
+// All workers are joined before Run can abort the sink or release writer.lock.
+// Task page writes stay serialized; data application is bounded and concurrent.
+func (c Controller) applyReady(ctx context.Context, tasks store.Tasks, spec protocol.Spec, ref protocol.ObjectRef, ready []store.Task) error {
+	if len(ready) == 0 {
+		return nil
+	}
+	group, ctx := errgroup.WithContext(ctx)
+	jobs := make(chan store.Task)
+	var taskMu sync.Mutex
+	group.Go(func() error {
+		defer close(jobs)
+		for _, task := range ready {
+			select {
+			case jobs <- task:
+			case <-ctx.Done():
+				return protocol.Wrap(ctx.Err())
+			}
+		}
+		return nil
+	})
+	for i := 0; i < min(c.Config.ApplyConcurrency(), len(ready)); i++ {
+		group.Go(func() error {
+			for task := range jobs {
+				if err := ctx.Err(); err != nil {
+					return protocol.Wrap(err)
+				}
+				taskMu.Lock()
+				assigned, err := tasks.Assign(task.Range.RangeID)
+				taskMu.Unlock()
+				if err != nil {
+					return err
+				}
+				var ex protocol.Export
+				if err = protocol.Read(assigned.Export, &ex); err != nil {
+					return err
+				}
+				if err = protocol.ValidateExport(spec, ref, task.Range, ex); err != nil {
+					return err
+				}
+				rows, err := c.Capture.ApplySnapshot(ctx, c.ID, c.Epoch, spec, ref, ex)
+				if err != nil {
+					return err
+				}
+				if err = ctx.Err(); err != nil {
+					return protocol.Wrap(err)
+				}
+				taskMu.Lock()
+				err = tasks.Commit(task.Range.RangeID, assigned.Lease, rows)
+				taskMu.Unlock()
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return group.Wait()
 }

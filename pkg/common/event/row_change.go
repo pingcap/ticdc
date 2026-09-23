@@ -92,7 +92,6 @@ type SnapshotRow struct {
 	ID         string
 	SnapshotID string
 	Timestamp  uint64
-	Schema     string
 }
 
 type RowEvent struct {

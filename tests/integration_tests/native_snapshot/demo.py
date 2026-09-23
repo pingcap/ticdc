@@ -166,7 +166,7 @@ def main():
             raise SystemExit("changefeed did not catch up: "+str(state.get("error")))
     elif args.action == "verify":
         output = root/(args.name+"-verification.json")
-        subprocess.run([str(root/"bin/snapshot-verify"), "-broker", args.broker, "-topic", args.topic, "-output", str(output)], check=True)
+        subprocess.run([str(root/"bin/snapshot-verify"), "-broker", args.broker, "-topic", args.topic, "-output", str(output), "-spec", http(args.server+"/api/v2/changefeeds/"+args.name+"?keyspace="+args.keyspace)["snapshot"]["spec_ref"]["uri"]], check=True)
         subprocess.run(["python3", str(Path(__file__).with_name("compare.py")), str(output), "--port", args.sql_port], check=True)
 
 

@@ -117,10 +117,37 @@ type Marker struct {
 // Config is opt-in. The initial deployment uses one capture and a shared local
 // artifact directory. Provider and capture are independent modules.
 type Config struct {
-	BackupURI    string `toml:"backup-uri" json:"backup-uri"`
-	BackupDigest string `toml:"backup-digest" json:"backup-digest"`
-	ProviderURL  string `toml:"provider-url" json:"provider-url"`
-	ArtifactDir  string `toml:"artifact-dir" json:"artifact-dir"`
+	ApplyWorkers  int    `toml:"apply-workers" json:"apply-workers,omitempty"`
+	InflightBytes int64  `toml:"inflight-bytes" json:"inflight-bytes,omitempty"`
+	BackupURI     string `toml:"backup-uri" json:"backup-uri"`
+	BackupDigest  string `toml:"backup-digest" json:"backup-digest"`
+	ProviderURL   string `toml:"provider-url" json:"provider-url"`
+	ArtifactDir   string `toml:"artifact-dir" json:"artifact-dir"`
+}
+
+// ApplyConcurrency and InflightLimit bound capture-side work independently of
+// provider export workers. The byte budget covers mounted data awaiting ACK;
+// each worker additionally owns at most one bounded input chunk and batch.
+func (c *Config) ApplyConcurrency() int {
+	if c == nil || c.ApplyWorkers == 0 {
+		return 4
+	}
+	return c.ApplyWorkers
+}
+func (c *Config) InflightLimit() int64 {
+	if c == nil || c.InflightBytes == 0 {
+		return 64 << 20
+	}
+	return c.InflightBytes
+}
+func (c *Config) ValidateRuntime() error {
+	if c.ApplyConcurrency() < 1 || c.ApplyConcurrency() > 32 {
+		return Invalid("apply-workers must be between 1 and 32")
+	}
+	if c.InflightLimit() < 32<<20 || c.InflightLimit() > 1<<30 {
+		return Invalid("inflight-bytes must be between 32 MiB and 1 GiB")
+	}
+	return nil
 }
 
 func Digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }

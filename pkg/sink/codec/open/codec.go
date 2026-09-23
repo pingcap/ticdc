@@ -49,8 +49,6 @@ func encodeRowChangedEvent(
 			keyWriter.WriteStringField("snapshot_record_id", e.Snapshot.ID)
 			keyWriter.WriteStringField("snapshot_id", e.Snapshot.SnapshotID)
 			keyWriter.WriteUint64Field("snapshot_ts", e.Snapshot.Timestamp)
-			keyWriter.WriteStringField("snapshot_schema", e.Snapshot.Schema)
-			keyWriter.WriteStringField("snapshot_schema_encoding", "ticdc-table-info-base64-v1")
 		}
 		keyWriter.WriteStringField("scm", e.TableInfo.GetTargetSchemaName())
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTargetTableName())

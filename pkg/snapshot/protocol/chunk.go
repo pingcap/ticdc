@@ -40,12 +40,36 @@ func DecodeChunk(ref Chunk, expected Header, span Span, emit func([]byte, []byte
 	if Digest(b) != ref.Digest {
 		return zero, Invalid("chunk checksum/size mismatch")
 	}
-	return decode(bytes.NewReader(b), expected, span, ref, emit)
+	return decode(&bufferReader{data: b}, expected, span, ref, emit)
 }
 
+// bufferReader slices an already verified, owned file buffer. Emitted slices
+// are read-only and remain valid when retained; the buffer is never pooled.
+type bufferReader struct{ data []byte }
+
+func (r *bufferReader) Len() int { return len(r.data) }
+func (r *bufferReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+func (r *bufferReader) take(n uint32) ([]byte, error) {
+	if uint64(n) > uint64(len(r.data)) {
+		return nil, Wrap(io.ErrUnexpectedEOF)
+	}
+	b := r.data[:n:n]
+	r.data = r.data[n:]
+	return b, nil
+}
 func readN(r io.Reader, n uint32, max uint32) ([]byte, error) {
 	if n > max {
 		return nil, Invalid("frame exceeds limit")
+	}
+	if r, ok := r.(*bufferReader); ok {
+		return r.take(n)
 	}
 	b := make([]byte, n)
 	_, e := io.ReadFull(r, b)
@@ -53,6 +77,13 @@ func readN(r io.Reader, n uint32, max uint32) ([]byte, error) {
 }
 
 func readU32(r io.Reader) (uint32, error) {
+	if r, ok := r.(*bufferReader); ok {
+		b, err := r.take(4)
+		if err != nil {
+			return 0, err
+		}
+		return binary.LittleEndian.Uint32(b), nil
+	}
 	var b [4]byte
 	_, e := io.ReadFull(r, b[:])
 	return binary.LittleEndian.Uint32(b[:]), Wrap(e)
@@ -123,7 +154,7 @@ func decode(r io.Reader, expected Header, span Span, ref Chunk, emit func([]byte
 		if e != nil {
 			return seen, e
 		}
-		block := bytes.NewReader(b)
+		block := &bufferReader{data: b}
 		for i := uint32(0); i < count; i++ {
 			kl, e := readU32(block)
 			if e != nil {

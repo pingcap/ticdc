@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 )
 
 func NewMQRowEvents(
@@ -53,7 +54,7 @@ func NewMQRowEvents(
 				TotalPartition: partitionNum,
 			},
 			RowEvent: commonEvent.RowEvent{
-				Snapshot:        event.Snapshot,
+				Snapshot:        snapshotRow(event, row),
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
 				StartTs:         event.StartTs,
@@ -86,7 +87,7 @@ func NewRowEvents(
 		}
 
 		events = append(events, &commonEvent.RowEvent{
-			Snapshot:        event.Snapshot,
+			Snapshot:        snapshotRow(event, row),
 			PhysicalTableID: event.PhysicalTableID,
 			TableInfo:       event.TableInfo,
 			StartTs:         event.StartTs,
@@ -98,4 +99,17 @@ func NewRowEvents(
 		})
 	}
 	return events
+}
+
+// A mounted snapshot batch shares generation metadata, but every row has its
+// own identity. Never copy a batch-level record ID to all rows in the batch.
+func snapshotRow(event *commonEvent.DMLEvent, row commonEvent.RowChange) *commonEvent.SnapshotRow {
+	if event.Snapshot == nil {
+		return nil
+	}
+	return &commonEvent.SnapshotRow{
+		ID:         protocol.RecordID(event.Snapshot.SnapshotID, event.PhysicalTableID, row.RowKey),
+		SnapshotID: event.Snapshot.SnapshotID,
+		Timestamp:  event.Snapshot.Timestamp,
+	}
 }
