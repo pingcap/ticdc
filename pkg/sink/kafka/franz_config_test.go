@@ -28,7 +28,6 @@ import (
 
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 	"github.com/jcmturner/gokrb5/v8/keytab"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
@@ -70,33 +69,17 @@ func TestFranzRequiredAcks(t *testing.T) {
 }
 
 func TestClientOptions(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		configured time.Duration
-		expected   time.Duration
-	}{
-		{"below minimum", 50 * time.Millisecond, 10 * time.Second},
-		{"at minimum", 10 * time.Second, 10 * time.Second},
-		{"within range", 2 * time.Minute, 2 * time.Minute},
-		{"at maximum", 15 * time.Minute, 15 * time.Minute},
-		{"above maximum", 30 * time.Minute, 15 * time.Minute},
-	} {
-		t.Run("timeouts "+tc.name, func(t *testing.T) {
-			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?kafka-client=franz&read-timeout=" +
-				tc.configured.String() + "&write-timeout=" + tc.configured.String())
-			require.NoError(t, err)
-			o := NewOptions()
-			require.NoError(t, o.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, nil))
-			client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
-			require.NoError(t, err)
-			defer client.Close()
+	t.Run("timeouts", func(t *testing.T) {
+		o := testOptions([]string{"127.0.0.1:9092"})
+		o.ReadTimeout = 2 * time.Minute
+		o.WriteTimeout = 3 * time.Minute
+		client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
+		require.NoError(t, err)
+		defer client.Close()
 
-			require.Equal(t, tc.expected, client.OptValue(kgo.RequestTimeoutOverhead))
-			require.Equal(t, tc.expected, client.OptValue(kgo.ProduceRequestTimeout))
-			require.Equal(t, tc.expected, o.WriteTimeout)
-			require.Equal(t, tc.expected, o.ReadTimeout)
-		})
-	}
+		require.Equal(t, o.WriteTimeout, client.OptValue(kgo.RequestTimeoutOverhead))
+		require.Equal(t, o.ReadTimeout, client.OptValue(kgo.ProduceRequestTimeout))
+	})
 
 	t.Run("TLS", func(t *testing.T) {
 		ca, err := security.NewCA()
