@@ -60,6 +60,16 @@ func (m *mockPDClient) ServeHTTP(resp http.ResponseWriter, _ *http.Request) {
 
 func TestCheckClusterVersion(t *testing.T) {
 	t.Parallel()
+	// The test checks which versions are accepted, not how long retry.Do waits
+	// between two attempts, and the backoff would otherwise cost seconds for
+	// every rejected version.
+	originalBaseDelay, originalMaxDelay := checkClusterVersionRetryBaseDelay, checkClusterVersionRetryMaxDelay
+	checkClusterVersionRetryBaseDelay = time.Millisecond
+	checkClusterVersionRetryMaxDelay = 2 * time.Millisecond
+	defer func() {
+		checkClusterVersionRetryBaseDelay = originalBaseDelay
+		checkClusterVersionRetryMaxDelay = originalMaxDelay
+	}()
 	mock := mockPDClient{
 		Client: nil,
 	}

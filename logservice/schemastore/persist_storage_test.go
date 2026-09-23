@@ -2486,6 +2486,8 @@ func TestApplyDDLJobs(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.testName, func(t *testing.T) {
+			t.Parallel()
+
 			dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 			pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
 			checkState := func(fromDisk bool) {
