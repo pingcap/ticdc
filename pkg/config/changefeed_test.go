@@ -14,6 +14,7 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -122,6 +123,32 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.Contains(t, output, "xxxxx")
 	require.Contains(t, output, "******")
 	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: util.AddressOf("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
 	require.Equal(t, original, after)
 }
