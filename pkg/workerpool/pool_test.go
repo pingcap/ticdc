@@ -167,7 +167,9 @@ func TestCancelHandle(t *testing.T) {
 		return nil
 	})
 
+	producerDone := make(chan struct{})
 	errg.Go(func() error {
+		defer close(producerDone)
 		i := 0
 		for {
 			select {
@@ -211,7 +213,19 @@ func TestCancelHandle(t *testing.T) {
 		require.Equal(t, atomic.LoadInt32(&num), lastNum)
 	}
 
-	time.Sleep(600 * time.Millisecond)
+	select {
+	case <-producerDone:
+	case <-ctx.Done():
+		require.FailNow(t, "producer did not stop after unregister")
+	}
+	// A producer delayed inside AddEvent may enqueue after Unregister returns.
+	// Drain that task before checking that no callback ran after unregister.
+	worker := handle.(*defaultEventHandle).worker
+	require.Eventually(t, func() bool {
+		return len(worker.taskCh) == 0
+	}, 5*time.Second, time.Millisecond)
+	worker.synchronize()
+	require.Equal(t, lastNum, atomic.LoadInt32(&num))
 	cancel()
 
 	err = errg.Wait()

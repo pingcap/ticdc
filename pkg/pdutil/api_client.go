@@ -115,17 +115,9 @@ type pdAPIClient struct {
 	httpClient   *httputil.Client
 	pdHttpClient pdhttp.Client
 
-	// maxRetries bounds the retry budget of the HTTP API calls; zero keeps
-	// defaultMaxRetry. Tests lower it to skip the production backoff sleeps.
+	// maxRetries bounds the retry budget of the HTTP API calls.
+	// Tests lower it to skip the production backoff sleeps.
 	maxRetries uint64
-}
-
-// retryMaxTries returns the retry budget used by the HTTP API calls.
-func (pc *pdAPIClient) retryMaxTries() uint64 {
-	if pc.maxRetries == 0 {
-		return defaultMaxRetry
-	}
-	return pc.maxRetries
 }
 
 // NewPDAPIClient create a new pdAPIClient.
@@ -144,6 +136,7 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		grpcClient:   pdClient,
 		httpClient:   dialClient,
 		pdHttpClient: pdHttpClient,
+		maxRetries:   defaultMaxRetry,
 	}, nil
 }
 
@@ -194,7 +187,7 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 
 		log.Info("Succeed to add meta region label to PD")
 		return nil
-	}, retry.WithMaxTries(pc.retryMaxTries()),
+	}, retry.WithMaxTries(pc.maxRetries),
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
@@ -369,7 +362,7 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 			return err
 		}
 		return nil
-	}, retry.WithMaxTries(pc.retryMaxTries()), retry.WithIsRetryableErr(func(err error) bool {
+	}, retry.WithMaxTries(pc.maxRetries), retry.WithIsRetryableErr(func(err error) bool {
 		return !errors.Is(errors.Cause(err), context.Canceled)
 	}))
 	return resp, err

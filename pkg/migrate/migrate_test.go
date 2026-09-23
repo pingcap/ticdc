@@ -599,8 +599,8 @@ func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
 	mockClient.testServer.Close()
 }
 
-func TestListServiceSafePointFailed(t *testing.T) {
-	// The PD API client retries with backoff, the test only needs the failure.
+func TestListServiceSafePointTimeout(t *testing.T) {
+	// An invalid response keeps the PD API client retrying until the caller's deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	mockClient := newMockPDClient(true)
@@ -608,7 +608,7 @@ func TestListServiceSafePointFailed(t *testing.T) {
 	m := &migrator{}
 	mockClient.respData = "xxx"
 	err := m.migrateGcServiceSafePoint(ctx, mockClient, &security.Credential{}, "abcd", 10)
-	require.NotNil(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestNoServiceSafePoint(t *testing.T) {

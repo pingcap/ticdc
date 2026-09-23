@@ -59,14 +59,15 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 	rows.AppendRow(chunk.MutRowFromValues(int64(1), "test").ToRow())
 	rows.AppendRow(chunk.MutRowFromValues(int64(2), "test2").ToRow())
 	event.SetRows(rows)
-	event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+	event.RowTypes = []commonType.RowType{commonType.RowTypeInsert, commonType.RowTypeInsert}
 	event.Length = 2
+	event.ApproximateSize = rows.MemoryUsage()
 	event.TableInfoVersion = tableInfo.GetUpdateTS()
 	return event
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
-func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
+func TestBlackHoleSinkFlushEvents(t *testing.T) {
 	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

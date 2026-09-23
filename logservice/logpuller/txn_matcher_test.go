@@ -292,7 +292,7 @@ func TestMatchMatchCachedRollbackRow(t *testing.T) {
 	require.Empty(t, matcher.unmatchedValue)
 }
 
-func TestMatcher_TryCleanUnmatchedValue(t *testing.T) {
+func TestMatcherCleanup(t *testing.T) {
 	// stalePrewriteTime is older than the clean threshold, so the matcher can be
 	// driven into the clean path without waiting for wall clock time to pass.
 	stalePrewriteTime := func() time.Time {

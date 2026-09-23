@@ -226,7 +226,7 @@ func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) 
 	require.NoError(t, co.updateGCSafepoint(context.Background()))
 }
 
-func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
+func TestRemoveLastChangefeedDeletesSafepoint(t *testing.T) {
 	// The operator finishes in milliseconds, do not wait a second for it.
 	defer func(original time.Duration) {
 		stopChangefeedWaitInterval = original
@@ -279,7 +279,7 @@ func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
 	require.Equal(t, uint64(101), <-cpCh)
 }
 
-func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t *testing.T) {
+func TestConcurrentChangefeedReplaceKeepsSafepoint(t *testing.T) {
 	// The operator finishes in milliseconds, do not wait a second for it.
 	defer func(original time.Duration) {
 		stopChangefeedWaitInterval = original

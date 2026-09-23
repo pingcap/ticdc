@@ -720,7 +720,7 @@ func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
 }
 
 // Test the async ddl can be write successfully
-func TestMysqlWriter_AsyncDDL(t *testing.T) {
+func TestWriterAsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
 	// waitDDLDone polls a running downstream DDL; keeping the production interval

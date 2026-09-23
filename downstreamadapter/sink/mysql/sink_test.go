@@ -237,7 +237,7 @@ func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
-func TestMysqlSinkBasicFunctionality(t *testing.T) {
+func TestMysqlSinkFlushEvents(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
 	var count atomic.Int64

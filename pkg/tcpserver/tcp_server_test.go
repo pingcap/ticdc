@@ -287,9 +287,7 @@ func testWithGrpcWorkload(ctx context.Context, t *testing.T, server TCPServer, a
 		defer grpcServer.GracefulStop()
 		// GracefulStop waits for the open client connection, so close it here
 		// instead of waiting for the 5s context timeout below.
-		defer func() {
-			_ = conn.Close()
-		}()
+		defer conn.Close()
 
 		stream, err := client.PingStream(ctx)
 		require.NoError(t, err)

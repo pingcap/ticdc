@@ -701,8 +701,8 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	require.Equal(t, int32(1), flushCalls.Load())
 }
 
-// test uncompelete table span can correctly handle the ddl events
-func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
+// Test that an incomplete table span handles DDL events correctly.
+func TestIncompleteSpanDispatcher(t *testing.T) {
 	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

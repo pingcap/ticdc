@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -126,6 +127,26 @@ func TestListGcServiceSafePoint(t *testing.T) {
 	_, err = pc.ListGcServiceSafePoint(ctx)
 	require.NoError(t, err)
 	mockClient.testServer.Close()
+}
+
+func TestListGcServiceSafePointInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("xxx"))
+	}))
+	defer server.Close()
+
+	mockClient := &mockPDClient{url: server.URL}
+	pc, err := NewPDAPIClient(mockClient, nil)
+	require.NoError(t, err)
+	defer pc.Close()
+	pc.(*pdAPIClient).maxRetries = 1
+
+	_, err = pc.ListGcServiceSafePoint(t.Context())
+	require.ErrorIs(t, err, cerror.ErrReachMaxTry)
+	_, ok := errors.AsType[*json.SyntaxError](err)
+	require.True(t, ok)
 }
 
 // LabelRulePatch is the patch to update the label rules.
