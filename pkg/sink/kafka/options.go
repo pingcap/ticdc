@@ -352,6 +352,11 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if err != nil {
 		return err
 	}
+	if o.Client == KafkaClientFranz {
+		// Store the effective timeouts so the configuration log matches franz-go.
+		o.WriteTimeout = normalizeTimeout(o.WriteTimeout)
+		o.ReadTimeout = normalizeTimeout(o.ReadTimeout)
+	}
 
 	return nil
 }
