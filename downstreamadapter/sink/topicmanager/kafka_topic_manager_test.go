@@ -16,6 +16,8 @@ package topicmanager
 import (
 	"context"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
@@ -341,4 +343,27 @@ func TestCreateTopicWithCreateDenied(t *testing.T) {
 	partitions, ok := manager.topics.Load(defaultTopic)
 	require.True(t, ok)
 	require.Equal(t, int32(2), partitions)
+}
+
+func TestKafkaTopicManagerHeartbeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		adminClient := kafka.NewMockClusterAdminClient(gomock.NewController(t))
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
+			map[string]kafka.TopicDetail{kafkaTopicManagerTestTopic: {NumPartitions: 1}}, nil,
+		)
+		adminClient.EXPECT().Heartbeat().Times(2)
+		manager, err := GetTopicManagerAndTryCreateTopic(
+			t.Context(), common.NewChangefeedID4Test("test", "heartbeat"),
+			kafkaTopicManagerTestTopic, &kafka.AutoCreateTopicConfig{}, adminClient,
+		)
+		require.NoError(t, err)
+		defer manager.Close()
+
+		synctest.Wait()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		manager.Close()
+		synctest.Wait()
+		time.Sleep(10 * time.Second)
+	})
 }

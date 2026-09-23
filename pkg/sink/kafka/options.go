@@ -36,8 +36,6 @@ import (
 const (
 	// defaultPartitionNum specifies the default number of partitions when we create the topic.
 	defaultPartitionNum = 3
-	// defaultMaxRetry is the default retry budget for Kafka producers.
-	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
 
@@ -64,6 +62,10 @@ const (
 	// See: https://kafka.apache.org/documentation/#brokerconfigs_min.insync.replicas and
 	// https://kafka.apache.org/documentation/#topicconfigs_min.insync.replicas
 	MinInsyncReplicasConfigName = "min.insync.replicas"
+	// BrokerConnectionsMaxIdleMsConfigName specifies the maximum idle time of a connection to a broker.
+	// Broker will close the connection if it is idle for this long.
+	// See: https://kafka.apache.org/documentation/#brokerconfigs_connections.max.idle.ms
+	BrokerConnectionsMaxIdleMsConfigName = "connections.max.idle.ms"
 )
 
 const (
@@ -119,7 +121,6 @@ type urlConfig struct {
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
 	MaxMessageBytes              *int    `form:"max-message-bytes"`
-	MaxRetry                     *int    `form:"max-retry"`
 	Compression                  *string `form:"compression"`
 	KafkaClientID                *string `form:"kafka-client-id"`
 	AutoCreateTopic              *bool   `form:"auto-create-topic"`
@@ -159,7 +160,6 @@ type options struct {
 	IsAssignedVersion bool
 	RequestVersion    int16
 	MaxMessageBytes   int
-	MaxRetry          int
 	Compression       string
 	ClientID          string
 	RequiredAcks      RequiredAcks
@@ -174,9 +174,10 @@ type options struct {
 	SASL               *security.SASL
 
 	// Timeout for network configurations, default to `10s`
-	DialTimeout  time.Duration
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
+	DialTimeout           time.Duration
+	WriteTimeout          time.Duration
+	ReadTimeout           time.Duration
+	KeepConnAliveInterval time.Duration
 }
 
 // NewOptions returns a default Kafka configuration
@@ -185,7 +186,6 @@ func NewOptions() *options {
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
 		Compression:        "none",
 		RequiredAcks:       WaitForAll,
@@ -262,10 +262,6 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
-	}
-
-	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
-		o.MaxRetry = *urlParameter.MaxRetry
 	}
 
 	if urlParameter.Compression != nil {
@@ -633,6 +629,21 @@ func adjustOptions(
 	topics, err := admin.GetTopicsMeta([]string{topic}, true)
 	if err != nil {
 		return err
+	}
+
+	// adjust keepConnAliveInterval by `connections.max.idle.ms` broker config.
+	idleMs, found, err := admin.GetBrokerConfig(BrokerConnectionsMaxIdleMsConfigName)
+	if err != nil {
+		log.Warn("GetBrokerConfig failed for connections.max.idle.ms", zap.Error(err))
+	} else if found {
+		idleMsInt, err := strconv.Atoi(idleMs)
+		if err != nil || idleMsInt <= 0 {
+			log.Warn("invalid broker config",
+				zap.String("configName", BrokerConnectionsMaxIdleMsConfigName), zap.String("configValue", idleMs))
+			return errors.Trace(err)
+		}
+		options.KeepConnAliveInterval = time.Duration(idleMsInt/3) * time.Millisecond
+		log.Info("Adjust KeepConnAliveInterval", zap.Duration("KeepConnAliveInterval", options.KeepConnAliveInterval))
 	}
 
 	info, exists := topics[topic]

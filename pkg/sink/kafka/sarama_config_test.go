@@ -18,10 +18,10 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -57,7 +57,8 @@ func TestNewSaramaConfig(t *testing.T) {
 	}
 	cfg, err := newSaramaConfig(ctx, options)
 	require.NoError(t, err)
-	require.Equal(t, defaultMaxRetry, cfg.Producer.Retry.Max)
+	require.Zero(t, cfg.Producer.Retry.Max)
+	require.Equal(t, 9*time.Minute, cfg.Metadata.RefreshFrequency)
 
 	options.EnableTLS = true
 	options.Credential = &security.Credential{
@@ -155,60 +156,6 @@ func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	var escapeErr url.EscapeError
 	require.ErrorAs(t, err, &escapeErr)
-}
-
-func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		sinkURI  string
-		expected int
-	}{
-		{
-			name:     "default max retry",
-			sinkURI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&kafka-client-id=unit-test",
-			expected: defaultMaxRetry,
-		},
-		{
-			name: "set max retry",
-			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
-				"&kafka-client-id=unit-test&max-retry=7",
-			expected: 7,
-		},
-		{
-			name: "zero max retry",
-			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
-				"&kafka-client-id=unit-test&max-retry=0",
-			expected: 0,
-		},
-		{
-			name: "negative max retry",
-			sinkURI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0" +
-				"&kafka-client-id=unit-test&max-retry=-1",
-			expected: defaultMaxRetry,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			options := NewOptions()
-			sinkURI, err := url.Parse(test.sinkURI)
-			require.NoError(t, err)
-			err = options.Apply(
-				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
-				sinkURI,
-				config.GetDefaultReplicaConfig().Sink,
-			)
-			require.NoError(t, err)
-
-			cfg, err := newSaramaConfig(context.Background(), options)
-			require.NoError(t, err)
-			require.Equal(t, test.expected, cfg.Producer.Retry.Max)
-		})
-	}
 }
 
 func TestApplySASL(t *testing.T) {

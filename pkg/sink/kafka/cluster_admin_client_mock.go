@@ -134,3 +134,15 @@ func (mr *MockClusterAdminClientMockRecorder) GetTopicsPartitionsNum(topics inte
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockClusterAdminClient)(nil).GetTopicsPartitionsNum), topics)
 }
+
+// Heartbeat mocks base method.
+func (m *MockClusterAdminClient) Heartbeat() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Heartbeat")
+}
+
+// Heartbeat indicates an expected call of Heartbeat.
+func (mr *MockClusterAdminClientMockRecorder) Heartbeat() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockClusterAdminClient)(nil).Heartbeat))
+}

@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -251,6 +252,51 @@ func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 
 	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
 	require.False(t, kafkaSink.IsNormal())
+}
+
+func TestDDLProducerHeartbeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		producer := kafka.NewMockSyncProducer(gomock.NewController(t))
+		producer.EXPECT().Heartbeat().Times(2)
+		s := &sink{ddlProducer: producer}
+		done := make(chan error, 1)
+		go func() { done <- s.sendCheckpoint(ctx) }()
+
+		synctest.Wait()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+		time.Sleep(10 * time.Second)
+	})
+}
+
+func TestDMLProducerHeartbeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		producer := kafka.NewMockAsyncProducer(gomock.NewController(t))
+		producer.EXPECT().Heartbeat().Times(2)
+		changefeedID := common.NewChangefeedID4Test("test", "heartbeat")
+		encoderGroup, err := codec.NewEncoderGroup(ctx, &config.SinkConfig{}, codecCommon.NewConfig(config.ProtocolOpen), nil, changefeedID)
+		require.NoError(t, err)
+		s := &sink{
+			changefeedID: changefeedID,
+			dmlProducer:  producer,
+			comp:         components{encoderGroup: encoderGroup},
+		}
+		done := make(chan error, 1)
+		go func() { done <- s.sendMessages(ctx) }()
+
+		synctest.Wait()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+		time.Sleep(10 * time.Second)
+	})
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {

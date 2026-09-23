@@ -191,7 +191,6 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
-	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
 	// multiple kafka broker endpoints
 	uri = "kafka://127.0.0.1:9092,127.0.0.1:9091,127.0.0.1:9090/kafka-test?"
@@ -231,14 +230,6 @@ func TestCompleteOptions(t *testing.T) {
 	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
 
-	// Illegal max-retry.
-	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-retry=a"
-	sinkURI, err = url.Parse(uri)
-	require.NoError(t, err)
-	options = NewOptions()
-	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
-
 	// Illegal partition-num.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=a"
 	sinkURI, err = url.Parse(uri)
@@ -270,32 +261,6 @@ func TestCompleteOptions(t *testing.T) {
 	options = NewOptions()
 	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
 	require.True(t, errors.ErrKafkaInvalidConfig.Equal(err))
-
-	// max-retry accepts non-negative sink-uri values.
-	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
-	sinkURI, err = url.Parse(uri)
-	require.NoError(t, err)
-	options = NewOptions()
-	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.NoError(t, err)
-	require.Equal(t, 7, options.MaxRetry)
-
-	uri = "kafka://127.0.0.1:9092/abc?max-retry=0"
-	sinkURI, err = url.Parse(uri)
-	require.NoError(t, err)
-	options = NewOptions()
-	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.NoError(t, err)
-	require.Equal(t, 0, options.MaxRetry)
-
-	// Negative max-retry values are ignored.
-	uri = "kafka://127.0.0.1:9092/abc?max-retry=-1"
-	sinkURI, err = url.Parse(uri)
-	require.NoError(t, err)
-	options = NewOptions()
-	err = options.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.NoError(t, err)
-	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 }
 
 func TestSetPartitionNum(t *testing.T) {
@@ -847,4 +812,40 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, "ca.pem", c.Credential.CAPath)
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
 	require.Equal(t, "key.pem", c.Credential.KeyPath)
+}
+
+func TestAdjustOptionsKeepAlive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		idleMs   string
+		found    bool
+		wantErr  bool
+		expected time.Duration
+	}{
+		{name: "valid idle time", idleMs: "300000", found: true, expected: 100 * time.Second},
+		{name: "invalid idle time", idleMs: "not-a-number", found: true, wantErr: true},
+		{name: "zero idle time", idleMs: "0", found: true},
+		{name: "negative idle time", idleMs: "-1000", found: true},
+		{name: "missing idle time"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newKafkaAdminFixture(t)
+			if test.found {
+				fixture.brokerConfig[BrokerConnectionsMaxIdleMsConfigName] = test.idleMs
+			}
+			options := NewOptions()
+			err := adjustOptions(common.NewChangefeedID4Test("test", "test"), fixture.admin, options, defaultMockTopicName)
+			if test.wantErr {
+				var numErr *strconv.NumError
+				require.ErrorAs(t, err, &numErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.expected, options.KeepConnAliveInterval)
+		})
+	}
 }
