@@ -224,8 +224,8 @@ func (s *Server) run(ctx context.Context, id string) error {
 		if e = protocol.ValidatePlan(j.Spec, plan); e != nil {
 			return e
 		}
-		if len(plan.Ranges) > 256 {
-			return protocol.Invalid("demo supports at most 256 ranges")
+		if len(plan.Ranges) > 4096 {
+			return protocol.Invalid("demo supports at most 4096 ranges")
 		}
 		if e = s.update(id, func(j *Job) error {
 			if e := activeJob(j); e != nil {

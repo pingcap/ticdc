@@ -193,8 +193,8 @@ This profile uses uncompressed 1 MiB blocks, 64 MiB target chunks (configurable
 header/footer, 4 MiB metadata and 512 MiB source file-memory quota. Metadata is
 bounded before full allocation. Empty ranges publish a zero-row export/receipt.
 
-This is not a production distributed exporter: one local Runner processes ranges
-sequentially; the plan is limited to 256 ranges and 2,048 chunks per range. Local
+This is not a production distributed exporter: one Provider runs a bounded pool
+of local CSE processes; the plan is limited to 4,096 ranges and 2,048 chunks per range. Local
 flock/fsync/rename CAS requires one host and shared paths. Capture fencing uses
 the local manager epoch and process writer lock. Multi-capture transport, remote
 object CAS, Kubernetes Runner pools, compressed/encrypted chunk output, source
