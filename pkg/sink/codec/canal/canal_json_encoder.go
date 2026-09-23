@@ -463,8 +463,8 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	m.IncRowsCount()
 
 	targetTable := e.TableInfo.GetTargetTableName()
-	originLength := m.Length()
-	if m.Length() > c.config.MaxMessageBytes {
+	originLength := c.config.MessageLength(m)
+	if originLength > c.config.MaxMessageBytes {
 		// for single message that is longer than max-message-bytes, do not send it.
 		if c.config.LargeMessageHandle.Disabled() {
 			log.Error("Single message is too large for canal-json",
@@ -487,7 +487,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 			}
 
 			m.Value = value
-			length := m.Length()
+			length := c.config.MessageLength(m)
 			if length > c.config.MaxMessageBytes {
 				log.Error("Single message is still too large for canal-json only encode handle-key columns",
 					zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -540,7 +540,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
-	length := result.Length()
+	length := c.config.MessageLength(result)
 	if length > c.config.MaxMessageBytes {
 		log.Warn("Single message is too large for canal-json, when create the claim check location message",
 			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),

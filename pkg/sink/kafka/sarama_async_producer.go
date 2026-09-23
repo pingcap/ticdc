@@ -128,8 +128,7 @@ func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommo
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
-		zap.String("eventContext", BuildEventLogContext(
-			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
+		zap.String("eventContext", BuildEventLogContext(logInfo)),
 		zap.Error(err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }

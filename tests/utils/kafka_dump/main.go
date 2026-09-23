@@ -17,15 +17,16 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/linkedin/goavro/v2"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func main() {
@@ -52,129 +53,109 @@ func main() {
 		log.Fatal("until-count must be greater than zero")
 	}
 
-	config := sarama.NewConfig()
-	config.ClientID = "ticdc-integration-test-kafka-dump"
-	config.Consumer.Return.Errors = true
-
-	var consumer sarama.Consumer
-	deadline := time.Now().Add(*timeout)
-	for {
-		var err error
-		consumer, err = sarama.NewConsumer(strings.Split(*brokers, ","), config)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			log.Fatalf("create Kafka consumer: %v", err)
-		}
-		time.Sleep(time.Second)
-	}
-	defer func() {
-		if err := consumer.Close(); err != nil {
-			log.Printf("close Kafka consumer: %v", err)
-		}
-	}()
-
-	var partitions []int32
-	for {
-		var err error
-		partitions, err = consumer.Partitions(*topic)
-		if err == nil && len(partitions) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			log.Fatalf("list partitions for %s: %v", *topic, err)
-		}
-		time.Sleep(time.Second)
-	}
-
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-
-	type rec struct {
-		key   []byte
-		value []byte
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
+		kgo.ClientID("ticdc-integration-test-kafka-dump"),
+		// Direct consumption reads every partition without joining a group.
+		kgo.ConsumeTopics(*topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	if err != nil {
+		log.Fatalf("create Kafka consumer: %v", err)
 	}
-	ch := make(chan rec, 32)
-	var wg sync.WaitGroup
-	for _, partition := range partitions {
-		pc, err := consumer.ConsumePartition(*topic, partition, sarama.OffsetOldest)
+	defer consumer.Close()
+
+	// Wait until the cluster is reachable and the topic is visible before
+	// consuming, so a missing cluster or topic fails with a specific error
+	// instead of the generic timeout.
+	if err := waitFor(ctx, func() error { return consumer.Ping(ctx) }); err != nil {
+		log.Fatalf("create Kafka consumer: %v", err)
+	}
+	admin := kadm.NewClient(consumer)
+	if err := waitFor(ctx, func() error {
+		details, err := admin.ListTopics(ctx, *topic)
 		if err != nil {
-			log.Fatalf("consume partition %d: %v", partition, err)
+			return err
 		}
-		wg.Add(1)
-		go func(pc sarama.PartitionConsumer) {
-			defer wg.Done()
-			defer func() {
-				if err := pc.Close(); err != nil {
-					log.Printf("close partition consumer: %v", err)
-				}
-			}()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg, ok := <-pc.Messages():
-					if !ok {
-						return
-					}
-					select {
-					case ch <- rec{key: msg.Key, value: msg.Value}:
-					case <-ctx.Done():
-						return
-					}
-				case err, ok := <-pc.Errors():
-					if !ok {
-						return
-					}
-					log.Printf("consume error: %v", err)
-				}
-			}
-		}(pc)
+		detail, ok := details[*topic]
+		if !ok {
+			return fmt.Errorf("topic %s not found", *topic)
+		}
+		if detail.Err != nil {
+			return detail.Err
+		}
+		if len(detail.Partitions) == 0 {
+			return fmt.Errorf("topic %s has no partitions", *topic)
+		}
+		return nil
+	}); err != nil {
+		log.Fatalf("list partitions for %s: %v", *topic, err)
 	}
-
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
 
 	matched := 0
 	for {
-		select {
-		case <-ctx.Done():
+		fetches := consumer.PollFetches(ctx)
+		if ctx.Err() != nil {
 			log.Fatalf("timeout: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
-		case r, ok := <-ch:
-			if !ok {
-				log.Fatalf("consumers exited: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
+		}
+		if fetches.IsClientClosed() {
+			log.Fatalf("consumer exited: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
+		}
+		for _, err := range fetches.Errors() {
+			log.Printf("consume error: topic=%s partition=%d: %v", err.Topic, err.Partition, err.Err)
+		}
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			if ctx.Err() != nil {
+				log.Fatalf("timeout: saw %d DML messages for table %s, want %d", matched, *untilTable, *untilCount)
 			}
+			r := iter.Next()
 			if *registryURL != "" {
-				value, err := avroDecoder.decode(ctx, r.value)
+				value, err := avroDecoder.decode(ctx, r.Value)
 				if err != nil {
 					log.Fatalf("decode Avro value: %v", err)
 				}
-				if len(r.key) > 0 {
-					value["key"], err = avroDecoder.decode(ctx, r.key)
+				if len(r.Key) > 0 {
+					value["key"], err = avroDecoder.decode(ctx, r.Key)
 					if err != nil {
 						log.Fatalf("decode Avro key: %v", err)
 					}
 				}
-				r.value, err = json.Marshal(value)
+				r.Value, err = json.Marshal(value)
 				if err != nil {
 					log.Fatalf("marshal Avro dump: %v", err)
 				}
 			}
-			if _, err := os.Stdout.Write(r.value); err != nil {
+			if _, err := os.Stdout.Write(r.Value); err != nil {
 				log.Fatalf("write message: %v", err)
 			}
 			if _, err := os.Stdout.Write([]byte("\n")); err != nil {
 				log.Fatalf("write newline: %v", err)
 			}
-			if tableOf(r.value) == *untilTable {
+			if tableOf(r.Value) == *untilTable {
 				matched++
 				if matched >= *untilCount {
 					return
 				}
 			}
+		}
+	}
+}
+
+// waitFor retries attempt once per second until it succeeds or ctx expires,
+// returning the error from the last attempt.
+func waitFor(ctx context.Context, attempt func() error) error {
+	for {
+		err := attempt()
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Second):
 		}
 	}
 }

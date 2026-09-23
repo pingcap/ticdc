@@ -38,14 +38,11 @@ func DetermineEventType(info *codecCommon.MessageLogInfo) string {
 	return "unknown"
 }
 
-// BuildEventLogContext builds a textual representation of event info.
-func BuildEventLogContext(keyspace, changefeed string, info *codecCommon.MessageLogInfo) string {
+// BuildEventLogContext builds a textual representation of the event carried by
+// a message. Callers log keyspace and changefeed as their own fields.
+func BuildEventLogContext(info *codecCommon.MessageLogInfo) string {
 	var sb strings.Builder
-	sb.WriteString("keyspace=")
-	sb.WriteString(keyspace)
-	sb.WriteString(", changefeed=")
-	sb.WriteString(changefeed)
-	sb.WriteString(", eventType=")
+	sb.WriteString("eventType=")
 	sb.WriteString(DetermineEventType(info))
 
 	if info == nil {

@@ -8,7 +8,18 @@ if [ ! -f "$guard_registry" ]; then
 fi
 
 while IFS= read -r guard_stop_file; do
-	if [ -n "$guard_stop_file" ]; then
+	if [ -n "$guard_stop_file" ] && [ -d "$(dirname "$guard_stop_file")" ]; then
+		guard_lock_dir="$guard_stop_file.lock"
+		attempt=0
+		while ! mkdir "$guard_lock_dir" 2>/dev/null; do
+			attempt=$((attempt + 1))
+			if [ "$attempt" -ge 100 ]; then
+				echo "Timed out stopping CDC guard: $guard_stop_file" >&2
+				exit 1
+			fi
+			sleep 0.1
+		done
 		touch "$guard_stop_file"
+		rmdir "$guard_lock_dir"
 	fi
 done <"$guard_registry"
