@@ -16,14 +16,18 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	# to make the table multi regions, to help create multiple dispatchers for the table
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 
 	TOPIC_NAME="ticdc-ddl-split-table-$RANDOM"
 	case $SINK_TYPE in
@@ -51,7 +55,12 @@ main() {
 	# ## insert some datas
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
@@ -77,6 +86,9 @@ main_with_consistent() {
 		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 		ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
@@ -84,7 +96,12 @@ main_with_consistent() {
 			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 	else
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 	fi
 }

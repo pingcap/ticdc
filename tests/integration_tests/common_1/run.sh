@@ -33,10 +33,12 @@ function test_recover_schema() {
 	ensure 30 "check_db_not_exists recover_schema_test ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}"
 
 	# Simulate the old TiDB job format, which embeds all recovered table infos.
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/forceRecoverSchemaJobWithTableInfo=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "-recover-schema" --data-dir "$WORK_DIR/cdc_data"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "-recover-schema" --data-dir "$WORK_DIR/cdc_data"
 	export GO_FAILPOINTS=''
 
 	run_sql "flashback database recover_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -66,7 +68,7 @@ function run() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/verifyRecoverSchemaJobWithSnapshotTS=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 	export GO_FAILPOINTS=''
 
 	# this test contains `recover table`, which requires super privilege, so we
@@ -112,8 +114,13 @@ EOF
 	check_table_exists common.v ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.recover_and_insert ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "-recover-schema"
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "-recover-schema"
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

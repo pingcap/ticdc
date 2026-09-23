@@ -14,7 +14,7 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-cdc-test-$RANDOM"
 	case $SINK_TYPE in
@@ -58,6 +58,8 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	cd "$(dirname "$0")"
 	set -o pipefail
 	GO111MODULE=on go run cdc.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	check_logs $WORK_DIR
 fi

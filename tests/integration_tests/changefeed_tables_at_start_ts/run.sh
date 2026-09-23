@@ -301,7 +301,7 @@ run() {
 	mkdir -p "$WORK_DIR"
 	start_tidb_cluster --workdir "$WORK_DIR"
 	run_sql "SET GLOBAL tidb_enable_exchange_partition = ON;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	run_sql_file "$CUR/data/prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	baseline_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
@@ -320,12 +320,16 @@ run() {
 
 	# Restart CDC after the first schema-store initialization. The next
 	# checkpoint validations must rebuild the schema from the persisted DDLs.
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 	last_checkpoint_index=$((${#ddl_names[@]} - 1))
 	validate_checkpoint restart_final "${ddl_commit_ts[$last_checkpoint_index]}" \
 		"${expected_table_ids[$last_checkpoint_index]}"
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 }
 

@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/linkedin/goavro/v2"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -64,6 +66,33 @@ func main() {
 		log.Fatalf("create Kafka consumer: %v", err)
 	}
 	defer consumer.Close()
+
+	// Wait until the cluster is reachable and the topic is visible before
+	// consuming, so a missing cluster or topic fails with a specific error
+	// instead of the generic timeout.
+	if err := waitFor(ctx, func() error { return consumer.Ping(ctx) }); err != nil {
+		log.Fatalf("create Kafka consumer: %v", err)
+	}
+	admin := kadm.NewClient(consumer)
+	if err := waitFor(ctx, func() error {
+		details, err := admin.ListTopics(ctx, *topic)
+		if err != nil {
+			return err
+		}
+		detail, ok := details[*topic]
+		if !ok {
+			return fmt.Errorf("topic %s not found", *topic)
+		}
+		if detail.Err != nil {
+			return detail.Err
+		}
+		if len(detail.Partitions) == 0 {
+			return fmt.Errorf("topic %s has no partitions", *topic)
+		}
+		return nil
+	}); err != nil {
+		log.Fatalf("list partitions for %s: %v", *topic, err)
+	}
 
 	matched := 0
 	for {
@@ -111,6 +140,22 @@ func main() {
 					return
 				}
 			}
+		}
+	}
+}
+
+// waitFor retries attempt once per second until it succeeds or ctx expires,
+// returning the error from the last attempt.
+func waitFor(ctx context.Context, attempt func() error) error {
+	for {
+		err := attempt()
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Second):
 		}
 	}
 }
