@@ -28,6 +28,7 @@ import (
 
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
@@ -44,8 +45,6 @@ func testOptions(brokers []string) *options {
 	o.MaxMessageBytes = 1 << 20
 	o.MaxRetry = 1
 	o.DialTimeout = time.Second
-	o.ReadTimeout = time.Second
-	o.WriteTimeout = time.Second
 	return o
 }
 
@@ -83,17 +82,19 @@ func TestClientOptions(t *testing.T) {
 		{"above maximum", 30 * time.Minute, 15 * time.Minute},
 	} {
 		t.Run("timeouts "+tc.name, func(t *testing.T) {
-			o := testOptions([]string{"127.0.0.1:9092"})
-			o.ReadTimeout = tc.configured
-			o.WriteTimeout = tc.configured
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?kafka-client=franz&read-timeout=" +
+				tc.configured.String() + "&write-timeout=" + tc.configured.String())
+			require.NoError(t, err)
+			o := NewOptions()
+			require.NoError(t, o.Apply(common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"), sinkURI, nil))
 			client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 			require.NoError(t, err)
 			defer client.Close()
 
 			require.Equal(t, tc.expected, client.OptValue(kgo.RequestTimeoutOverhead))
 			require.Equal(t, tc.expected, client.OptValue(kgo.ProduceRequestTimeout))
-			require.Equal(t, tc.configured, o.WriteTimeout)
-			require.Equal(t, tc.configured, o.ReadTimeout)
+			require.Equal(t, tc.expected, o.WriteTimeout)
+			require.Equal(t, tc.expected, o.ReadTimeout)
 		})
 	}
 

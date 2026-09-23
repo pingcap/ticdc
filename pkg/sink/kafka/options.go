@@ -48,6 +48,17 @@ const (
 )
 
 const (
+	minFranzTimeout = 10 * time.Second
+	// franz-go rejects RequestTimeoutOverhead values above 15m. Both sink
+	// timeout options use this ceiling to keep their effective range consistent.
+	maxFranzTimeout = 15 * time.Minute
+)
+
+func normalizeTimeout(timeout time.Duration) time.Duration {
+	return max(minFranzTimeout, min(timeout, maxFranzTimeout))
+}
+
+const (
 	// BrokerMessageMaxBytesConfigName specifies the largest record batch size allowed by
 	// Kafka brokers.
 	// See: https://kafka.apache.org/documentation/#brokerconfigs_message.max.bytes
