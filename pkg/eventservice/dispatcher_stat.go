@@ -36,8 +36,8 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 3600
 
-	minScanLimitInBytes     = 1024        // 1KB
-	maxScanLimitInBytes     = 1024 * 1024 // 1MB
+	minScanLimitInBytes     = 1024            // 1KB
+	maxScanLimitInBytes     = 4 * 1024 * 1024 // 4MB
 	updateScanLimitInterval = time.Second * 10
 )
 

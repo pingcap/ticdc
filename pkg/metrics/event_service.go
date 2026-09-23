@@ -126,6 +126,22 @@ var (
 			Help:      "The duration of scanning a data range from eventStore",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 19), // 40us to 10s
 		})
+	EventServiceEffectiveScanLimitBytes = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "effective_scan_limit_bytes",
+			Help:      "The per-dispatcher byte limit used for an accepted scan task",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 14), // 1KB to 8MB
+		})
+	EventServiceActiveScanTaskDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "active_scan_task_duration",
+			Help:      "Time spent scanning and handing events to the message worker after quota admission",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 19), // 40us to 10s
+		})
 	EventServiceScannedCount = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -278,6 +294,8 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScanWindowMemoryReleaseCount)
 	registry.MustRegister(EventServiceScanWindowAdjustCount)
 	registry.MustRegister(EventServiceScanDuration)
+	registry.MustRegister(EventServiceEffectiveScanLimitBytes)
+	registry.MustRegister(EventServiceActiveScanTaskDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
 	registry.MustRegister(EventServiceScanTaskCount)

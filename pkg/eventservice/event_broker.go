@@ -812,6 +812,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	metrics.EventServiceEffectiveScanLimitBytes.Observe(float64(sl.maxDMLBytes))
+	scanStart := time.Now()
+	defer func() {
+		metrics.EventServiceActiveScanTaskDuration.Observe(time.Since(scanStart).Seconds())
+	}()
+
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
 	defer finishActiveScan()
