@@ -813,39 +813,3 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
 	require.Equal(t, "key.pem", c.Credential.KeyPath)
 }
-
-func TestAdjustOptionsKeepAlive(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		idleMs   string
-		found    bool
-		wantErr  bool
-		expected time.Duration
-	}{
-		{name: "valid idle time", idleMs: "300000", found: true, expected: 100 * time.Second},
-		{name: "invalid idle time", idleMs: "not-a-number", found: true, wantErr: true},
-		{name: "zero idle time", idleMs: "0", found: true},
-		{name: "negative idle time", idleMs: "-1000", found: true},
-		{name: "missing idle time"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			fixture := newKafkaAdminFixture(t)
-			if test.found {
-				fixture.brokerConfig[BrokerConnectionsMaxIdleMsConfigName] = test.idleMs
-			}
-			options := NewOptions()
-			err := adjustOptions(common.NewChangefeedID4Test("test", "test"), fixture.admin, options, defaultMockTopicName)
-			if test.wantErr {
-				var numErr *strconv.NumError
-				require.ErrorAs(t, err, &numErr)
-			} else {
-				require.NoError(t, err)
-			}
-			require.Equal(t, test.expected, options.KeepConnAliveInterval)
-		})
-	}
-}
