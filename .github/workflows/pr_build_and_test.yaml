@@ -40,6 +40,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Go environment
+        id: setup-go
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
@@ -61,7 +62,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: tools/bin
-          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+          key: check-tools-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum', 'tools/Makefile') }}
+
+      - name: Mark cached tools up to date
+        if: steps.cache-tools.outputs.cache-hit == 'true'
+        # Checkout gives go.mod a newer mtime; the cache key pins its contents.
+        run: find tools/bin -maxdepth 1 -type f -exec touch {} +
+
+      - name: Cache golangci-lint analysis
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', '.golangci.yml', 'tools/check/go.mod', 'tools/check/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', '.golangci.yml', 'tools/check/go.mod', 'tools/check/go.sum') }}-
 
       - name: Check
         run: make check
