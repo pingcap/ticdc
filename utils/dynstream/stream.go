@@ -423,9 +423,13 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
-// appendEvent appends an event to the pending queue.
-// It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+// appendEvent adds an event to the pending queue or merges it into the last
+// periodic signal. accepted reports whether the event was accepted, while
+// appended reports whether the pending queue grew by one event.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(
+	event eventWrap[A, P, T, D, H],
+	handler H,
+) (accepted bool, appended bool) {
 	if pi.areaMemStat != nil {
 		return pi.areaMemStat.appendEvent(pi, event, handler)
 	}
@@ -433,7 +437,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 
 	back, ok := pi.pendingQueue.BackRef()
@@ -441,11 +445,11 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		// If the last event is a periodic signal, we only need to keep the latest one.
 		// And we don't need to add a new signal.
 		*back = event
-		return true
+		return true, false
 	} else {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 }
 
