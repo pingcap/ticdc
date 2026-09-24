@@ -33,8 +33,9 @@ type metricsHook struct {
 
 	brokers sync.Map
 
-	recordsPerBatch  prometheus.Observer
-	compressionRatio prometheus.Observer
+	recordsPerBatch   prometheus.Observer
+	batchesPerRequest prometheus.Observer
+	compressionRatio  prometheus.Observer
 }
 
 type brokerMetrics struct {
@@ -49,10 +50,11 @@ func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	return &metricsHook{
-		keyspace:         keyspace,
-		changefeed:       changefeed,
-		recordsPerBatch:  recordsPerBatch.WithLabelValues(keyspace, changefeed),
-		compressionRatio: compressionRatio.WithLabelValues(keyspace, changefeed),
+		keyspace:          keyspace,
+		changefeed:        changefeed,
+		recordsPerBatch:   recordsPerBatch.WithLabelValues(keyspace, changefeed),
+		batchesPerRequest: batchesPerRequest.WithLabelValues(keyspace, changefeed),
+		compressionRatio:  compressionRatio.WithLabelValues(keyspace, changefeed),
 	}
 }
 
@@ -97,7 +99,14 @@ func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	requestDuration.DeletePartialMatch(labels)
 	throttleTime.DeletePartialMatch(labels)
 	recordsPerBatch.DeletePartialMatch(labels)
+	batchesPerRequest.DeletePartialMatch(labels)
 	compressionRatio.DeletePartialMatch(labels)
+}
+
+func (h *metricsHook) OnProduceRequestEncoded(_ kgo.BrokerMetadata, numBatches int) {
+	if numBatches > 0 {
+		h.batchesPerRequest.Observe(float64(numBatches))
+	}
 }
 
 func (h *metricsHook) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, _ time.Duration, _ time.Duration, err error) {
