@@ -28422,7 +28422,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Outgoing Bytes",
+          "title": "Outgoing Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -28526,7 +28526,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Inflight Requests",
+          "title": "In-flight Requests",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -28618,7 +28618,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "1000 * sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -28627,7 +28627,7 @@
             },
             {
               "exemplar": true,
-              "expr": "1000 * histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance, broker))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_request_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance, broker))",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -28656,7 +28656,7 @@
           "yaxes": [
             {
               "decimals": 1,
-              "format": "ms",
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -28683,7 +28683,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Requests per second, grouped by broker and result.",
+          "description": "Requests per second, grouped by broker.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -28731,11 +28731,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_requests_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker, result)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_requests_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}",
               "refId": "A"
             }
           ],
@@ -28743,7 +28743,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Request Rate",
+          "title": "Requests / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -28900,7 +28900,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "One-minute ratio of uncompressed bytes to compressed bytes.",
+          "description": "One-minute average and P99 uncompressed-to-compressed record batch size ratio, multiplied by 100.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -28946,12 +28946,21 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "100 * sum(rate(ticdc_sink_kafka_producer_uncompressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_compressed_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_batch_compression_ratio_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance) / sum(rate(ticdc_sink_kafka_producer_batch_compression_ratio_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-avg",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_batch_compression_ratio_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed,instance))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-p99",
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -29002,7 +29011,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Maximum one-minute average and p99 broker throttle time.",
+          "description": "One-minute average and p99 throttle time for each broker.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -29050,20 +29059,20 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "1000 * max(sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)) by (namespace,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker) / sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-avg",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-avg",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "1000 * max(histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance, broker))) by (namespace,changefeed, instance)",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_kafka_producer_throttle_time_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (le, namespace,changefeed, instance, broker))",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-p99",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-p99",
               "refId": "B"
             }
           ],
@@ -29088,111 +29097,7 @@
           "yaxes": [
             {
               "decimals": 1,
-              "format": "ms",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": false
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Responses per second, grouped by broker and result.",
-          "fieldConfig": {
-            "defaults": {
-              "links": []
-            },
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 21
-          },
-          "hiddenSeries": false,
-          "id": 62109,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "paceLength": 10,
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_kafka_producer_responses_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance, broker, result)",
-              "format": "time_series",
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-{{broker}}-{{result}}",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Response Rate",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": 1,
-              "format": "ops",
+              "format": "s",
               "label": null,
               "logBase": 1,
               "max": null,
