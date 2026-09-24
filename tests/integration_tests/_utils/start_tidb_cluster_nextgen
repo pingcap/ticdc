@@ -612,6 +612,7 @@ tidb-server \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_SYSTEM_STATUS}" \
 	--log-file "$OUT_DIR/log/upstream/tidb-system/tidb.log" \
+	--log-slow-query "$OUT_DIR/log/upstream/tidb-system/tidb-slow.log" \
 	>"$OUT_DIR/log/upstream/tidb-system/tidb-stdout.log" \
 	2>"$OUT_DIR/log/upstream/tidb-system/tidb-stderr.log" &
 
@@ -629,6 +630,7 @@ tidb-server \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_STATUS}" \
 	--log-file "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb.log" \
+	--log-slow-query "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb-slow.log" \
 	>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
 	2>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
 
@@ -641,6 +643,7 @@ tidb-server \
 	--path "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 	--status "${UP_TIDB_OTHER_STATUS}" \
 	--log-file "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb.log" \
+	--log-slow-query "$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb-slow.log" \
 	>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb-stdout.log" \
 	2>"$OUT_DIR/log/upstream/tidb-$KEYSPACE_NAME-other/tidb-stderr.log" &
 
@@ -655,6 +658,7 @@ tidb-server \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_SYSTEM_STATUS}" \
 	--log-file "$OUT_DIR/log/downstream/tidb-system/tidb.log" \
+	--log-slow-query "$OUT_DIR/log/downstream/tidb-system/tidb-slow.log" \
 	>"$OUT_DIR/log/downstream/tidb-system/tidb-stdout.log" \
 	2>"$OUT_DIR/log/downstream/tidb-system/tidb-stderr.log" &
 
@@ -672,6 +676,7 @@ tidb-server \
 	--path "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	--status "${DOWN_TIDB_STATUS}" \
 	--log-file "$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb.log" \
+	--log-slow-query "$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb-slow.log" \
 	>"$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb-stdout.log" \
 	2>"$OUT_DIR/log/downstream/tidb-$KEYSPACE_NAME/tidb-stderr.log" &
 
