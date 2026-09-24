@@ -144,6 +144,13 @@ var (
 			Help:      "Bucketed histogram of split span check time (s).",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{GetKeyspaceLabel(), "changefeed", "group_id"})
+	TrafficBalanceSkipCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "traffic_balance_skip_total",
+			Help:      "The number of traffic balance checks skipped for safety.",
+		}, []string{"reason"})
 )
 
 func initSchedulerMetrics(registry *prometheus.Registry) {
@@ -168,4 +175,5 @@ func initSchedulerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SlowestTablePullerResolvedTsLag)
 
 	registry.MustRegister(SplitSpanCheckDuration)
+	registry.MustRegister(TrafficBalanceSkipCounter)
 }

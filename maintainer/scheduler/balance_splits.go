@@ -99,14 +99,15 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 	//
 	// 1. First check if there are existing spans that need to be split (spans' region count exceeds the limit, span's traffic exceeds the limit)
 	// if so, split first
-	// 2. Check if the current spans meet the requirement to merge all back into one span
+	// 2. Move one dispatcher away from a node whose EventStore traffic is persistently above the cluster average
+	// 3. Check if the current spans meet the requirement to merge all back into one span
 	// (total region count and traffic are within limits, and lag is low), if so, merge (merge is done by first move, then merge)
-	// 3. Check if traffic is balanced between nodes, if there is obvious imbalance,
+	// 4. Check if traffic is balanced between nodes, if there is obvious imbalance,
 	// first try to migrate spans from the node with maximum traffic to the node with minimum traffic,
 	// if not possible, split the span of the maximum traffic node and move it over
-	// 4. Check if there are dispatchers that need to be merged, satisfying that they are adjacent in the same node, lag is low,
+	// 5. Check if there are dispatchers that need to be merged, satisfying that they are adjacent in the same node, lag is low,
 	// and the merged span's region count and traffic are within limits
-	// 5. If none of the above, first calculate whether the current number of dispatchers is within acceptable range,
+	// 6. If none of the above, first calculate whether the current number of dispatchers is within acceptable range,
 	// if not, check what dispatchers can be moved to facilitate merge operations.
 
 	// we only process spans of one group that are all in replicating state (merge/split/move operations will enter scheduling state once created)
