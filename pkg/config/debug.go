@@ -153,6 +153,9 @@ type EventStoreConfig struct {
 	EnableZstdCompression bool `toml:"enable-zstd-compression" json:"enable_zstd_compression"`
 
 	EnableDataSharing bool `toml:"enable-data-sharing" json:"enable_data_sharing"`
+	// EnableRedoDataSharing reuses exact local subscriptions between normal and
+	// redo dispatchers of the same changefeed. Disabled by default for A/B tests.
+	EnableRedoDataSharing bool `toml:"enable-redo-data-sharing" json:"enable_redo_data_sharing"`
 }
 
 // NewDefaultEventStoreConfig returns the default event store configuration.
