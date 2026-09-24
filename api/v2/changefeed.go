@@ -1220,7 +1220,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1302,7 +1302,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1374,7 +1374,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1448,7 +1448,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1507,7 +1507,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1575,7 +1575,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 		return
 	}
 
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
