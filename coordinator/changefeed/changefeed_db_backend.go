@@ -39,10 +39,12 @@ type Backend interface {
 	GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error)
 	// GetChangefeedInfo returns the latest persisted changefeed info from the backend db.
 	GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error)
-	// CreateChangefeed saves changefeed info and status to db
+	// CreateChangefeed saves changefeed config, runtime and status to db
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
-	// UpdateChangefeed updates changefeed info  to db
+	// UpdateChangefeed updates config and enables separate runtime storage
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
+	// UpdateChangefeedRuntime updates runtime and status using the existing storage format.
+	UpdateChangefeedRuntime(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
 	// ResumeChangefeed persists the resumed status with a new owner epoch.
 	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error)
 	// BumpChangefeedEpoch is the low-level ownership boundary used before a

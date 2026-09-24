@@ -1188,7 +1188,11 @@ func (c *Controller) UpdateChangefeed(ctx context.Context, change *config.Change
 		return errors.New("changefeed not found")
 	}
 	progress := config.ProgressNone
-	state := cf.GetInfo().State
+	currentInfo := cf.GetInfo()
+	// The API validated a config snapshot. Preserve the latest runtime when
+	// publishing that config, including when enabling runtime storage.
+	change.State, change.Error, change.Epoch = currentInfo.State, currentInfo.Error, currentInfo.Epoch
+	state := currentInfo.State
 	if state == config.StateFailed || state == config.StateFinished {
 		progress = config.ProgressStopping
 	}

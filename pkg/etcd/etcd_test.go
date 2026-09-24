@@ -15,11 +15,13 @@ package etcd
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -263,7 +265,7 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 				etcdClusterID: fields.etcdClusterID,
 			}
 
-			gotRevision, gotStatusMap, gotInfoMap, err := c.GetChangefeedInfoAndStatus(tt.args.ctx)
+			gotRevision, gotStatusMap, gotInfoMap, _, err := c.GetChangefeedInfoAndStatus(tt.args.ctx)
 			tt.assertion(t, err)
 			require.Equal(t, tt.wantRevision, gotRevision)
 			require.EqualValues(t, tt.wantStatusMap, gotStatusMap)
@@ -281,6 +283,7 @@ func TestCDCEtcdClientImpl_GetAllCDCInfo(t *testing.T) {
 	client.EXPECT().
 		Get(gomock.Eq(ctx), gomock.Eq("/tidb/cdc/cluster-id/"), gomock.Any()).
 		Return(&clientv3.GetResponse{
+			Header: &etcdserverpb.ResponseHeader{Revision: 10},
 			Kvs: []*mvccpb.KeyValue{
 				{
 					Key:   []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"),
@@ -290,10 +293,18 @@ func TestCDCEtcdClientImpl_GetAllCDCInfo(t *testing.T) {
 		}, nil).
 		Times(1)
 
+	runtimeKV := &mvccpb.KeyValue{
+		Key:   []byte(GetEtcdKeyChangeFeedRuntime("cluster-id", common.NewChangeFeedDisplayName("changefeed1", "default"))),
+		Value: []byte(`{"state":"normal","epoch":1}`),
+	}
+	client.EXPECT().Get(ctx, ChangefeedRuntimeKeyPrefix("cluster-id"), gomock.Any(), gomock.Any()).
+		Return(&clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{runtimeKV}}, nil)
+
 	etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: "cluster-id"}
 	kvs, err := etcdClient.GetAllCDCInfo(ctx)
 	require.NoError(t, err)
-	require.Len(t, kvs, 1)
+	require.Len(t, kvs, 2)
+	require.Equal(t, runtimeKV, kvs[1])
 	require.Equal(t, []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"), kvs[0].Key)
 }
 
@@ -309,6 +320,8 @@ func TestCDCEtcdClientImpl_ClearAllCDCInfo(t *testing.T) {
 		Times(1)
 
 	etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: "cluster-id"}
+	client.EXPECT().Delete(ctx, ChangefeedRuntimeKeyPrefix("cluster-id"), gomock.Any()).
+		Return(&clientv3.DeleteResponse{}, nil)
 	require.NoError(t, etcdClient.ClearAllCDCInfo(ctx))
 }
 
@@ -430,4 +443,66 @@ func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(123), rev)
 	})
+}
+
+func TestChangeFeedRuntimeSnapshot(t *testing.T) {
+	for _, bulk := range []bool{false, true} {
+		for _, useRuntime := range []bool{false, true} {
+			t.Run(fmt.Sprintf("bulk=%t/runtime=%t", bulk, useRuntime), func(t *testing.T) {
+				ctx := context.Background()
+				ctrl := gomock.NewController(t)
+				client := NewMockClient(ctrl)
+				cdcClient := &CDCEtcdClientImpl{Client: client, ClusterID: "test"}
+				id := common.NewChangeFeedDisplayName("feed", "keyspace")
+				infoKey := GetEtcdKeyChangeFeedInfo("test", id)
+				runtimeKey := GetEtcdKeyChangeFeedRuntime("test", id)
+				infoKV := &mvccpb.KeyValue{
+					Key: []byte(infoKey), ModRevision: 1,
+					Value: fmt.Appendf(nil, `{"use-runtime":%t,"state":"stopped","epoch":1}`, useRuntime),
+				}
+				response := &clientv3.GetResponse{
+					Header: &etcdserverpb.ResponseHeader{Revision: 10}, Count: 1,
+					Kvs: []*mvccpb.KeyValue{infoKV},
+				}
+				if bulk {
+					client.EXPECT().Get(ctx, clusterPrefix("test"), gomock.Any()).Return(response, nil)
+				} else {
+					client.EXPECT().Get(ctx, infoKey).Return(response, nil)
+				}
+				if useRuntime {
+					key := runtimeKey
+					optionMatchers := []any{gomock.Any()}
+					if bulk {
+						key = ChangefeedRuntimeKeyPrefix("test")
+						optionMatchers = append(optionMatchers, gomock.Any())
+					}
+					client.EXPECT().Get(ctx, key, optionMatchers...).
+						DoAndReturn(func(_ context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+							// The read revision is the snapshot, not info's old ModRevision.
+							require.Equal(t, int64(10), clientv3.OpGet(key, opts...).Rev())
+							return &clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{{
+								Key: []byte(runtimeKey), Value: []byte(`{"state":"failed","epoch":9}`), ModRevision: 8,
+							}}}, nil
+						})
+				}
+				var info *config.ChangeFeedInfo
+				if bulk {
+					all, err := cdcClient.GetAllChangeFeedInfo(ctx)
+					require.NoError(t, err)
+					info = all[id]
+				} else {
+					var err error
+					info, err = cdcClient.GetChangeFeedInfo(ctx, id)
+					require.NoError(t, err)
+				}
+				if useRuntime {
+					require.Equal(t, config.StateFailed, info.State)
+					require.Equal(t, uint64(9), info.Epoch)
+				} else {
+					require.Equal(t, config.StateStopped, info.State)
+					require.Equal(t, uint64(1), info.Epoch)
+				}
+			})
+		}
+	}
 }

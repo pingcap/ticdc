@@ -213,14 +213,15 @@ func (mr *MockCDCEtcdClientMockRecorder) GetChangeFeedStatus(ctx, id interface{}
 }
 
 // GetChangefeedInfoAndStatus mocks base method.
-func (m *MockCDCEtcdClient) GetChangefeedInfoAndStatus(ctx context.Context) (int64, map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error) {
+func (m *MockCDCEtcdClient) GetChangefeedInfoAndStatus(ctx context.Context) (int64, map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetChangefeedInfoAndStatus", ctx)
 	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue)
 	ret2, _ := ret[2].(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue)
-	ret3, _ := ret[3].(error)
-	return ret0, ret1, ret2, ret3
+	ret3, _ := ret[3].(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue)
+	ret4, _ := ret[4].(error)
+	return ret0, ret1, ret2, ret3, ret4
 }
 
 // GetChangefeedInfoAndStatus indicates an expected call of GetChangefeedInfoAndStatus.
