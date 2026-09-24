@@ -236,6 +236,9 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
+		retry.WithIsRetryableErr(func(err error) bool {
+			return !kafka.IsUnretryableKafkaError(err)
+		}),
 	)
 
 	return err
@@ -273,6 +276,7 @@ func (m *kafkaTopicManager) createTopic(
 		return 0, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
 	}
 
+<<<<<<< HEAD
 	log.Info(
 		"Kafka admin client create the topic success",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
@@ -284,6 +288,8 @@ func (m *kafkaTopicManager) createTopic(
 	)
 	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
 
+=======
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	return m.cfg.PartitionNum, nil
 }
 
@@ -291,6 +297,7 @@ func (m *kafkaTopicManager) createTopic(
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
+<<<<<<< HEAD
 	// If the topic is not in the cache, we try to get the metadata of the topic.
 	// ignoreTopicErr is set to true to ignore the error if the topic is not found,
 	// which means we should create the topic later.
@@ -312,6 +319,17 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 		}
 	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 		return numPartition, nil
+=======
+	// If the topic is not in the cache, try to get its metadata.
+	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, false)
+	if err == nil {
+		if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+			return numPartition, nil
+		}
+	}
+	if kafka.IsAuthorizationFailed(err) {
+		return m.useConfiguredPartitionNum(topicName, err), nil
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	}
 
 	partitionNum, err := m.createTopic(ctx, topicName)
@@ -326,6 +344,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
+	m.tryUpdatePartitionsAndLogging(topicName, partitionNum)
 
 	return partitionNum, nil
 }
