@@ -44,26 +44,31 @@ func TestMetricsHook(t *testing.T) {
 		NumRecords:        3,
 		UncompressedBytes: 10,
 		CompressedBytes:   5,
+		CompressionType:   1,
 	})
 
 	metrics := hook.broker(1)
 	require.Same(t, metrics, hook.broker(1))
 	require.Equal(t, float64(12), testutil.ToFloat64(metrics.outgoingBytesTotal))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.requestsSuccess))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.responsesSuccess))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.requestsTotal))
 	require.Equal(t, float64(0), testutil.ToFloat64(metrics.requestsInFlight))
-	require.Equal(t, float64(10), testutil.ToFloat64(
-		uncompressedBytesTotal.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-	))
-	require.Equal(t, float64(5), testutil.ToFloat64(
-		compressedBytesTotal.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-	))
 	batchMetric, ok := hook.recordsPerBatch.(prometheus.Metric)
 	require.True(t, ok)
 	batchHistogram := &dto.Metric{}
 	require.NoError(t, batchMetric.Write(batchHistogram))
 	require.Equal(t, uint64(1), batchHistogram.GetHistogram().GetSampleCount())
 	require.Equal(t, float64(3), batchHistogram.GetHistogram().GetSampleSum())
+	hook.OnProduceBatchWritten(meta, "topic", 0, kgo.ProduceBatchMetrics{
+		NumRecords:        1,
+		UncompressedBytes: 10,
+		CompressedBytes:   10,
+	})
+	compressionMetric, ok := hook.compressionRatio.(prometheus.Metric)
+	require.True(t, ok)
+	compressionHistogram := &dto.Metric{}
+	require.NoError(t, compressionMetric.Write(compressionHistogram))
+	require.Equal(t, uint64(1), compressionHistogram.GetHistogram().GetSampleCount())
+	require.Equal(t, float64(200), compressionHistogram.GetHistogram().GetSampleSum())
 
 	registry := prometheus.NewRegistry()
 	InitMetrics(registry)
@@ -85,11 +90,10 @@ func TestMetricsHook(t *testing.T) {
 	require.InDelta(t, 0.010, histogram.GetHistogram().GetSampleSum(), 0.000001)
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, context.DeadlineExceeded)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.requestsWriteError))
+	require.Equal(t, float64(3), testutil.ToFloat64(metrics.requestsTotal))
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, nil)
 	hook.OnBrokerE2E(meta, 0, kgo.BrokerE2E{ReadErr: context.Canceled})
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.responsesReadError))
 	require.Equal(t, float64(0), testutil.ToFloat64(metrics.requestsInFlight))
 
 	hook.OnBrokerWrite(kgo.BrokerMetadata{NodeID: -1}, 0, 1, 0, 0, nil)
@@ -109,14 +113,10 @@ func TestMetricsHook(t *testing.T) {
 	keyspace, changefeed, broker := changefeedID.Keyspace(), changefeedID.Name(), "1"
 	cleanupMetrics(changefeedID)
 	require.False(t, outgoingBytesTotal.DeleteLabelValues(keyspace, changefeed, broker))
-	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
-	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultWriteError))
-	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
-	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultReadError))
+	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, requestsInFlightGauge.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, requestDuration.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, throttleTime.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, recordsPerBatch.DeleteLabelValues(keyspace, changefeed))
-	require.False(t, uncompressedBytesTotal.DeleteLabelValues(keyspace, changefeed))
-	require.False(t, compressedBytesTotal.DeleteLabelValues(keyspace, changefeed))
+	require.False(t, compressionRatio.DeleteLabelValues(keyspace, changefeed))
 }

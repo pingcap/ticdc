@@ -27,15 +27,8 @@ var (
 		Namespace: "ticdc",
 		Subsystem: "sink",
 		Name:      "kafka_producer_requests_total",
-		Help:      "Total Kafka producer request writes by broker and transport result.",
-	}, []string{"namespace", "changefeed", "broker", "result"})
-
-	responsesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "kafka_producer_responses_total",
-		Help:      "Total Kafka producer response reads by broker and transport result.",
-	}, []string{"namespace", "changefeed", "broker", "result"})
+		Help:      "Total Kafka producer request writes by broker.",
+	}, []string{"namespace", "changefeed", "broker"})
 
 	requestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
@@ -61,17 +54,11 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
 	}, []string{"namespace", "changefeed"})
 
-	uncompressedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	compressionRatio = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",
-		Name:      "kafka_producer_uncompressed_bytes_total",
-		Help:      "Total record bytes before compression in successfully produced batches.",
-	}, []string{"namespace", "changefeed"})
-
-	compressedBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "kafka_producer_compressed_bytes_total",
-		Help:      "Total record bytes after compression in successfully produced batches.",
+		Name:      "kafka_producer_batch_compression_ratio",
+		Help:      "Distribution of uncompressed-to-compressed record batch size ratios multiplied by 100.",
+		Buckets:   prometheus.ExponentialBuckets(25, 2, 10),
 	}, []string{"namespace", "changefeed"})
 )
