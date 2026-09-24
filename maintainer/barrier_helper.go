@@ -117,7 +117,10 @@ func compareEventKey(a, b eventKey) int {
 	if !a.isSyncPoint && b.isSyncPoint {
 		return -1
 	}
-	return 1
+	if a.isSyncPoint && !b.isSyncPoint {
+		return 1
+	}
+	return 0
 }
 
 func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) {
