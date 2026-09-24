@@ -49,15 +49,40 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, c
 	ss := NewMockSchemaStore()
 	mc := messaging.NewMockMessageCenter()
 	outputCh := mc.GetMessageChannel()
-	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
-		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
-		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
-	}), es, ss, outputCh
+	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC), es, ss, outputCh
 }
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	did := common.NewDispatcherID()
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
+}
+
+func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	first := newMockDispatcherInfoForTest(t)
+	first.changefeedID = common.NewChangefeedID4Test("default", "first")
+	first.integrity = &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
+	}
+	firstStatus := broker.getOrSetChangefeedStatus(first)
+
+	firstReplica := newMockDispatcherInfoForTest(t)
+	firstReplica.changefeedID = first.changefeedID
+	firstReplica.integrity = first.integrity
+	require.Same(t, firstStatus, broker.getOrSetChangefeedStatus(firstReplica))
+
+	second := newMockDispatcherInfoForTest(t)
+	second.changefeedID = common.NewChangefeedID4Test("default", "second")
+	second.integrity = &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelCorrectness),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelError),
+	}
+	secondStatus := broker.getOrSetChangefeedStatus(second)
+
+	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
 }
 
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
