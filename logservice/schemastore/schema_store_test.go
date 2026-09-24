@@ -80,6 +80,61 @@ func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bo
 	return ok
 }
 
+func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:                    lifecycleCtx,
+		cancel:                 lifecycleCancel,
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	keyspaceCtx, cancel := store.newKeyspaceContext(context.Background())
+	defer cancel()
+
+	// Registration holds this lock while loading the initial snapshot. Close
+	// must cancel that work before waiting for the lock.
+	store.keyspaceLocker.Lock()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close(context.Background())
+	}()
+	select {
+	case <-keyspaceCtx.Done():
+		require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		store.keyspaceLocker.Unlock()
+		require.FailNow(t, "keyspace initialization context was not canceled")
+	}
+	store.keyspaceLocker.Unlock()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema store did not close after registration finished")
+	}
+}
+
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	keyspaceCtx, keyspaceCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {
+				ctx:    keyspaceCtx,
+				cancel: keyspaceCancel,
+			},
+		},
+		tombstoneKeyspaces: make(map[uint32]struct{}),
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
+
 func TestRemoveTombstoneKeyspace(t *testing.T) {
 	const keyspaceID = uint32(42)
 	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
