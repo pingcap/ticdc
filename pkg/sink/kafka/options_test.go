@@ -668,6 +668,33 @@ func TestTimeout(t *testing.T) {
 	require.Equal(t, 2*time.Minute, options.WriteTimeout)
 }
 
+func TestFranzTimeoutsNormalizedOnApply(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test")
+	for _, tc := range []struct {
+		name      string
+		client    string
+		read      string
+		write     string
+		wantRead  time.Duration
+		wantWrite time.Duration
+	}{
+		{"franz below minimum", KafkaClientFranz, "1s", "2s", 10 * time.Second, 10 * time.Second},
+		{"franz above maximum", KafkaClientFranz, "20m", "30m", 15 * time.Minute, 15 * time.Minute},
+		{"sarama unchanged", KafkaClientSarama, "1s", "30m", time.Second, 30 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/kafka-test?kafka-client=" + tc.client +
+				"&read-timeout=" + tc.read + "&write-timeout=" + tc.write)
+			require.NoError(t, err)
+
+			options := NewOptions()
+			require.NoError(t, options.Apply(changefeedID, sinkURI, config.GetDefaultReplicaConfig().Sink))
+			require.Equal(t, tc.wantRead, options.ReadTimeout)
+			require.Equal(t, tc.wantWrite, options.WriteTimeout)
+		})
+	}
+}
+
 func TestApplyRejectsNonPositiveTimeout(t *testing.T) {
 	t.Parallel()
 

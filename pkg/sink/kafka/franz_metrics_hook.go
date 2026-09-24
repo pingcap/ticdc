@@ -33,38 +33,28 @@ type metricsHook struct {
 
 	brokers sync.Map
 
-	recordsPerBatch        prometheus.Observer
-	uncompressedBytesTotal prometheus.Counter
-	compressedBytesTotal   prometheus.Counter
+	recordsPerBatch   prometheus.Observer
+	batchesPerRequest prometheus.Observer
+	compressionRatio  prometheus.Observer
 }
 
 type brokerMetrics struct {
 	outgoingBytesTotal prometheus.Counter
-	requestsSuccess    prometheus.Counter
-	requestsWriteError prometheus.Counter
-	responsesSuccess   prometheus.Counter
-	responsesReadError prometheus.Counter
+	requestsTotal      prometheus.Counter
 	requestsInFlight   prometheus.Gauge
 	requestDuration    prometheus.Observer
 	throttleTime       prometheus.Observer
 }
 
-const (
-	// Result values are fixed to keep the broker-level metric label cardinality bounded.
-	metricResultSuccess    = "success"
-	metricResultWriteError = "write_error"
-	metricResultReadError  = "read_error"
-)
-
 func newMetricsHook(changefeedID common.ChangeFeedID) *metricsHook {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	return &metricsHook{
-		keyspace:               keyspace,
-		changefeed:             changefeed,
-		recordsPerBatch:        recordsPerBatch.WithLabelValues(keyspace, changefeed),
-		uncompressedBytesTotal: uncompressedBytesTotal.WithLabelValues(keyspace, changefeed),
-		compressedBytesTotal:   compressedBytesTotal.WithLabelValues(keyspace, changefeed),
+		keyspace:          keyspace,
+		changefeed:        changefeed,
+		recordsPerBatch:   recordsPerBatch.WithLabelValues(keyspace, changefeed),
+		batchesPerRequest: batchesPerRequest.WithLabelValues(keyspace, changefeed),
+		compressionRatio:  compressionRatio.WithLabelValues(keyspace, changefeed),
 	}
 }
 
@@ -86,11 +76,8 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 	brokerID := strconv.Itoa(int(nodeID))
 	metrics := &brokerMetrics{
 		outgoingBytesTotal: outgoingBytesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID),
-		requestsSuccess:    requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultSuccess),
-		requestsWriteError: requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultWriteError),
-		responsesSuccess:   responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultSuccess),
-		responsesReadError: responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultReadError),
-		requestsInFlight:   requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsTotal:      requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsInFlight:   requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		requestDuration:    requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		throttleTime:       throttleTime.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 	}
@@ -108,13 +95,18 @@ func cleanupMetrics(changefeedID common.ChangeFeedID) {
 
 	outgoingBytesTotal.DeletePartialMatch(labels)
 	requestsTotal.DeletePartialMatch(labels)
-	responsesTotal.DeletePartialMatch(labels)
-	requestsInFlight.DeletePartialMatch(labels)
+	requestsInFlightGauge.DeletePartialMatch(labels)
 	requestDuration.DeletePartialMatch(labels)
 	throttleTime.DeletePartialMatch(labels)
 	recordsPerBatch.DeletePartialMatch(labels)
-	uncompressedBytesTotal.DeletePartialMatch(labels)
-	compressedBytesTotal.DeletePartialMatch(labels)
+	batchesPerRequest.DeletePartialMatch(labels)
+	compressionRatio.DeletePartialMatch(labels)
+}
+
+func (h *metricsHook) OnProduceRequestEncoded(_ kgo.BrokerMetadata, numBatches int) {
+	if numBatches > 0 {
+		h.batchesPerRequest.Observe(float64(numBatches))
+	}
 }
 
 func (h *metricsHook) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, _ time.Duration, _ time.Duration, err error) {
@@ -123,15 +115,13 @@ func (h *metricsHook) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritt
 	}
 
 	metrics := h.broker(meta.NodeID)
+	metrics.requestsTotal.Inc()
 
 	if bytesWritten > 0 {
 		metrics.outgoingBytesTotal.Add(float64(bytesWritten))
 	}
 
-	if err != nil {
-		metrics.requestsWriteError.Inc()
-	} else {
-		metrics.requestsSuccess.Inc()
+	if err == nil {
 		metrics.requestsInFlight.Inc()
 	}
 }
@@ -145,13 +135,6 @@ func (h *metricsHook) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.Brok
 
 	if e2e.WriteErr == nil {
 		metrics.requestsInFlight.Dec()
-		if e2e.BytesRead > 0 || e2e.ReadErr != nil {
-			if e2e.ReadErr != nil {
-				metrics.responsesReadError.Inc()
-			} else {
-				metrics.responsesSuccess.Inc()
-			}
-		}
 	}
 
 	if e2e.Err() == nil {
@@ -164,11 +147,8 @@ func (h *metricsHook) OnProduceBatchWritten(_ kgo.BrokerMetadata, _ string, _ in
 		h.recordsPerBatch.Observe(float64(m.NumRecords))
 	}
 
-	if m.UncompressedBytes > 0 {
-		h.uncompressedBytesTotal.Add(float64(m.UncompressedBytes))
-	}
-
-	if m.CompressedBytes > 0 {
-		h.compressedBytesTotal.Add(float64(m.CompressedBytes))
+	if m.CompressionType != 0 && m.UncompressedBytes > 0 && m.CompressedBytes > 0 {
+		ratio := float64(m.UncompressedBytes) / float64(m.CompressedBytes) * 100
+		h.compressionRatio.Observe(ratio)
 	}
 }
