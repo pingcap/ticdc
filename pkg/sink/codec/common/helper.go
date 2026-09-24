@@ -309,9 +309,10 @@ func queryRowChecksumAux(
 	return result
 }
 
-// MustSnapshotQuery query the db by the snapshot read with the given commitTs
+// MustSnapshotQuery queries a snapshot at commitTs. An optional SQL projection
+// replaces SELECT *; callers must build it from trusted, quoted column names.
 func MustSnapshotQuery(
-	ctx context.Context, db *sql.DB, commitTs uint64, schema, table string, conditions map[string]interface{},
+	ctx context.Context, db *sql.DB, commitTs uint64, schema, table string, conditions map[string]any, projection ...string,
 ) *ColumnsHolder {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -341,7 +342,11 @@ func MustSnapshotQuery(
 	}
 
 	// 2. query the whole row
-	query = fmt.Sprintf("select * from %s.%s where ", schema, table)
+	columns := "*"
+	if len(projection) > 0 {
+		columns = projection[0]
+	}
+	query = fmt.Sprintf("select %s from %s.%s where ", columns, schema, table)
 	var whereClause string
 	for name, value := range conditions {
 		if whereClause != "" {

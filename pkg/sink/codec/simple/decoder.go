@@ -481,11 +481,11 @@ func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo) *ti
 		}
 	}
 	return &timodel.IndexInfo{
-		ID:      1,
 		Name:    ast.NewCIStr(indexSchema.Name),
 		Columns: indexColumns,
 		Unique:  indexSchema.Unique,
 		Primary: indexSchema.Primary,
+		State:   timodel.StatePublic,
 	}
 }
 
@@ -500,13 +500,16 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 		nextMockID := int64(1)
 		for _, col := range m.Columns {
 			tiCol := newTiColumnInfo(col, nextMockID, m.Indexes)
+			tiCol.Offset = len(tidbTableInfo.Columns)
 			nextMockID += 1
 			tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		}
-		for _, idx := range m.Indexes {
+		for i, idx := range m.Indexes {
 			index := newTiIndexInfo(idx, tidbTableInfo.Columns)
+			index.ID = int64(i) + 1
 			tidbTableInfo.Indices = append(tidbTableInfo.Indices, index)
 		}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
 	}
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }

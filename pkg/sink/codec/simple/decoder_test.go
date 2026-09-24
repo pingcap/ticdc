@@ -106,3 +106,33 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Equal(t, MessageTypeWatermark, decoder.msg.Type)
 	require.Equal(t, commitTs+1, decoder.msg.CommitTs)
 }
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// rebuilds from a table schema: a composite primary key must stay the handle key,
+// with the real column offsets, because that is what the MySQL sink locates rows
+// by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	schema := &TableSchema{
+		Schema: "test",
+		Table:  "t",
+		Columns: []*columnSchema{
+			{Name: "a", DataType: dataType{MySQLType: "INT"}},
+			{Name: "b", DataType: dataType{MySQLType: "INT"}},
+			{Name: "c", DataType: dataType{MySQLType: "VARCHAR"}},
+		},
+		Indexes: []*IndexSchema{
+			{Name: "PRIMARY", Unique: true, Primary: true, Columns: []string{"a", "b"}},
+			{Name: "c_unique", Unique: true, Columns: []string{"c"}},
+			{Name: "b_idx", Columns: []string{"b"}},
+		},
+	}
+
+	tableInfo := newTableInfo(schema)
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "a", "b")
+	require.Len(t, tableInfo.GetIndices(), 3)
+	indexIDs := make(map[int64]struct{})
+	for _, index := range tableInfo.GetIndices() {
+		require.NotContains(t, indexIDs, index.ID)
+		indexIDs[index.ID] = struct{}{}
+	}
+}

@@ -92,6 +92,7 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
+	replayFilter           *util.ReplayFilter
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -105,6 +106,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
 		spillStore:             util.NewSpillStore(),
+		replayFilter:           util.NewReplayFilter(),
 	}
 	var (
 		db  *sql.DB
@@ -149,17 +151,6 @@ func newWriter(ctx context.Context, o *option) *writer {
 	return w
 }
 
-func (w *writer) run(ctx context.Context) error {
-	return w.mysqlSink.Run(ctx)
-}
-
-func (w *writer) getSpillStore() *util.SpillStore {
-	if w.spillStore == nil {
-		w.spillStore = util.NewSpillStore()
-	}
-	return w.spillStore
-}
-
 func (w *writer) cleanupEventsGroups() error {
 	var cleanupErr error
 	for _, progress := range w.progresses {
@@ -167,7 +158,7 @@ func (w *writer) cleanupEventsGroups() error {
 			_ = group.Cleanup()
 		}
 	}
-	if err := w.getSpillStore().Cleanup(); err != nil {
+	if err := w.spillStore.Cleanup(); err != nil {
 		cleanupErr = err
 		log.Warn("cleanup spill store failed", zap.Error(err))
 	}
@@ -205,7 +196,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 func (w *writer) flushEventsFromGroups(
 	ctx context.Context, groups []*util.EventsGroup, resolveTs uint64, fields ...zap.Field,
 ) (int, error) {
-	limit := w.getSpillStore().ResolveLimit()
+	limit := w.spillStore.ResolveLimit()
 	batchEvents := make([]*event.DMLEvent, 0, limit.MaxMessages)
 	batchMessages := 0
 	var batchBytes int64
@@ -230,7 +221,6 @@ func (w *writer) flushEventsFromGroups(
 
 	for {
 		hasMoreGroups := false
-		preparedAny := false
 		for _, group := range groups {
 			if batchMessages >= limit.MaxMessages || batchBytes >= limit.MaxBytes {
 				if err := flush(); err != nil {
@@ -247,7 +237,6 @@ func (w *writer) flushEventsFromGroups(
 			}
 			hasMoreGroups = hasMoreGroups || hasMore
 			if batch != nil {
-				preparedAny = true
 				prepared = append(prepared, batch)
 				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
 				batchMessages += len(batch.Messages)
@@ -257,14 +246,41 @@ func (w *writer) flushEventsFromGroups(
 		if err := flush(); err != nil {
 			return 0, err
 		}
-		if !hasMoreGroups || !preparedAny {
+		if !hasMoreGroups {
 			break
 		}
 	}
 	return total, nil
 }
 
+// getReplayFilter returns the replay filter, creating it lazily so writers built
+// without newWriter, such as in tests, still deduplicate.
+func (w *writer) getReplayFilter() *util.ReplayFilter {
+	if w.replayFilter == nil {
+		w.replayFilter = util.NewReplayFilter()
+	}
+	return w.replayFilter
+}
+
 func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	// Replays use the same partition, and PrepareResolve keeps each table's
+	// equal commit-ts together. Deduplicate the restored batch before the sink
+	// merges row changes. Equality with the watermark remains open to replay.
+	filter := w.getReplayFilter()
+	retained, duplicates := filter.FilterBatch(events)
+	if err := w.flushFilteredDMLBatch(ctx, retained, fields...); err != nil {
+		return err
+	}
+	// Advance deduplication state and release duplicate chunks only after the
+	// retained rows are durable. The caller then acknowledges the spill batch.
+	filter.Commit(w.globalWatermark())
+	for _, e := range duplicates {
+		e.PostFlush()
+	}
+	return nil
+}
+
+func (w *writer) flushFilteredDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -353,9 +369,7 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 func (w *writer) globalWatermark() uint64 {
 	watermark := uint64(math.MaxUint64)
 	for _, progress := range w.progresses {
-		if progress.watermark < watermark {
-			watermark = progress.watermark
-		}
+		watermark = min(watermark, progress.watermark)
 	}
 	return watermark
 }
@@ -373,8 +387,11 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A replay may have been buffered before the watermark advanced. Keep the
+	// previous boundary until ALL groups have drained, not just one batch.
+	w.getReplayFilter().Advance(watermark)
 	if total != 0 {
-		stats := w.getSpillStore().Stats()
+		stats := w.spillStore.Stats()
 		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
@@ -411,7 +428,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 	}
 
 	needFlush := false
-	wasDraining := w.getSpillStore().ShouldDrain()
+	wasDraining := w.spillStore.ShouldDrain()
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
@@ -459,26 +476,8 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		needFlush = true
 	case common.MessageTypeRow:
 		var counter int
-		dmlMessage := progress.decoder.NextDMLMessage()
-		if dmlMessage == nil {
-			if w.protocol != config.ProtocolSimple {
-				log.Panic("DML message is nil, it's not expected",
-					zap.Int32("partition", partition), zap.Any("offset", offset))
-			}
-			log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
-			break
-		}
-
-		if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
-			return false, err
-		}
-		counter++
-		for {
-			_, hasNext = progress.decoder.HasNext()
-			if !hasNext {
-				break
-			}
-			dmlMessage = progress.decoder.NextDMLMessage()
+		for hasNext {
+			dmlMessage := progress.decoder.NextDMLMessage()
 			if dmlMessage == nil {
 				if w.protocol != config.ProtocolSimple {
 					log.Panic("DML message is nil, it's not expected",
@@ -491,6 +490,10 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 				return false, err
 			}
 			counter++
+			_, hasNext = progress.decoder.HasNext()
+		}
+		if counter == 0 {
+			break
 		}
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
 		if len(message.Key)+len(message.Value) > w.maxMessageBytes && counter > 1 {
@@ -511,7 +514,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 	if needFlush {
 		return w.Write(ctx, messageType)
 	}
-	if !wasDraining && w.getSpillStore().ShouldDrain() {
+	if !wasDraining && w.spillStore.ShouldDrain() {
 		if err := w.flushDMLEventsByWatermark(ctx); err != nil {
 			return false, err
 		}
@@ -653,7 +656,7 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64, originalRowType commonType.RowType) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -663,6 +666,12 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 		if !ok {
 			row.Rewind()
 			break
+		}
+
+		// Avro updates without a before image expand into a keyed delete and
+		// an insert. Only the complete after image can reproduce column routing.
+		if w.protocol == config.ProtocolAvro && originalRowType == commonType.RowTypeUpdate && change.RowType == commonType.RowTypeDelete {
+			continue
 		}
 
 		target, _, err := partitioner.GeneratePartitionIndexAndKey(&change, partitionNum, row.TableInfo, row.GetCommitTs())
@@ -683,7 +692,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset int64) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
-		w.checkPartition(row, partition, offset)
+		w.checkPartition(row, partition, offset, message.RowType)
 		return row
 	})
 }
@@ -717,7 +726,7 @@ func (w *writer) appendMessage2Group(
 
 	group := progress.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(progress.partition, tableID, w.getSpillStore())
+		group = util.NewEventsGroup(progress.partition, tableID, w.spillStore)
 		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
 			return w.messageWithPartitionCheck(message, progress.partition, sourcePosition)
 		})

@@ -324,14 +324,38 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 	e.StartTs = csvMsg.commitTs
 	e.TableInfo = tableInfo
 
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
-	e.AddPostFlushFunc(func() {
-		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
-	})
 	columns := tableInfo.GetColumns()
 	data, err := formatAllColumnsValue(csvConfig, csvMsg.columns, columns)
 	if err != nil {
 		return nil, err
+	}
+	var deleteData map[string]any
+	if csvMsg.opType == operationUpdate {
+		handleIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
+		if len(handleIDs) == 0 {
+			return nil, errors.ErrCSVDecodeFailed.GenWithStack("update without before value requires a handle key")
+		}
+		deleteData = make(map[string]any, len(handleIDs))
+		for _, id := range handleIDs {
+			name := tableInfo.ForceGetColumnInfo(id).Name.O
+			value := data[name]
+			if value == nil {
+				return nil, errors.ErrCSVDecodeFailed.GenWithStack("update without before value has an invalid handle column: %s", name)
+			}
+			deleteData[name] = value
+		}
+	}
+
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	e.AddPostFlushFunc(func() {
+		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
+	})
+	if deleteData != nil {
+		// Handle-key changes are split upstream. Keep the keyed delete and
+		// after-image insert in one event, as for Avro updates without before values.
+		common.AppendRow2Chunk(deleteData, columns, chk)
+		e.RowTypes = append(e.RowTypes, commonType.RowTypeDelete)
+		e.Length++
 	}
 	common.AppendRow2Chunk(data, columns, chk)
 	switch csvMsg.opType {

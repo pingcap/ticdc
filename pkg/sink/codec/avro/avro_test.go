@@ -15,6 +15,7 @@ package avro
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/linkedin/goavro/v2"
@@ -520,6 +521,54 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 
 	_, exists = decoder.HasNext()
 	require.False(t, exists)
+}
+
+func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroEnableWatermark = true
+	ctx := t.Context()
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	require.NoError(t, err)
+	t.Cleanup(TeardownEncoderAndSchemaRegistry4Testing)
+
+	tableInfo := newAvroTableInfoForTest()
+	row := chunk.MutRowFromValues(int64(1), int64(18)).ToRow()
+	topic := "cached-value-schema"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+		newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, row)))
+	insert := encoder.Build()[0]
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic,
+		newAvroRowEventForTest(tableInfo, 1025, row, chunk.Row{})))
+	deleted := encoder.Build()[0]
+
+	for _, withWatermark := range []bool{false, true} {
+		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
+			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoder.AddKeyValue(insert.Key, insert.Value)
+			// The consumer may defer materialization until after receiving the delete.
+			insertMessage := decoder.NextDMLMessage()
+			value := deleted.Value
+			if !withWatermark {
+				value = nil
+			}
+			decoder.AddKeyValue(deleted.Key, value)
+			deleteEvent := decoder.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(deleteEvent.PostFlush)
+			insertEvent := insertMessage.ToDMLEvent()
+			t.Cleanup(insertEvent.PostFlush)
+
+			require.Equal(t, insertEvent.TableInfo.GetColumns(), deleteEvent.TableInfo.GetColumns())
+			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete}, deleteEvent.RowTypes)
+			require.Equal(t, 2, deleteEvent.Rows.NumCols())
+			require.Equal(t, int64(1), deleteEvent.Rows.GetRow(0).GetInt64(0))
+			require.True(t, deleteEvent.Rows.GetRow(0).IsNull(1))
+			common.RequireRowLocatorByPrimaryKey(t, deleteEvent.TableInfo, "id")
+			if withWatermark {
+				require.Equal(t, uint64(1025), deleteEvent.CommitTs)
+			}
+		})
+	}
 }
 
 func TestAvroEnvelope(t *testing.T) {

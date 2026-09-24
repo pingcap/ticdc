@@ -142,3 +142,18 @@ func CompareRow(
 		}
 	}
 }
+
+// RequireRowLocatorByPrimaryKey checks handle-key identity and schema offsets
+// directly on the table metadata produced by a decoder.
+func RequireRowLocatorByPrimaryKey(t require.TestingT, tableInfo *commonType.TableInfo, primaryKeys ...string) {
+	ids := tableInfo.GetOrderedHandleKeyColumnIDs()
+	require.Len(t, ids, len(primaryKeys))
+	for i, id := range ids {
+		require.True(t, tableInfo.IsHandleKey(id))
+		offset := tableInfo.MustGetColumnOffsetByID(id)
+		column := tableInfo.GetColumns()[offset]
+		require.Equal(t, id, column.ID)
+		require.Equal(t, primaryKeys[i], column.Name.O)
+		require.Equal(t, offset, column.Offset)
+	}
+}
