@@ -94,10 +94,6 @@ func (m *mockEventDispatcher) GetRouter() routing.Router {
 	return routing.Router{}
 }
 
-func (m *mockEventDispatcher) GetTimezone() string {
-	return "system"
-}
-
 func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return nil
 }
