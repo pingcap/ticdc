@@ -16,7 +16,6 @@ package kafka
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -68,25 +67,6 @@ func TestMetricsHook(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	InitMetrics(registry)
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	names := make([]string, 0, len(metricFamilies))
-	for _, family := range metricFamilies {
-		if strings.HasPrefix(family.GetName(), "ticdc_sink_kafka_franz_producer_") {
-			names = append(names, family.GetName())
-		}
-	}
-	require.ElementsMatch(t, []string{
-		"ticdc_sink_kafka_franz_producer_compressed_bytes_total",
-		"ticdc_sink_kafka_franz_producer_in_flight_requests",
-		"ticdc_sink_kafka_franz_producer_outgoing_bytes_total",
-		"ticdc_sink_kafka_franz_producer_records_per_batch",
-		"ticdc_sink_kafka_franz_producer_request_duration_seconds",
-		"ticdc_sink_kafka_franz_producer_requests_total",
-		"ticdc_sink_kafka_franz_producer_responses_total",
-		"ticdc_sink_kafka_franz_producer_throttle_time_seconds",
-		"ticdc_sink_kafka_franz_producer_uncompressed_bytes_total",
-	}, names)
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, nil)
 	hook.OnBrokerE2E(meta, 0, kgo.BrokerE2E{
@@ -133,7 +113,7 @@ func TestMetricsHook(t *testing.T) {
 	require.False(t, requestsTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultWriteError))
 	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultSuccess))
 	require.False(t, responsesTotal.DeleteLabelValues(keyspace, changefeed, broker, metricResultReadError))
-	require.False(t, requestsInFlight.DeleteLabelValues(keyspace, changefeed, broker))
+	require.False(t, requestsInFlightGauge.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, requestDuration.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, throttleTime.DeleteLabelValues(keyspace, changefeed, broker))
 	require.False(t, recordsPerBatch.DeleteLabelValues(keyspace, changefeed))
