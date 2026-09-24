@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,9 +32,64 @@ import (
 func newLogCoordinatorForTest() *logCoordinator {
 	c := &logCoordinator{pdClock: pdutil.NewClock4Test()}
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
+	c.eventBrokerStates.m = make(map[node.ID]eventBrokerState)
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 	return c
+}
+
+func TestEventBrokerDispatcherCountReports(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mc := messaging.NewMockMessageCenter()
+	c.messageCenter = mc
+	target := node.ID("capture")
+	c.nodes.m[target] = &node.Info{ID: target}
+	query := func(target node.ID) *logservicepb.EventBrokerDispatcherCountResponse {
+		t.Helper()
+		message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic,
+			&logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: target.String()})
+		message.From = "coordinator"
+		require.NoError(t, c.handleMessage(t.Context(), message))
+		reply := <-mc.GetMessageChannel()
+		require.Equal(t, message.From, reply.To)
+		require.Equal(t, messaging.CoordinatorTopic, reply.Topic)
+		response := reply.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
+		require.Equal(t, target.String(), response.TargetNodeId)
+		return response
+	}
+	// A new log coordinator has no reports, including for captures with no brokers.
+	require.Nil(t, query(target).Report)
+	report := &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 3, RegistrationsStopped: true}
+	message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic, report)
+	message.From = target
+	require.NoError(t, c.handleMessage(t.Context(), message))
+	require.Equal(t, report, query(target).Report)
+
+	// A late report from before admission closed cannot replace a current
+	// report. The cache owns its copy of the message.
+	report.DispatcherCount = 0
+	c.updateEventBrokerState(target, &logservicepb.EventBrokerDispatcherCount{})
+	require.Equal(t, uint32(3), query(target).Report.DispatcherCount)
+	state := c.eventBrokerStates.m[target]
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
+	c.eventBrokerStates.m[target] = state
+	require.Nil(t, query(target).Report)
+
+	c.updateEventBrokerState(target, report)
+	require.Zero(t, query(target).Report.DispatcherCount)
+	// The replacement capture has a new ID and cannot inherit the old zero.
+	replacement := node.ID("restarted-capture")
+	c.handleNodeChange(map[node.ID]*node.Info{target: {ID: target}, replacement: {ID: replacement}})
+	require.Nil(t, query(replacement).Report)
+	c.handleNodeChange(map[node.ID]*node.Info{replacement: {ID: replacement}})
+	c.updateEventBrokerState(target, report)
+	require.Nil(t, query(target).Report)
+	require.Nil(t, query(replacement).Report)
+	require.Empty(t, c.eventBrokerStates.m)
+
+	c.updateEventBrokerState(replacement, &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 3})
+	require.False(t, query(replacement).Report.RegistrationsStopped)
+	require.Equal(t, uint32(3), query(replacement).Report.DispatcherCount)
 }
 
 func TestGetCandidateNodes(t *testing.T) {
@@ -202,6 +258,13 @@ func TestGetCandidateNodes(t *testing.T) {
 		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
+	// STOPPING brokers keep reusable subscriptions in the event store, but
+	// must no longer be offered as reuse candidates, even after report expiry.
+	coordinator.updateEventBrokerState(nodeID2, &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true})
+	state := coordinator.eventBrokerStates.m[nodeID2]
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
+	coordinator.eventBrokerStates.m[nodeID2] = state
+	require.Empty(t, coordinator.getCandidateNodes(nodeID3, &span1, startTs))
 }
 
 func TestGetCandidateNodesIgnoreDifferentKeyspace(t *testing.T) {

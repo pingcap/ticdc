@@ -1041,17 +1041,21 @@ func TestViewWildcardRouting(t *testing.T) {
 				{Matcher: []string{"test.*"}, TargetSchema: "dst", TargetTable: "{table}_r"},
 				{Matcher: []string{"test.*"}, TargetSchema: "dst"},
 				{Matcher: []string{"test.*"}, TargetTable: "{table}_r"},
-				{Matcher: []string{"other.*"}, TargetSchema: "dst"},
 			} {
 				router := newTestRouter(t, false, []*config.DispatchRule{rule})
 				routed, err := router.ApplyToDDLEvent(ddl)
 				require.NoError(t, err)
+				require.NotSame(t, ddl, routed)
 				helper.Tk().MustExec("USE " + common.QuoteName(routed.GetTargetSchemaName()))
 				helper.Tk().MustExec(routed.Query)
 				view := common.QuoteSchema(routed.GetTargetSchemaName(), routed.GetTargetTableName())
 				helper.Tk().MustQuery("SELECT * FROM " + view).Check(testkit.Rows("7"))
 				helper.Tk().MustExec("DROP VIEW " + view)
 			}
+			unmatchedRouter := newTestRouter(t, false, []*config.DispatchRule{{Matcher: []string{"other.*"}, TargetSchema: "dst"}})
+			unrouted, err := unmatchedRouter.ApplyToDDLEvent(ddl)
+			require.NoError(t, err)
+			require.Same(t, ddl, unrouted)
 		})
 	}
 }

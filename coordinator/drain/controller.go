@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils"
@@ -64,6 +65,11 @@ type nodeState struct {
 	lastSeen    time.Time
 	nodeEpoch   uint64
 	liveness    heartbeatpb.NodeLiveness
+
+	// Only an observed, admission-closed zero can authorize drain completion.
+	// Such a zero is terminal for this capture ID.
+	eventBrokerDispatcherCount         int
+	eventBrokerDispatcherCountObserved bool
 }
 
 type drainTargetSchedulerGate struct {
@@ -89,9 +95,8 @@ type drainTargetClearGate struct {
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
 //
-// It is in-memory only. Observations come from either:
-// - NodeHeartbeat, or
-// - SetNodeLivenessResponse.
+// It is in-memory only. Liveness observations come from NodeHeartbeat or
+// SetNodeLivenessResponse; broker counts come from LogCoordinator responses.
 type Controller struct {
 	mu sync.Mutex
 
@@ -413,6 +418,54 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 		return false, false, false
 	}
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
+}
+
+// NewEventBrokerDispatcherCountRequest queries the log coordinator only after
+// STOPPING, so broker registrations do not prevent closing registration admission.
+// The coordinator's periodic task retries until an admission-closed zero is observed.
+func (c *Controller) NewEventBrokerDispatcherCountRequest(nodeID node.ID) *logservicepb.EventBrokerDispatcherCountRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.stoppingObserved || (st.eventBrokerDispatcherCountObserved && st.eventBrokerDispatcherCount == 0) {
+		return nil
+	}
+	return &logservicepb.EventBrokerDispatcherCountRequest{
+		TargetNodeId: nodeID.String(),
+	}
+}
+
+// ObserveEventBrokerDispatcherCountResponse records reports for a stopping capture.
+// Capture IDs identify process lifetimes, and a closed registration gate cannot
+// reopen, so an admission-closed zero remains valid even if its reply was delayed.
+func (c *Controller) ObserveEventBrokerDispatcherCountResponse(resp *logservicepb.EventBrokerDispatcherCountResponse) {
+	if resp == nil || resp.Report == nil || !resp.Report.RegistrationsStopped {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[node.ID(resp.TargetNodeId)]
+	if !ok || !st.stoppingObserved {
+		return
+	}
+	// A delayed positive report must not undo an already observed terminal zero.
+	if st.eventBrokerDispatcherCountObserved && st.eventBrokerDispatcherCount == 0 {
+		return
+	}
+	st.eventBrokerDispatcherCount = int(resp.Report.DispatcherCount)
+	st.eventBrokerDispatcherCountObserved = true
+}
+
+// GetEventBrokerDispatcherCount returns the last admission-closed count for the
+// requested capture. An absent report cannot authorize completion.
+func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.eventBrokerDispatcherCountObserved {
+		return 0, false
+	}
+	return st.eventBrokerDispatcherCount, true
 }
 
 // GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.
