@@ -90,7 +90,7 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 		requestsWriteError: requestsTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultWriteError),
 		responsesSuccess:   responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultSuccess),
 		responsesReadError: responsesTotal.WithLabelValues(h.keyspace, h.changefeed, brokerID, metricResultReadError),
-		requestsInFlight:   requestsInFlight.WithLabelValues(h.keyspace, h.changefeed, brokerID),
+		requestsInFlight:   requestsInFlightGauge.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		requestDuration:    requestDuration.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 		throttleTime:       throttleTime.WithLabelValues(h.keyspace, h.changefeed, brokerID),
 	}
@@ -109,7 +109,7 @@ func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	outgoingBytesTotal.DeletePartialMatch(labels)
 	requestsTotal.DeletePartialMatch(labels)
 	responsesTotal.DeletePartialMatch(labels)
-	requestsInFlight.DeletePartialMatch(labels)
+	requestsInFlightGauge.DeletePartialMatch(labels)
 	requestDuration.DeletePartialMatch(labels)
 	throttleTime.DeletePartialMatch(labels)
 	recordsPerBatch.DeletePartialMatch(labels)
