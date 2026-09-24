@@ -39,8 +39,10 @@ const (
 	DMLEventVersion1 = 1
 	// BatchDMLEventVersion1 is the version of the BatchDMLEvent struct.
 	BatchDMLEventVersion1 = 1
-	// dmlChecksumSize includes current(4), previous(4), version(8), and corrupted(1).
-	dmlChecksumSize = 4 + 4 + 8 + 1
+	// dmlChecksumSize includes current(4), previous(4), version(8), and flags(1).
+	dmlChecksumSize      = 4 + 4 + 8 + 1
+	dmlChecksumPresent   = 1 << 0
+	dmlChecksumCorrupted = 1 << 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -435,7 +437,8 @@ type DMLEvent struct {
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
-	// Entries in the slice are non-nil.
+	// The slice is empty or has one entry per logical DML row (Length).
+	// Nil entries represent rows without a checksum, including historical rows.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
 }
@@ -630,7 +633,11 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		}
 		t.Length++
 		t.ApproximateSize += raw.GetSize()
-		if checksum != nil {
+		if checksum != nil || len(t.Checksum) != 0 {
+			if len(t.Checksum) == 0 {
+				// Earlier rows may have been written before checksums were enabled.
+				t.Checksum = make([]*integrity.Checksum, t.Length-1)
+			}
 			t.Checksum = append(t.Checksum, checksum)
 		}
 	}
@@ -893,6 +900,9 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil, nil
 	}
+	if len(t.Checksum) != 0 && len(t.Checksum) != int(t.Length) {
+		return nil, errors.ErrEncodeFailed.FastGen("DML checksum count %d does not match row count %d", len(t.Checksum), t.Length)
+	}
 	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
 	// Seq(8) + Epoch(8) + Length(4) + ApproximateSize(8) + PreviousTotalOffset(4)
 	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
@@ -962,11 +972,15 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 		for _, checksum := range t.Checksum {
 			entry := buf[offset : offset+dmlChecksumSize]
 			offset += dmlChecksumSize
+			if checksum == nil {
+				continue
+			}
 			binary.BigEndian.PutUint32(entry[0:4], checksum.Current)
 			binary.BigEndian.PutUint32(entry[4:8], checksum.Previous)
 			binary.BigEndian.PutUint64(entry[8:16], uint64(checksum.Version))
+			entry[16] = dmlChecksumPresent
 			if checksum.Corrupted {
-				entry[16] = 1
+				entry[16] |= dmlChecksumCorrupted
 			}
 		}
 	}
@@ -1038,18 +1052,27 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 	checksumCount := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 	checksumData := data[offset:]
-	if uint64(checksumCount) > uint64(len(checksumData)/dmlChecksumSize) {
-		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML checksum entries")
+	if uint64(len(checksumData)) != uint64(checksumCount)*dmlChecksumSize {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML checksum suffix length does not match checksum count")
+	}
+	if checksumCount != 0 && uint64(checksumCount) != uint64(t.Length) {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML checksum count does not match row count")
 	}
 	t.Checksum = make([]*integrity.Checksum, int(checksumCount))
 	for i := range t.Checksum {
 		entry := checksumData[:dmlChecksumSize]
 		checksumData = checksumData[dmlChecksumSize:]
+		if entry[16] == 0 {
+			continue
+		}
+		if entry[16] != dmlChecksumPresent && entry[16] != dmlChecksumPresent|dmlChecksumCorrupted {
+			return errors.ErrDecodeFailed.FastGenByArgs("invalid DML checksum flags")
+		}
 		t.Checksum[i] = &integrity.Checksum{
 			Current:   binary.BigEndian.Uint32(entry[0:4]),
 			Previous:  binary.BigEndian.Uint32(entry[4:8]),
 			Version:   int(binary.BigEndian.Uint64(entry[8:16])),
-			Corrupted: entry[16] != 0,
+			Corrupted: entry[16]&dmlChecksumCorrupted != 0,
 		}
 	}
 	return nil

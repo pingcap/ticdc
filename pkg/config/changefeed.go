@@ -281,6 +281,16 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
 		ChangefeedID:                  info.ChangefeedID,
 		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
@@ -289,7 +299,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SinkURI:                       info.SinkURI,
 		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:                    info.Config.Sink,
+		SinkConfig:                    sinkConfig,
 		Filter:                        info.Config.Filter,
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
