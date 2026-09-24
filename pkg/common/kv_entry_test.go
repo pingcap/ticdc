@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -227,4 +228,30 @@ func TestRawKVEntry_IsUpdate(t *testing.T) {
 		}
 		require.False(t, entry.IsUpdate())
 	})
+}
+
+func TestRawKVEntryStringRedaction(t *testing.T) {
+	original := perrors.RedactLogEnabled.Load()
+	defer perrors.RedactLogEnabled.Store(original)
+
+	entry := &RawKVEntry{
+		OpType:   OpTypePut,
+		Key:      []byte("key-secret"),
+		Value:    []byte("value-secret"),
+		OldValue: []byte("old-secret"),
+		StartTs:  1,
+		CRTs:     2,
+		RegionID: 3,
+	}
+
+	perrors.RedactLogEnabled.Store(perrors.RedactLogDisable)
+	require.Equal(t, "OpType: 1, Key: key-secret, Value: value-secret, OldValue: old-secret, "+
+		"StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+
+	perrors.RedactLogEnabled.Store(perrors.RedactLogEnable)
+	require.Equal(t, "OpType: 1, Key: ?, Value: ?, OldValue: ?, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+
+	perrors.RedactLogEnabled.Store(perrors.RedactLogMarker)
+	require.Equal(t, "OpType: 1, Key: ‹key-secret›, Value: ‹value-secret›, "+
+		"OldValue: ‹old-secret›, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
 }
