@@ -150,6 +150,9 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("codec config apply failed", zap.Error(err))
 	}
+	if replicaConfig.Integrity != nil {
+		o.codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
+	}
 	o.codecConfig.AvroConfluentSchemaRegistry = o.schemaRegistryURI
 
 	tz, err := putil.GetTimezone(o.timezone)
