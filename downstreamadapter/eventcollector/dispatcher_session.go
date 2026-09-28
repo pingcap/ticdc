@@ -519,6 +519,7 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			TableSpan:    s.target.GetTableSpan(),
 			StartTs:      startTs,
 			// ServerId is the id of the request sender.
+<<<<<<< HEAD
 			ServerId:             serverID,
 			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
 			FilterConfig:         s.target.GetFilterConfig(),
@@ -533,6 +534,24 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
+=======
+			ServerId:                      serverID,
+			ActionType:                    eventpb.ActionType_ACTION_TYPE_REGISTER,
+			FilterConfig:                  s.target.GetFilterConfig(),
+			EnableSyncPoint:               s.target.EnableSyncPoint(),
+			SyncPointInterval:             uint64(syncPointInterval.Seconds()),
+			SyncPointTs:                   syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, s.target.GetSkipSyncpointAtStartTs()),
+			OnlyReuse:                     onlyReuse,
+			BdrMode:                       s.target.GetBDRMode(),
+			Mode:                          s.target.GetMode(),
+			Epoch:                         0,
+			Timezone:                      s.target.GetTimezone(),
+			Integrity:                     s.target.GetIntegrityConfig(),
+			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
+			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
+>>>>>>> 167f7400e (*: add changefeed-level performance mode (#5862))
 		},
 	}
 }
@@ -561,6 +580,7 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			SyncPointInterval: uint64(syncPointInterval.Seconds()),
 			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, skipSyncpointSameAsResetTs),
 			// OnlyReuse:         false,
+<<<<<<< HEAD
 			BdrMode:              s.target.GetBDRMode(),
 			Mode:                 s.target.GetMode(),
 			Epoch:                epoch,
@@ -568,6 +588,17 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
+=======
+			BdrMode:                       s.target.GetBDRMode(),
+			Mode:                          s.target.GetMode(),
+			Epoch:                         epoch,
+			Timezone:                      s.target.GetTimezone(),
+			Integrity:                     s.target.GetIntegrityConfig(),
+			OutputRawChangeEvent:          s.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:                  string(s.target.GetTxnAtomicity()),
+			EnableIgnoreUpdateOnlyColumns: s.target.EnableIgnoreUpdateOnlyColumns(),
+			LowLatencyMode:                s.target.IsLowLatencyMode(),
+>>>>>>> 167f7400e (*: add changefeed-level performance mode (#5862))
 		},
 	}
 }
