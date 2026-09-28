@@ -126,7 +126,7 @@ func TestSameClusterRoutingRuntimeSemantics(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, routed.GetTargetSchemaName(), ddl.GetTargetSchemaName())
 				captured := !f.ShouldDiscardDDL(ddl.GetTargetSchemaName(), "", model.ActionDropSchema, nil)
-				require.Equal(t, tc.wantSchemaCaptured && !(caseSensitive && tc.caseInsensitiveOnly), captured)
+				require.Equal(t, tc.wantSchemaCaptured && (!caseSensitive || !tc.caseInsensitiveOnly), captured)
 
 				err = check.ValidateSameClusterRouting(cfg)
 				// TiDB resolves schema identifiers case insensitively even when the
