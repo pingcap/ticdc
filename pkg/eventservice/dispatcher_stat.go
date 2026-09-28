@@ -546,6 +546,8 @@ type changefeedStatus struct {
 	changefeedID   common.ChangeFeedID
 	lowLatencyMode bool
 	filter         filter.Filter
+	// mounter configuration is changefeed scoped.
+	mounter pevent.Mounter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
