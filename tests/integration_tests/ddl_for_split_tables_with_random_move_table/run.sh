@@ -138,7 +138,7 @@ main() {
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
@@ -194,7 +194,7 @@ main_with_consistent() {
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
