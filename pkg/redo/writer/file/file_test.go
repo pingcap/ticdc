@@ -31,12 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"

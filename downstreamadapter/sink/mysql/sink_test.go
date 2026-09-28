@@ -25,13 +25,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
 

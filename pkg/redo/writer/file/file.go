@@ -34,12 +34,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/br/pkg/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"

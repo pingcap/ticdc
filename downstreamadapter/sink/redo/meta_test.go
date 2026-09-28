@@ -30,14 +30,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
+	"github.com/pingcap/ticdc/pkg/writelease"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-=======
-	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"

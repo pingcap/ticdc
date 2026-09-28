@@ -27,11 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/prometheus/client_golang/prometheus"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"go.uber.org/zap"
 )
 
@@ -116,8 +112,6 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaSt
 	w.tableSchemaStore = tableSchemaStore
 }
 
-<<<<<<< HEAD
-=======
 // SetWriteGate configures capture-wide DML write admission for this transport
 // writer. A nil gate preserves the legacy behavior.
 func (w *Writer) SetWriteGate(gate *writelease.Gate) {
@@ -142,12 +136,6 @@ func (w *Writer) grantWrite() bool {
 	}
 }
 
-// SetControlAsyncDB sets the DB pool used to execute TiDB ADD INDEX DDLs.
-func (w *Writer) SetControlAsyncDB(db *sql.DB) {
-	w.asyncDB = db
-}
-
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	if w.cfg.IsTiDB {
 		// first we check whether there is some async ddl executed now.

@@ -62,25 +62,17 @@ func NewMaintainerManager(
 	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-<<<<<<< HEAD
-=======
-	heartbeatCh := make(chan struct{}, 1)
 	writeGate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
 	if !ok {
 		writeGate = writelease.NewGate()
 	}
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
 		node:        newManagerNodeState(nodeLiveness),
-<<<<<<< HEAD
 		maintainers: newManagerMaintainerSet(conf, nodeInfo),
-=======
-		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
 		writeGate:   writeGate,
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)

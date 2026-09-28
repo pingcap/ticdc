@@ -20,12 +20,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/br/pkg/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

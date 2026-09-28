@@ -26,12 +26,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/br/pkg/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"

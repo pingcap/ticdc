@@ -35,17 +35,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-<<<<<<< HEAD
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/model"
-=======
-	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/objstore/objectio"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
-	"github.com/pingcap/tidb/pkg/parser/ast"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -608,7 +601,7 @@ type failOnIndexStorage struct {
 }
 
 type fenceAfterDataStorage struct {
-	storeapi.Storage
+	storage.ExternalStorage
 	dataFile string
 	gate     *writelease.Gate
 }
@@ -629,7 +622,7 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 }
 
 func (s *fenceAfterDataStorage) WriteFile(ctx context.Context, name string, data []byte) error {
-	if err := s.Storage.WriteFile(ctx, name, data); err != nil {
+	if err := s.ExternalStorage.WriteFile(ctx, name, data); err != nil {
 		return err
 	}
 	if name == s.dataFile {
@@ -649,9 +642,9 @@ func TestWriterChecksWriteGateBeforePublishingIndex(t *testing.T) {
 	dataFile := "data.json"
 	indexFile := "meta/data.index"
 	d.storage = &fenceAfterDataStorage{
-		Storage:  d.storage,
-		dataFile: dataFile,
-		gate:     gate,
+		ExternalStorage: d.storage,
+		dataFile:        dataFile,
+		gate:            gate,
 	}
 	d.setWriteGate(gate)
 

@@ -29,11 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/br/pkg/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
 	"go.uber.org/atomic"

@@ -416,8 +416,6 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
-<<<<<<< HEAD
-=======
 func withCaptureWriteGate(ctx context.Context, inner sink.Sink) sink.Sink {
 	gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
 	if !ok {
@@ -433,20 +431,6 @@ func (e *DispatcherManager) getWriteSink() sink.Sink {
 	return e.sink
 }
 
-func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
-	if filter == nil {
-		return 0
-	}
-	count := 0
-	for _, rule := range filter.EventFilters {
-		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
-			count++
-		}
-	}
-	return count
-}
-
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
 	var (
 		batchCount = s.BatchCount()

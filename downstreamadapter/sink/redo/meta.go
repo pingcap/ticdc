@@ -29,13 +29,8 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
-	"github.com/pingcap/tidb/br/pkg/storage"
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"

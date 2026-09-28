@@ -35,11 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/meta/model"
->>>>>>> 46132a925 (server: fence capture writes with etcd and P2P leases (#6092))
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -361,9 +357,9 @@ func TestKafkaSinkWriteGateBlocksDMLSend(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	kafkaSink, topicManager, asyncProducer, _ := newKafkaSinkForTest(
-		t, ctx, config.ProtocolOpen, &config.SinkConfig{})
-	topicManager.EXPECT().GetPartitionNum(gomock.Any(), kafkaSinkTestTopic).Return(int32(1), nil)
+	ctrl := gomock.NewController(t)
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
 	sent := make(chan struct{}, 1)
 	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
 	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -379,6 +375,10 @@ func TestKafkaSinkWriteGateBlocksDMLSend(t *testing.T) {
 			sent <- struct{}{}
 			return nil
 		}).Times(1)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
+	require.NoError(t, err)
 	gate := writelease.NewGate()
 	kafkaSink.SetWriteGate(gate)
 
