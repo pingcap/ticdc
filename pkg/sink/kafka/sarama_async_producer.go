@@ -128,10 +128,16 @@ func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) err
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
+<<<<<<< HEAD
 		zap.String("eventContext", BuildEventLogContext(
 			p.changefeedID.Keyspace(), p.changefeedID.Name(), extractLogInfo(err.Msg))),
 		zap.Error(err.Err))
 	return errors.WrapError(errors.ErrKafkaSendMessage, err.Err)
+=======
+		zap.String("eventContext", BuildEventLogContext(logInfo)),
+		zap.Error(err))
+	return errors.WrapError(errors.ErrKafkaSendMessage, err)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 }
 
 // AsyncSend is the input channel for the user to write messages to that they

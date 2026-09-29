@@ -5,6 +5,7 @@
 package kafka
 
 import (
+	context "context"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -46,14 +47,19 @@ func (mr *MockClusterAdminClientMockRecorder) Close() *gomock.Call {
 }
 
 // CreateTopic mocks base method.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (m *MockClusterAdminClient) CreateTopic(detail *TopicDetail) error {
+=======
+func (m *MockAdminClient) CreateTopic(ctx context.Context, detail *TopicDetail) error {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTopic", detail)
+	ret := m.ctrl.Call(m, "CreateTopic", ctx, detail)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CreateTopic indicates an expected call of CreateTopic.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) CreateTopic(detail interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockClusterAdminClient)(nil).CreateTopic), detail)
@@ -61,13 +67,23 @@ func (mr *MockClusterAdminClientMockRecorder) CreateTopic(detail interface{}) *g
 
 // GetAllBrokers mocks base method.
 func (m *MockClusterAdminClient) GetAllBrokers() []Broker {
+=======
+func (mr *MockAdminClientMockRecorder) CreateTopic(ctx, detail interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockAdminClient)(nil).CreateTopic), ctx, detail)
+}
+
+// GetAllBrokers mocks base method.
+func (m *MockAdminClient) GetAllBrokers(ctx context.Context) []Broker {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAllBrokers")
+	ret := m.ctrl.Call(m, "GetAllBrokers", ctx)
 	ret0, _ := ret[0].([]Broker)
 	return ret0
 }
 
 // GetAllBrokers indicates an expected call of GetAllBrokers.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) GetAllBrokers() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBrokers", reflect.TypeOf((*MockClusterAdminClient)(nil).GetAllBrokers))
@@ -75,8 +91,17 @@ func (mr *MockClusterAdminClientMockRecorder) GetAllBrokers() *gomock.Call {
 
 // GetBrokerConfig mocks base method.
 func (m *MockClusterAdminClient) GetBrokerConfig(configName string) (string, bool, error) {
+=======
+func (mr *MockAdminClientMockRecorder) GetAllBrokers(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBrokers", reflect.TypeOf((*MockAdminClient)(nil).GetAllBrokers), ctx)
+}
+
+// GetBrokerConfig mocks base method.
+func (m *MockAdminClient) GetBrokerConfig(ctx context.Context, configName string) (string, bool, error) {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBrokerConfig", configName)
+	ret := m.ctrl.Call(m, "GetBrokerConfig", ctx, configName)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
@@ -84,6 +109,7 @@ func (m *MockClusterAdminClient) GetBrokerConfig(configName string) (string, boo
 }
 
 // GetBrokerConfig indicates an expected call of GetBrokerConfig.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) GetBrokerConfig(configName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBrokerConfig", reflect.TypeOf((*MockClusterAdminClient)(nil).GetBrokerConfig), configName)
@@ -91,8 +117,17 @@ func (mr *MockClusterAdminClientMockRecorder) GetBrokerConfig(configName interfa
 
 // GetTopicConfig mocks base method.
 func (m *MockClusterAdminClient) GetTopicConfig(topicName, configName string) (string, bool, error) {
+=======
+func (mr *MockAdminClientMockRecorder) GetBrokerConfig(ctx, configName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBrokerConfig", reflect.TypeOf((*MockAdminClient)(nil).GetBrokerConfig), ctx, configName)
+}
+
+// GetTopicConfig mocks base method.
+func (m *MockAdminClient) GetTopicConfig(ctx context.Context, topicName, configName string) (string, bool, error) {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicConfig", topicName, configName)
+	ret := m.ctrl.Call(m, "GetTopicConfig", ctx, topicName, configName)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(bool)
 	ret2, _ := ret[2].(error)
@@ -100,6 +135,7 @@ func (m *MockClusterAdminClient) GetTopicConfig(topicName, configName string) (s
 }
 
 // GetTopicConfig indicates an expected call of GetTopicConfig.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) GetTopicConfig(topicName, configName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicConfig", reflect.TypeOf((*MockClusterAdminClient)(nil).GetTopicConfig), topicName, configName)
@@ -107,14 +143,24 @@ func (mr *MockClusterAdminClientMockRecorder) GetTopicConfig(topicName, configNa
 
 // GetTopicsMeta mocks base method.
 func (m *MockClusterAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+=======
+func (mr *MockAdminClientMockRecorder) GetTopicConfig(ctx, topicName, configName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicConfig", reflect.TypeOf((*MockAdminClient)(nil).GetTopicConfig), ctx, topicName, configName)
+}
+
+// GetTopicsMeta mocks base method.
+func (m *MockAdminClient) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicsMeta", topics, ignoreTopicError)
+	ret := m.ctrl.Call(m, "GetTopicsMeta", ctx, topics, ignoreTopicError)
 	ret0, _ := ret[0].(map[string]TopicDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTopicsMeta indicates an expected call of GetTopicsMeta.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) GetTopicsMeta(topics, ignoreTopicError interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockClusterAdminClient)(nil).GetTopicsMeta), topics, ignoreTopicError)
@@ -122,15 +168,30 @@ func (mr *MockClusterAdminClientMockRecorder) GetTopicsMeta(topics, ignoreTopicE
 
 // GetTopicsPartitionsNum mocks base method.
 func (m *MockClusterAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+=======
+func (mr *MockAdminClientMockRecorder) GetTopicsMeta(ctx, topics, ignoreTopicError interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsMeta", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsMeta), ctx, topics, ignoreTopicError)
+}
+
+// GetTopicsPartitionsNum mocks base method.
+func (m *MockAdminClient) GetTopicsPartitionsNum(ctx context.Context, topics []string) (map[string]int32, error) {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTopicsPartitionsNum", topics)
+	ret := m.ctrl.Call(m, "GetTopicsPartitionsNum", ctx, topics)
 	ret0, _ := ret[0].(map[string]int32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetTopicsPartitionsNum indicates an expected call of GetTopicsPartitionsNum.
+<<<<<<< HEAD:pkg/sink/kafka/cluster_admin_client_mock.go
 func (mr *MockClusterAdminClientMockRecorder) GetTopicsPartitionsNum(topics interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockClusterAdminClient)(nil).GetTopicsPartitionsNum), topics)
+=======
+func (mr *MockAdminClientMockRecorder) GetTopicsPartitionsNum(ctx, topics interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTopicsPartitionsNum", reflect.TypeOf((*MockAdminClient)(nil).GetTopicsPartitionsNum), ctx, topics)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/admin_client_mock.go
 }

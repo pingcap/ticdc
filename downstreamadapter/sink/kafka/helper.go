@@ -51,6 +51,9 @@ func (c components) close() {
 	if c.claimCheck != nil {
 		c.claimCheck.Close()
 	}
+	if c.factory != nil {
+		c.factory.Close()
+	}
 }
 
 func newKafkaSinkComponent(
@@ -85,7 +88,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}
@@ -105,6 +108,9 @@ func newKafkaSinkComponent(
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
 	if err != nil {
 		return comp, protocol, err
+	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
 	}
 
 	comp.claimCheck, err = claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)

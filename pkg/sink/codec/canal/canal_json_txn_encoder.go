@@ -64,8 +64,12 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 		if err != nil {
 			return err
 		}
+<<<<<<< HEAD
 		length := len(value) + common.MaxRecordOverhead
 		// For single message that is longer than max-message-bytes, do not send it.
+=======
+		length := j.config.MessageLengthForKeyValue(0, len(value))
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 		if length > j.config.MaxMessageBytes {
 			log.Warn("Single message is too large for canal-json",
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),

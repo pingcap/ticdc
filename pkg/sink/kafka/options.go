@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -40,6 +41,7 @@ const (
 	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
+<<<<<<< HEAD
 
 	// the `max-message-bytes` is set equal to topic's `max.message.bytes`, and is used to check
 	// whether the message is larger than the max size limit. It's found some message pass the message
@@ -47,6 +49,12 @@ const (
 	// the network transmission. so we set the `max-message-bytes` to a smaller value to avoid this problem.
 	// maxMessageBytesOverhead is used to reduce the `max-message-bytes`.
 	maxMessageBytesOverhead = 128
+=======
+	// KafkaClientFranz is the franz-go based Kafka client implementation.
+	KafkaClientFranz = "franz"
+	// KafkaClientSarama is the default Kafka client implementation.
+	KafkaClientSarama = "sarama"
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 )
 
 const (
@@ -115,6 +123,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 }
 
 type urlConfig struct {
+	KafkaClient                  *string `form:"kafka-client"`
 	PartitionNum                 *int32  `form:"partition-num"`
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
@@ -147,6 +156,7 @@ type urlConfig struct {
 
 // options stores user specified configurations
 type options struct {
+	Client          string
 	Topic           string
 	BrokerEndpoints []string
 
@@ -182,8 +192,13 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
+<<<<<<< HEAD
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
+=======
+		Client:             KafkaClientSarama,
+		Version:            "2.4.0",
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxRetry:           defaultMaxRetry,
 		ReplicationFactor:  1,
@@ -263,6 +278,16 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.MaxMessageBytes != nil {
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
+<<<<<<< HEAD
+=======
+	o.MaxBatchedBytes = o.MaxMessageBytes
+	if urlParameter.KafkaClient != nil {
+		o.Client = strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+	}
+	if o.Client != KafkaClientFranz && o.Client != KafkaClientSarama {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka-client %q, only support franz and sarama", o.Client)
+	}
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -564,12 +589,16 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
+<<<<<<< HEAD
 func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin ClusterAdminClient) error {
+=======
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(ctx context.Context, admin AdminClient) error {
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
 
-	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	raw, found, err := admin.GetBrokerConfig(ctx, MinInsyncReplicasConfigName)
 	if err != nil {
 		log.Warn("kafka broker configuration lookup failed, skipping replication factor validation",
 			zap.String("configName", MinInsyncReplicasConfigName),
@@ -623,6 +652,7 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
+<<<<<<< HEAD
 // adjustOptions adjust the `options` and `sarama.Config` by condition.
 func adjustOptions(
 	changefeedID common.ChangeFeedID,
@@ -631,6 +661,15 @@ func adjustOptions(
 	topic string,
 ) error {
 	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+=======
+// adjustOptions adjusts options with Kafka runtime metadata.
+// It overwrites MaxMessageBytes with the final producer message limit derived
+// from the topic or broker configuration.
+func adjustOptions(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, topic string) error {
+	// The topic may not exist yet and will be created later by the topic manager,
+	// so ignore per-topic metadata errors here.
+	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	if err != nil {
 		return err
 	}
@@ -639,6 +678,7 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
+<<<<<<< HEAD
 		// make sure that producer's `MaxMessageBytes` smaller than topic's `max.message.bytes`
 		topicMaxMessageBytesStr, found, err := getTopicConfig(
 			admin, info.Name,
@@ -678,6 +718,11 @@ func adjustOptions(
 		}
 
 		return nil
+=======
+		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, info)
+	} else {
+		adjustNewTopicOptions(ctx, admin, changefeedID, options)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	}
 
 	brokerMessageMaxBytesStr, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
@@ -685,6 +730,7 @@ func adjustOptions(
 		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
 		return err
 	}
+<<<<<<< HEAD
 	if !found {
 		return errors.ErrKafkaAdminAPI.GenWithStack(
 			"Kafka broker configuration %s not found", BrokerMessageMaxBytesConfigName)
@@ -709,19 +755,82 @@ func adjustOptions(
 		options.MaxMessageBytes = maxMessageBytes
 	} else if maxMessageBytes < options.MaxMessageBytes {
 		options.MaxMessageBytes = maxMessageBytes
+=======
+
+	options.MaxBatchedBytes = min(options.MaxBatchedBytes, options.MaxMessageBytes)
+	return nil
+}
+
+func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, info TopicDetail) error {
+	maxMessageBytes, found, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
+	if err != nil || !found {
+		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		maxMessageBytes = options.MaxMessageBytes
+	}
+	options.MaxMessageBytes = maxMessageBytes
+
+	return options.setPartitionNum(changefeedID, info.NumPartitions)
+}
+
+func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID common.ChangeFeedID, options *options) {
+	// when create the topic, `max.message.bytes` is decided by the broker,
+	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
+	messageMaxBytes, found, err := getBrokerMaxMessageBytes(ctx, admin)
+	if err != nil || !found {
+		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
+			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+		messageMaxBytes = options.MaxMessageBytes
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	}
 
 	// topic not exists yet, and user does not specify the `partition-num` in the sink uri.
 	if options.PartitionNum == 0 {
 		options.PartitionNum = defaultPartitionNum
 	}
+<<<<<<< HEAD
 	return nil
+=======
+}
+
+func getTopicMaxMessageBytes(ctx context.Context, admin AdminClient, topic string) (int, bool, error) {
+	raw, found, err := getTopicConfig(ctx, admin, topic, TopicMaxMessageBytesConfigName, BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		return 0, false, err
+	}
+	if !found {
+		return 0, false, nil
+	}
+	maxMessageBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", TopicMaxMessageBytesConfigName)
+	}
+	return maxMessageBytes, true, nil
+}
+
+func getBrokerMaxMessageBytes(ctx context.Context, admin AdminClient) (int, bool, error) {
+	raw, found, err := admin.GetBrokerConfig(ctx, BrokerMessageMaxBytesConfigName)
+	if err != nil {
+		return 0, false, err
+	}
+	if !found {
+		return 0, false, nil
+	}
+	messageMaxBytes, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, errors.WrapError(errors.ErrKafkaAdminAPI, err, "parse-config", BrokerMessageMaxBytesConfigName)
+	}
+	return messageMaxBytes, true, nil
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 }
 
 // getTopicConfig gets topic config by name.
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
+<<<<<<< HEAD
 func getTopicConfig(
 	admin ClusterAdminClient,
 	topicName string,
@@ -729,9 +838,13 @@ func getTopicConfig(
 	brokerConfigName string,
 ) (string, bool, error) {
 	c, found, err := admin.GetTopicConfig(topicName, topicConfigName)
+=======
+func getTopicConfig(ctx context.Context, admin AdminClient, topicName, topicConfigName, brokerConfigName string) (string, bool, error) {
+	c, found, err := admin.GetTopicConfig(ctx, topicName, topicConfigName)
+>>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	if err == nil && found {
 		return c, true, nil
 	}
 
-	return admin.GetBrokerConfig(brokerConfigName)
+	return admin.GetBrokerConfig(ctx, brokerConfigName)
 }
