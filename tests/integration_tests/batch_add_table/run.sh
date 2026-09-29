@@ -15,7 +15,7 @@ function run_with_fast_create_table() {
 
 	run_sql "set global tidb_enable_fast_create_table=on" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-batch-add-table-test-$RANDOM"
 	case $SINK_TYPE in
@@ -56,8 +56,11 @@ function run_with_fast_create_table() {
 	check_table_exists batch_add_table.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	# check the ddl of this table is skipped
 	check_table_not_exists test.t_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
@@ -68,7 +71,7 @@ function run_without_fast_create_table() {
 
 	run_sql "set global tidb_enable_fast_create_table=off" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-batch-add-table-test-$RANDOM"
 	case $SINK_TYPE in
@@ -92,8 +95,11 @@ function run_without_fast_create_table() {
 
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists batch_add_table.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
