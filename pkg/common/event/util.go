@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,21 +63,91 @@ type EventTestHelper struct {
 	domain  *domain.Domain
 	mounter Mounter
 
+<<<<<<< HEAD
+=======
+	originalEnableDistTask bool
+
+	// privateStore reports that the helper owns its store instead of using the
+	// store shared by the helpers of this test binary.
+	privateStore bool
+
+>>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 	tableInfos map[string]*common.TableInfo
 	// each partition table's partition ID, Name -> ID.
 	partitionIDs map[string]map[string]int64
 }
 
+// Bootstrapping a mockstore (session.BootstrapSession) is what makes this helper
+// expensive: it creates and populates the TiDB system tables, which takes
+// seconds. A test binary creates hundreds of helpers, so they share one
+// bootstrapped store. That domain has to stay alive while the helpers are: it
+// owns the DDL worker, and closing it while later helpers still run DDL ends up
+// waiting for a DDL owner that never comes back. Helpers that are alive at the
+// same time (a test that keeps a helper while a subtest creates another one, or
+// parallel tests) get a store of their own instead, because sharing the store
+// means sharing the schemas.
+var (
+	sharedStoreMu sync.Mutex
+	sharedStore   kv.Storage
+	sharedDomain  *domain.Domain
+	// liveHelpers counts the helpers that are not closed yet.
+	liveHelpers int
+)
+
+// takeHelperStore bootstraps the store for a new helper and counts the helper as
+// live. private reports that the store and the domain belong to this helper
+// alone and have to be closed by it.
+func takeHelperStore(t testing.TB, forcePrivate bool) (store kv.Storage, dom *domain.Domain, private bool) {
+	sharedStoreMu.Lock()
+	liveHelpers++
+	first := liveHelpers == 1 && !forcePrivate
+	sharedStoreMu.Unlock()
+
+	if !first {
+		privateStore, err := mockstore.NewMockStore()
+		require.NoError(t, err)
+		privateDomain, err := session.BootstrapSession(privateStore)
+		require.NoError(t, err)
+		return privateStore, privateDomain, true
+	}
+
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedStore == nil {
+		store, err := mockstore.NewMockStore()
+		require.NoError(t, err)
+		sharedStore = store
+	}
+	if sharedDomain == nil {
+		dom, err := session.BootstrapSession(sharedStore)
+		require.NoError(t, err)
+		sharedDomain = dom
+	}
+	return sharedStore, sharedDomain, false
+}
+
 // NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
 func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestHelper {
-	store, err := mockstore.NewMockStore()
-	require.NoError(t, err)
+	return newEventTestHelper(t, tz, false)
+}
+
+// NewEventTestHelperWithPrivateStore creates a SchemaTestHelper with a store of
+// its own. Use it for a test that writes to the system tables or that breaks the
+// store in a way the next helper would notice, because the helpers of a test
+// binary otherwise share one store.
+func NewEventTestHelperWithPrivateStore(t testing.TB) *EventTestHelper {
+	return newEventTestHelper(t, time.Local, true)
+}
+
+func newEventTestHelper(t testing.TB, tz *time.Location, privateStore bool) *EventTestHelper {
+	store, dom, private := takeHelperStore(t, privateStore)
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
 		conf.AlterPrimaryKey = true
 	})
 	session.SetSchemaLease(time.Second)
 	session.DisableStats4Test()
 
+<<<<<<< HEAD
 	domain, err := session.BootstrapSession(store)
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
@@ -89,6 +160,54 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 		mounter:      NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
 		tableInfos:   make(map[string]*common.TableInfo),
 		partitionIDs: make(map[string]map[string]int64),
+=======
+	// EventTestHelper executes TiDB DDL only to synthesize CDC test events.
+	// mockstore does not provide managed dist task nodes, so keep reorg DDLs
+	// off the dist task path and skip the bootstrap DXF loop when failpoints are active.
+	originalEnableDistTask := vardef.EnableDistTask.Load()
+	vardef.EnableDistTask.Store(false)
+	require.NoError(t, failpoint.Enable(disableTiDBDistTaskFailpoint, "return(true)"))
+	defer func() {
+		require.NoError(t, failpoint.Disable(disableTiDBDistTaskFailpoint))
+	}()
+
+	dom.SetStatsUpdating(true)
+	tk := testkit.NewTestKit(t, store)
+
+	helper := &EventTestHelper{
+		t:                      t,
+		tk:                     tk,
+		storage:                store,
+		privateStore:           private,
+		domain:                 dom,
+		mounter:                NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
+		originalEnableDistTask: originalEnableDistTask,
+		tableInfos:             make(map[string]*common.TableInfo),
+		partitionIDs:           make(map[string]map[string]int64),
+>>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
+	}
+	if !private {
+		// A previous helper may have left schemas behind in the shared store,
+		// so start from the schemas a freshly bootstrapped store has.
+		helper.dropUserSchemas()
+	}
+	return helper
+}
+
+// CloseSharedEventTestStore closes the domain and the mock store that the
+// helpers of a test binary share. Both are kept for the whole test binary, so a
+// test binary that checks for leaked goroutines has to close them after all
+// tests finished.
+func CloseSharedEventTestStore() {
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedDomain != nil {
+		sharedDomain.Close()
+		sharedDomain = nil
+	}
+	if sharedStore != nil {
+		sharedStore.Close() //nolint:errcheck
+		sharedStore = nil
 	}
 }
 
@@ -750,8 +869,48 @@ func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 
 // Close closes the helper
 func (s *EventTestHelper) Close() {
+<<<<<<< HEAD
 	s.domain.Close()
 	s.storage.Close() //nolint:errcheck
+=======
+	sharedStoreMu.Lock()
+	liveHelpers--
+	sharedStoreMu.Unlock()
+	if s.privateStore {
+		s.domain.Close()
+		s.storage.Close() //nolint:errcheck
+	}
+	// The domain of the shared store outlives the helpers, see takeHelperStore.
+	vardef.EnableDistTask.Store(s.originalEnableDistTask)
+>>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
+}
+
+// dropUserSchemas removes every schema that a test may have created, so that a
+// helper taking over the shared store sees the schemas of a freshly
+// bootstrapped store.
+func (s *EventTestHelper) dropUserSchemas() {
+	// The session of a fresh helper does not see the schemas yet (its schema
+	// version is not loaded), so enumerate them through the domain infoschema.
+	// A table in one schema may be referenced by a foreign key in another.
+	// All user schemas are discarded here, so allow dropping either one first.
+	s.tk.MustExec("set @@session.foreign_key_checks = 0")
+	defer s.tk.MustExec("set @@session.foreign_key_checks = 1")
+	for _, dbInfo := range s.domain.InfoSchema().AllSchemas() {
+		name := dbInfo.Name.L
+		if isSystemSchema(name) {
+			continue
+		}
+		s.tk.MustExec("drop database if exists `" + name + "`")
+	}
+	s.tk.MustExec("create database if not exists test")
+}
+
+func isSystemSchema(name string) bool {
+	switch strings.ToLower(name) {
+	case "information_schema", "performance_schema", "metrics_schema", "mysql", "sys":
+		return true
+	}
+	return false
 }
 
 func toTableInfosKey(schema, table string) string {

@@ -16,11 +16,13 @@ package eventservice
 import (
 	"testing"
 
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/leakutil"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
+<<<<<<< HEAD
 	opts := []goleak.Option{
 		goleak.IgnoreTopFunction("github.com/pingcap/ticdc/pkg/workerpool.(*worker).run"),
 		goleak.IgnoreTopFunction("sync.runtime_Semacquire"),
@@ -29,4 +31,10 @@ func TestMain(m *testing.M) {
 	}
 
 	leakutil.SetUpLeakTest(m, opts...)
+=======
+	// The event test helpers share one TiDB mock store for the whole test
+	// binary, so close it before the goroutine leak check runs.
+	leakutil.AddCleanup(commonEvent.CloseSharedEventTestStore)
+	leakutil.SetUpLeakTest(m)
+>>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 }
