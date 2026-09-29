@@ -171,7 +171,26 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		newStatus.CheckpointTs = old.CheckpointTs
 	})
 
+<<<<<<< HEAD
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
+=======
+	if newStatus.CheckpointTs < old.CheckpointTs {
+		if len(newStatus.Err) == 0 {
+			return false, config.StateNormal, nil
+		}
+		statusWithMonotonicCheckpoint := *newStatus
+		statusWithMonotonicCheckpoint.CheckpointTs = old.CheckpointTs
+		newStatus = &statusWithMonotonicCheckpoint
+	}
+
+	if newStatus.CheckpointTs >= old.CheckpointTs {
+		// Bootstrap completion survives maintainer replacement until an explicit resume.
+		if old.BootstrapDone && !newStatus.BootstrapDone {
+			statusWithBootstrapDone := *newStatus
+			statusWithBootstrapDone.BootstrapDone = true
+			newStatus = &statusWithBootstrapDone
+		}
+>>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 		c.status.Store(newStatus)
 
 		changed, state, err := c.backoff.checkFailedStatus(newStatus)
@@ -179,7 +198,9 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			return changed, state, err
 		}
 
-		if old.BootstrapDone != newStatus.BootstrapDone {
+		if !old.BootstrapDone && newStatus.BootstrapDone {
+			// Record accepted progress before returning without CheckStatus.
+			c.backoff.checkpointTs = newStatus.CheckpointTs
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))

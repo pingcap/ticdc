@@ -53,6 +53,12 @@ func NewEventRouter(
 
 	rules := make([]Rule, 0, len(ruleConfigs))
 	for _, ruleConfig := range ruleConfigs {
+		// Table routing alone must not select the default MQ dispatchers.
+		if (ruleConfig.TargetSchema != "" || ruleConfig.TargetTable != "") &&
+			ruleConfig.DispatcherRule == "" && ruleConfig.PartitionRule == "" &&
+			ruleConfig.IndexName == "" && len(ruleConfig.Columns) == 0 && ruleConfig.TopicRule == "" {
+			continue
+		}
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, ruleConfig.Matcher)

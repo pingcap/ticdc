@@ -1,0 +1,11 @@
+SELECT 'cte', id FROM cte_view_routed ORDER BY id;
+SELECT 'shadow', id FROM cte_shadow_view_routed ORDER BY id;
+SELECT 'case_qualified', id FROM case_qualified_view_routed ORDER BY id;
+SELECT 'case_table', id FROM case_table_view_routed ORDER BY id;
+SELECT 'case_wildcard', id FROM case_wildcard_view_routed ORDER BY id;
+SELECT 'case_from', id FROM case_from_view_routed ORDER BY id;
+SELECT 'cte_scope', id FROM cte_scope_view_routed ORDER BY id;
+SELECT 'derived_scope', id FROM derived_scope_view_routed ORDER BY id;
+SELECT 'lateral_scope', id FROM lateral_scope_view_routed ORDER BY id;
+SELECT 'lateral_forward_scope', id FROM lateral_forward_scope_view_routed ORDER BY id;
+SELECT 'case_view_dependency', id FROM case_view_dependency_routed ORDER BY id;

@@ -15,6 +15,7 @@ package changefeed
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -110,7 +111,50 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	require.Equal(t, newStatus, cf.GetStatus())
 }
 
+<<<<<<< HEAD
 func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
+=======
+func TestCheckpointRegression(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 200, true)
+
+	regressedStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 150}
+	updated, state, err := cf.UpdateStatus(regressedStatus)
+	require.False(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+
+	retryableErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "retryable error",
+	}
+	regressedStatus = &heartbeatpb.MaintainerStatus{
+		CheckpointTs: 150,
+		Err:          []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err = cf.UpdateStatus(regressedStatus)
+	require.True(t, updated)
+	require.Equal(t, config.StateWarning, state)
+	require.Same(t, retryableErr, err)
+	require.Equal(t, uint64(150), regressedStatus.CheckpointTs)
+	status := cf.GetStatus()
+	require.Equal(t, uint64(200), status.CheckpointTs)
+	require.Len(t, status.Err, 1)
+	require.Same(t, retryableErr, status.Err[0])
+	require.False(t, cf.ShouldRun())
+	require.True(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.isRestarting.Load())
+}
+
+func TestBootstrapDoneFastFail(t *testing.T) {
+>>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -138,7 +182,7 @@ func TestChangefeed_UpdateStatusFastFailWhenBootstrapDoneChanges(t *testing.T) {
 	require.False(t, cf.ShouldRun())
 }
 
-func TestChangefeed_UpdateStatusRetryableErrorWhenBootstrapDoneChanges(t *testing.T) {
+func TestBootstrapDoneRetryableError(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
@@ -327,4 +371,33 @@ func TestChangefeed_GetKeyspaceID(t *testing.T) {
 		info: atomic.NewPointer(info),
 	}
 	require.Equal(t, uint32(1), c2.GetKeyspaceID())
+}
+
+func TestBootstrapRegression(t *testing.T) {
+	for _, targetTs := range []uint64{0, 200} {
+		t.Run(fmt.Sprintf("target %d", targetTs), func(t *testing.T) {
+			info := &config.ChangeFeedInfo{
+				SinkURI: "mysql://localhost:3306", State: config.StateNormal,
+				Config: config.GetDefaultReplicaConfig(), TargetTs: targetTs,
+			}
+			cf := NewChangefeed(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), info, 100, true)
+			cf.UpdateStatus(&heartbeatpb.MaintainerStatus{CheckpointTs: 200, BootstrapDone: true})
+			incoming := &heartbeatpb.MaintainerStatus{CheckpointTs: 200}
+			if targetTs == 0 {
+				incoming.Err = []*heartbeatpb.RunningError{{Code: "CDC:ErrChangefeedRetryable", Message: "retry"}}
+			}
+			changed, state, err := cf.UpdateStatus(incoming)
+			require.True(t, changed)
+			require.True(t, cf.GetStatus().BootstrapDone)
+			require.False(t, incoming.BootstrapDone)
+			if targetTs == 0 {
+				require.Equal(t, config.StateWarning, state)
+				require.Same(t, incoming.Err[0], err)
+				require.False(t, cf.ShouldRun())
+			} else {
+				require.Equal(t, config.StateFinished, state)
+				require.Nil(t, err)
+			}
+		})
+	}
 }
