@@ -163,7 +163,7 @@ func TestEventStoreKeyBounds(t *testing.T) {
 	require.True(t, bytes.HasPrefix(key, lowerBound))
 
 	rowLevelPosition := encodeRowLevelScanPosition(key)
-	require.Equal(t, ScanPosition(key[encodedKeyTxnCommitTsOffset:]), rowLevelPosition)
+	require.Equal(t, ScanPosition(key[encodedKeyTxnCommitTsStart:]), rowLevelPosition)
 	rowLevelLowerBound := encodeRowLevelScanPositionLowerBound(1, 1, rowLevelPosition)
 	require.Less(t, bytes.Compare(key, rowLevelLowerBound), 0)
 

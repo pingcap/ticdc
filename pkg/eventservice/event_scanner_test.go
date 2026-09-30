@@ -1342,9 +1342,6 @@ func TestDMLProcessor(t *testing.T) {
 
 	// Test case 0: create a new DML processor
 	t.Run("CreateNewDMLProcessor", func(t *testing.T) {
-<<<<<<< HEAD
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
-=======
 		originalConfig := config.GetGlobalServerConfig().Clone()
 		cfg := originalConfig.Clone()
 		cfg.DataDir = t.TempDir()
@@ -1353,8 +1350,7 @@ func TestDMLProcessor(t *testing.T) {
 			config.StoreGlobalServerConfig(originalConfig)
 		})
 
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
 		require.Nil(t, processor.currentTxn)
@@ -1556,7 +1552,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKCachesInsertWhenSplitTxnIsBelowSpillThreshold", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -1581,7 +1577,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKSpillsInsertWhenSplitTxnExceedsThreshold", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -1617,7 +1613,7 @@ func TestDMLProcessor(t *testing.T) {
 	})
 
 	t.Run("UpdateThatChangesUKKeepsSpillingAfterLargeTxnResume", func(t *testing.T) {
-		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode, false)
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false, common.DefaultMode)
 		disp := &dispatcherStat{id: dispatcherID}
 		processor.dispatcherStat = disp
 		processor.spillDir = t.TempDir()
@@ -2411,8 +2407,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 		scanner.schemaGetter,
 		stat.filter,
 		stat.info.IsOutputRawChangeEvent(),
-		scanner.mode,
-		stat.info.EnableIgnoreUpdateOnlyColumns())
+		scanner.mode)
 	processor.dispatcherStat = stat
 	scanCtx := &txnScanContext{
 		scanner:   scanner,
@@ -2517,8 +2512,7 @@ func TestScanAndMergeEventsSkipsDeletedTableTxn(t *testing.T) {
 		scanner.schemaGetter,
 		disp.filter,
 		disp.info.IsOutputRawChangeEvent(),
-		scanner.mode,
-		disp.info.EnableIgnoreUpdateOnlyColumns())
+		scanner.mode)
 	processor.dispatcherStat = disp
 	scanCtx := &txnScanContext{
 		scanner:   scanner,

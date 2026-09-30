@@ -152,8 +152,7 @@ func (s *eventScanner) scan(
 		s.schemaGetter,
 		dispatcherStat.filter,
 		dispatcherStat.info.IsOutputRawChangeEvent(),
-		s.mode,
-		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
+		s.mode)
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 
@@ -240,10 +239,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	processor := scanCtx.processor
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-<<<<<<< HEAD
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
-=======
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -810,15 +805,9 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-<<<<<<< HEAD
-	filter filter.Filter
-=======
 	filter         filter.Filter
-	filterContext  filter.DMLFilterContext
 	dispatcherStat *dispatcherStat
 	spillDir       string
-
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
 	// and startTs are fixed for the current transaction.
@@ -877,18 +866,8 @@ func (p *dmlProcessor) startTxn(
 }
 
 func (p *dmlProcessor) commitTxn() error {
-<<<<<<< HEAD
-	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
-		for _, insertRow := range p.insertRowCache {
-			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
-				return err
-			}
-		}
-		p.insertRowCache = make([]*common.RawKVEntry, 0)
-=======
 	if err := p.flushCachedInsertRows(); err != nil {
 		return err
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
 	}
 	p.currentTxn = nil
 	return nil
@@ -899,7 +878,7 @@ func (p *dmlProcessor) flushCachedInsertRows() error {
 		return nil
 	}
 	for _, insertRow := range p.insertRowCache {
-		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter, p.filterContext); err != nil {
+		if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
 			return err
 		}
 	}
@@ -912,7 +891,7 @@ func (p *dmlProcessor) appendInsertRow(rawEvent *common.RawKVEntry) error {
 		log.Panic("no current DML event to append to")
 	}
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
-	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
+	return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 }
 
 // appendRow appends a row to the current DML event.

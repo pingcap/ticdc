@@ -14,7 +14,6 @@
 package eventservice
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -157,83 +156,8 @@ func TestCleanupLargeTxnInsertSpillFiles(t *testing.T) {
 	require.FileExists(t, keepPath)
 }
 
-type xorEncryptionManager struct {
-	encryptKeyspaceID uint32
-	decryptKeyspaceID uint32
-}
-
-type cancelAwareEncryptionManager struct{}
-
-func (*cancelAwareEncryptionManager) EncryptData(
-	ctx context.Context, _ uint32, data []byte,
-) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (*cancelAwareEncryptionManager) DecryptData(
-	ctx context.Context, _ uint32, data []byte,
-) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (m *xorEncryptionManager) EncryptData(
-	ctx context.Context, keyspaceID uint32, data []byte,
-) ([]byte, error) {
-	m.encryptKeyspaceID = keyspaceID
-	return xorBytes(data), nil
-}
-
-func (m *xorEncryptionManager) DecryptData(
-	ctx context.Context, keyspaceID uint32, data []byte,
-) ([]byte, error) {
-	m.decryptKeyspaceID = keyspaceID
-	return xorBytes(data), nil
-}
-
-func xorBytes(data []byte) []byte {
-	result := make([]byte, len(data))
-	for i := range data {
-		result[i] = data[i] ^ 0xff
-	}
-	return result
-}
-
-func TestLargeTxnInsertSpillUsesEncryptionManager(t *testing.T) {
-	const keyspaceID uint32 = 42
-	manager := &xorEncryptionManager{}
-	spill, err := newLargeTxnInsertSpillWithEncryption(t.TempDir(), keyspaceID, manager)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, spill.Cleanup())
-	})
-
-	entry := newTestSpillRawKVEntry(1)
-	encoded := entry.Encode()
-	require.NoError(t, spill.Append(context.Background(), entry))
-
-	onDisk, err := os.ReadFile(spill.file.Path())
-	require.NoError(t, err)
-	require.False(t, bytes.Contains(onDisk, encoded))
-	require.Equal(t, keyspaceID, manager.encryptKeyspaceID)
-
-	reader, err := spill.NewReader()
-	require.NoError(t, err)
-	decoded, err := reader.Next(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, entry, decoded)
-	require.Equal(t, keyspaceID, manager.decryptKeyspaceID)
-	require.NoError(t, reader.Close())
-}
-
 func TestLargeTxnStateUsesOperationContext(t *testing.T) {
-	spill, err := newLargeTxnInsertSpillWithEncryption(
-		t.TempDir(), 42, &cancelAwareEncryptionManager{})
+	spill, err := newLargeTxnInsertSpill(t.TempDir(), 0)
 	require.NoError(t, err)
 	state := &largeTxnScanState{spill: spill}
 	t.Cleanup(func() {

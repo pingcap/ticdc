@@ -398,12 +398,6 @@ func (iter *mockEventIterator) NextWithScanPosition() (*common.RawKVEntry, event
 
 	row := iter.events[0]
 	iter.events = iter.events[1:]
-<<<<<<< HEAD
-	isNewTxn := false
-	if iter.prevCommitTS == 0 || row.StartTs != iter.prevStartTS || row.CRTs != iter.prevCommitTS {
-		isNewTxn = true
-	}
-=======
 	var position eventstore.ScanPosition
 	if len(iter.positions) > 0 {
 		position = iter.positions[0]
@@ -412,8 +406,6 @@ func (iter *mockEventIterator) NextWithScanPosition() (*common.RawKVEntry, event
 		position = encodeMockScanPosition(iter.rowCount)
 	}
 	isNewTxn := iter.prevCommitTS == 0 || row.StartTs != iter.prevStartTS || row.CRTs != iter.prevCommitTS
-
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++

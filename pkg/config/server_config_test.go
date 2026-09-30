@@ -25,51 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-=======
-func TestServerConfigMarshal(t *testing.T) {
-	t.Parallel()
-	conf := GetDefaultServerConfig()
-	conf.Addr = "192.155.22.33:8887"
-	b, err := conf.Marshal()
-	require.NoError(t, err)
-	conf2 := new(ServerConfig)
-	err = conf2.Unmarshal([]byte(b))
-	require.NoError(t, err)
-	require.Equal(t, conf, conf2)
-}
-
-func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
-	t.Parallel()
-
-	configPath := filepath.Join(t.TempDir(), "server.toml")
-	configContent := strings.TrimSpace(`
-enable-legacy-safepoint = true
-`)
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
-
-	cfg := GetDefaultServerConfig()
-	require.False(t, cfg.EnableLegacySafePoint)
-
-	metaData, err := toml.DecodeFile(configPath, cfg)
-	require.NoError(t, err)
-	require.Empty(t, metaData.Undecoded())
-	require.True(t, cfg.EnableLegacySafePoint)
-}
-
-func TestServerConfigClone(t *testing.T) {
+func TestServerConfigLargeTxnThresholdDefault(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig()
 	require.Equal(t, int64(1024*1024), conf.Debug.EventService.LargeTxnThresholdInBytes)
-	conf.Addr = "192.155.22.33:8887"
-	conf.Sorter.SortDir = "/tmp"
-	conf2 := conf.Clone()
-	require.Equal(t, conf, conf2)
-	conf2.Sorter.SortDir = "/tmp/sorter"
-	require.Equal(t, "/tmp", conf.Sorter.SortDir)
 }
 
->>>>>>> 33e394952 (eventservice: split large scanned transactions (#5511))
 func TestServerConfigExposeEncryptionAtRoot(t *testing.T) {
 	t.Parallel()
 
