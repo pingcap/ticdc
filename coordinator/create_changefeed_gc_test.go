@@ -122,22 +122,11 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 		KeyspaceID:   1,
 	}
 
-<<<<<<< HEAD
 	gcManager.EXPECT().
 		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
-=======
-	if kerneltype.IsClassic() {
-		gcManager.EXPECT().
-			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
-			Return(nil).Times(1)
-	} else {
-		gcManager.EXPECT().
-			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
-			Return(nil).Times(1)
-	}
+		Return(nil).Times(1)
 	gcManager.EXPECT().
-		CheckStaleCheckpointTs(info.KeyspaceID, cfID, info.StartTs).
->>>>>>> 8334f62ad (coordinator: enforce gc ttl for stalled changefeeds (#6206))
+		CheckStaleCheckpointTs(cfID, info.StartTs).
 		Return(nil).Times(1)
 
 	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
@@ -174,18 +163,12 @@ func TestUpdateGCSafepointChecksFailedChangefeedGCTTL(t *testing.T) {
 	}
 	changefeedDB.AddStoppedChangefeed(changefeed.NewChangefeed(cfID, info, checkpointTs, false))
 
-	if kerneltype.IsClassic() {
-		gcManager.EXPECT().
-			TryUpdateServiceGCSafepoint(gomock.Any(), checkpointTs-1).
-			Return(nil).Times(1)
-	} else {
-		gcManager.EXPECT().
-			TryUpdateKeyspaceGCBarrier(gomock.Any(), info.KeyspaceID, cfID.Keyspace(), checkpointTs-1).
-			Return(nil).Times(1)
-	}
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafepoint(gomock.Any(), checkpointTs-1).
+		Return(nil).Times(1)
 	ttlErr := errors.ErrGCTTLExceeded.GenWithStackByArgs(checkpointTs, cfID)
 	gcManager.EXPECT().
-		CheckStaleCheckpointTs(info.KeyspaceID, cfID, checkpointTs).
+		CheckStaleCheckpointTs(cfID, checkpointTs).
 		Return(ttlErr).Times(1)
 
 	require.NoError(t, co.updateGCSafepoint(context.Background()))
@@ -318,7 +301,7 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 			Return(nil).
 			Times(1)
 		gcManager.EXPECT().
-			CheckStaleCheckpointTs(newInfo.KeyspaceID, newID, newInfo.StartTs).
+			CheckStaleCheckpointTs(newID, newInfo.StartTs).
 			Return(nil).
 			Times(1)
 
