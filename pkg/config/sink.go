@@ -805,6 +805,14 @@ func CheckUseTableIDAsPathCompatibility(
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
+	dispatchRules := s.DispatchRules[:0]
+	for _, rule := range s.DispatchRules {
+		if rule != nil {
+			dispatchRules = append(dispatchRules, rule)
+		}
+	}
+	s.DispatchRules = dispatchRules
+
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
 		return err
 	}

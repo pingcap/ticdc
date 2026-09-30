@@ -136,6 +136,21 @@ func TestNewRouter(t *testing.T) {
 		require.Empty(t, router.rules)
 	})
 
+	t.Run("nil rules are skipped", func(t *testing.T) {
+		t.Parallel()
+
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
+			nil,
+			{
+				Matcher:      []string{"db1.*"},
+				TargetSchema: "archive",
+				TargetTable:  TablePlaceholder,
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, router.rules, 1)
+	})
+
 	t.Run("invalid matcher returns error", func(t *testing.T) {
 		t.Parallel()
 
