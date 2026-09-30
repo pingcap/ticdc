@@ -64,13 +64,9 @@ func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bo
 	return changefeedDisplayName, true
 }
 
-func maskSinkURIForError(sinkURI string) string {
-	return util.MaskSensitiveDataInURIForError(sinkURI)
-}
-
 func genSinkURIInvalidError(sinkURI string, err error) error {
 	return errors.WrapError(
-		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(sinkURI))
 }
 
 // CreateChangefeed handles create changefeed request,
@@ -165,7 +161,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -312,7 +308,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
 		return
 	}
 
@@ -466,7 +462,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	if config.IsMQScheme(scheme) {
 		topic, err = helper.GetTopic(sinkURIParsed)
 		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfg.SinkURI)))
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfg.SinkURI)))
 			return
 		}
 	}
@@ -573,21 +569,22 @@ func CfInfoToAPIModel(
 		}
 	}
 
-	sinkURI, err := util.MaskSinkURI(info.SinkURI)
-	if err != nil {
-		log.Error("failed to mask sink URI", zap.Error(err))
+	var replicaConfig *ReplicaConfig
+	if info.Config != nil {
+		replicaConfig = ToAPIReplicaConfig(info.Config)
+		replicaConfig.maskSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
 		Keyspace:       info.ChangefeedID.Keyspace(),
-		SinkURI:        sinkURI,
+		SinkURI:        util.MaskSensitiveDataInURI(info.SinkURI),
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
 		TargetTs:       info.TargetTs,
 		AdminJobType:   info.AdminJobType,
-		Config:         ToAPIReplicaConfig(info.Config),
+		Config:         replicaConfig,
 		State:          info.State,
 		Error:          runningError,
 		CreatorVersion: info.CreatorVersion,
@@ -862,7 +859,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(cfInfo.SinkURI)))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(cfInfo.SinkURI)))
 				return
 			}
 		}
@@ -1022,7 +1019,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
@@ -1066,7 +1063,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, util.MaskSensitiveDataInURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 
