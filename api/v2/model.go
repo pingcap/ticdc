@@ -371,6 +371,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	if c.Sink != nil {
 		var dispatchRules []*config.DispatchRule
 		for _, rule := range c.Sink.DispatchRules {
+			if rule == nil {
+				continue
+			}
 			dispatchRules = append(dispatchRules, &config.DispatchRule{
 				Matcher:        rule.Matcher,
 				DispatcherRule: "",
@@ -765,6 +768,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	if cloned.Sink != nil {
 		var dispatchRules []*DispatchRule
 		for _, rule := range cloned.Sink.DispatchRules {
+			if rule == nil {
+				continue
+			}
 			dispatchRules = append(dispatchRules, &DispatchRule{
 				Matcher:       rule.Matcher,
 				PartitionRule: rule.PartitionRule,

@@ -113,6 +113,18 @@ func TestReplicaConfigConversion(t *testing.T) {
 			KafkaConfig: &KafkaConfig{
 				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
 			},
+			DispatchRules: []*DispatchRule{
+				nil,
+				{
+					Matcher:      []string{"src.orders"},
+					TargetSchema: "dst_orders",
+				},
+				nil,
+				{
+					Matcher:      []string{"src.customers"},
+					TargetSchema: "dst_customers",
+				},
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -155,6 +167,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, []*config.DispatchRule{
+		{
+			Matcher:      []string{"src.orders"},
+			TargetSchema: "dst_orders",
+		},
+		{
+			Matcher:      []string{"src.customers"},
+			TargetSchema: "dst_customers",
+		},
+	}, internalCfg.Sink.DispatchRules)
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -193,6 +215,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, util.GetOrZero(defaultCfg.CaseSensitive), util.GetOrZero(internalCfgNil.CaseSensitive))
 
 	// Test case 3: Conversion back to API config
+	internalCfg.Sink.DispatchRules = append(
+		[]*config.DispatchRule{nil}, internalCfg.Sink.DispatchRules...)
+	internalCfg.Sink.DispatchRules = append(internalCfg.Sink.DispatchRules, nil)
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
@@ -210,6 +235,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, []*DispatchRule{
+		{
+			Matcher:      []string{"src.orders"},
+			TargetSchema: "dst_orders",
+		},
+		{
+			Matcher:      []string{"src.customers"},
+			TargetSchema: "dst_customers",
+		},
+	}, apiCfgBack.Sink.DispatchRules)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
