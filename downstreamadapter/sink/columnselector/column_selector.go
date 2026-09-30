@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	filter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
@@ -75,10 +74,10 @@ type ColumnSelectors struct {
 }
 
 // New return a column selectors
-func New(sinkConfig *config.SinkConfig) (*ColumnSelectors, error) {
+func New(sinkConfig *config.SinkConfig, caseSensitive bool) (*ColumnSelectors, error) {
 	selectors := make([]*ColumnSelector, 0, len(sinkConfig.ColumnSelectors))
 	for _, r := range sinkConfig.ColumnSelectors {
-		selector, err := newColumnSelector(r, util.GetOrZero(sinkConfig.CaseSensitive))
+		selector, err := newColumnSelector(r, caseSensitive)
 		if err != nil {
 			return nil, err
 		}

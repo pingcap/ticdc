@@ -56,3 +56,56 @@ func TestCSVBatchDecoder(t *testing.T) {
 	_, hasNext := decoder.HasNext()
 	require.False(t, hasNext)
 }
+<<<<<<< HEAD
+=======
+
+func TestCSVBatchDecoderWithColumnSelector(t *testing.T) {
+	csvData := `"I","t","test",433305438660591626,1,"visible-value"
+`
+	ctx := context.Background()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	createTableDDL := helper.DDL2Event(
+		"create table test.t(id int primary key, visible varchar(255), secret varchar(255))")
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.t"}, Columns: []string{"id", "visible"}},
+		},
+	}, false)
+	require.NoError(t, err)
+
+	codecConfig := &common.Config{
+		Delimiter:       ",",
+		Quote:           "\"",
+		Terminator:      "\n",
+		NullString:      "\\N",
+		IncludeCommitTs: true,
+	}
+	decoder, err := NewDecoderWithColumnSelector(
+		ctx,
+		codecConfig,
+		createTableDDL.TableInfo,
+		[]byte(csvData),
+		selectors.GetForTableInfo(createTableDDL.TableInfo),
+	)
+	require.NoError(t, err)
+
+	tp, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, tp)
+
+	event := decoder.NextDMLMessage().ToDMLEvent()
+	require.Len(t, event.TableInfo.GetColumns(), 2)
+	require.Equal(t, "id", event.TableInfo.GetColumns()[0].Name.O)
+	require.Equal(t, "visible", event.TableInfo.GetColumns()[1].Name.O)
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(1), row.Row.GetInt64(0))
+	require.Equal(t, "visible-value", string(row.Row.GetBytes(1)))
+
+	_, hasNext = decoder.HasNext()
+	require.False(t, hasNext)
+}
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))

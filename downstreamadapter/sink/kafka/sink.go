@@ -74,7 +74,15 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
+<<<<<<< HEAD
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+=======
+var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
+	return createSaramaFactory()
+}
+
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
@@ -102,12 +110,17 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer claimCheck.Close()
 
+<<<<<<< HEAD
 	isAvroLike := protocol == config.ProtocolAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+=======
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	if _, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, false, isAvroLike); err != nil {
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 		return err
 	}
 
-	if _, err = columnselector.New(sinkConfig); err != nil {
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 
@@ -135,9 +148,13 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
+<<<<<<< HEAD
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+=======
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
