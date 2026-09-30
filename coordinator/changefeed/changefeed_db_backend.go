@@ -43,6 +43,9 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
+	// FinishInit clears the initial bootstrap marker for the given
+	// incarnation and epoch. Nil means the owner changed or the task was removed.
+	FinishInit(ctx context.Context, id common.ChangeFeedID, epoch uint64) (*config.ChangeFeedInfo, error)
 	// ResumeChangefeed persists the resumed status with a new owner epoch.
 	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error)
 	// BumpChangefeedEpoch is the low-level ownership boundary used before a
