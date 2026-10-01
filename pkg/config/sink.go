@@ -95,6 +95,10 @@ const (
 	// to send all tables bootstrap message at changefeed start.
 	DefaultSendAllBootstrapAtStart = false
 
+	// DefaultDebeziumOutputOldValue is the default value of whether
+	// to output the old value in debezium protocol messages.
+	DefaultDebeziumOutputOldValue = true
+
 	// DefaultMaxReconnectToPulsarBroker is the default max reconnect times to pulsar broker.
 	// The pulsar client uses an exponential backoff with jitter to reconnect to the broker.
 	// Based on test, when the max reconnect times is 3,
@@ -1166,6 +1170,9 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text

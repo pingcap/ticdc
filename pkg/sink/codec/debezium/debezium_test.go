@@ -14,6 +14,7 @@
 package debezium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -206,4 +207,153 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Len(messages, 1)
 	s.requireDebeziumJSONEq(dataDbzOutput, messages[0].Value)
 	s.requireDebeziumJSONEq(keyDbzOutput, messages[0].Key)
+}
+
+func TestEncodeStartTsInSource(t *testing.T) {
+	// The field is emitted when debezium-include-start-ts is enabled,
+	// independent of enable-tidb-extension.
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.DebeziumIncludeStartTs = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+	dec.UseNumber()
+	var value map[string]any
+	require.NoError(t, dec.Decode(&value))
+	payload := value["payload"].(map[string]any)
+	source := payload["source"].(map[string]any)
+	startTs, err := source["start_ts"].(json.Number).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(5), startTs)
+
+	// The source schema declares start_ts under the same switch, so
+	// schema-validated consumers can see it without enable-tidb-extension.
+	schema := value["schema"].(map[string]any)
+	sourceSchema := schemaFieldsByName(t, schema, "source")
+	require.NotNil(t, sourceSchema)
+	require.NotNil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
+
+	// round-trip: decoding restores the true start ts. The TiCDC-side decoder
+	// requires enable-tidb-extension: it relies on the per-column tidb_type in
+	// the schema to reconstruct column types, so the encoded message must
+	// carry the extension fields as well.
+	cfg2 := common.NewConfig(config.ProtocolDebezium)
+	cfg2.DebeziumIncludeStartTs = true
+	cfg2.EnableTiDBExtension = true
+	cfg2.TimeZone = time.UTC
+	encoder2 := NewBatchEncoder(cfg2, "dbserver1")
+	require.NoError(t, encoder2.AppendRowChangedEvent(context.Background(), "", rowEvent))
+	messages2 := encoder2.Build()
+	require.Len(t, messages2, 1)
+
+	decoder := NewDecoder(cfg2, 0, nil)
+	decoder.AddKeyValue(messages2[0].Key, messages2[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	require.Equal(t, uint64(5), decoded.GetStartTs())
+}
+
+func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
+	// A message produced without debezium-include-start-ts (the pre-feature
+	// format) has no start_ts in the source block; decoding it must fall back
+	// to commit_ts, keeping the old behavior.
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true // required to decode the message back
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+	dec.UseNumber()
+	var value map[string]any
+	require.NoError(t, dec.Decode(&value))
+	payload := value["payload"].(map[string]any)
+	source := payload["source"].(map[string]any)
+	require.NotContains(t, source, "start_ts")
+	schema := value["schema"].(map[string]any)
+	sourceSchema := schemaFieldsByName(t, schema, "source")
+	require.NotNil(t, sourceSchema)
+	require.Nil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
+	require.NotEqual(t, uint64(5), decoded.GetStartTs())
+}
+
+func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.DebeziumIncludeStartTs = true
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	for _, tc := range []struct {
+		name    string
+		startTs json.Number
+	}{
+		{name: "zero", startTs: json.Number("0")},
+		{name: "negative", startTs: json.Number("-1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+			dec.UseNumber()
+			var value map[string]any
+			require.NoError(t, dec.Decode(&value))
+			payload := value["payload"].(map[string]any)
+			source := payload["source"].(map[string]any)
+			source["start_ts"] = tc.startTs
+			valueBytes, err := json.Marshal(value)
+			require.NoError(t, err)
+
+			decoder := NewDecoder(cfg, 0, nil)
+			decoder.AddKeyValue(messages[0].Key, valueBytes)
+			messageType, hasNext := decoder.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
+		})
+	}
+}
+
+// schemaFieldsByName returns the sub-schema object of a field inside a Debezium
+// struct schema, or nil when the field is not declared.
+func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[string]any {
+	fields, ok := schema["fields"].([]any)
+	require.True(t, ok)
+	for _, f := range fields {
+		fm := f.(map[string]any)
+		if fm["field"] == name {
+			return fm
+		}
+	}
+	return nil
 }
