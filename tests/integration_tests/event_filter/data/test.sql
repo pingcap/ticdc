@@ -153,3 +153,21 @@ INSERT INTO filtered_like_src.t_src_like VALUES (1, 100);
 
 CREATE TABLE event_filter.t_like_from_filtered LIKE filtered_like_src.t_src_like;
 INSERT INTO event_filter.t_like_from_filtered VALUES (1, 200);
+
+-- The event filter of t_fk_child is triggered by the ddl below, and the
+-- changefeed must keep replicating it, see
+-- https://github.com/pingcap/ticdc/issues/6275 .
+CREATE TABLE t_fk_parent (
+    id INT PRIMARY KEY
+);
+CREATE TABLE t_fk_child (
+    id INT PRIMARY KEY,
+    b INT,
+    INDEX idx_b (b),
+    CONSTRAINT fk_child FOREIGN KEY (b) REFERENCES t_fk_parent (id)
+);
+INSERT INTO t_fk_parent VALUES (1);
+INSERT INTO t_fk_child VALUES (1, 1);
+ALTER TABLE t_fk_child DROP FOREIGN KEY fk_child;
+INSERT INTO t_fk_parent VALUES (2);
+INSERT INTO t_fk_child VALUES (2, 2);
