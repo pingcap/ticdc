@@ -219,7 +219,7 @@ func GetBlockedTables(
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
-		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionAlterIndexVisibility,
+		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionModifyTableComment, timodel.ActionAlterIndexVisibility,
 		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
