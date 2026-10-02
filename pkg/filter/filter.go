@@ -71,6 +71,9 @@ type Filter interface {
 	ShouldIgnoreSchema(schema string) bool
 	// IsEligibleTable returns true if the table is eligible to be replicated.
 	IsEligibleTable(tableInfo *common.TableInfo) bool
+	// IsForceReplicateEnabled reports whether tables without a primary key or
+	// a non-null unique key are eligible for replication.
+	IsForceReplicateEnabled() bool
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
 	Verify(tableInfos []*common.TableInfo) error
@@ -217,6 +220,10 @@ func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
 		return true
 	}
 	return tableInfo.IsEligible(f.forceReplicate)
+}
+
+func (f *filter) IsForceReplicateEnabled() bool {
+	return f.forceReplicate
 }
 
 func (f *filter) shouldIgnoreStartTs(ts uint64) bool {

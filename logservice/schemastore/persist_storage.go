@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -360,20 +361,49 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 	return store.getTableInfo(ts)
 }
 
-func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+// getTableInfoAtTs reads the table schema at ts without
+// reconstructing every retained version for tables without local dispatchers.
+func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.TableInfo, error) {
 	p.mu.RLock()
-	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
+		store.waitTableInfoInitialized()
 		return store.getTableInfo(ts)
 	}
-	p.mu.RUnlock()
-	// build a temp store to get table info
-	store := newEmptyVersionedTableInfoStore(tableID)
-	if err := p.buildVersionedTableInfoStore(store); err != nil {
-		return nil, err
+	gcTs := p.gcTs
+	if ts < gcTs {
+		p.mu.RUnlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts, gcTs)
 	}
-	return store.getTableInfo(ts)
+	// Capture the disk snapshot, GC timestamp and history together. History entries
+	// are append-only and GC only reslices them, so reading this prefix does not
+	// require copying the entire history while concurrent appends or GC proceed.
+	storageSnap := p.db.NewSnapshot()
+	history := p.tablesDDLHistory[tableID]
+	end := sort.Search(len(history), func(i int) bool { return history[i] > ts })
+	history = history[:end]
+	p.mu.RUnlock()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
+
+	for _, version := range slices.Backward(history) {
+		event := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
+		handler := allDDLHandlers[model.ActionType(event.Type)]
+		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)
+		if tableInfo != nil {
+			return tableInfo, nil
+		}
+		if deleted {
+			return nil, &TableDeletedError{}
+		}
+		// For example, CREATE TABLE LIKE is recorded for the referenced table,
+		// but does not change that table's schema.
+	}
+	if tableInfo := readTableInfoInKVSnapWithEncryption(storageSnap, tableID, gcTs, p.encryptionManager, p.keyspaceID); tableInfo != nil {
+		return tableInfo, nil
+	}
+	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
 }
 
 // TODO: this may consider some shouldn't be send ddl, like create table, does it matter?
@@ -501,9 +531,14 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
+<<<<<<< HEAD
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
+=======
+			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
+>>>>>>> cf33e2a9d ( schemastore: fix replication when DDL makes a table eligible (#6254))
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -727,10 +762,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
-	// TODO: do we have a better way to do this?
-	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		// ExtraTableInfo is the normal table info before exchange
-		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
+	if handler.enrichPersistedDDLEventFunc != nil {
+		if err := handler.enrichPersistedDDLEventFunc(p.getTableInfoAtTs, &ddlEvent); err != nil {
+			return err
+		}
 	}
 
 	// Note: need write ddl event to disk before update ddl history,
@@ -851,9 +886,8 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
-// for the corresponding dispatcher.
-// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
+// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
