@@ -24,9 +24,7 @@ import (
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
 	"workload/schema"
-	pbank2 "workload/schema/bank2"
 	psysbench "workload/schema/sysbench"
-	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
 
 // updateTask defines a task for updating data
@@ -159,27 +157,17 @@ func (app *WorkloadApp) processUpdateTask(conn *sql.Conn, task *updateTask) (uin
 // executeUpdate performs the actual update operation based on workload type
 func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	switch app.Config.WorkloadType {
-	case bank2:
-		return app.executeBank2Update(conn, task)
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
-	case wideTableWithJSON:
-		return app.executeWideTableWithJSONUpdate(conn, task)
+	case bank2, wideTableWithJSON, contentMetadataWide:
+		return app.executeUpdateWithValues(conn, task)
 	default:
 		return app.executeRegularUpdate(conn, task)
 	}
 }
 
-// executeBank2Update handles updates specific to bank2 workload
-func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task *updateTask) (sql.Result, error) {
-	task.UpdateOption.Batch = 1
-	updateSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
-	task.generatedSQL = updateSQL
-	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
-}
-
-func (app *WorkloadApp) executeWideTableWithJSONUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
-	updateSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
+func (app *WorkloadApp) executeUpdateWithValues(conn *sql.Conn, task *updateTask) (sql.Result, error) {
+	updateSQL, values := app.Workload.(schema.UpdateValuesWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
 	task.generatedSQL = updateSQL
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }
