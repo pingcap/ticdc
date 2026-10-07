@@ -414,6 +414,7 @@ func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			broker, _, _, _ := newEventBrokerForTest()
 			broker.close()
+			broker.done = make(chan struct{})
 
 			queue := make(chan scanTask, 1)
 			broker.taskChan[0] = queue
@@ -464,6 +465,49 @@ func TestNotifyQueueFullWaitsForCapacity(t *testing.T) {
 			require.Empty(t, queue)
 		})
 	}
+}
+
+func TestNotifyQueueFullReturnsOnCancellation(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	brokerDone := make(chan struct{})
+	broker.done = brokerDone
+
+	queue := make(chan scanTask, 1)
+	broker.taskChan[0] = queue
+	queue <- nil
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.startTs = 100
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+
+	done := make(chan struct{})
+	go func() {
+		broker.onNotify(disp, 200, 0)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		disp.scanMu.Lock()
+		defer disp.scanMu.Unlock()
+		return disp.scanState == dispatcherScanQueued
+	}, time.Second, time.Millisecond)
+	close(brokerDone)
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	disp.scanMu.Lock()
+	require.Equal(t, dispatcherScanIdle, disp.scanState)
+	disp.scanMu.Unlock()
+	require.Len(t, queue, 1)
 }
 
 func TestInterruptedScanQueueFullRecoversOnNextNotify(t *testing.T) {

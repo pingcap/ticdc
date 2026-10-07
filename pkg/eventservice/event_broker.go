@@ -100,6 +100,7 @@ type eventBroker struct {
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
+	done   <-chan struct{}
 	g      *errgroup.Group
 
 	// metricsCollector handles all metrics collection and reporting
@@ -157,6 +158,7 @@ func newEventBroker(
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
 		cancel:                  cancel,
+		done:                    ctx.Done(),
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
@@ -1113,7 +1115,15 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 
 	// Only the external EventStore notify path may wait for capacity. Scan workers
 	// use requestScan so that they never block on their own queue.
-	c.taskChan[d.scanWorkerIndex] <- d
+	select {
+	case c.taskChan[d.scanWorkerIndex] <- d:
+	case <-c.done:
+		d.scanMu.Lock()
+		if d.scanState == dispatcherScanQueued {
+			d.scanState = dispatcherScanIdle
+		}
+		d.scanMu.Unlock()
+	}
 }
 
 func (c *eventBroker) requestScan(d *dispatcherStat) {
