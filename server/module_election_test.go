@@ -14,10 +14,13 @@
 package server
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,4 +45,37 @@ func TestCoordinatorSchedulerSettingsUsesCapturedConfig(t *testing.T) {
 	maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings(cfg.Debug.Scheduler)
 	require.Equal(t, 3, maxTaskConcurrency)
 	require.Equal(t, 22*time.Second, checkBalanceInterval)
+}
+
+func TestRunLogCoordinatorStopsWhenNodeStartsDraining(t *testing.T) {
+	started := make(chan struct{})
+	e := &elector{svr: &server{
+		info:     &node.Info{ID: "node-a"},
+		liveness: liveness.CaptureAlive,
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- e.runLogCoordinator(ctx, func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("log coordinator did not start")
+	}
+	require.True(t, e.svr.liveness.Store(liveness.CaptureDraining))
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("log coordinator did not stop after the node started draining")
+	}
 }
