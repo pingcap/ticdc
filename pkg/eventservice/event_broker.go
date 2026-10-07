@@ -48,6 +48,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
+	defaultLargeTxnCleanupRetryInterval        = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
@@ -78,6 +79,10 @@ type eventBroker struct {
 
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
+
+	// dispatcherStat -> struct{}, retains removed/replaced dispatchers whose
+	// large transaction spill cleanup needs another attempt.
+	pendingLargeTxnCleanup sync.Map
 
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
@@ -188,6 +193,10 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
+	g.Go(func() error {
+		return c.runLargeTxnCleanupWorker(ctx, defaultLargeTxnCleanupRetryInterval)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
@@ -281,8 +290,9 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
 	// Can't send resolvedTs if there was a interrupted scan task happened before.
-	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
-	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
+	// A non-zero scan-progress start-ts indicates that there was an interrupted scan task before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval ||
+		d.loadScanProgress().txnStartTs != 0 {
 		return
 	}
 	watermark := d.sentResolvedTs.Load()
@@ -405,17 +415,18 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
-// getScanTaskDataRange determines the valid data range for scanning a given task.
+// getScanTaskRequest determines the valid range and resume cursor for a scan task.
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
-// If no valid range is found, it returns an empty DataRange.
-func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
-	// 1. Get the data range of the dispatcher.
-	dataRange, needScan := task.getDataRange()
+// If no valid range is found, it returns an empty ScanRequest.
+func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRequest) {
+	// 1. Get the range and resume cursor of the dispatcher.
+	request, needScan := task.getScanRequest()
 	if !needScan {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
+	dataRange := &request.Range
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
@@ -426,7 +437,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, task.info.GetTableSpan().TableID)
 	if err != nil {
 		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 	commitTsEndBeforeWindow := dataRange.CommitTsEnd
@@ -482,9 +493,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 
-<<<<<<< HEAD
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-=======
 	hasResumeCursor := request.Cursor.TxnStartTs != 0 || len(request.Cursor.Position) != 0
 	// A published cursor at C came from an earlier scan whose DDL and received
 	// resolved-ts bounds had already reached C. Since those bounds do not regress,
@@ -502,25 +510,19 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		canResumeAtStart := dataRange.CommitTsEnd == dataRange.CommitTsStart &&
 			hasResumeCursor
 		if canResumeAtStart || task.hasPendingLargeTxnState() {
-			result := scanTaskRequestResult{needScan: true, request: request}
-			if task.changefeedStat.lowLatencyMode {
-				result.schemaBlocked = ddlState.ResolvedTs < receivedResolvedTs &&
-					dataRange.CommitTsEnd == ddlState.ResolvedTs
-				result.schemaBlockedUntilTs = ddlState.ResolvedTs
-			}
-			return result
+			return true, request
 		}
->>>>>>> 8f7a22bbe (eventservice: keep transaction cursor inside scan window (#6040))
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
 		c.sendSignalResolvedTs(task)
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
 
 	// 3. Check whether there is any events in the data range
-	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
+	// Note: target range resumes after request.Cursor inside
+	// (dataRange.CommitTsStart, dataRange.CommitTsEnd].
 	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
 	// it is difficult to determine whether any txn events with a commitTs of `dataRange.CommitTsStart` remain unscanned.
 	// because multiple transactions may have the same commit ts.
@@ -531,9 +533,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
-		return false, common.DataRange{}
+		return false, eventstore.ScanRequest{}
 	}
-	return true, dataRange
+	return true, request
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
@@ -563,7 +565,7 @@ func (c *eventBroker) scanReady(task scanTask) bool {
 
 	c.sendHandshakeIfNeed(task)
 
-	ok, _ := c.getScanTaskDataRange(task)
+	ok, _ := c.getScanTaskRequest(task)
 	return ok
 }
 
@@ -662,6 +664,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			c.pushTask(task, false)
 		}
 	}()
+	scanCtx, finishScan := task.beginScan(ctx)
+	defer finishScan()
 
 	var (
 		remoteID     = node.ID(task.info.GetServerID())
@@ -682,7 +686,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	needScan, dataRange := c.getScanTaskDataRange(task)
+	needScan, request := c.getScanTaskRequest(task)
 	if !needScan {
 		return
 	}
@@ -744,17 +748,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
-	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
 	if interrupted {
 		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
+		if task.isRemoved.Load() {
+			return
+		}
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
@@ -804,7 +811,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
-	task.info.GetMode()
+	if progress.valid {
+		task.updateScanRangeWithPosition(
+			progress.txnCommitTs,
+			progress.txnStartTs,
+			progress.rowLevelScanPosition,
+		)
+	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
@@ -1104,7 +1117,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Error(err),
 		)
 		// Mark removed to avoid processing notifications before unregister completes.
-		dispatcher.isRemoved.Store(true)
+		dispatcher.markRemoved()
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1141,7 +1154,13 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
-	stat.isRemoved.Store(true)
+	stat.markRemoved()
+	if err := c.cleanupLargeTxnState(stat); err != nil {
+		log.Warn("cleanup large txn state failed when removing dispatcher, scheduled retry",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", id),
+			zap.Error(err))
+	}
 
 	if isTableTriggerDispatcher {
 		c.tableTriggerDispatchers.Delete(id)
@@ -1211,10 +1230,15 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		return nil
 	}
 
-	// Mark the old dispatcher as removed.
-	// No need to worry that the old dispatcher is still scanning,
-	// because its data will be filtered by event collector because of stale epoch.
-	oldStat.isRemoved.Store(true)
+	// Mark the old dispatcher as removed and cancel its scan before cleaning up
+	// resources shared with that scan.
+	oldStat.markRemoved()
+	if err := c.cleanupLargeTxnState(oldStat); err != nil {
+		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Error(err))
+	}
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
@@ -1264,7 +1288,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 			return nil
 		}
-		oldStat.isRemoved.Store(true)
+		oldStat.markRemoved()
+		if err := c.cleanupLargeTxnState(oldStat); err != nil {
+			log.Warn("cleanup large txn state failed when retrying dispatcher reset, scheduled retry",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Error(err))
+		}
 	}
 
 	log.Info("reset dispatcher",
@@ -1281,6 +1311,41 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 
 	return nil
+}
+
+func (c *eventBroker) cleanupLargeTxnState(stat *dispatcherStat) error {
+	err := stat.cleanupLargeTxnState()
+	if err != nil {
+		c.pendingLargeTxnCleanup.Store(stat, struct{}{})
+		return err
+	}
+	c.pendingLargeTxnCleanup.Delete(stat)
+	return nil
+}
+
+func (c *eventBroker) retryPendingLargeTxnCleanup() {
+	c.pendingLargeTxnCleanup.Range(func(key, _ any) bool {
+		stat := key.(*dispatcherStat)
+		if err := stat.cleanupLargeTxnState(); err == nil {
+			c.pendingLargeTxnCleanup.Delete(stat)
+		}
+		return true
+	})
+}
+
+func (c *eventBroker) runLargeTxnCleanupWorker(
+	ctx context.Context, interval time.Duration,
+) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.retryPendingLargeTxnCleanup()
+		}
+	}
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {

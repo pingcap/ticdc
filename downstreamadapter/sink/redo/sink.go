@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -181,6 +182,11 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		})
 	}
 	s.logBuffer.Push(events...)
+}
+
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.dmlWriter.SetWriteGate(gate)
+	s.ddlWriter.SetWriteGate(gate)
 }
 
 func (s *Sink) IsNormal() bool {

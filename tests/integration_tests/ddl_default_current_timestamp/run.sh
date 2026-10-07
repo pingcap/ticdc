@@ -79,7 +79,7 @@ function run() {
 	# following DDL must be applied by `cdc redo apply`.
 	redo_start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$CUR/conf/server.toml" --logsuffix redo
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --config "$CUR/conf/server.toml" --logsuffix redo
 	cdc_cli_changefeed create --start-ts=$redo_start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" -c "test"
 
 	run_sql "SET time_zone = '${TIME_ZONE}'; SET @@timestamp = 1000000004.222222; ALTER TABLE ${DB_NAME}.t_fp ADD COLUMN redo_c DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -90,6 +90,8 @@ function run() {
 	ensure 100 check_redo_resolved_ts test $current_tso $storage_path $tmp_download_path/meta
 
 	export GO_FAILPOINTS=''
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "redo"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	down_redo_col_count=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 -Nse "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='${DB_NAME}' AND table_name='t_fp' AND column_name='redo_c';")

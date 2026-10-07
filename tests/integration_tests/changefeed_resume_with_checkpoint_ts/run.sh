@@ -18,7 +18,7 @@ function resume_changefeed_in_stopped_state() {
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 
 	checkpointTs1=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
@@ -32,7 +32,9 @@ function resume_changefeed_in_stopped_state() {
 		table="test.table$i"
 		check_table_exists $table ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	done
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config2.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	cdc_cli_changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
 
 	checkpointTs2=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
@@ -60,7 +62,9 @@ function resume_changefeed_in_stopped_state() {
 	stmt="select count(*) as table_count from information_schema.tables where table_schema='test'"
 	run_sql "$stmt" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains "table_count: 4"
 	run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT} && check_contains "table_count: 6"
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config1.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	cdc_cli_changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
 	echo "Resume changefeed with checkpointTs1 $checkpointTs1"
@@ -71,8 +75,11 @@ function resume_changefeed_in_stopped_state() {
 	done
 	run_sql "$stmt" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains "table_count: 6"
 	run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT} && check_contains "table_count: 6"
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config2.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
