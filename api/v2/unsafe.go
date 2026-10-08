@@ -39,12 +39,7 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 	for _, pair := range kvs {
 		value := string(pair.Value)
 		if strings.Contains(string(pair.Key), "/changefeed/info/") {
-			info := new(config.ChangeFeedInfo)
-			if err := info.Unmarshal(pair.Value); err != nil {
-				value = "<redacted>"
-			} else {
-				value = info.String()
-			}
+			value = config.MaskChangefeedInfo(pair.Value)
 		}
 		resp = append(resp, EtcdData{
 			Key:   string(pair.Key),

@@ -90,22 +90,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.NoError(t, err)
 
 	output := info.String()
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"registry-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"token-url-secret-sentinel",
-		"private-key-sentinel",
-		"claim-check-secret-sentinel",
-		"glue-access-sentinel",
-		"glue-secret-sentinel",
-		"glue-token-sentinel",
-	} {
-		require.NotContains(t, output, secret)
-	}
+	require.NotContains(t, output, "sentinel")
 	require.Contains(t, output, "xxxxx")
 	require.Contains(t, output, "******")
 	after, err := info.Marshal()

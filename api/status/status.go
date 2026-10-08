@@ -61,12 +61,7 @@ func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w
 	for _, kv := range kvs {
 		value := string(kv.Value)
 		if strings.Contains(string(kv.Key), "/changefeed/info/") {
-			info := new(config.ChangeFeedInfo)
-			if err := info.Unmarshal(kv.Value); err != nil {
-				value = "<redacted>"
-			} else {
-				value = info.String()
-			}
+			value = config.MaskChangefeedInfo(kv.Value)
 		}
 		_, _ = fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
 	}

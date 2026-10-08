@@ -294,7 +294,7 @@ func cleanOldData(ctx context.Context, client etcd.Client) {
 		if shouldDelete(key) {
 			value := string(kvPair.Value)
 			if strings.HasPrefix(key, oldChangefeedPrefix) {
-				value = maskChangefeedInfo(kvPair.Value)
+				value = config.MaskChangefeedInfo(kvPair.Value)
 			}
 			// 0 is the backup version. For now, we only support version 0
 			newKey := etcd.MigrateBackupKey(0, key)
@@ -336,14 +336,6 @@ func shouldDelete(key string) bool {
 		}
 	}
 	return false
-}
-
-func maskChangefeedInfo(data []byte) string {
-	info := new(config.ChangeFeedInfo)
-	if err := info.Unmarshal(data); err != nil {
-		return "<redacted>"
-	}
-	return info.String()
 }
 
 func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,

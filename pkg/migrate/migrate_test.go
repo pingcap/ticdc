@@ -642,7 +642,7 @@ func TestMaskChangefeedData(t *testing.T) {
 	}
 	data, err := json.Marshal(&info)
 	require.Nil(t, err)
-	masked := maskChangefeedInfo(data)
+	masked := config.MaskChangefeedInfo(data)
 	maskedInfo := config.ChangeFeedInfo{}
 	err = json.Unmarshal([]byte(masked), &maskedInfo)
 	require.Nil(t, err)
@@ -652,5 +652,5 @@ func TestMaskChangefeedData(t *testing.T) {
 	require.NotContains(t, masked, "oauth-secret-sentinel")
 	require.Contains(t, maskedInfo.SinkURI, "root:xxxxx@127.0.0.1:9092")
 	require.Equal(t, "******", *maskedInfo.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "<redacted>", maskChangefeedInfo([]byte(`{"sink-uri":`)))
+	require.Equal(t, "<redacted>", config.MaskChangefeedInfo([]byte(`{"sink-uri":`)))
 }
