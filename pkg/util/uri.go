@@ -19,6 +19,8 @@ import (
 	"strings"
 )
 
+const maskedSensitiveURIValue = "xxxxx"
+
 // IsValidIPv6AddressFormatInURI reports whether hostPort is a valid IPv6 address in URI.
 // See: https://www.ietf.org/rfc/rfc2732.txt.
 func IsValidIPv6AddressFormatInURI(hostPort string) bool {
@@ -71,7 +73,7 @@ func MaskSinkURI(uri string) (string, error) {
 	}
 	queries := uriParsed.Query()
 	if queries.Has("sasl-password") {
-		queries.Set("sasl-password", "xxxxx")
+		queries.Set("sasl-password", maskedSensitiveURIValue)
 		uriParsed.RawQuery = queries.Encode()
 	}
 	return uriParsed.Redacted(), nil
@@ -99,15 +101,47 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	queries := uriParsed.Query()
 	for key := range queries {
-		lower := strings.ToLower(key)
-		for _, secretKey := range sensitiveQueryParameterNames {
-			if strings.Contains(lower, secretKey) {
-				queries.Set(key, "xxxxx")
-			}
+		if isSensitiveQueryParameter(key) {
+			queries.Set(key, maskedSensitiveURIValue)
 		}
 	}
 	uriParsed.RawQuery = queries.Encode()
 	return uriParsed.Redacted()
+}
+
+// HasMaskedSensitiveDataInURI reports whether a URI contains a credential
+// placeholder produced by MaskSensitiveDataInURI.
+func HasMaskedSensitiveDataInURI(uri string) bool {
+	uriParsed, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	if uriParsed.User != nil {
+		if password, ok := uriParsed.User.Password(); ok && password == maskedSensitiveURIValue {
+			return true
+		}
+	}
+	for key, values := range uriParsed.Query() {
+		if !isSensitiveQueryParameter(key) {
+			continue
+		}
+		for _, value := range values {
+			if value == maskedSensitiveURIValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSensitiveQueryParameter(key string) bool {
+	lower := strings.ToLower(key)
+	for _, secretKey := range sensitiveQueryParameterNames {
+		if strings.Contains(lower, secretKey) {
+			return true
+		}
+	}
+	return false
 }
 
 // MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.

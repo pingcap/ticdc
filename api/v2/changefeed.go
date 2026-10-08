@@ -968,7 +968,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
-	updateCfConfig.restoreMaskedSensitiveData(oldCfInfo)
+	if err = updateCfConfig.restoreMaskedSensitiveData(oldCfInfo); err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+		return
+	}
 
 	var configUpdated, sinkURIUpdated, targetTsUpdated bool
 	if updateCfConfig.TargetTs != 0 {

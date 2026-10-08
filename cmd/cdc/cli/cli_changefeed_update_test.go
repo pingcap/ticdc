@@ -168,7 +168,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotContains(t, output.String(), "update-password-sentinel")
 	require.Contains(t, output.String(), "xxxxx")
 	require.Contains(t, output.String(), "SinkURI")
-	require.Contains(t, output.String(), "<redacted>")
+	require.Contains(t, output.String(), config.MaskedSensitiveValue)
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)

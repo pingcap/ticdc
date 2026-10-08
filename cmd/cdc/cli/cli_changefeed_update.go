@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/config"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/r3labs/diff"
 	"github.com/spf13/cobra"
@@ -137,7 +138,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		if _, ok := visiblePaths[strings.Join(change.Path, "\x00")]; ok {
 			continue
 		}
-		cmd.Printf("{Type:%s Path:%v From:<redacted> To:<redacted>}\n", change.Type, change.Path)
+		cmd.Printf("{Type:%s Path:%v From:%s To:%s}\n",
+			change.Type, change.Path, config.MaskedSensitiveValue, config.MaskedSensitiveValue)
 	}
 
 	if !o.commonChangefeedOptions.noConfirm {
