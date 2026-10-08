@@ -1623,7 +1623,7 @@ func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *tes
 				t.Run(fmt.Sprintf("mode=%d/state=%s/partial=%t", mode, state, partial), func(t *testing.T) {
 					env := newMergeBootstrapTestEnv(t)
 					cfg := env.controller.replicaConfig.Clone()
-					cfg.Scheduler.EnableSplittableCheck = util.AddressOf(true)
+					cfg.Scheduler.EnableSplittableCheck = new(true)
 					ddlSpan := env.controller.spanController.GetDDLDispatcher()
 					var redoDDLSpan *replica.SpanReplication
 					if common.IsRedoMode(mode) {
