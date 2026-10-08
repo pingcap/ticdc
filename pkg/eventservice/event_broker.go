@@ -1115,8 +1115,15 @@ func (c *eventBroker) prepareScanFromNotify(d *dispatcherStat) {
 
 	// Only the external EventStore notify path may wait for capacity. Scan workers
 	// use requestScan so that they never block on their own queue.
+	taskChan := c.taskChan[d.scanWorkerIndex]
 	select {
-	case c.taskChan[d.scanWorkerIndex] <- d:
+	case taskChan <- d:
+		return
+	default:
+	}
+
+	select {
+	case taskChan <- d:
 	case <-c.done:
 		d.scanMu.Lock()
 		if d.scanState == dispatcherScanQueued {
