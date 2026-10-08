@@ -20,11 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -173,7 +172,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 	metaVersion, err := getMetaVersion(ctx, m.cli.GetEtcdClient(), m.cli.GetClusterID())
 	if err != nil {
 		log.Error("get meta version failed, etcd meta data migration failed", zap.Error(err))
-		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 
 	if metaVersion > m.newMetaVersion {
@@ -193,7 +192,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 		_, err := m.cli.GetEtcdClient().Put(ctx, m.metaVersionKey, fmt.Sprintf("%d", oldVersion))
 		if err != nil {
 			log.Error("put meta version failed, etcd meta data migration failed", zap.Error(err))
-			return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+			return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 		}
 	}
 
@@ -201,13 +200,13 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 	campaignCtx, cancel := context.WithTimeout(ctx, campaignTimeoutDuration)
 	defer cancel()
 	if err := m.campaignOldOwner(campaignCtx); err != nil {
-		if errors.ErrorEqual(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) {
 			log.Error("campaign old owner timeout",
 				zap.Duration("duration", campaignTimeoutDuration))
 		}
 		log.Error("campaign old owner failed, etcd meta data migration failed",
 			zap.Error(err))
-		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 
 	beforeKV := make(map[string][]byte)
@@ -217,7 +216,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 		if err != nil {
 			log.Error("get old meta data failed, etcd meta data migration failed",
 				zap.Error(err))
-			return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+			return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 		}
 		for _, v := range resp.Kvs {
 			oldKey := string(v.Key)
@@ -231,7 +230,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 					log.Error("unmarshal changefeed failed",
 						zap.String("key", oldKey),
 						zap.Error(err))
-					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+					return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 				}
 				info.UpstreamID = upstreamID
 				info.ChangefeedID.DisplayName.Keyspace = common.DefaultKeyspaceName
@@ -243,7 +242,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 				if err != nil {
 					log.Error("marshal changefeed failed",
 						zap.Error(err))
-					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+					return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 				}
 				_, err = m.cli.GetEtcdClient().Put(ctx, newKey, str)
 			} else {
@@ -252,7 +251,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 			if err != nil {
 				log.Error("put new meta data failed, etcd meta data migration failed",
 					zap.Error(err))
-				return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+				return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 			}
 		}
 	}
@@ -261,24 +260,28 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 	if err != nil {
 		log.Error("save default upstream failed, "+
 			"etcd meta data migration failed", zap.Error(err))
-		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 
 	err = m.migrateGcServiceSafePoint(ctx, pdClient,
 		m.config.Security, m.cli.GetGCServiceID(), m.config.GcTTL)
 	if err != nil {
 		log.Error("update meta version failed, etcd meta data migration failed", zap.Error(err))
-		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 
 	// 5. update metaVersion
 	_, err = m.cli.GetEtcdClient().Put(ctx, m.metaVersionKey, fmt.Sprintf("%d", m.newMetaVersion))
 	if err != nil {
 		log.Error("update meta version failed, etcd meta data migration failed", zap.Error(err))
-		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+		return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 	}
 	log.Info("etcd data migration successful")
 	if err := cleanOldData(ctx, m.cli.GetEtcdClient()); err != nil {
+		// Cleanup queries remain best effort after the metadata version is committed.
+		if errors.Is(err, errors.ErrEtcdAPIError) {
+			return nil
+		}
 		return err
 	}
 	log.Info("clean old etcd data successful")
@@ -290,24 +293,32 @@ func cleanOldData(ctx context.Context, client etcd.Client) error {
 	if err != nil {
 		log.Warn("query data from etcd failed",
 			zap.Error(err))
-		return errors.Trace(err)
+		return errors.WrapError(errors.ErrEtcdAPIError, err)
 	}
-	for _, kvPair := range resp.Kvs {
+	// Validate all display values before backing up or deleting any old keys.
+	displayValues := make([]string, len(resp.Kvs))
+	for i, kvPair := range resp.Kvs {
+		key := string(kvPair.Key)
+		if !shouldDelete(key) {
+			continue
+		}
+		displayValues[i] = string(kvPair.Value)
+		if strings.HasPrefix(key, oldChangefeedPrefix) {
+			displayValues[i], err = config.MaskChangefeedInfo(kvPair.Value)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for i, kvPair := range resp.Kvs {
 		key := string(kvPair.Key)
 		if shouldDelete(key) {
-			value := string(kvPair.Value)
-			if strings.HasPrefix(key, oldChangefeedPrefix) {
-				value, err = config.MaskChangefeedInfo(kvPair.Value)
-				if err != nil {
-					return err
-				}
-			}
 			// 0 is the backup version. For now, we only support version 0
 			newKey := etcd.MigrateBackupKey(0, key)
 			log.Info("renaming old etcd data",
 				zap.String("key", key),
 				zap.String("newKey", newKey),
-				zap.String("value", value))
+				zap.String("value", displayValues[i]))
 			if _, err := client.Put(ctx, newKey,
 				string(kvPair.Value)); err != nil {
 				log.Info("put new key failed", zap.String("key", key),
@@ -424,7 +435,7 @@ func (m *migrator) Migrate(ctx context.Context) error {
 				log.Error("save default upstream failed, "+
 					"etcd meta data migration failed",
 					zap.Error(err))
-				return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
+				return errors.WrapError(errors.ErrEtcdMigrateFailed, err)
 			}
 			_, err := m.cli.GetEtcdClient().
 				Put(ctx, m.metaVersionKey, fmt.Sprintf("%d", newVersion))
