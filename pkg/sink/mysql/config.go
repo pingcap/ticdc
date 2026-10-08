@@ -122,6 +122,8 @@ type Config struct {
 	SSLCa           string
 	SSLCert         string
 	SSLKey          string
+	spiffeTLS       *spiffeTLSOptions
+	tlsResource     *spiffeTLSResource
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -230,11 +232,38 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 	}
 }
 
+// Apply populates c from the sink configuration. After Apply initializes SPIFFE
+// TLS, c is single-use, including after CloseTLS; callers must construct a fresh
+// Config instead of calling Apply again.
 func (c *Config) Apply(
 	sinkURI *url.URL,
 	changefeedID common.ChangeFeedID,
 	cfg *config.ChangefeedConfig,
 ) (err error) {
+	return c.apply(context.Background(), sinkURI, changefeedID, cfg)
+}
+
+func (c *Config) apply(
+	ctx context.Context,
+	sinkURI *url.URL,
+	changefeedID common.ChangeFeedID,
+	cfg *config.ChangefeedConfig,
+) (err error) {
+	if c.tlsResource != nil {
+		return errors.ErrMySQLInvalidConfig.GenWithStack(
+			"MySQL config with SPIFFE TLS cannot be applied more than once")
+	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := c.CloseTLS(); closeErr != nil {
+			log.Warn("close mysql TLS after applying config failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
+
 	if sinkURI == nil {
 		log.Error("empty SinkURI")
 		return errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
@@ -265,7 +294,7 @@ func (c *Config) Apply(
 	if err = getTiDBTxnMode(query, &c.TidbTxnMode, &c.tidbTxnModeSpecified); err != nil {
 		return err
 	}
-	if err = c.getSSLCA(query, changefeedID, &c.TLS); err != nil {
+	if err = c.configureTLS(ctx, query, changefeedID); err != nil {
 		return err
 	}
 	if err = getSafeMode(query, &c.SafeMode); err != nil {
@@ -341,6 +370,14 @@ func NewMysqlConfigAndDBs(
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	defer func() {
+		if err != nil {
+			if closeErr := cfg.CloseTLS(); closeErr != nil {
+				log.Warn("close mysql TLS after db pool creation failed",
+					zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+			}
+		}
+	}()
 
 	controlDB, err := CreateMysqlDBConn(dsnStr)
 	if err != nil {
@@ -392,12 +429,21 @@ func newMysqlConfigAndDB(
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
 	cfg = New()
-	err = cfg.Apply(sinkURI, changefeedID, config)
+	err = cfg.apply(ctx, sinkURI, changefeedID, config)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	cfg.EnableActiveActive = config.EnableActiveActive
 	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
+	defer func(tlsCfg *Config) {
+		if err == nil {
+			return
+		}
+		if closeErr := tlsCfg.CloseTLS(); closeErr != nil {
+			log.Warn("close mysql TLS after config creation failed",
+				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
+		}
+	}(cfg)
 
 	dsnStr, err = GenerateDSN(ctx, cfg)
 	if err != nil {
@@ -408,15 +454,15 @@ func newMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer func() {
+	defer func(ownedDB *sql.DB) {
 		if err == nil {
 			return
 		}
-		if closeErr := db.Close(); closeErr != nil {
+		if closeErr := ownedDB.Close(); closeErr != nil {
 			log.Warn("close mysql db after config creation failed",
 				zap.String("changefeed", changefeedID.String()), zap.Error(closeErr))
 		}
-	}()
+	}(db)
 
 	cfg.ServerInfo = getTiDBVersion(db)
 	cfg.HasVectorType = shouldFormatVectorType(cfg)
@@ -635,7 +681,7 @@ func getTiDBTxnMode(values url.Values, mode *string, modeSpecified *bool) error 
 	return nil
 }
 
-func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
+func (c *Config) getFileSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
 	credential := security.Credential{
 		CAPath:   c.SSLCa,
 		CertPath: c.SSLCert,
@@ -663,7 +709,7 @@ func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, t
 		return errors.Trace(err)
 	}
 
-	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Keyspace(), changefeedID.ID())
+	name := mysqlTLSRegistryName(changefeedID)
 	err = dmysql.RegisterTLSConfig(name, tlsCfg)
 	if err != nil {
 		return errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
