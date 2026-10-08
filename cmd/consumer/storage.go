@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
-	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -29,7 +28,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
@@ -70,87 +68,46 @@ type storageTableKey struct {
 	partition int64
 }
 
-type storageConsumer struct {
-	storage         storeapi.Storage
-	writer          *eventWriter
-	codecConfig     *codeccommon.Config
-	columnSelectors *columnselector.ColumnSelectors
-	dateSeparator   config.DateSeparator
-	fileExtension   string
-	fileIndexWidth  int
-	checkpoint      uint64
-	schemas         map[cloudstorage.SchemaPathKey]*storageSchema
-	fileIndices     map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks   map[string]uint64
-	tableIDs        map[storageTableKey]int64
-	tableWatermarks map[int64]uint64
-	nextTableID     int64
+type storageInput struct {
+	key      cloudstorage.DMLPathKey
+	index    cloudstorage.FileIndex
+	groupEnd bool
+	tableID  int64
+	sort     bool
+}
+type storagePosition struct {
+	key   cloudstorage.DMLPathKey
+	index cloudstorage.FileIndex
+}
+type storageReader struct {
+	storage          storeapi.Storage
+	buffer           *readBuffer
+	codecConfig      *codeccommon.Config
+	columnSelectors  *columnselector.ColumnSelectors
+	dateSeparator    config.DateSeparator
+	fileExtension    string
+	fileIndexWidth   int
+	checkpoint       uint64
+	schemas          map[cloudstorage.SchemaPathKey]*storageSchema
+	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	confirmedIndices map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks    map[string]uint64
+	tableIDs         map[storageTableKey]int64
+	tableWatermarks  map[int64]uint64
+	nextTableID      int64
+	mu               sync.Mutex
+	records          []*inputRecord
+	positions        map[*inputRecord]storagePosition
+	inputs           []storageInput
+	current          storageInput
+	decoder          codeccommon.Decoder
+	record           *inputRecord
+	sortBeforeWrite  bool
+	groupReady       bool
+	scanned          bool
 }
 
-func runStorageConsumer(ctx context.Context, wg *sync.WaitGroup, upstreamURI *url.URL, downstreamURI, timezone string, replicaConfig *config.ReplicaConfig) error {
-	parentCtx := ctx
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	writeCtx, cancelWrite := context.WithCancelCause(context.WithoutCancel(ctx))
-	defer cancelWrite(nil)
-	wg.Go(func() {
-		select {
-		case <-parentCtx.Done():
-			log.Info("consumer stopping", zap.Duration("shutdownTimeout", shutdownTimeout))
-		case <-writeCtx.Done():
-			return
-		}
-		shutdownCtx, cancelShutdown := context.WithTimeout(writeCtx, shutdownTimeout)
-		defer cancelShutdown()
-		<-shutdownCtx.Done()
-		if shutdownCtx.Err() == context.DeadlineExceeded {
-			cancelWrite(errors.ErrInternalCheckFailed.FastGenByArgs("consumer shutdown drain timed out"))
-		}
-	})
-	c, err := newStorageConsumer(ctx, writeCtx, upstreamURI, downstreamURI, timezone, replicaConfig)
-	if err != nil {
-		return err
-	}
-	defer c.storage.Close()
-	defer c.writer.downstream.Close()
-	sinkDone := make(chan bool)
-	defer func() {
-		cancelWrite(nil)
-		<-sinkDone
-	}()
-	wg.Go(func() {
-		defer close(sinkDone)
-		if err := c.writer.downstream.Run(writeCtx); err != nil {
-			cancelWrite(err)
-			cancel(err)
-			return
-		}
-		if writeCtx.Err() == nil {
-			err := errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
-			cancelWrite(err)
-			cancel(err)
-		}
-	})
-	err = c.run(ctx, writeCtx)
-	if writeErr := context.Cause(writeCtx); writeErr != nil {
-		return writeErr
-	}
-	if parentCtx.Err() == nil || !errors.Is(err, context.Canceled) {
-		return err
-	}
-	drainCtx, cancelDrain := context.WithTimeout(writeCtx, shutdownTimeout)
-	defer cancelDrain()
-	// A partially decoded file or cross-node group is replayed on restart.
-	// Only batches already submitted to the sink are drained here.
-	for len(c.writer.inFlight) != 0 {
-		if err := c.writer.waitBatch(drainCtx, c.writer.inFlight[0]); err != nil {
-			return err
-		}
-	}
-	return context.Cause(writeCtx)
-}
-
-func newStorageConsumer(ctx, writeCtx context.Context, upstreamURI *url.URL, downstreamURI, timezone string, replicaConfig *config.ReplicaConfig) (*storageConsumer, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, memory *bufferUsage) (*storageReader, error) {
 	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
 		return nil, err
 	}
@@ -183,76 +140,21 @@ func newStorageConsumer(ctx, writeCtx context.Context, upstreamURI *url.URL, dow
 	if err != nil {
 		return nil, err
 	}
-	replicaConfig.Sink.TiDBSourceID = 1
-	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	downstream, err := sink.New(writeCtx, &config.ChangefeedConfig{
-		ChangefeedID: changefeedID, SinkURI: downstreamURI, SinkConfig: replicaConfig.Sink,
-		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive), EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
-	}, changefeedID, common.DefaultKeyspaceID)
-	if err != nil {
-		storage.Close()
-		return nil, err
-	}
-	partition := &messagePartition{schemas: make(map[schemaKey]bool), schemaPointers: make(map[*common.TableInfo]bool)}
-	writer := &eventWriter{downstream: downstream, protocol: protocol, partitions: map[int32]*messagePartition{0: partition}, mutations: make(map[mutationKey]*mutation)}
-	c := &storageConsumer{
-		storage: storage, writer: writer, codecConfig: codecConfig, columnSelectors: selectors,
+
+	c := &storageReader{
+		storage: storage, buffer: &readBuffer{memory: memory}, codecConfig: codecConfig, columnSelectors: selectors,
 		dateSeparator: putil.GetOrZero(replicaConfig.Sink.DateSeparator), fileExtension: helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		ddlWatermarks: make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
+		confirmedIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
+		positions:        make(map[*inputRecord]storagePosition),
+		ddlWatermarks:    make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
 	}
-	writer.confirm = c.confirmCompleted
-	log.Info("Storage consumer initialized", zap.String("protocol", protocol.String()))
+	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
 }
 
-func (c *storageConsumer) run(ctx, writeCtx context.Context) error {
-	tick := time.Tick(storageScanInterval)
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		exists, err := c.storage.FileExists(ctx, "metadata")
-		if err != nil {
-			return errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
-		}
-		if exists {
-			data, err := c.readFile(ctx, "metadata", maxRecordBytes)
-			if err != nil {
-				return err
-			}
-			var metadata storageMetadata
-			if err := json.Unmarshal(data, &metadata); err != nil {
-				return errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
-			}
-			c.checkpoint = max(c.checkpoint, metadata.CheckpointTs)
-		}
-		files, err := c.scanFiles(ctx)
-		if err != nil {
-			return err
-		}
-		if err := c.handleFiles(ctx, writeCtx, files); err != nil {
-			return err
-		}
-		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
-			c.writer.lastProgressLog = time.Now()
-			log.Info("consumer progress", zap.Uint64("checkpoint", c.checkpoint),
-				zap.Int64("receivedInputs", c.writer.receivedInputs), zap.Int64("decodedRows", c.writer.decodedRows),
-				zap.Int64("writtenRows", c.writer.writtenRows), zap.Int64("completedInputs", c.writer.completedInputs),
-				zap.Int("pendingDMLCount", len(c.writer.pendingDML)), zap.Int("pendingDDLCount", len(c.writer.pendingDDL)),
-				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int("uncompletedInputs", c.writer.recordCount), zap.Int64("bufferedBytes", c.writer.bufferedBytes()))
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-tick:
-		}
-	}
-}
-
-func (c *storageConsumer) readFile(ctx context.Context, path string, limit int64) ([]byte, error) {
+func (c *storageReader) readFile(ctx context.Context, path string, limit int64) (data []byte, err error) {
 	if limit <= 0 {
 		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer has no buffer capacity for a Storage file")
 	}
@@ -260,8 +162,12 @@ func (c *storageConsumer) readFile(ctx context.Context, path string, limit int64
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage file")
 	}
-	defer reader.Close()
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil && err == nil {
+			err = errors.WrapError(errors.ErrExternalStorageAPI, closeErr, "close Storage file")
+		}
+	}()
+	data, err = io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
 	}
@@ -271,7 +177,7 @@ func (c *storageConsumer) readFile(ctx context.Context, path string, limit int64
 	return data, nil
 }
 
-func (c *storageConsumer) scanFiles(ctx context.Context) (map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange, error) {
+func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange, error) {
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
 	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
@@ -289,7 +195,7 @@ func (c *storageConsumer) scanFiles(ctx context.Context) (map[cloudstorage.DMLPa
 		}
 		var key cloudstorage.DMLPathKey
 		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
-			return nil
+			return nil //nolint:nilerr // Ignore unsupported index paths in a shared Storage directory.
 		}
 		if c.checkpoint > 0 && key.TableVersion > c.checkpoint {
 			return nil
@@ -309,18 +215,24 @@ func (c *storageConsumer) scanFiles(ctx context.Context) (map[cloudstorage.DMLPa
 			}
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
-			c.writer.controlBytes += int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
+			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
+			if err := c.buffer.memory.reserve(bytes); err != nil {
+				return err
+			}
+			c.buffer.memory.readBytes.Add(bytes)
 		}
 		if _, known := indices[index.FileIndexKey]; !known {
 			if len(indices) >= maxRecords {
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Storage index cache exceeds its resource limit")
 			}
 			indices[index.FileIndexKey] = 0
-			c.writer.controlBytes += int64(len(index.DispatcherID) + 128)
+			bytes := int64(len(index.DispatcherID) + 128)
+			if err := c.buffer.memory.reserve(bytes); err != nil {
+				return err
+			}
+			c.buffer.memory.readBytes.Add(bytes)
 		}
-		if c.writer.bufferedBytes() > maxBufferedBytes {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("Storage index cache exceeds its byte limit")
-		}
+
 		previous := indices[index.FileIndexKey]
 		if index.Idx > previous {
 			if files[key] == nil {
@@ -336,7 +248,7 @@ func (c *storageConsumer) scanFiles(ctx context.Context) (map[cloudstorage.DMLPa
 	return files, nil
 }
 
-func (c *storageConsumer) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
+func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
 	var key cloudstorage.SchemaPathKey
 	key.Parse(path)
 	if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || c.schemas[key] != nil {
@@ -345,7 +257,7 @@ func (c *storageConsumer) readSchema(ctx context.Context, path string) (cloudsto
 	if len(c.schemas) >= maxSchemas {
 		return key, false, errors.ErrInternalCheckFailed.FastGenByArgs("Storage schema cache exceeds its count limit")
 	}
-	data, err := c.readFile(ctx, path, min(maxRecordBytes, maxSchemaBytes-c.writer.schemaBytes))
+	data, err := c.readFile(ctx, path, min(maxRecordBytes, maxSchemaBytes-c.buffer.schemaBytes))
 	if err != nil {
 		return key, false, err
 	}
@@ -362,9 +274,13 @@ func (c *storageConsumer) readSchema(ctx context.Context, path string) (cloudsto
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
 	}
 	bytes := int64(len(data))*4 + 1024
-	if c.writer.schemaBytes+bytes > maxSchemaBytes || c.writer.bufferedBytes()+bytes > maxBufferedBytes {
+	if c.buffer.schemaBytes+bytes > maxSchemaBytes {
 		return key, false, errors.ErrInternalCheckFailed.FastGenByArgs("Storage schema cache exceeds its byte limit")
 	}
+	if err := c.buffer.memory.reserve(bytes); err != nil {
+		return key, false, err
+	}
+	c.buffer.memory.readBytes.Add(bytes)
 	// Schema files carry primary-key flags. Rebuild offsets and an explicit
 	// primary index, including composite keys, for the default batch DML path.
 	table := file.TableInfo().ToTiDBTableInfo()
@@ -382,20 +298,139 @@ func (c *storageConsumer) readSchema(ctx context.Context, path string) (cloudsto
 		table.Indices = []*timodel.IndexInfo{primary}
 	}
 	c.schemas[key] = &storageSchema{file: file, tableInfo: common.NewTableInfo4Decoder(file.Schema, table)}
-	c.writer.schemaBytes += bytes
+	c.buffer.schemaBytes += bytes
 	return key, true, nil
 }
 
-func (c *storageConsumer) handleFiles(ctx, writeCtx context.Context, files map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange) error {
-	keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
-	for _, key := range keys {
+func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
+	for {
 		if err := context.Cause(ctx); err != nil {
-			return err
+			return nil, err
 		}
-		schema := c.schemas[key.SchemaPathKey]
+		if !c.sortBeforeWrite || c.groupReady {
+			result, err := c.buffer.nextReady(^uint64(0))
+			if err != nil || result != nil {
+				return result, err
+			}
+		}
+		if c.groupReady {
+			c.groupReady = false
+			return &readResult{force: true, tableID: c.current.tableID, watermark: c.tableWatermarks[c.current.tableID], hasWatermark: true}, nil
+		}
+		if c.decoder != nil {
+			messageType, hasNext := c.decoder.HasNext()
+			if hasNext {
+				if messageType != codeccommon.MessageTypeRow {
+					continue
+				}
+				message := c.decoder.NextDMLMessage()
+				if message == nil {
+					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage decoder returned an empty DML message")
+				}
+				tableID := c.current.tableID
+				if !c.current.index.EnableTableAcrossNodes && message.GetCommitTs() < c.tableWatermarks[tableID] {
+					continue
+				}
+				c.tableWatermarks[tableID] = max(c.tableWatermarks[tableID], message.GetCommitTs())
+				dml := message.ToDMLEvent()
+				if dml == nil || dml.TableInfo == nil {
+					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML message has no table metadata")
+				}
+				dml.PhysicalTableID = tableID
+				if c.codecConfig.Protocol == config.ProtocolCanalJSON {
+					dml.TableInfo.UpdateTS = c.current.key.TableVersion
+				}
+				if err := c.buffer.queueDML(dml, []*inputRecord{c.record}, nil); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			// All rows have their own write references before decoding is released.
+			size := c.record.bytes.Swap(256)
+			c.buffer.memory.bytes.Add(256 - size)
+			c.buffer.memory.readBytes.Add(256 - size)
+			c.record.pending.Add(-1)
+			c.buffer.memory.effects.Add(-1)
+			c.fileIndices[c.current.key][c.current.index.FileIndexKey] = c.current.index.Idx
+			c.decoder = nil
+			c.record = nil
+			continue
+		}
+		if len(c.inputs) == 0 {
+			if c.scanned {
+				select {
+				case <-ctx.Done():
+					return nil, context.Cause(ctx)
+				case <-time.After(storageScanInterval):
+				}
+			}
+			c.scanned = true
+			exists, err := c.storage.FileExists(ctx, "metadata")
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
+			}
+			if exists {
+				data, err := c.readFile(ctx, "metadata", maxRecordBytes)
+				if err != nil {
+					return nil, err
+				}
+				var metadata storageMetadata
+				if err := json.Unmarshal(data, &metadata); err != nil {
+					return nil, errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
+				}
+				c.checkpoint = max(c.checkpoint, metadata.CheckpointTs)
+			}
+			files, err := c.scanFiles(ctx)
+			if err != nil {
+				return nil, err
+			}
+			keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
+			for _, key := range keys {
+				if key.IsSchemaFileDMLPathKey() {
+					if err := c.buffer.memory.reserve(256); err != nil {
+						return nil, err
+					}
+					c.buffer.memory.readBytes.Add(256)
+					c.inputs = append(c.inputs, storageInput{key: key})
+					continue
+				}
+				sortBeforeWrite := false
+				for indexKey := range files[key] {
+					sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
+				}
+				for indexKey, span := range files[key] {
+					for index := span.start; ; index++ {
+						if err := c.buffer.memory.reserve(256); err != nil {
+							return nil, err
+						}
+						c.buffer.memory.readBytes.Add(256)
+						c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: index}, sort: sortBeforeWrite})
+						if len(c.inputs) > maxRecords {
+							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage scan exceeds its input limit")
+						}
+						if index == span.end {
+							break
+						}
+					}
+				}
+				if err := c.buffer.memory.reserve(256); err != nil {
+					return nil, err
+				}
+				c.buffer.memory.readBytes.Add(256)
+				c.inputs = append(c.inputs, storageInput{key: key, groupEnd: true})
+			}
+			continue
+		}
+		input := c.inputs[0]
+		c.inputs[0] = storageInput{}
+		c.inputs = c.inputs[1:]
+		c.buffer.memory.bytes.Add(-256)
+		c.buffer.memory.readBytes.Add(-256)
+		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
-			return errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
+			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
 		}
+		key := input.key
 		tableKey := key.GetKey()
 		if key.IsSchemaFileDMLPathKey() {
 			if schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
@@ -405,33 +440,35 @@ func (c *storageConsumer) handleFiles(ctx, writeCtx context.Context, files map[c
 			if schema.file.Type == byte(timodel.ActionRenameTable) {
 				statement, err := parser.New().ParseOneStmt(schema.file.Query, "", "")
 				if err != nil {
-					return errors.WrapError(errors.ErrCodecDecode, err, "parse Storage rename DDL")
+					return nil, errors.WrapError(errors.ErrCodecDecode, err, "parse Storage rename DDL")
 				}
 				rename, ok := statement.(*ast.RenameTableStmt)
 				if !ok || len(rename.TableToTables) == 0 {
-					return errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
+					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
 				}
 				old := rename.TableToTables[0].OldTable
 				oldKey = common.QuoteSchema(cmp.Or(old.Schema.O, schema.file.Schema), old.Name.O)
 			}
 			ddl := schema.file.DDLEvent()
 			ddl.TableInfo = schema.tableInfo
-			// The preceding path group has drained before advancing to this DDL.
-			if err := c.writer.downstream.FlushDMLBeforeBlock(ddl); err != nil {
-				return err
+			size := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
+			record, err := c.buffer.newRecord(size)
+			if err != nil {
+				return nil, err
 			}
-			if err := c.writer.downstream.WriteBlockEvent(ddl); err != nil {
-				return err
-			}
+			c.mu.Lock()
+			c.records = append(c.records, record)
+			c.mu.Unlock()
 			c.ddlWatermarks[tableKey] = max(c.ddlWatermarks[tableKey], key.TableVersion)
 			if oldKey != "" {
 				c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], key.TableVersion)
 			}
-			continue
+			// This record's initial reference is the DDL write itself.
+			return &readResult{ddl: ddl, records: []*inputRecord{record}}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
-			for indexKey, span := range files[key] {
-				c.fileIndices[key][indexKey] = span.end
+			if !input.groupEnd {
+				c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
 			}
 			continue
 		}
@@ -439,157 +476,90 @@ func (c *storageConsumer) handleFiles(ctx, writeCtx context.Context, files map[c
 		tableID := c.tableIDs[idKey]
 		if tableID == 0 {
 			if len(c.tableIDs) >= maxRecords {
-				return errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
 			}
+			size := int64(len(key.Schema) + len(key.Table) + 128)
+			if err := c.buffer.memory.reserve(size); err != nil {
+				return nil, err
+			}
+			c.buffer.memory.readBytes.Add(size)
 			c.nextTableID++
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
-			c.writer.controlBytes += int64(len(key.Schema) + len(key.Table) + 128)
 		}
-		sortBeforeWrite := false
-		for indexKey := range files[key] {
-			sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
+		input.tableID = tableID
+		c.current = input
+		if input.groupEnd {
+			c.groupReady = true
+			continue
 		}
-		for indexKey, span := range files[key] {
-			for index := span.start; ; index++ {
-				fileIndex := &cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: index}
-				if err := c.readDMLFile(ctx, writeCtx, key, fileIndex, schema, tableID, sortBeforeWrite); err != nil {
-					return err
-				}
-				if index == span.end {
-					break
-				}
-			}
-		}
-		if err := c.writer.flushDML(ctx, writeCtx, math.MaxUint64, true, true); err != nil {
-			return err
-		}
-		for len(c.writer.inFlight) != 0 {
-			if err := c.writer.waitBatch(ctx, c.writer.inFlight[0]); err != nil {
-				return err
-			}
-		}
-		if err := c.confirmCompleted(ctx); err != nil {
-			return err
-		}
-		for indexKey, span := range files[key] {
-			c.fileIndices[key][indexKey] = span.end
-		}
-	}
-	return nil
-}
-
-func (c *storageConsumer) readDMLFile(ctx, writeCtx context.Context, key cloudstorage.DMLPathKey, index *cloudstorage.FileIndex, schema *storageSchema, tableID int64, sortBeforeWrite bool) error {
-	path := key.GenerateDMLFilePath(index, c.fileExtension, c.fileIndexWidth)
-	// Reserve capacity for decoded rows while a complete input file is held.
-	data, err := c.readFile(ctx, path, maxBufferedBytes-c.writer.bufferedBytes()-maxInFlightBytes)
-	if err != nil {
-		return err
-	}
-	if c.writer.recordCount >= maxRecords {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("Storage file completion queue exceeds its count limit")
-	}
-	// The decoding effect keeps the file's payload charged during intermediate
-	// flushes. Rows are materialized before that effect is released.
-	record := &messageRecord{remaining: 1, bytes: int64(len(data)) + 256}
-	c.writer.effectCount++
-	c.writer.recordCount++
-	c.writer.receivedInputs++
-	c.writer.inputBytes += record.bytes
-	c.writer.partitions[0].records = append(c.writer.partitions[0].records, record)
-	var decoder codeccommon.Decoder
-	if c.codecConfig.Protocol == config.ProtocolCsv {
-		decoder, err = csv.NewDecoderWithColumnSelector(ctx, c.codecConfig, schema.tableInfo, data, c.columnSelectors.GetForTableInfo(schema.tableInfo))
+		// Cross-node groups must be decoded completely before sorting their rows.
+		c.sortBeforeWrite = input.sort
+		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
+		data, err := c.readFile(ctx, path, maxBufferedBytes-c.buffer.memory.bytes.Load()-maxInFlightBytes)
 		if err != nil {
-			return errors.WrapError(errors.ErrCodecDecode, err, "create Storage CSV decoder")
+			return nil, err
 		}
-	} else {
-		decoder = canal.NewTxnDecoder(c.codecConfig)
-		decoder.AddKeyValue(nil, data)
-	}
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
+		record, err := c.buffer.newRecord(int64(len(data)) + 256)
+		if err != nil {
+			return nil, err
 		}
-		messageType, hasNext := decoder.HasNext()
-		if !hasNext {
-			break
-		}
-		if messageType != codeccommon.MessageTypeRow {
-			continue
-		}
-		message := decoder.NextDMLMessage()
-		if message == nil {
-			return errors.ErrCodecDecode.FastGenByArgs("Storage decoder returned an empty DML message")
-		}
-		if !index.EnableTableAcrossNodes && message.GetCommitTs() < c.tableWatermarks[tableID] {
-			continue
-		}
-		c.tableWatermarks[tableID] = max(c.tableWatermarks[tableID], message.GetCommitTs())
-		dml := message.ToDMLEvent()
-		if dml == nil || dml.TableInfo == nil {
-			return errors.ErrCodecDecode.FastGenByArgs("Storage DML message has no table metadata")
-		}
-		dml.PhysicalTableID = tableID
-		if c.codecConfig.Protocol == config.ProtocolCanalJSON {
-			dml.TableInfo.UpdateTS = key.TableVersion
-		}
-		record.remaining++
-		c.writer.effectCount++
-		if err := c.writer.queueDML(codeccommon.NewDMLMessageFromEvent(dml), record, nil); err != nil {
-			return err
-		}
-		if c.writer.effectCount > maxEffects {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("Storage decoded input exceeds its effect limit")
-		}
-		if !sortBeforeWrite {
-			if err := c.writer.flushDML(ctx, writeCtx, math.MaxUint64, true, c.writer.bufferedBytes() >= memoryHighWater); err != nil {
-				return err
+		c.mu.Lock()
+		c.records = append(c.records, record)
+		c.positions[record] = storagePosition{key: key, index: input.index}
+		c.mu.Unlock()
+		c.record = record
+		if c.codecConfig.Protocol == config.ProtocolCsv {
+			c.decoder, err = csv.NewDecoderWithColumnSelector(ctx, c.codecConfig, schema.tableInfo, data, c.columnSelectors.GetForTableInfo(schema.tableInfo))
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrCodecDecode, err, "create Storage CSV decoder")
 			}
+		} else {
+			c.decoder = canal.NewTxnDecoder(c.codecConfig)
+			c.decoder.AddKeyValue(nil, data)
 		}
+		return &readResult{records: []*inputRecord{record}}, nil
 	}
-	c.writer.inputBytes -= record.bytes - 256
-	record.bytes = 256
-	if err := c.writer.finishRecordEffect(record); err != nil {
-		return err
-	}
-	return c.confirmCompleted(ctx)
 }
 
-func (c *storageConsumer) confirmCompleted(ctx context.Context) error {
+func (c *storageReader) Confirm(ctx context.Context, completed []*inputRecord) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	partition := c.writer.partitions[0]
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, record := range completed {
+		record.completed = true
+	}
 	count := 0
-	for _, record := range partition.records {
-		if !record.complete {
+	for _, record := range c.records {
+		if !record.completed {
 			break
 		}
-		c.writer.inputBytes -= record.bytes
+		if position, ok := c.positions[record]; ok {
+			indices := c.confirmedIndices[position.key]
+			if indices == nil {
+				indices = make(map[cloudstorage.FileIndexKey]uint64)
+				c.confirmedIndices[position.key] = indices
+			}
+			indices[position.index.FileIndexKey] = position.index.Idx
+			delete(c.positions, record)
+		}
+		size := record.bytes.Load()
+		c.buffer.memory.bytes.Add(-size)
+		c.buffer.memory.readBytes.Add(-size)
+		c.buffer.memory.records.Add(-1)
 		count++
 	}
-	c.writer.recordCount -= count
-	c.writer.completedInputs += int64(count)
-	copy(partition.records, partition.records[count:])
-	clear(partition.records[len(partition.records)-count:])
-	partition.records = partition.records[:len(partition.records)-count]
-	// Storage has independent table progress. A global checkpoint must not
-	// discard replay identities belonging to a table whose files are unread.
-	before := maps.Clone(c.tableWatermarks)
-	for _, item := range c.writer.pendingDML {
-		before[item.event.PhysicalTableID] = min(before[item.event.PhysicalTableID], item.event.CommitTs)
-	}
-	for _, batch := range c.writer.inFlight {
-		for _, item := range batch.items {
-			before[item.event.PhysicalTableID] = min(before[item.event.PhysicalTableID], item.event.CommitTs)
-		}
-	}
-	for key, mutation := range c.writer.mutations {
-		if mutation.batch == nil && key.commitTs < before[key.tableID] {
-			delete(c.writer.mutations, key)
-			c.writer.mutationBytes -= int64(len(key.handle) + 192)
-		}
-	}
+	copy(c.records, c.records[count:])
+	clear(c.records[len(c.records)-count:])
+	c.records = c.records[:len(c.records)-count]
+	return nil
+}
+
+func (c *storageReader) BufferedBytes() int64 { return c.buffer.memory.readBytes.Load() }
+
+func (c *storageReader) Close() error {
+	c.storage.Close()
 	return nil
 }

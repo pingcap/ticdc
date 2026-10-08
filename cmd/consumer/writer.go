@@ -8,6 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -26,9 +27,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -51,88 +50,31 @@ const (
 	progressLogInterval = 5 * time.Second
 )
 
-type messageRecord struct {
-	partition int32
-	remaining int
-	complete  bool
-	bytes     int64
-}
-
-type messagePartition struct {
-	decoder       codeccommon.Decoder
-	watermark     uint64
-	hasWatermark  bool
-	records       []*messageRecord
-	cachedRecords []*messageRecord
-	// Simple can release cached messages out of order. Keep their records
-	// incomplete until every message in this cache group has been flushed.
-	cachedUnreleased int
-	cachedUnflushed  int
-	paused           bool
-	schemas          map[schemaKey]bool
-	schemaPointers   map[*common.TableInfo]bool
-}
-
-type schemaKey struct {
-	schema  string
-	table   string
-	version uint64
-}
-
 type pendingDML struct {
-	event           *event.DMLEvent
-	record          *messageRecord
-	cachedPartition *messagePartition
-	bytes           int64
+	event   *event.DMLEvent
+	records []*inputRecord
+	bytes   int64
 }
 
-type ddlKey struct {
-	commitTs uint64
-	schema   string
-	table    string
-}
-
-type pendingDDL struct {
-	key        ddlKey
-	event      *event.DDLEvent
-	partitions map[int32]bool
-	records    []*messageRecord
-	flushed    bool
-	bytes      int64
-}
-
-type eventWriter struct {
+type writer struct {
 	downstream      sink.Sink
-	protocol        config.Protocol
-	partitions      map[int32]*messagePartition
+	memory          *bufferUsage
 	pendingDML      []*pendingDML
-	pendingDDL      []*pendingDDL
-	ddls            map[ddlKey]*pendingDDL
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*mutation
 	readySince      time.Time
 	dmlDirty        bool
-	ddlDirty        bool
 	writtenBefore   uint64
-	inputBytes      int64
-	polledBytes     int64
 	dmlBytes        int64
-	controlBytes    int64
 	mutationBytes   int64
-	schemaBytes     int64
-	schemaCount     int
 	inFlightBytes   int64
-	recordCount     int
-	effectCount     int
 	confirm         func(context.Context) error
-	bufferedInput   func() int64
 	receivedInputs  int64
 	decodedRows     int64
 	writtenRows     int64
 	completedInputs int64
 	lastProgressLog time.Time
 }
-
 type writeBatch struct {
 	items   []*pendingDML
 	events  []*event.DMLEvent
@@ -155,146 +97,37 @@ type mutation struct {
 	digest [sha256.Size]byte
 }
 
-func (c *eventWriter) queueDML(message *codeccommon.DMLMessage, record *messageRecord, cachedPartition *messagePartition) error {
-	dml := message.ToDMLEvent()
-	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
-		return errors.ErrCodecDecode.FastGenByArgs("DML message cannot be materialized into nonempty rows with table metadata")
-	}
-	partition := cachedPartition
-	if record != nil {
-		partition = c.partitions[record.partition]
-	}
-	if err := c.trackSchema(partition, dml.TableInfo); err != nil {
+func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) error {
+	if err := c.flushDML(ctx, writeCtx, ^uint64(0), true, true); err != nil {
 		return err
 	}
-	bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64 + 256
-	if bytes > maxInFlightBytes || c.bufferedBytes()+bytes > maxBufferedBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DML exceeds its buffer limit; source record remains unconfirmed")
-	}
-	c.dmlBytes += bytes
-	c.pendingDML = append(c.pendingDML, &pendingDML{event: dml, record: record, cachedPartition: cachedPartition, bytes: bytes})
-	c.decodedRows += int64(dml.Len())
-	c.dmlDirty = true
-	return nil
-}
-
-func (c *eventWriter) trackSchema(partition *messagePartition, table *common.TableInfo) error {
-	if table == nil {
-		return nil
-	}
-	key := schemaKey{schema: table.GetSchemaName(), table: table.GetTableName(), version: table.GetUpdateTS()}
-	// Kafka/Pulsar Canal metadata has no schema version. Storage supplies the
-	// version from its schema file, so per-row metadata shares one cache entry.
-	unversioned := c.protocol == config.ProtocolCanalJSON && table.GetUpdateTS() == 0
-	if unversioned {
-		if _, known := partition.schemaPointers[table]; known {
-			return nil
-		}
-	} else if _, known := partition.schemas[key]; known {
-		return nil
-	}
-	if c.schemaCount >= maxSchemas {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its count limit; source record remains unconfirmed")
-	}
-	data, err := table.Marshal()
-	if err != nil {
-		return errors.WrapError(errors.ErrCodecDecode, err, "measure consumer table metadata")
-	}
-	// Serialized size is an accounting estimate, not a process RSS limit.
-	// Reserve space for decoded columns, indexes, maps and generated SQL too.
-	bytes := int64(len(data))*4 + 1024
-	if c.schemaBytes+bytes > maxSchemaBytes || c.bufferedBytes()+bytes > maxBufferedBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its byte limit; source record remains unconfirmed")
-	}
-	if unversioned {
-		partition.schemaPointers[table] = true
-	} else {
-		partition.schemas[key] = true
-	}
-	c.schemaBytes += bytes
-	c.schemaCount++
-	return nil
-}
-
-func (c *eventWriter) flushReady(ctx, writeCtx context.Context, watermark uint64, force bool) error {
-	if c.ddlDirty {
-		slices.SortStableFunc(c.pendingDDL, func(a, b *pendingDDL) int { return cmp.Compare(a.key.commitTs, b.key.commitTs) })
-		c.ddlDirty = false
-	}
-	for len(c.pendingDDL) != 0 {
-		ddl := c.pendingDDL[0]
-		early := false
-		if ddl.event != nil {
-			switch timodel.ActionType(ddl.event.Type) {
-			case timodel.ActionCreateSchema:
-				early = true
-			case timodel.ActionCreateTable:
-				blocked := ddl.event.GetBlockedTables()
-				early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID && len(ddl.event.GetBlockedTableNames()) == 0
-			}
-		}
-		if ddl.key.commitTs > watermark && !early {
-			break
-		}
-		expected := len(c.partitions)
-		if c.protocol == config.ProtocolCanalJSON {
-			expected = 1
-		}
-		// Every partition has crossed this inclusive watermark. A missing
-		// DDL copy can no longer arrive without violating the source boundary.
-		if len(ddl.partitions) != expected {
-			if ddl.key.commitTs > watermark {
-				break
-			}
-			return errors.ErrCodecDecode.FastGenByArgs("DDL is missing an expected copy at the complete boundary")
-		}
-		if ddl.event == nil {
-			return errors.ErrCodecDecode.FastGenByArgs("DDL is missing its canonical event")
-		}
-		// Independent creation has no earlier DML in its target scope. It
-		// may initialize the downstream while the source watermark is stalled.
-		if ddl.key.commitTs <= watermark {
-			if err := c.flushDML(ctx, writeCtx, ddl.key.commitTs, false, true); err != nil {
+	for _, batch := range slices.Clone(c.inFlight) {
+		if batchAffectedByDDL(batch, result.ddl) {
+			if err := c.waitBatch(ctx, batch); err != nil {
 				return err
 			}
 		}
-		// Only batches that touch this DDL's scope need to be durable first.
-		// Keep unrelated batches in flight while the synchronous DDL executes.
-		for _, batch := range slices.Clone(c.inFlight) {
-			if batchAffectedByDDL(batch, ddl.event) {
-				if err := c.waitBatch(ctx, batch); err != nil {
-					return err
-				}
-			}
-		}
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if err := c.downstream.FlushDMLBeforeBlock(ddl.event); err != nil {
-			return err
-		}
-		if err := c.downstream.WriteBlockEvent(ddl.event); err != nil {
-			return err
-		}
-		for _, record := range ddl.records {
-			if err := c.finishRecordEffect(record); err != nil {
-				return err
-			}
-		}
-		c.controlBytes -= ddl.bytes
-		ddl.flushed = true
-		ddl.event = nil
-		ddl.partitions = nil
-		ddl.records = nil
-		ddl.bytes = int64(len(ddl.key.schema) + len(ddl.key.table) + 192)
-		c.controlBytes += ddl.bytes
-		c.pendingDDL[0] = nil
-		c.pendingDDL = c.pendingDDL[1:]
 	}
-	return c.flushDML(ctx, writeCtx, watermark, true, force)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := c.downstream.FlushDMLBeforeBlock(result.ddl); err != nil {
+		return err
+	}
+	if err := c.downstream.WriteBlockEvent(result.ddl); err != nil {
+		return err
+	}
+	for _, record := range result.records {
+		if record.pending.Add(-1) < 0 {
+			return errors.ErrInternalCheckFailed.FastGenByArgs("input effect completed more than once")
+		}
+		c.memory.effects.Add(-1)
+	}
+	c.memory.bytes.Add(-result.bytes)
+	return nil
 }
 
-func (c *eventWriter) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclusive, force bool) error {
+func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclusive, force bool) error {
 	var building *writeBatch
 	defer func() {
 		// Cancellation can interrupt filtering while it waits for an earlier
@@ -304,13 +137,16 @@ func (c *eventWriter) flushDML(ctx, writeCtx context.Context, commitTs uint64, i
 		}
 		for _, key := range building.keys {
 			delete(c.mutations, key)
-			c.mutationBytes -= int64(len(key.handle) + 192)
+			bytes := int64(len(key.handle) + 192)
+			c.mutationBytes -= bytes
+			c.memory.bytes.Add(-bytes)
 		}
 		originalBytes := int64(0)
 		for _, item := range building.items {
 			originalBytes += item.bytes
 		}
 		c.dmlBytes -= building.bytes - originalBytes
+		c.memory.bytes.Add(-(building.bytes - originalBytes))
 	}()
 	if c.dmlDirty {
 		slices.SortStableFunc(c.pendingDML, func(a, b *pendingDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
@@ -361,8 +197,8 @@ func (c *eventWriter) flushDML(ctx, writeCtx context.Context, commitTs uint64, i
 			if filtered != item.event {
 				// The original chunk stays alive through its decoder callbacks.
 				copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
-				if c.bufferedBytes()+copyBytes > maxBufferedBytes {
-					return errors.ErrInternalCheckFailed.FastGenByArgs("consumer filtered DML exceeds its buffer limit; source record remains unconfirmed")
+				if err := c.memory.reserve(copyBytes); err != nil {
+					return err
 				}
 				batch.bytes += copyBytes
 				c.dmlBytes += copyBytes
@@ -412,7 +248,7 @@ func (c *eventWriter) flushDML(ctx, writeCtx context.Context, commitTs uint64, i
 	return nil
 }
 
-func (c *eventWriter) waitBatch(ctx context.Context, batch *writeBatch) error {
+func (c *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	tick := time.Tick(progressLogInterval)
 	for {
 		select {
@@ -429,15 +265,15 @@ func (c *eventWriter) waitBatch(ctx context.Context, batch *writeBatch) error {
 				log.Info("consumer waiting for batch",
 					zap.Int64("receivedInputs", c.receivedInputs), zap.Int64("decodedRows", c.decodedRows),
 					zap.Int64("writtenRows", c.writtenRows), zap.Int64("completedInputs", c.completedInputs),
-					zap.Int("pendingDMLCount", len(c.pendingDML)), zap.Int("pendingDDLCount", len(c.pendingDDL)),
+					zap.Int("pendingDMLCount", len(c.pendingDML)),
 					zap.Int("inFlightBatches", len(c.inFlight)), zap.Int64("inFlightBytes", c.inFlightBytes),
-					zap.Int("uncompletedInputs", c.recordCount), zap.Int64("bufferedBytes", c.bufferedBytes()))
+					zap.Int64("uncompletedInputs", c.memory.records.Load()), zap.Int64("bufferedBytes", c.bufferedBytes()))
 			}
 		}
 	}
 }
 
-func (c *eventWriter) finishBatches() error {
+func (c *writer) finishBatches() error {
 	remaining := c.inFlight[:0]
 	for _, batch := range c.inFlight {
 		select {
@@ -453,28 +289,18 @@ func (c *eventWriter) finishBatches() error {
 			c.writtenRows += int64(dml.Len())
 		}
 		for _, item := range batch.items {
-			if item.record != nil {
-				if err := c.finishRecordEffect(item.record); err != nil {
-					return err
+			for _, record := range item.records {
+				if record.pending.Add(-1) < 0 {
+					return errors.ErrInternalCheckFailed.FastGenByArgs("input effect completed more than once")
 				}
-				continue
-			}
-			partition := item.cachedPartition
-			partition.cachedUnflushed--
-			if partition.cachedUnreleased == 0 && partition.cachedUnflushed == 0 {
-				for _, record := range partition.cachedRecords {
-					if err := c.finishRecordEffect(record); err != nil {
-						return err
-					}
-				}
-				clear(partition.cachedRecords)
-				partition.cachedRecords = nil
+				c.memory.effects.Add(-1)
 			}
 		}
 		for _, key := range batch.keys {
 			c.mutations[key].batch = nil
 		}
 		c.dmlBytes -= batch.bytes
+		c.memory.bytes.Add(-batch.bytes)
 		c.inFlightBytes -= batch.bytes
 	}
 	clear(c.inFlight[len(remaining):])
@@ -482,43 +308,39 @@ func (c *eventWriter) finishBatches() error {
 	return nil
 }
 
-func (c *eventWriter) advanceReplay(watermark uint64) {
-	if watermark <= c.writtenBefore {
-		return
-	}
-	// This is an exclusive frontier: keep identities at the current boundary
-	// for equal-ts replays, and never move past queued or in-flight effects.
+func (c *writer) advanceReplay(watermark uint64, tableID int64) {
 	before := watermark
 	for _, item := range c.pendingDML {
-		before = min(before, item.event.CommitTs)
-	}
-	for _, batch := range c.inFlight {
-		for _, item := range batch.items {
+		if tableID == 0 || item.event.PhysicalTableID == tableID {
 			before = min(before, item.event.CommitTs)
 		}
 	}
-	for _, ddl := range c.pendingDDL {
-		before = min(before, ddl.key.commitTs)
-	}
-	if before <= c.writtenBefore {
-		return
-	}
-	c.writtenBefore = before
-	for key, ddl := range c.ddls {
-		if ddl.flushed && key.commitTs < before {
-			c.controlBytes -= ddl.bytes
-			delete(c.ddls, key)
+	for _, batch := range c.inFlight {
+		for _, item := range batch.items {
+			if tableID == 0 || item.event.PhysicalTableID == tableID {
+				before = min(before, item.event.CommitTs)
+			}
 		}
 	}
+	if tableID == 0 {
+		if before <= c.writtenBefore {
+			return
+		}
+		c.writtenBefore = before
+	}
+	// Storage's per-table progress retires identities, not incoming rows:
+	// unread cross-node file groups can still contain older commit timestamps.
 	for key := range c.mutations {
-		if key.commitTs < before {
-			c.mutationBytes -= int64(len(key.handle) + 192)
+		if (tableID == 0 || key.tableID == tableID) && key.commitTs < before {
+			bytes := int64(len(key.handle) + 192)
+			c.mutationBytes -= bytes
+			c.memory.bytes.Add(-bytes)
 			delete(c.mutations, key)
 		}
 	}
 }
 
-func (c *eventWriter) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
+func (c *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
 	if dml.CommitTs < c.writtenBefore {
 		return nil, nil
 	}
@@ -581,8 +403,11 @@ func (c *eventWriter) filterRows(ctx context.Context, dml *event.DMLEvent, batch
 				retain = false
 			} else {
 				bytes := int64(len(key.handle) + 192)
-				if len(c.mutations) >= maxEffects || c.bufferedBytes()+bytes > maxBufferedBytes {
+				if len(c.mutations) >= maxEffects {
 					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer replay state exceeds its buffer limit; source record remains unconfirmed")
+				}
+				if err := c.memory.reserve(bytes); err != nil {
+					return nil, err
 				}
 				c.mutations[key] = &mutation{batch: batch, digest: digest}
 				c.mutationBytes += bytes
@@ -666,54 +491,10 @@ func batchAffectedByDDL(batch *writeBatch, ddl *event.DDLEvent) bool {
 	return false
 }
 
-func (c *eventWriter) finishRecordEffect(record *messageRecord) error {
-	if record.remaining <= 0 {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("source record effect completed more than once")
+func (c *writer) bufferedBytes() int64 {
+	bytes := c.memory.bytes.Load()
+	if c.memory.externalBytes != nil {
+		bytes += c.memory.externalBytes()
 	}
-	record.remaining--
-	c.effectCount--
-	if record.remaining == 0 {
-		record.complete = true
-	}
-	return nil
-}
-
-func (c *eventWriter) bufferedBytes() int64 {
-	input := int64(0)
-	if c.bufferedInput != nil {
-		input = c.bufferedInput()
-	}
-	return c.inputBytes + c.polledBytes + c.dmlBytes + c.controlBytes + c.mutationBytes + c.schemaBytes + input
-}
-
-func (c *eventWriter) queueDDL(ddl *event.DDLEvent, state *messageRecord, partitionID int32, canonical bool) error {
-	if ddl.GetCommitTs() < c.writtenBefore {
-		return nil
-	}
-	key := ddlKey{commitTs: ddl.GetCommitTs(), schema: ddl.GetSchemaName(), table: ddl.GetTableName()}
-	pending := c.ddls[key]
-	if pending == nil {
-		pending = &pendingDDL{key: key, partitions: make(map[int32]bool), bytes: int64(len(ddl.Query) + len(key.schema) + len(key.table) + 1024)}
-		c.controlBytes += pending.bytes
-		c.ddls[key] = pending
-		c.pendingDDL = append(c.pendingDDL, pending)
-		c.ddlDirty = true
-	}
-	if pending.flushed {
-		return nil
-	}
-	state.remaining++
-	c.effectCount++
-	if !pending.partitions[partitionID] {
-		pending.partitions[partitionID] = true
-		pending.bytes += 32
-		c.controlBytes += 32
-	}
-	pending.records = append(pending.records, state)
-	pending.bytes += 16
-	c.controlBytes += 16
-	if canonical {
-		pending.event = ddl
-	}
-	return nil
+	return bytes
 }

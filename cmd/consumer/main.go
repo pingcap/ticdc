@@ -8,6 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -18,7 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -144,11 +145,17 @@ func newCommand() *cobra.Command {
 			log.Info("consumer configuration loaded", zap.String("sourceType", string(source)))
 
 			if options.enableProfiling {
-				listener, err := net.Listen("tcp", profileAddress)
+				listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
 				if err != nil {
 					return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
 				}
-				server := &http.Server{Addr: profileAddress, ReadHeaderTimeout: 5 * time.Second}
+				mux := http.NewServeMux()
+				mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+				mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+				mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+				mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+				mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+				server := &http.Server{Addr: profileAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 				wg.Go(func() {
 					if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
@@ -166,13 +173,20 @@ func newCommand() *cobra.Command {
 					}
 				})
 			}
-			if source == sourceKafka {
-				return runKafkaConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.consumerID, options.timezone, replicaConfig)
+			memory := &bufferUsage{}
+			var input reader
+			switch source {
+			case sourceKafka:
+				input, err = newKafkaReader(ctx, upstreamURI, options.consumerID, options.timezone, replicaConfig, memory)
+			case sourcePulsar:
+				input, err = newPulsarReader(ctx, upstreamURI, options.consumerID, options.timezone, replicaConfig, memory)
+			default:
+				input, err = newStorageReader(ctx, upstreamURI, options.timezone, replicaConfig, memory)
 			}
-			if source == sourcePulsar {
-				return runPulsarConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.consumerID, options.timezone, replicaConfig)
+			if err != nil {
+				return err
 			}
-			return runStorageConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.timezone, replicaConfig)
+			return runConsumer(ctx, &wg, input, options.downstreamURI, replicaConfig, memory)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {

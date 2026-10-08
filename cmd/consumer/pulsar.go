@@ -17,7 +17,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -26,7 +25,6 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -37,93 +35,19 @@ import (
 	"go.uber.org/zap"
 )
 
-type pulsarWatermark struct {
-	watermark uint64
-	record    *messageRecord
-}
-
-type pulsarConsumer struct {
+type pulsarReader struct {
 	client            pulsar.Client
 	consumer          pulsar.Consumer
-	writer            *eventWriter
+	buffer            *readBuffer
+	mu                sync.Mutex
 	partitionIDs      map[string]int32
-	messageIDs        map[*messageRecord]pulsar.MessageID
-	pendingWatermarks []pulsarWatermark
+	messageIDs        map[*inputRecord]pulsar.MessageID
+	pendingWatermarks []*readResult
 	watermark         uint64
 	hasWatermark      bool
 }
 
-func runPulsarConsumer(ctx context.Context, wg *sync.WaitGroup, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) error {
-	parentCtx := ctx
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	writeCtx, cancelWrite := context.WithCancelCause(context.WithoutCancel(ctx))
-	defer cancelWrite(nil)
-	wg.Go(func() {
-		select {
-		case <-parentCtx.Done():
-			log.Info("consumer stopping", zap.Duration("shutdownTimeout", shutdownTimeout))
-		case <-writeCtx.Done():
-			return
-		}
-		shutdownCtx, cancelShutdown := context.WithTimeout(writeCtx, shutdownTimeout)
-		defer cancelShutdown()
-		<-shutdownCtx.Done()
-		if shutdownCtx.Err() == context.DeadlineExceeded {
-			cancelWrite(errors.ErrInternalCheckFailed.FastGenByArgs("consumer shutdown drain timed out"))
-		}
-	})
-	consumer, err := newPulsarConsumer(ctx, writeCtx, upstreamURI, downstreamURI, consumerID, timezone, replicaConfig)
-	if err != nil {
-		return err
-	}
-	defer consumer.client.Close()
-	defer consumer.consumer.Close()
-	defer consumer.writer.downstream.Close()
-	sinkDone := make(chan bool)
-	defer func() {
-		cancelWrite(nil)
-		<-sinkDone
-	}()
-	wg.Go(func() {
-		defer close(sinkDone)
-		if err := consumer.writer.downstream.Run(writeCtx); err != nil {
-			cancelWrite(err)
-			cancel(err)
-			return
-		}
-		if writeCtx.Err() == nil {
-			err := errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
-			cancelWrite(err)
-			cancel(err)
-		}
-	})
-	err = consumer.run(ctx, writeCtx)
-	if writeErr := context.Cause(writeCtx); writeErr != nil {
-		return writeErr
-	}
-	if parentCtx.Err() == nil || !errors.Is(err, context.Canceled) {
-		return err
-	}
-	drainCtx, cancelDrain := context.WithTimeout(writeCtx, shutdownTimeout)
-	defer cancelDrain()
-	if consumer.hasWatermark {
-		if err := consumer.writer.flushReady(drainCtx, drainCtx, consumer.watermark, true); err != nil {
-			return err
-		}
-	}
-	for len(consumer.writer.inFlight) != 0 {
-		if err := consumer.writer.waitBatch(drainCtx, consumer.writer.inFlight[0]); err != nil {
-			return err
-		}
-	}
-	if err := consumer.confirmCompleted(drainCtx); err != nil {
-		return err
-	}
-	return context.Cause(writeCtx)
-}
-
-func newPulsarConsumer(ctx, writeCtx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*pulsarConsumer, error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *bufferUsage) (*pulsarReader, error) {
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if strings.Contains(topic, ",") {
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("cdc_consumer accepts one Pulsar topic")
@@ -252,182 +176,136 @@ func newPulsarConsumer(ctx, writeCtx context.Context, upstreamURI *url.URL, down
 		client.Close()
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "subscribe to Pulsar topic")
 	}
-	partitions := make(map[int32]*messagePartition, len(topics))
+	partitions := make(map[int32]*partition, len(topics))
 	partitionIDs := make(map[string]int32, len(topics))
 	schemas := make(map[schemaKey]bool)
 	schemaPointers := make(map[*common.TableInfo]bool)
 	for index, partitionTopic := range topics {
 		partitionIDs[partitionTopic] = int32(index)
-		partitions[int32(index)] = &messagePartition{decoder: decoder, schemas: schemas, schemaPointers: schemaPointers}
+		partitions[int32(index)] = &partition{decoder: decoder, schemas: schemas, schemaPointers: schemaPointers}
 	}
-	replicaConfig.Sink.TiDBSourceID = 1
-	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	downstream, err := sink.New(writeCtx, &config.ChangefeedConfig{
-		ChangefeedID: changefeedID, SinkURI: downstreamURI, SinkConfig: replicaConfig.Sink,
-		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive), EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
-	}, changefeedID, common.DefaultKeyspaceID)
-	if err != nil {
-		consumer.Close()
-		client.Close()
-		return nil, err
-	}
-	writer := &eventWriter{downstream: downstream, protocol: protocol, partitions: partitions, ddls: make(map[ddlKey]*pendingDDL), mutations: make(map[mutationKey]*mutation)}
-	c := &pulsarConsumer{client: client, consumer: consumer, writer: writer, partitionIDs: partitionIDs, messageIDs: make(map[*messageRecord]pulsar.MessageID)}
-	writer.confirm = c.confirmCompleted
-	log.Info("Pulsar consumer initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
+
+	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, ddls: make(map[ddlKey]*readDDL)}
+	c := &pulsarReader{client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs, messageIDs: make(map[*inputRecord]pulsar.MessageID)}
+	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c, nil
 }
 
-func (c *pulsarConsumer) run(ctx, writeCtx context.Context) error {
-	tick := time.Tick(batchLinger)
+func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
-			return err
+			return nil, err
 		}
-		if err := c.writer.finishBatches(); err != nil {
-			return err
+		if c.hasWatermark || len(c.buffer.pendingDDL) != 0 {
+			result, err := c.buffer.nextReady(c.watermark)
+			if err != nil || result != nil {
+				return result, err
+			}
 		}
-		if err := c.confirmCompleted(ctx); err != nil {
-			return err
+		if len(c.pendingWatermarks) != 0 {
+			result := c.pendingWatermarks[0]
+			c.pendingWatermarks[0] = nil
+			c.pendingWatermarks = c.pendingWatermarks[1:]
+			c.buffer.advance(result.watermark)
+			return result, nil
 		}
-		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
-			c.writer.lastProgressLog = time.Now()
-			log.Info("consumer progress", zap.Uint64("watermark", c.watermark), zap.Bool("hasWatermark", c.hasWatermark),
-				zap.Int64("receivedInputs", c.writer.receivedInputs), zap.Int64("decodedRows", c.writer.decodedRows),
-				zap.Int64("writtenRows", c.writer.writtenRows), zap.Int64("completedInputs", c.writer.completedInputs),
-				zap.Int("pendingDMLCount", len(c.writer.pendingDML)), zap.Int("pendingDDLCount", len(c.writer.pendingDDL)),
-				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int("uncompletedInputs", c.writer.recordCount), zap.Int64("bufferedBytes", c.writer.bufferedBytes()))
-		}
-		idle := false
 		select {
 		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-tick:
-			idle = true
+			return nil, context.Cause(ctx)
 		case message, ok := <-c.consumer.Chan():
 			if !ok {
-				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar consumer stopped unexpectedly")
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar reader stopped unexpectedly")
 			}
-			if err := c.processMessage(message.Message); err != nil {
-				return err
+			partitionID, ok := c.partitionIDs[message.Topic()]
+			if !ok {
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
 			}
-			idle = len(c.consumer.Chan()) == 0
-		}
-		if err := c.writer.flushReady(ctx, writeCtx, c.watermark, idle || c.writer.bufferedBytes() >= memoryHighWater); err != nil {
-			return err
-		}
-		if c.hasWatermark {
-			c.writer.advanceReplay(c.watermark)
-		}
-		if err := c.confirmCompleted(ctx); err != nil {
-			return err
-		}
-	}
-}
-
-func (c *pulsarConsumer) processMessage(message pulsar.Message) error {
-	partitionID, ok := c.partitionIDs[message.Topic()]
-	if !ok {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
-	}
-	bytes := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
-	if bytes > maxRecordBytes || c.writer.recordCount >= maxRecords || c.writer.bufferedBytes()+bytes > maxBufferedBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its buffer limit; Pulsar message remains unconfirmed")
-	}
-	state := &messageRecord{partition: partitionID, bytes: bytes}
-	c.messageIDs[state] = message.ID()
-	c.writer.inputBytes += bytes
-	c.writer.recordCount++
-	c.writer.receivedInputs++
-	partition := c.writer.partitions[partitionID]
-	partition.records = append(partition.records, state)
-	partition.decoder.AddKeyValue([]byte(message.Key()), message.Payload())
-	for {
-		messageType, hasNext := partition.decoder.HasNext()
-		if !hasNext {
-			break
-		}
-		switch messageType {
-		case codeccommon.MessageTypeRow:
-			message := partition.decoder.NextDMLMessage()
-			if message == nil {
-				return errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DML message")
+			size := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
+			if size > maxRecordBytes {
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
 			}
-			state.remaining++
-			c.writer.effectCount++
-			if err := c.writer.queueDML(message, state, nil); err != nil {
-				return err
+			record, err := c.buffer.newRecord(size)
+			if err != nil {
+				return nil, err
 			}
-		case codeccommon.MessageTypeDDL:
-			ddl := partition.decoder.NextDDLEvent()
-			if ddl == nil || ddl.Query == "" {
-				return errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DDL event")
-			}
-			key := schemaKey{schema: ddl.SchemaName, table: ddl.TableName, version: ddl.FinishedTs}
-			if !partition.schemas[key] {
-				if c.writer.schemaCount >= maxSchemas || c.writer.schemaBytes+128 > maxSchemaBytes {
-					return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its resource limit; Pulsar message remains unconfirmed")
+			p := c.buffer.partitions[partitionID]
+			c.mu.Lock()
+			c.messageIDs[record] = message.ID()
+			p.records = append(p.records, record)
+			c.mu.Unlock()
+			p.decoder.AddKeyValue([]byte(message.Key()), message.Payload())
+			for {
+				messageType, hasNext := p.decoder.HasNext()
+				if !hasNext {
+					break
 				}
-				partition.schemas[key] = true
-				c.writer.schemaCount++
-				c.writer.schemaBytes += 128
+				switch messageType {
+				case codeccommon.MessageTypeRow:
+					message := p.decoder.NextDMLMessage()
+					if message == nil {
+						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DML message")
+					}
+					if err := c.buffer.queueDML(message.ToDMLEvent(), []*inputRecord{record}, p); err != nil {
+						return nil, err
+					}
+				case codeccommon.MessageTypeDDL:
+					ddl := p.decoder.NextDDLEvent()
+					if ddl == nil || ddl.Query == "" {
+						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DDL event")
+					}
+					key := schemaKey{schema: ddl.SchemaName, table: ddl.TableName, version: ddl.FinishedTs}
+					if !p.schemas[key] {
+						if c.buffer.schemaCount >= maxSchemas || c.buffer.schemaBytes+128 > maxSchemaBytes {
+							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar schema cache exceeds its resource limit")
+						}
+						if err := c.buffer.memory.reserve(128); err != nil {
+							return nil, err
+						}
+						p.schemas[key] = true
+						c.buffer.schemaCount++
+						c.buffer.schemaBytes += 128
+						c.buffer.memory.readBytes.Add(128)
+					}
+					if err := c.buffer.queueDDL(ddl, record, 0, true); err != nil {
+						return nil, err
+					}
+				case codeccommon.MessageTypeResolved:
+					watermark := p.decoder.NextResolvedEvent()
+					if c.buffer.memory.effects.Add(1) > maxEffects {
+						return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input exceeds its effect limit")
+					}
+					record.pending.Add(1)
+					c.watermark = max(c.watermark, watermark)
+					c.hasWatermark = true
+					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, records: []*inputRecord{record}})
+				default:
+					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
+				}
 			}
-			// Pulsar has one logical control stream; its physical placement
-			// does not select the DDL that will be submitted to the sink.
-			if err := c.writer.queueDDL(ddl, state, 0, true); err != nil {
-				return err
-			}
-		case codeccommon.MessageTypeResolved:
-			watermark := partition.decoder.NextResolvedEvent()
-			state.remaining++
-			c.writer.effectCount++
-			c.writer.controlBytes += 32
-			c.watermark = max(c.watermark, watermark)
-			c.hasWatermark = true
-			c.pendingWatermarks = append(c.pendingWatermarks, pulsarWatermark{watermark: watermark, record: state})
-		default:
-			return errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
-		}
-		if c.writer.effectCount > maxEffects || c.writer.bufferedBytes() > maxBufferedBytes {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("consumer decoded input exceeds its buffer limit; Pulsar message remains unconfirmed")
+			record.pending.Add(-1)
+			c.buffer.memory.effects.Add(-1)
+			return &readResult{records: []*inputRecord{record}}, nil
 		}
 	}
-	state.complete = state.remaining == 0
-	return nil
 }
 
-func (c *pulsarConsumer) confirmCompleted(ctx context.Context) error {
-	unfinished := uint64(math.MaxUint64)
-	for _, item := range c.writer.pendingDML {
-		unfinished = min(unfinished, item.event.CommitTs)
-	}
-	for _, batch := range c.writer.inFlight {
-		for _, item := range batch.items {
-			unfinished = min(unfinished, item.event.CommitTs)
+func (c *pulsarReader) Confirm(ctx context.Context, completed []*inputRecord) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, record := range completed {
+		if _, ok := c.messageIDs[record]; !ok {
+			// A previous call can ACK one partition before another fails.
+			if record.completed {
+				continue
+			}
+			return errors.ErrInternalCheckFailed.FastGenByArgs("unknown Pulsar input confirmation")
 		}
+		record.completed = true
 	}
-	for _, ddl := range c.writer.pendingDDL {
-		unfinished = min(unfinished, ddl.key.commitTs)
-	}
-	remaining := c.pendingWatermarks[:0]
-	hasUnfinished := len(c.writer.pendingDML) != 0 || len(c.writer.inFlight) != 0 || len(c.writer.pendingDDL) != 0
-	for _, control := range c.pendingWatermarks {
-		if control.watermark > c.watermark || (hasUnfinished && control.watermark >= unfinished) {
-			remaining = append(remaining, control)
-			continue
-		}
-		if err := c.writer.finishRecordEffect(control.record); err != nil {
-			return err
-		}
-		c.writer.controlBytes -= 32
-	}
-	clear(c.pendingWatermarks[len(remaining):])
-	c.pendingWatermarks = remaining
-	for _, partition := range c.writer.partitions {
+	for _, p := range c.buffer.partitions {
 		count := 0
-		for _, record := range partition.records {
-			if !record.complete {
+		for _, record := range p.records {
+			if !record.completed {
 				break
 			}
 			count++
@@ -438,19 +316,29 @@ func (c *pulsarConsumer) confirmCompleted(ctx context.Context) error {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		id := c.messageIDs[partition.records[count-1]]
-		if err := c.consumer.AckIDCumulative(id); err != nil {
+		if err := c.consumer.AckIDCumulative(c.messageIDs[p.records[count-1]]); err != nil {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
-		for _, record := range partition.records[:count] {
-			c.writer.inputBytes -= record.bytes
+		for _, record := range p.records[:count] {
+			size := record.bytes.Load()
+			c.buffer.memory.bytes.Add(-size)
+			c.buffer.memory.readBytes.Add(-size)
+			c.buffer.memory.records.Add(-1)
 			delete(c.messageIDs, record)
 		}
-		c.writer.recordCount -= count
-		c.writer.completedInputs += int64(count)
-		copy(partition.records, partition.records[count:])
-		clear(partition.records[len(partition.records)-count:])
-		partition.records = partition.records[:len(partition.records)-count]
+		copy(p.records, p.records[count:])
+		clear(p.records[len(p.records)-count:])
+		p.records = p.records[:len(p.records)-count]
 	}
+	return nil
+}
+
+func (c *pulsarReader) BufferedBytes() int64 {
+	return c.buffer.memory.readBytes.Load() + int64(len(c.consumer.Chan()))*maxRecordBytes
+}
+
+func (c *pulsarReader) Close() error {
+	c.consumer.Close()
+	c.client.Close()
 	return nil
 }
