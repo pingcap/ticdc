@@ -857,6 +857,23 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	common.CompareRow(t, insertEvents[2].Event, insertEvents[2].TableInfo, change, decoded.TableInfo)
 }
 
+func TestEncoderUsesKafkaRecordBatchSize(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolOpen).
+		WithMaxMessageBytes(200).
+		WithMaxBatchedBytes(120).
+		WithKafkaRecordBatchSize()
+	encoder := &batchEncoder{config: codecConfig}
+
+	encoder.pushMessage([]byte("k"), []byte("v"), nil)
+	require.Len(t, encoder.messages, 1)
+	require.LessOrEqual(t, encoder.messages[0].KafkaRecordBatchLength(), codecConfig.MaxBatchedBytes)
+
+	encoder.pushMessage([]byte("k"), []byte("v"), nil)
+	require.Len(t, encoder.messages, 2)
+	require.Equal(t, 1, encoder.messages[0].GetRowsCount())
+	require.Equal(t, 1, encoder.messages[1].GetRowsCount())
+}
+
 func TestMessageTooLarge(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(100)

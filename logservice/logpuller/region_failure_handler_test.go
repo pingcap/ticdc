@@ -185,6 +185,109 @@ func TestRegionFailureHandlerSchedulesNotLeaderRangeRetry(t *testing.T) {
 	}
 }
 
+func TestRegionFailureHandlerRoutesErrors(t *testing.T) {
+	testCases := []struct {
+		name          string
+		err           error
+		expectedRetry string
+		expectedError bool
+	}{
+		{
+			name: "epoch not match retries range",
+			err: &eventError{err: &cdcpb.Error{
+				EpochNotMatch: &errorpb.EpochNotMatch{},
+			}},
+			expectedRetry: "range",
+		},
+		{
+			name: "region not found retries range",
+			err: &eventError{err: &cdcpb.Error{
+				RegionNotFound: &errorpb.RegionNotFound{},
+			}},
+			expectedRetry: "range",
+		},
+		{
+			name:          "missing rpc context retries range",
+			err:           &rpcCtxUnavailableErr{},
+			expectedRetry: "range",
+		},
+		{
+			name: "server busy retries region",
+			err: &eventError{err: &cdcpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{BackoffMs: 1},
+			}},
+			expectedRetry: "region",
+		},
+		{
+			name:          "unknown cdc error retries region",
+			err:           &eventError{err: &cdcpb.Error{}},
+			expectedRetry: "region",
+		},
+		{
+			name: "duplicate request is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				DuplicateRequest: &cdcpb.DuplicateRequest{},
+			}},
+			expectedError: true,
+		},
+		{
+			name: "incompatible version is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				Compatibility: &cdcpb.Compatibility{RequiredVersion: "v9.0.0"},
+			}},
+			expectedError: true,
+		},
+		{
+			name: "cluster id mismatch is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				ClusterIdMismatch: &cdcpb.ClusterIDMismatch{Current: 1, Request: 2},
+			}},
+			expectedError: true,
+		},
+		{
+			name:          "unknown local error is terminal",
+			err:           errors.New("unrecoverable"),
+			expectedError: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			retryCh := make(chan string, 1)
+			handler := newRegionFailureHandler(
+				nil,
+				func(*subscribedSpan) {},
+				func(context.Context, regionInfo) { retryCh <- "region" },
+				func(context.Context, rangeTask) { retryCh <- "range" },
+			)
+			t.Cleanup(handler.cancelRecoveries)
+
+			region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+			// Keep this test focused on error routing. High priority bypasses the
+			// scan-priority clock lookup when a range retry is constructed.
+			region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+			err := handler.handleError(t.Context(), newRegionErrorInfo(region, testCase.err))
+			if testCase.expectedError {
+				require.Error(t, err)
+				select {
+				case retry := <-retryCh:
+					t.Fatalf("terminal error unexpectedly scheduled a %s retry", retry)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			select {
+			case retry := <-retryCh:
+				require.Equal(t, testCase.expectedRetry, retry)
+			case <-time.After(time.Second):
+				t.Fatalf("timed out waiting for %s retry", testCase.expectedRetry)
+			}
+		})
+	}
+}
+
 func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
 	regionRetryCh := make(chan regionInfo, 2)
 	handler := newRegionFailureHandler(

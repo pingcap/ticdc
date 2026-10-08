@@ -110,12 +110,8 @@ are coalesced into that single continuation, so the dispatcher promptly checks
 the newest frontier without adding one task per notification. Throughput mode
 keeps its existing behavior and does not create this continuation.
 
-Internal continuation and retry paths use non-blocking queue insertion. When
-the queue is full, the dispatcher returns to a recoverable state and a later
-signal can schedule it again. The EventStore notification path may wait for
-queue capacity after it has confirmed that a real scan is required. The
-`ticdc_event_service_dropped_scan_task_count` counter records failed internal
-scheduling attempts; it does not mean that a data event was dropped.
+All scan scheduling paths enqueue into an unbounded per-worker FIFO, so they do
+not block waiting for worker capacity or drop a scheduling request.
 
 ### Dispatcher scan state machine
 
@@ -128,7 +124,6 @@ Each dispatcher has one `dispatcherScanState`, protected by `scanMu`:
 | `dispatcherScanRunning` | One goroutine owns scan preparation or execution. |
 | `dispatcherScanRunningPending` | A low-latency request arrived while the dispatcher was running. |
 | `dispatcherScanSchemaBlocked` | Progress is waiting for SchemaStore to advance. |
-| `dispatcherScanRemoved` | The dispatcher is removed; this state is terminal for that dispatcher instance. |
 
 The main transitions are:
 
@@ -151,11 +146,9 @@ The `Running` state deliberately covers both inline preparation and worker
 execution. This gives both paths the same ownership rule and prevents them
 from checking or updating one dispatcher concurrently.
 
-An interrupted scan is queued again. If an internal enqueue fails because the
-worker queue is full, its fallback is `Idle`, so the next notification can
-recover it. A failed schema retry stays `SchemaBlocked`, so the retry loop can
-try again. Removing or resetting a dispatcher marks the old dispatcher state
-as `Removed`; a reset creates a new dispatcher state starting from `Idle`.
+An interrupted scan is queued again. Removing or resetting a dispatcher sets
+its independent `isRemoved` lifecycle flag; queued workers reject it after the
+flag is set. A reset creates a new dispatcher state starting from `Idle`.
 
 ### Schema-blocked retry and active scans
 
@@ -183,7 +176,7 @@ so both modes can run on the same captures.
 Throughput changefeeds retain their configured LogPuller batching interval,
 200 ms dispatcher heartbeat, delayed first heartbeat, periodic Maintainer
 reporting, and existing scan scheduling behavior. Both modes continue to use
-the same bounded worker queues, scan limits, memory quotas, and event ordering
+the same unbounded worker queues, scan limits, memory quotas, and event ordering
 rules.
 
 ## Existing test coverage
@@ -216,12 +209,11 @@ rules.
 - `TestLowLatencyScanRequestWhileRunningSchedulesContinuation` and
   `TestThroughputModeDoesNotContinueScanRequestWhileRunning` compare the two
   scheduling modes.
-- `TestLowLatencyScanContinuationQueueFullRecoversOnNextNotify`,
-  `TestInterruptedScanQueueFullRecoversOnNextNotify`, and
-  `TestNotifyQueueFullWaitsForCapacity` cover bounded-queue behavior and
-  recovery.
+- `TestLowLatencyScanContinuationIsQueued`, `TestInterruptedScanIsQueuedAgain`,
+  and `TestNotifyEnqueuesWithoutBlockingOrDuplicatingTask` cover unbounded
+  queueing and notification coalescing.
 - `TestRunningNotifyParksAtSchemaBlock`,
-  `TestLowLatencySchemaBlockedQueueFullRetriesWithoutNotify`,
+  `TestLowLatencySchemaBlockedRetriesWithoutNotify`,
   `TestThroughputModeDoesNotParkSchemaBlockedDispatcher`, and
   `TestResetSchemaBlockedDispatcherRemovesOldEpoch` cover SchemaStore blocking,
   retry, mode isolation, and dispatcher reset.

@@ -45,6 +45,27 @@ func (k TableKey) Equal(other TableKey) bool {
 	return k.Schema == other.Schema && k.Table == other.Table
 }
 
+// normalized returns the key used for table identity comparisons under the
+// changefeed's case sensitivity. A case-insensitive changefeed treats `T` and `t`
+// as the same table, so conflict detection and admission tracking must match
+// rule matching; a case-sensitive changefeed keeps them distinct.
+func (k TableKey) normalized(caseSensitive bool) TableKey {
+	return TableKey{
+		Schema: normalizeIdentifier(k.Schema, caseSensitive),
+		Table:  normalizeIdentifier(k.Table, caseSensitive),
+	}
+}
+
+// normalizeIdentifier lower-cases a schema or table identifier unless the
+// changefeed is case-sensitive. SQL reference binding always uses the
+// case-insensitive form, independently of route matching and admission.
+func normalizeIdentifier(name string, caseSensitive bool) string {
+	if caseSensitive {
+		return name
+	}
+	return strings.ToLower(name)
+}
+
 // RouteBinding records one source-to-target route mapping.
 type RouteBinding struct {
 	Source TableKey
@@ -66,6 +87,8 @@ func NewRouteBinding(schema, table, targetSchema, targetTable string) RouteBindi
 }
 
 func (b RouteBinding) routed() bool {
+	// Spelling matters: a case-only mapping still changes the statement sent
+	// downstream, so compare the names exactly here.
 	return !b.Source.Equal(b.Target)
 }
 
@@ -143,8 +166,8 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) (*common.TableInfo
 	return tableInfo.CloneWithRouting(binding.Target.Schema, binding.Target.Table), nil
 }
 
-// ApplyToDDLEvent returns the original DDL event unless routing changes the DDL query;
-// when query changes, it also routes related metadata.
+// ApplyToDDLEvent returns the original DDL event unless routing changes its
+// query or related metadata.
 func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	if len(r.rules) == 0 || ddl == nil {
 		return ddl, nil
@@ -173,15 +196,20 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	// The event primary table is `other_db`.`child`, but the FOREIGN KEY reference can
 	// still match table route rules. So when table route is enabled, inspect the query
 	// through TiDB parser and let the AST visitor find all table names.
-	newQuery, err := r.rewriteParserBackedDDLQuery(ddl)
+	plan, err := r.buildParserBackedDDLRoutePlan(ddl)
 	if err != nil {
 		return nil, err
 	}
 
-	// In CDC DDL events, routed DDL metadata should correspond to names in Query.
-	// If Query is unchanged, no routed DDL event is needed.
-	if newQuery == ddl.Query {
+	queryRouted := plan.query != ddl.Query
+	if !queryRouted && !plan.hasOutOfBandTableMetadata {
 		return ddl, nil
+	}
+	if err := r.validateTableNamePreservingSchemaChanges(
+		plan.tableNamePreservingSchemaChanges,
+		ddl.MultipleTableInfos,
+	); err != nil {
+		return nil, err
 	}
 
 	binding, err := r.Route(ddl.GetSchemaName(), ddl.GetTableName())
@@ -206,6 +234,11 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	if err != nil {
 		return nil, err
 	}
+	metadataRouted := binding.routed() || extraBinding.routed() ||
+		tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
+	if !queryRouted && !metadataRouted {
+		return ddl, nil
+	}
 
 	if multipleTableInfos == nil {
 		multipleTableInfos = append([]*common.TableInfo(nil), ddl.MultipleTableInfos...)
@@ -216,7 +249,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
-		newQuery,
+		plan.query,
 		binding.Target.Schema,
 		binding.Target.Table,
 		extraBinding.Target.Schema,
@@ -225,6 +258,37 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		multipleTableInfos,
 		blockedTableNames,
 	), nil
+}
+
+// validateTableNamePreservingSchemaChanges verifies that a schema name change
+// can be represented downstream without renaming any tables inside the schema.
+func (r Router) validateTableNamePreservingSchemaChanges(
+	changes []schemaNameChange,
+	tableInfos []*common.TableInfo,
+) error {
+	for _, change := range changes {
+		for _, tableInfo := range tableInfos {
+			if tableInfo == nil {
+				continue
+			}
+			tableName := tableInfo.GetTableName()
+			oldBinding, err := r.Route(change.from, tableName)
+			if err != nil {
+				return err
+			}
+			newBinding, err := r.Route(change.to, tableName)
+			if err != nil {
+				return err
+			}
+			if oldBinding.Target.Table != newBinding.Target.Table {
+				return errors.ErrTableRoutingFailed.GenWithStack(
+					"schema change from %s to %s cannot preserve routed table %s: target table changes from %s to %s",
+					change.from, change.to, tableName,
+					oldBinding.Target.Table, newBinding.Target.Table)
+			}
+		}
+	}
+	return nil
 }
 
 // Route returns the source-to-target table name binding.
@@ -245,6 +309,11 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	}
 
 	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
+	if targetSchema == "" {
+		return RouteBinding{}, errors.ErrTableRoutingFailed.GenWithStack(
+			"target schema is empty for source %s.%s with target-schema expression %q",
+			originSchema, originTable, rule.targetSchemaExpr)
+	}
 	if originTable == "" {
 		return NewRouteBinding(originSchema, originTable, targetSchema, originTable), nil
 	}
@@ -359,6 +428,7 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.
+// Placeholder-like text in source names is preserved literally.
 // If expr is empty, returns defaultValue (typically sourceSchema for schema expressions,
 // sourceTable for table expressions).
 func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) string {
@@ -366,10 +436,10 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 		return defaultValue
 	}
 
-	result := expr
-	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
-	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
-	return result
+	return strings.NewReplacer(
+		SchemaPlaceholder, sourceSchema,
+		TablePlaceholder, sourceTable,
+	).Replace(expr)
 }
 
 // ValidateNoStaticRouteConflict checks whether the given table names would produce
@@ -393,7 +463,7 @@ func ValidateNoStaticRouteConflict(
 	for _, tableNames := range tableNameGroups {
 		capacity += len(tableNames)
 	}
-	registry := NewTargetTableRegistry(changefeedID, capacity)
+	registry := NewTargetTableRegistry(changefeedID, caseSensitive, capacity)
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
 			binding, err := router.Route(tableName.Schema, tableName.Table)

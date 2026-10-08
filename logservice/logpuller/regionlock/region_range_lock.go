@@ -302,6 +302,22 @@ type LockedRangeStatistic struct {
 	Created     time.Time
 }
 
+// GetRegionState returns a snapshot of one currently locked Region.
+func (l *RangeLock) GetRegionState(regionID uint64) (LockedRangeStatistic, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	entry, ok := l.regionIDToLockedRanges[regionID]
+	if !ok {
+		return LockedRangeStatistic{}, false
+	}
+	return LockedRangeStatistic{
+		RegionID:    regionID,
+		ResolvedTs:  entry.lockedRangeState.ResolvedTs.Load(),
+		Initialized: entry.lockedRangeState.Initialized.Load(),
+		Created:     entry.lockedRangeState.Created,
+	}, true
+}
+
 // UnLockRangeStatistic represents a range that is unlocked.
 type UnLockRangeStatistic struct {
 	Span       heartbeatpb.TableSpan

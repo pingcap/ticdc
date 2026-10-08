@@ -427,6 +427,8 @@ func (d DateSeparator) String() string {
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	// Rules are evaluated in order, and the first matching rule wins.
+	// MQ dispatching skips rules that only configure target schema or table names.
+	// A matcher-only rule selects the default MQ topic and partition strategy.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`

@@ -206,13 +206,23 @@ if [[ "$restart" == "true" ]]; then
 	fi
 
 	guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
-	guard_stop_file="$workdir/cdc$logsuffix.guard_stopped"
+	# Keep stop state across phases that reuse a suffix or recreate the workdir.
+	guard_stop_file="$OUT_DIR/.cdc_guard_stopped.$TEST_NAME.$pid"
+	guard_lock_dir="$guard_stop_file.lock"
 	rm -f "$guard_failure_file" "$guard_stop_file"
 	guard_registry="$OUT_DIR/.cdc_guard_stops.$TEST_NAME"
 	printf '%s\n' "$guard_stop_file" >>"$guard_registry"
 	restart_count=0
 	while true; do
-		if GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
+		# Serialize launches and failure markers with stop_cdc_server_guards.
+		while ! mkdir "$guard_lock_dir" 2>/dev/null; do
+			sleep 0.1
+		done
+		if [ -f "$guard_stop_file" ]; then
+			rmdir "$guard_lock_dir"
+			break
+		fi
+		GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
 			--data-dir "$data_dir" \
@@ -221,13 +231,20 @@ if [[ "$restart" == "true" ]]; then
 			$tls \
 			$certcn \
 			$addr \
-			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1; then
+			$pd_addr >>$workdir/stdout$logsuffix.log 2>&1 &
+		cdc_pid=$!
+		rmdir "$guard_lock_dir"
+		if wait "$cdc_pid"; then
 			exit_status=0
 		else
 			exit_status=$?
 		fi
 
+		while ! mkdir "$guard_lock_dir" 2>/dev/null; do
+			sleep 0.1
+		done
 		if [ -f "$guard_stop_file" ] || [ "$exit_status" -eq 143 ]; then
+			rmdir "$guard_lock_dir"
 			break
 		fi
 		if [ "$max_restarts" -ge 0 ] && [ "$restart_count" -ge "$max_restarts" ]; then
@@ -238,8 +255,10 @@ if [[ "$restart" == "true" ]]; then
 			guard_failure_message="[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); max restarts ($max_restarts) exhausted"
 			echo "$guard_failure_message" >"$guard_failure_file"
 			echo "$guard_failure_message" >&2
+			rmdir "$guard_lock_dir"
 			exit "$guard_exit_status"
 		fi
+		rmdir "$guard_lock_dir"
 
 		restart_count=$((restart_count + 1))
 		echo "[$(date)] cdc server $logsuffix exited unexpectedly (status $exit_status); restarting ($restart_count/$max_restarts)"

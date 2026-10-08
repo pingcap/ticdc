@@ -162,7 +162,13 @@ func (l *dmlWriter) Run(ctx context.Context) error {
 	eg.Go(func() error {
 		return l.fileWorkers.Run(egCtx)
 	})
-	return eg.Wait()
+	err := eg.Wait()
+	// The writer may stop because the caller canceled ctx. Report the cancellation
+	// instead of a generic stopped-writer error so callers can tell them apart.
+	if ctxErr := context.Cause(ctx); ctxErr != nil && errors.Is(err, errors.ErrRedoWriterStopped) {
+		return errors.Trace(ctxErr)
+	}
+	return err
 }
 
 func (l *dmlWriter) writeEncodedEventsToSpool(ctx context.Context) error {
@@ -332,6 +338,11 @@ func (l *dmlWriter) readEncodedEventsFromSpool(ctx context.Context) error {
 }
 
 func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
+	// Check cancellation first: the writer stops because of it, and the caller
+	// must not see a stopped-writer error that hides the cancellation.
+	if ctxErr := context.Cause(ctx); ctxErr != nil {
+		return errors.Trace(ctxErr)
+	}
 	if l.closed.Load() {
 		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
 	}

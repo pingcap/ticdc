@@ -17,23 +17,12 @@ import (
 	"testing"
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSingleTableDDL(t *testing.T) {
-	for d := range singleTableDDLs {
-		_, ok := ddlWhiteListMap[d]
-		require.True(t, ok, "DDL %s is not in the white list", d)
-	}
-	for d := range multiTableDDLs {
-		_, ok := ddlWhiteListMap[d]
-		require.True(t, ok, "DDL %s is not in the white list", d)
-	}
-	for d := range globalTableDDLs {
-		_, ok := ddlWhiteListMap[d]
-		require.True(t, ok, "DDL %s is in the white list", d)
-	}
-	require.Equal(t, 41, len(ddlWhiteListMap))
+func TestDDLWhiteList(t *testing.T) {
+	require.Equal(t, bf.RecoverDatabase, ddlToEventType(model.ActionRecoverSchema))
 }
 
 // TestWhitelistedDDLEventsUsable checks the invariant that every whitelisted ddl

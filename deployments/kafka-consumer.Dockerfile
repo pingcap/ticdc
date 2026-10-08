@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 # `binutils-gold` provides `ld.gold`. Without it, the kafka-consumer build on arm64 fails
 # at the final link step with: `collect2: fatal error: cannot find 'ld'`.
 RUN apk add --no-cache make bash git build-base binutils-gold

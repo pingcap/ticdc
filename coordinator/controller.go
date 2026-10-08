@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -52,6 +53,10 @@ const (
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
 )
+
+// stopChangefeedWaitInterval is how often the API waits for a stop changefeed
+// operator to finish. Tests shorten it to keep the waits short.
+var stopChangefeedWaitInterval = time.Second
 
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
@@ -404,6 +409,7 @@ func (c *Controller) onPeriodTask() {
 	// Drain liveness transitions and drain-target broadcasts are retry-based
 	// control loops. Drive them from the periodic task so they keep progressing
 	// even when no fresh heartbeat or node-change event arrives.
+	c.requestEventBrokerDispatcherCount()
 	c.advanceActiveDrainLiveness()
 	c.maybeBroadcastDispatcherDrainTarget(false)
 }
@@ -432,6 +438,8 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		c.syncDrainSchedulingPolicy()
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
+	case messaging.TypeEventBrokerDispatcherCountResponse:
+		c.drainController.ObserveEventBrokerDispatcherCountResponse(msg.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
@@ -1067,7 +1075,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for !op.IsFinished() {
 		select {
@@ -1105,7 +1113,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for !op.IsFinished() {
 		select {
