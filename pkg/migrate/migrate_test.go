@@ -685,7 +685,7 @@ func TestMigrationCleanupError(t *testing.T) {
 	defer s.TearDownTest(t)
 	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{s.ClientURL.String()}, DialTimeout: 3 * time.Second})
 	require.NoError(t, err)
-	defer cli.Close()
+	defer func() { require.NoError(t, cli.Close()) }()
 
 	for _, tc := range []struct {
 		name string
