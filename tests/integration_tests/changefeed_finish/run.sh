@@ -32,9 +32,9 @@ function run() {
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --target-ts=$target_ts 2>&1 | grep '^ID:' | head -n1 | awk -F ' ' '{print $2}')
 
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage) run_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_consumer "$WORK_DIR" $SINK_URI ;;
 	esac
 
 	run_sql "CREATE DATABASE changefeed_finish;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

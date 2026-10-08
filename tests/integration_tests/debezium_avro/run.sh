@@ -75,7 +75,7 @@ EOF
 
 		cdc_cli_changefeed create -c "debezium-avro-$mode" --sink-uri="$sink_uri" \
 			--config="$config_file" --schema-registry="$schema_registry_uri"
-		run_kafka_consumer "$WORK_DIR" "$sink_uri" "$config_file" "$schema_registry_uri" "-$mode"
+		run_consumer "$WORK_DIR" "$sink_uri&schema-registry=$(printf '%s' "$schema_registry_uri" | jq -sRr @uri)" "$config_file" "-$mode"
 		run_sql_file "$WORK_DIR/handling-$mode.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 		kafka_dump --topic "$topic" --schema-registry-uri "$schema_registry_uri" \
 			--timeout 90s --until-table handling_modes --until-count 6 >"$WORK_DIR/handling-$mode.jsonl"
@@ -86,7 +86,7 @@ EOF
 			"$CUR/conf/diff_config.toml" >"$diff_config"
 		check_sync_diff "$WORK_DIR" "$diff_config"
 		cdc_cli_changefeed remove -c "debezium-avro-$mode"
-		cleanup_process cdc_kafka_consumer
+		cleanup_process cdc_consumer
 	done
 }
 
@@ -115,7 +115,7 @@ function run() {
 	cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" -c "$changefeed_id" --schema-registry="$schema_registry_uri"
 	sleep 5 # wait for changefeed to start
 
-	run_kafka_consumer "$WORK_DIR" "$SINK_URI" "" "$schema_registry_uri"
+	run_consumer "$WORK_DIR" "$SINK_URI&schema-registry=$(printf '%s' "$schema_registry_uri" | jq -sRr @uri)" ""
 
 	run_sql_file "$CUR/data/workload.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql_file "$CUR/data/ddl.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
@@ -126,7 +126,7 @@ function run() {
 	check_schema_registry_subject "$TOPIC_NAME-value" "tp_accountEnvelope"
 
 	cdc_cli_changefeed remove -c "$changefeed_id"
-	cleanup_process cdc_kafka_consumer
+	cleanup_process cdc_consumer
 	run_handling_modes
 
 	cleanup_process "$CDC_BINARY"

@@ -1,0 +1,7 @@
+**/.env
+**/.env.*
+**/kubeconfig*
+.codegraph
+bin
+logs.zip
+output

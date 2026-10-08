@@ -69,9 +69,9 @@ function run() {
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/changefeed.toml
 
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $CUR/conf/changefeed.toml ;;
+	kafka) run_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml ;;
+	storage) run_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml "" ;;
+	pulsar) run_consumer "$WORK_DIR" $SINK_URI $CUR/conf/changefeed.toml ;;
 	esac
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}

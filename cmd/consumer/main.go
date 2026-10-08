@@ -83,8 +83,96 @@ func newCommand() *cobra.Command {
 			}
 			return nil
 		},
-		RunE: func(command *cobra.Command, _ []string) error {
-			return runConsumer(command.Context(), options)
+		RunE: func(command *cobra.Command, _ []string) (err error) {
+			parentCtx := command.Context()
+			ctx, cancel := context.WithCancelCause(parentCtx)
+			var wg sync.WaitGroup
+			loggerReady := false
+			defer func() {
+				cancel(err)
+				wg.Wait()
+				if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+					err = cause
+				}
+				if parentCtx.Err() != nil && errors.Is(err, context.Canceled) {
+					err = nil
+				}
+				if loggerReady {
+					if err != nil {
+						log.Error("consumer exited with error", zap.Error(err))
+					} else {
+						log.Info("consumer stopped")
+					}
+					_ = log.Sync()
+				}
+			}()
+
+			upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
+			if err != nil {
+				return err
+			}
+			source, err := sourceTypeFromURI(upstreamURI)
+			if err != nil {
+				return err
+			}
+			if err := validateSourceAddress(source, upstreamURI); err != nil {
+				return err
+			}
+			if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
+				return err
+			}
+			if err := validateTimezone(options.timezone); err != nil {
+				return err
+			}
+			if source != sourceStorage && strings.TrimSpace(options.consumerID) == "" {
+				return errors.ErrInvalidReplicaConfig.FastGenByArgs("consumer-id is required for " + string(source) + " sources")
+			}
+			replicaConfig := config.GetDefaultReplicaConfig()
+			if options.configFile != "" {
+				if err := cmdutil.StrictDecodeFile(options.configFile, "consumer", replicaConfig); err != nil {
+					return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
+				}
+				if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
+					return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
+				}
+			}
+			if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
+				return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
+			}
+			loggerReady = true
+			version.LogVersionInfo("consumer")
+			log.Info("consumer configuration loaded", zap.String("sourceType", string(source)))
+
+			if options.enableProfiling {
+				listener, err := net.Listen("tcp", profileAddress)
+				if err != nil {
+					return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
+				}
+				server := &http.Server{Addr: profileAddress, ReadHeaderTimeout: 5 * time.Second}
+				wg.Go(func() {
+					if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
+					}
+				})
+				wg.Go(func() {
+					<-ctx.Done()
+					shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer shutdownCancel()
+					if err := server.Shutdown(shutdownCtx); err != nil {
+						log.Error("consumer profiling server shutdown failed", zap.Error(err))
+						if err := server.Close(); err != nil {
+							log.Error("consumer profiling server close failed", zap.Error(err))
+						}
+					}
+				})
+			}
+			if source == sourceKafka {
+				return runKafkaConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.consumerID, options.timezone, replicaConfig)
+			}
+			if source == sourcePulsar {
+				return runPulsarConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.consumerID, options.timezone, replicaConfig)
+			}
+			return runStorageConsumer(ctx, &wg, upstreamURI, options.downstreamURI, options.timezone, replicaConfig)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -162,78 +250,4 @@ func validateTimezone(name string) error {
 		}
 		return nil
 	}
-}
-
-func runConsumer(ctx context.Context, options *options) error {
-	ctx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
-	defer func() {
-		cancel()
-		wg.Wait()
-	}()
-
-	upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
-	if err != nil {
-		return err
-	}
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return err
-	}
-	if err := validateSourceAddress(source, upstreamURI); err != nil {
-		return err
-	}
-	if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
-		return err
-	}
-	if err := validateTimezone(options.timezone); err != nil {
-		return err
-	}
-	if source != sourceStorage && strings.TrimSpace(options.consumerID) == "" {
-		return errors.ErrInvalidReplicaConfig.FastGenByArgs("consumer-id is required for " + string(source) + " sources")
-	}
-	if options.configFile != "" {
-		replicaConfig := config.GetDefaultReplicaConfig()
-		if err := cmdutil.StrictDecodeFile(options.configFile, "consumer", replicaConfig); err != nil {
-			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
-		}
-		if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
-		}
-	}
-
-	if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
-		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
-	}
-
-	version.LogVersionInfo("consumer")
-	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)))
-
-	if options.enableProfiling {
-		listener, err := net.Listen("tcp", profileAddress)
-		if err != nil {
-			return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
-		}
-		server := &http.Server{Addr: profileAddress, ReadHeaderTimeout: 5 * time.Second}
-		wg.Go(func() {
-			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				log.Error("consumer profiling server exited", zap.Error(err))
-			}
-		})
-		wg.Go(func() {
-			<-ctx.Done()
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				log.Error("consumer profiling server shutdown failed", zap.Error(err))
-				if err := server.Close(); err != nil {
-					log.Error("consumer profiling server close failed", zap.Error(err))
-				}
-			}
-		})
-	}
-
-	err = errors.ErrInternalCheckFailed.FastGenByArgs(string(source) + " source is not implemented")
-	log.Error("consumer exited with error", zap.Error(err))
-	return err
 }
