@@ -28,8 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
-const maskedSensitiveValue = "******"
-
 // EmptyResponse return empty {} to http client
 type EmptyResponse struct{}
 
@@ -1430,7 +1428,7 @@ func (c *ReplicaConfig) restoreMaskedSensitiveData(original *ReplicaConfig) {
 }
 
 func restoreMaskedValue(value *string, original string) {
-	if value != nil && original != "" && *value == maskedSensitiveValue {
+	if value != nil && original != "" && *value == config.MaskedSensitiveValue {
 		*value = original
 	}
 }
@@ -1481,7 +1479,7 @@ func (c *ReplicaConfig) maskSensitiveData() {
 	}
 	for _, field := range sensitiveFields {
 		if field != nil && *field != "" {
-			*field = maskedSensitiveValue
+			*field = config.MaskedSensitiveValue
 		}
 	}
 }

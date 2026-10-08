@@ -31,6 +31,10 @@ import (
 )
 
 const (
+	// MaskedSensitiveValue is the placeholder used when exposing sensitive
+	// configuration values.
+	MaskedSensitiveValue = "******"
+
 	// DefaultMaxMessageBytes sets the default value for max-message-bytes.
 	DefaultMaxMessageBytes = 10 * 1024 * 1024 // 10M
 	// DefaultAdvanceTimeoutInSec sets the default value for advance-timeout-in-sec.
@@ -518,7 +522,7 @@ func (k *KafkaConfig) MaskSensitiveData() {
 	}
 	for _, field := range sensitiveFields {
 		if field != nil && *field != "" {
-			*field = "******"
+			*field = MaskedSensitiveValue
 		}
 	}
 	if k.SASLOAuthTokenURL != nil {
@@ -686,13 +690,13 @@ func (c *PulsarConfig) GetOutputRawChangeEvent() bool {
 // MaskSensitiveData masks sensitive data in PulsarConfig
 func (c *PulsarConfig) MaskSensitiveData() {
 	if c.AuthenticationToken != nil {
-		c.AuthenticationToken = aws.String("******")
+		c.AuthenticationToken = aws.String(MaskedSensitiveValue)
 	}
 	if c.BasicPassword != nil {
-		c.BasicPassword = aws.String("******")
+		c.BasicPassword = aws.String(MaskedSensitiveValue)
 	}
 	if c.OAuth2 != nil {
-		c.OAuth2.OAuth2PrivateKey = "******"
+		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
 	}
 }
 
