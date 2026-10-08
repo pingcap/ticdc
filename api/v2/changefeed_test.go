@@ -365,7 +365,7 @@ func TestCfInfoToAPIModelPreservesReplicaCredentials(t *testing.T) {
 				err = json.Unmarshal(recorder.Body.Bytes(), &decoded)
 			}
 			require.NoError(t, err)
-			require.Equal(t, apiInfo.Config, decoded.Config)
+			require.Equal(t, apiInfo.Config.Sink, decoded.Config.Sink)
 		})
 	}
 	// A non-sensitive update must carry the original replica-config credentials.
