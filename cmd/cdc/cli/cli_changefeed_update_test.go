@@ -167,6 +167,8 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.Nil(t, cmd.Execute())
 	require.NotContains(t, output.String(), "update-password-sentinel")
 	require.Contains(t, output.String(), "xxxxx")
+	require.Contains(t, output.String(), "SinkURI")
+	require.Contains(t, output.String(), "<redacted>")
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)

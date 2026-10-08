@@ -29,6 +29,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultManagerHeartbeatInterval = 200 * time.Millisecond
+)
+
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
 // start a Manager when the ticdc server is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
@@ -44,6 +48,8 @@ type Manager struct {
 
 	// msgCh is used to cache messages from coordinator.
 	msgCh chan *messaging.TargetMessage
+	// heartbeatCh coalesces prompt reports from low-latency maintainers.
+	heartbeatCh chan struct{}
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
 	node *managerNodeState
 	// maintainers holds changefeed-scoped state and lifecycle operations.
@@ -66,12 +72,14 @@ func NewMaintainerManager(
 	if !ok {
 		writeGate = writelease.NewGate()
 	}
+	heartbeatCh := make(chan struct{}, 1)
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
+		heartbeatCh: heartbeatCh,
 		node:        newManagerNodeState(nodeLiveness),
-		maintainers: newManagerMaintainerSet(conf, nodeInfo),
+		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
 		writeGate:   writeGate,
 	}
 
@@ -133,7 +141,7 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Millisecond * 200)
+	ticker := time.NewTicker(defaultManagerHeartbeatInterval)
 	defer ticker.Stop()
 	nodeHeartbeatTicker := time.NewTicker(writelease.NodeHeartbeatInterval)
 	defer nodeHeartbeatTicker.Stop()
@@ -143,6 +151,8 @@ func (m *Manager) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
+		case <-m.heartbeatCh:
+			m.sendHeartbeat()
 		case <-ticker.C:
 			m.sendHeartbeat()
 			m.cleanupRemovedMaintainers()

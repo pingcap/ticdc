@@ -28,6 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultHeartbeatInterval     = 200 * time.Millisecond
+	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
+	defaultHeartbeatInitialDelay = time.Second
+)
+
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
@@ -42,7 +48,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 		manager:    manager,
 		statusTick: 0,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(time.Second*1))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay(manager)))
 	return t
 }
 
@@ -50,14 +56,27 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := time.Millisecond * 200
-	// 10s / 200ms = 50
+	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
+}
+
+func heartbeatInterval(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return lowLatencyHeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
+
+func heartbeatInitialDelay(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return 0
+	}
+	return defaultHeartbeatInitialDelay
 }
 
 func (t *HeartBeatTask) Cancel() {

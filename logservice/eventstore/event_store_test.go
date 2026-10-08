@@ -39,8 +39,9 @@ import (
 )
 
 type mockSubscriptionStat struct {
-	span    heartbeatpb.TableSpan
-	startTs uint64
+	span            heartbeatpb.TableSpan
+	startTs         uint64
+	advanceInterval int64
 }
 
 type mockSubscriptionClient struct {
@@ -84,8 +85,9 @@ func (s *mockSubscriptionClient) Subscribe(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[subID] = &mockSubscriptionStat{
-		span:    span,
-		startTs: startTs,
+		span:            span,
+		startTs:         startTs,
+		advanceInterval: advanceInterval,
 	}
 }
 
@@ -152,7 +154,7 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher with the same span
@@ -162,7 +164,7 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("e"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// check there is only one subscription in subClient
@@ -179,7 +181,7 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("b"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// check a new subscription is created in subClient
@@ -188,6 +190,54 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 		mockSubClient.mu.Lock()
 		require.Equal(t, 2, len(mockSubClient.subscriptions))
 		mockSubClient.mu.Unlock()
+	}
+}
+
+func TestEventStoreSeparatesSubscriptionsByPerformanceMode(t *testing.T) {
+	for _, firstLowLatency := range []bool{false, true} {
+		name := "throughput-first"
+		if firstLowLatency {
+			name = "low-latency-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			restoreCfg := setDataSharingForTest(t, true)
+			defer restoreCfg()
+
+			subClient, store := newEventStoreForTest(t.TempDir())
+			defer store.Close(context.Background())
+
+			span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+			firstChangefeed := common.NewChangefeedID4Test("default", "first")
+			secondChangefeed := common.NewChangefeedID4Test("default", "second")
+			register := func(changefeedID common.ChangeFeedID, onlyReuse, lowLatency bool) bool {
+				return store.RegisterDispatcher(
+					changefeedID,
+					common.NewDispatcherID(),
+					span,
+					100,
+					func(uint64, uint64) {},
+					onlyReuse,
+					false,
+					lowLatency,
+				)
+			}
+
+			require.True(t, register(firstChangefeed, false, firstLowLatency))
+			require.True(t, register(firstChangefeed, false, firstLowLatency))
+			require.False(t, register(secondChangefeed, true, !firstLowLatency))
+			require.True(t, register(secondChangefeed, false, !firstLowLatency))
+			require.True(t, register(secondChangefeed, false, !firstLowLatency))
+
+			mockSubClient := subClient.(*mockSubscriptionClient)
+			mockSubClient.mu.Lock()
+			defer mockSubClient.mu.Unlock()
+			require.Len(t, mockSubClient.subscriptions, 2)
+			intervals := make(map[int64]int)
+			for _, subscription := range mockSubClient.subscriptions {
+				intervals[subscription.advanceInterval]++
+			}
+			require.Equal(t, map[int64]int{0: 1, 100: 1}, intervals)
+		})
 	}
 }
 
@@ -217,7 +267,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=true) with a non-containing span which should fail
@@ -227,7 +277,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("i"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false, false)
 		require.False(t, ok)
 	}
 	// when the existing subscription is not initialized, add a dispatcher(onlyReuse=true) should fail
@@ -237,7 +287,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false, false)
 		require.False(t, ok)
 	}
 	// mark existing subscription as initialized
@@ -249,7 +299,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false, false)
 		require.True(t, ok)
 	}
 	{
@@ -291,7 +341,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
 		}
-		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	markSubStatsInitializedForTest(store, tableID)
@@ -304,7 +354,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("y"),
 		}
-		ok := es.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := es.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false, false)
 		require.True(t, ok)
 	}
 
@@ -316,7 +366,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("z"),
 		}
-		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false, false)
 		require.True(t, ok)
 	}
 }
@@ -340,7 +390,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a non-containing span
@@ -350,7 +400,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("c"),
 			EndKey:   []byte("i"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// do some check
@@ -366,7 +416,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// do some check
@@ -388,7 +438,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID4, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID4, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
 		require.Equal(t, 3, len(subStats))
@@ -440,16 +490,16 @@ func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
 	}
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, spanFull, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, spanFull, 100, func(uint64, uint64) {}, false, false, false))
 
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, spanFull, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, spanFull, 100, func(uint64, uint64) {}, false, false, false))
 
 	spanSubset := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: []byte("b"),
 		EndKey:   []byte("g"),
 	}
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID3, spanSubset, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID3, spanSubset, 100, func(uint64, uint64) {}, false, false, false))
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()
@@ -463,7 +513,7 @@ func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
 	require.Nil(t, es.dispatcherMeta.dispatcherStats[dispatcherID3].pendingSubStat)
 	es.dispatcherMeta.RUnlock()
 
-	ok := store.RegisterDispatcher(cfID, dispatcherID4, spanFull, 100, func(uint64, uint64) {}, true, false)
+	ok := store.RegisterDispatcher(cfID, dispatcherID4, spanFull, 100, func(uint64, uint64) {}, true, false, false)
 	require.False(t, ok)
 
 	es.dispatcherMeta.RLock()
@@ -492,7 +542,7 @@ func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
 		EndKey:   []byte("z"),
 	}
 
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false, false))
 
 	stat := store.dispatcherMeta.dispatcherStats[dispatcherID]
 	require.NotNil(t, stat)
@@ -527,7 +577,7 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
 	}
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false, false))
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
 	mockSubClient.mu.Lock()
@@ -569,7 +619,7 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 		StartKey: []byte("a"),
 		EndKey:   []byte("h"),
 	}
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false, false))
 
 	store.UnregisterDispatcher(cfID, dispatcherID)
 
@@ -615,7 +665,7 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
@@ -625,7 +675,7 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// check subStat checkpointTs cannot advance when their resolved ts is not advanced
@@ -701,8 +751,8 @@ func TestEventStoreUpdateCheckpointTsConcurrentStaleUpdates(t *testing.T) {
 		EndKey:   []byte("h"),
 	}
 
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(uint64, uint64) {}, false, false))
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(uint64, uint64) {}, false, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(uint64, uint64) {}, false, false, false))
 
 	es.dispatcherMeta.RLock()
 	stat1 := es.dispatcherMeta.dispatcherStats[dispatcherID1]
@@ -783,7 +833,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			StartKey: []byte("a"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
@@ -794,7 +844,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			StartKey: []byte("b"),
 			EndKey:   []byte("h"),
 		}
-		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
+		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false, false)
 		require.True(t, ok)
 	}
 
@@ -938,8 +988,8 @@ func TestEventStoreRowLevelScanPositionSurvivesSubStatSwitch(t *testing.T) {
 	fullSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
 	dispatcherSpan := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("b"), EndKey: []byte("h")}
 
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, fullSpan, 100, func(uint64, uint64) {}, false, false))
-	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, dispatcherSpan, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, fullSpan, 100, func(uint64, uint64) {}, false, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, dispatcherSpan, 100, func(uint64, uint64) {}, false, false, false))
 
 	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID2]
 	require.NotNil(t, dispatcherStat)
@@ -1329,7 +1379,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	resolvedTs.Store(startTs)
 	ok := store.RegisterDispatcher(cfID, dispatcherID, span, startTs, func(watermark, latestCommitTs uint64) {
 		resolvedTs.Store(watermark)
-	}, false, false)
+	}, false, false, false)
+
 	require.True(t, ok)
 
 	// 2. Write some data.
@@ -1420,7 +1471,7 @@ func TestEventStoreResumeTokenSupportsRowLevelResume(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 	span := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
-	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(watermark, latestCommitTs uint64) {}, false, false)
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(watermark, latestCommitTs uint64) {}, false, false, false)
 	require.True(t, ok)
 
 	dispatcherStat := store.dispatcherMeta.dispatcherStats[dispatcherID]

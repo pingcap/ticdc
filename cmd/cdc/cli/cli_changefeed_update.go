@@ -124,12 +124,20 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	changelog, err = diff.Diff(safeOld, safeNew)
+	safeChangelog, err := diff.Diff(safeOld, safeNew)
 	if err != nil {
 		return err
 	}
-	for _, change := range changelog {
+	visiblePaths := make(map[string]struct{}, len(safeChangelog))
+	for _, change := range safeChangelog {
 		cmd.Printf("%+v\n", change)
+		visiblePaths[strings.Join(change.Path, "\x00")] = struct{}{}
+	}
+	for _, change := range changelog {
+		if _, ok := visiblePaths[strings.Join(change.Path, "\x00")]; ok {
+			continue
+		}
+		cmd.Printf("{Type:%s Path:%v From:<redacted> To:<redacted>}\n", change.Type, change.Path)
 	}
 
 	if !o.commonChangefeedOptions.noConfirm {

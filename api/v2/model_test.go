@@ -13,12 +13,20 @@
 package v2
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func queryValue(t *testing.T, rawURL, key string) string {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	return parsed.Query().Get(key)
+}
 
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
@@ -65,6 +73,71 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
+func TestChangefeedConfigRestoreMaskedSensitiveData(t *testing.T) {
+	original := &ReplicaConfig{
+		Sink: &SinkConfig{
+			SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret"),
+			KafkaConfig: &KafkaConfig{
+				SASLPassword:          util.AddressOf("plain-password"),
+				SASLGssAPIPassword:    util.AddressOf("gssapi-password"),
+				SASLOAuthClientSecret: util.AddressOf("oauth-secret"),
+				SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-secret"),
+				Key:                   util.AddressOf("private-key"),
+				LargeMessageHandle: &LargeMessageHandleConfig{
+					ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret",
+				},
+				GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+					AccessKey:       "glue-access",
+					SecretAccessKey: "glue-secret",
+					Token:           "glue-token",
+				},
+			},
+			PulsarConfig: &PulsarConfig{
+				AuthenticationToken: util.AddressOf("pulsar-token"),
+				BasicPassword:       util.AddressOf("pulsar-password"),
+				OAuth2:              &PulsarOAuth2{OAuth2PrivateKey: "pulsar-private-key"},
+			},
+		},
+		Consistent: &ConsistentConfig{
+			Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret"),
+		},
+	}
+	oldInfo := &config.ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password@127.0.0.1:9092/topic?secret=uri-secret",
+		Config:  original.ToInternalReplicaConfig(),
+	}
+	update := &ChangefeedConfig{
+		SinkURI:       util.MaskSensitiveDataInURI(oldInfo.SinkURI),
+		ReplicaConfig: ToAPIReplicaConfig(oldInfo.Config),
+	}
+	update.ReplicaConfig.maskSensitiveData()
+
+	update.restoreMaskedSensitiveData(oldInfo)
+
+	require.Equal(t, oldInfo.SinkURI, update.SinkURI)
+	require.Equal(t, "registry-secret", queryValue(t, *update.ReplicaConfig.Sink.SchemaRegistry, "access-key"))
+	require.Equal(t, "plain-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "gssapi-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLGssAPIPassword)
+	require.Equal(t, "oauth-secret", *update.ReplicaConfig.Sink.KafkaConfig.SASLOAuthClientSecret)
+	require.Equal(t, "token-secret", queryValue(t, *update.ReplicaConfig.Sink.KafkaConfig.SASLOAuthTokenURL, "client_secret"))
+	require.Equal(t, "private-key", *update.ReplicaConfig.Sink.KafkaConfig.Key)
+	require.Equal(t, "claim-check-secret", queryValue(t,
+		update.ReplicaConfig.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI, "access-key"))
+	require.Equal(t, "glue-access", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey)
+	require.Equal(t, "glue-secret", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey)
+	require.Equal(t, "glue-token", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token)
+	require.Equal(t, "pulsar-token", *update.ReplicaConfig.Sink.PulsarConfig.AuthenticationToken)
+	require.Equal(t, "pulsar-password", *update.ReplicaConfig.Sink.PulsarConfig.BasicPassword)
+	require.Equal(t, "pulsar-private-key", update.ReplicaConfig.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey)
+	require.Equal(t, "consistent-secret", queryValue(t, *update.ReplicaConfig.Consistent.Storage, "access-key"))
+
+	update.SinkURI = "kafka://user:new-password@127.0.0.1:9092/topic"
+	update.ReplicaConfig.Sink.KafkaConfig.SASLPassword = util.AddressOf("new-password")
+	update.restoreMaskedSensitiveData(oldInfo)
+	require.Contains(t, update.SinkURI, "new-password")
+	require.Equal(t, "new-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
+}
+
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.
 func TestReplicaConfigConversion(t *testing.T) {
@@ -72,6 +145,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
+		PerformanceMode:       util.AddressOf(config.PerformanceModeLowLatency),
 		MemoryQuota:           util.AddressOf(uint64(1024)),
 		CaseSensitive:         util.AddressOf(true),
 		ForceReplicate:        util.AddressOf(true),
@@ -107,6 +181,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(internalCfg.PerformanceMode))
 	require.Equal(t, uint64(1024), util.GetOrZero(internalCfg.MemoryQuota))
 	require.True(t, util.GetOrZero(internalCfg.CaseSensitive))
 	require.True(t, util.GetOrZero(internalCfg.ForceReplicate))
@@ -138,6 +213,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 3: Conversion back to API config
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)

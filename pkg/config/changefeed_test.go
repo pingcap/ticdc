@@ -112,3 +112,16 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, after)
 }
+
+func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	info := &ChangeFeedInfo{
+		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+		Config:       replicaConfig,
+	}
+
+	changefeedConfig := info.ToChangefeedConfig()
+	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
+	require.True(t, changefeedConfig.IsLowLatencyMode())
+}

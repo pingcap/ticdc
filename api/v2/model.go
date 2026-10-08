@@ -28,6 +28,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
+const maskedSensitiveValue = "******"
+
 // EmptyResponse return empty {} to http client
 type EmptyResponse struct{}
 
@@ -199,6 +201,7 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
+	PerformanceMode          *string `json:"performance_mode,omitempty"`
 	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
 	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
 	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
@@ -235,6 +238,9 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
 	}
@@ -650,6 +656,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
+		PerformanceMode:          cloned.PerformanceMode,
 		MemoryQuota:              cloned.MemoryQuota,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
 		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
@@ -1368,6 +1375,72 @@ func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, err
 	return cloned, nil
 }
 
+// restoreMaskedSensitiveData restores secrets copied from a masked API response.
+func (c *ChangefeedConfig) restoreMaskedSensitiveData(oldInfo *config.ChangeFeedInfo) {
+	if c == nil || oldInfo == nil {
+		return
+	}
+	if c.SinkURI != "" && c.SinkURI == util.MaskSensitiveDataInURI(oldInfo.SinkURI) {
+		c.SinkURI = oldInfo.SinkURI
+	}
+	if c.ReplicaConfig == nil || oldInfo.Config == nil {
+		return
+	}
+	c.ReplicaConfig.restoreMaskedSensitiveData(ToAPIReplicaConfig(oldInfo.Config))
+}
+
+func (c *ReplicaConfig) restoreMaskedSensitiveData(original *ReplicaConfig) {
+	if c == nil || original == nil {
+		return
+	}
+	if c.Consistent != nil && original.Consistent != nil {
+		restoreMaskedURI(c.Consistent.Storage, util.GetOrZero(original.Consistent.Storage))
+	}
+	if c.Sink == nil || original.Sink == nil {
+		return
+	}
+	restoreMaskedURI(c.Sink.SchemaRegistry, util.GetOrZero(original.Sink.SchemaRegistry))
+
+	if kafka, originalKafka := c.Sink.KafkaConfig, original.Sink.KafkaConfig; kafka != nil && originalKafka != nil {
+		restoreMaskedValue(kafka.SASLPassword, util.GetOrZero(originalKafka.SASLPassword))
+		restoreMaskedValue(kafka.SASLGssAPIPassword, util.GetOrZero(originalKafka.SASLGssAPIPassword))
+		restoreMaskedValue(kafka.SASLOAuthClientSecret, util.GetOrZero(originalKafka.SASLOAuthClientSecret))
+		restoreMaskedValue(kafka.Key, util.GetOrZero(originalKafka.Key))
+		restoreMaskedURI(kafka.SASLOAuthTokenURL, util.GetOrZero(originalKafka.SASLOAuthTokenURL))
+		if kafka.LargeMessageHandle != nil && originalKafka.LargeMessageHandle != nil {
+			restoreMaskedURI(
+				&kafka.LargeMessageHandle.ClaimCheckStorageURI,
+				originalKafka.LargeMessageHandle.ClaimCheckStorageURI,
+			)
+		}
+		if glue, originalGlue := kafka.GlueSchemaRegistryConfig, originalKafka.GlueSchemaRegistryConfig; glue != nil && originalGlue != nil {
+			restoreMaskedValue(&glue.AccessKey, originalGlue.AccessKey)
+			restoreMaskedValue(&glue.SecretAccessKey, originalGlue.SecretAccessKey)
+			restoreMaskedValue(&glue.Token, originalGlue.Token)
+		}
+	}
+
+	if pulsar, originalPulsar := c.Sink.PulsarConfig, original.Sink.PulsarConfig; pulsar != nil && originalPulsar != nil {
+		restoreMaskedValue(pulsar.AuthenticationToken, util.GetOrZero(originalPulsar.AuthenticationToken))
+		restoreMaskedValue(pulsar.BasicPassword, util.GetOrZero(originalPulsar.BasicPassword))
+		if pulsar.OAuth2 != nil && originalPulsar.OAuth2 != nil {
+			restoreMaskedValue(&pulsar.OAuth2.OAuth2PrivateKey, originalPulsar.OAuth2.OAuth2PrivateKey)
+		}
+	}
+}
+
+func restoreMaskedValue(value *string, original string) {
+	if value != nil && original != "" && *value == maskedSensitiveValue {
+		*value = original
+	}
+}
+
+func restoreMaskedURI(value *string, original string) {
+	if value != nil && original != "" && *value == util.MaskSensitiveDataInURI(original) {
+		*value = original
+	}
+}
+
 // maskSensitiveData masks configured API fields without populating omitted fields.
 func (c *ReplicaConfig) maskSensitiveData() {
 	if c == nil {
@@ -1408,7 +1481,7 @@ func (c *ReplicaConfig) maskSensitiveData() {
 	}
 	for _, field := range sensitiveFields {
 		if field != nil && *field != "" {
-			*field = "******"
+			*field = maskedSensitiveValue
 		}
 	}
 }
