@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -38,6 +39,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/servicediscovery"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -631,6 +633,99 @@ func TestNoServiceSafePoint(t *testing.T) {
 	mockClient.respData = string(buf)
 	err = m.migrateGcServiceSafePoint(ctx, mockClient, &security.Credential{}, "abcd", 10)
 	require.Nil(t, err)
+}
+
+func TestCleanOldData(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		invalidMetadata bool
+	}{
+		{name: "original backups"},
+		{name: "masking error", invalidMetadata: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			client := etcd.NewMockClient(gomock.NewController(t))
+			kvs := []*mvccpb.KeyValue{
+				{Key: []byte("/tidb/cdc/capture/test"), Value: []byte("capture")},
+				{
+					Key:   []byte(oldChangefeedPrefix + "/test"),
+					Value: []byte(`{"sink-uri":"mysql://user:password-sentinel@host/","config":{"sink":{"kafka-config":{"sasl-password":"config-password-sentinel"}}}}`),
+				},
+			}
+			if tc.invalidMetadata {
+				kvs = append(kvs, &mvccpb.KeyValue{
+					Key: []byte(oldChangefeedPrefix + "/invalid"), Value: []byte(`{"sink-uri":`),
+				})
+			} else {
+				for _, kv := range kvs {
+					// Backups must retain the original credentials.
+					gomock.InOrder(
+						client.EXPECT().Put(ctx, etcd.MigrateBackupKey(0, string(kv.Key)), string(kv.Value)).
+							Return(&clientv3.PutResponse{}, nil),
+						client.EXPECT().Delete(ctx, string(kv.Key)).Return(&clientv3.DeleteResponse{}, nil),
+					)
+				}
+			}
+			client.EXPECT().Get(ctx, "/tidb/cdc", gomock.Any()).Return(&clientv3.GetResponse{Kvs: kvs}, nil)
+
+			err := cleanOldData(ctx, client)
+			if tc.invalidMetadata {
+				require.ErrorIs(t, err, errors.ErrUnmarshalFailed)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestMigrationCleanupError(t *testing.T) {
+	s := &etcd.Tester{}
+	s.SetUpTest(t)
+	defer s.TearDownTest(t)
+	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{s.ClientURL.String()}, DialTimeout: 3 * time.Second})
+	require.NoError(t, err)
+	defer cli.Close()
+
+	for _, tc := range []struct {
+		name string
+		resp *clientv3.GetResponse
+		err  error
+	}{
+		{name: "query error", err: context.DeadlineExceeded},
+		{name: "masking error", resp: &clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{
+			{Key: []byte(oldChangefeedPrefix + "/invalid"), Value: []byte(`{"sink-uri":`)},
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := etcd.NewMockClient(ctrl)
+			cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+			cdcClient.EXPECT().GetClusterID().Return(etcd.DefaultCDCClusterID).AnyTimes()
+			cdcClient.EXPECT().GetEtcdClient().Return(client).AnyTimes()
+			cdcClient.EXPECT().GetGCServiceID().Return("test-gc-service")
+			m := NewMigrator(cdcClient, nil, config.GetDefaultServerConfig()).(*migrator)
+			m.createPDClientFunc = func(context.Context, []string, *security.Credential) (pd.Client, error) {
+				mock := newMockPDClient(true)
+				mock.respData = "{}"
+				return mock, nil
+			}
+			client.EXPECT().Unwrap().Return(cli)
+			client.EXPECT().Get(gomock.Any(), m.metaVersionKey).Return(&clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{{Value: []byte("0")}},
+			}, nil)
+			versionWritten := client.EXPECT().Put(gomock.Any(), m.metaVersionKey, "1").Return(&clientv3.PutResponse{}, nil)
+			client.EXPECT().Put(gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.PutResponse{}, nil)
+			client.EXPECT().Get(gomock.Any(), "/tidb/cdc", gomock.Any()).Return(tc.resp, tc.err).After(versionWritten)
+
+			err := m.migrate(t.Context(), false, 0)
+			if tc.err != nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, errors.ErrUnmarshalFailed)
+			}
+		})
+	}
 }
 
 func TestMaskChangefeedData(t *testing.T) {

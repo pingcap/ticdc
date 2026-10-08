@@ -278,6 +278,10 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 	}
 	log.Info("etcd data migration successful")
 	if err := cleanOldData(ctx, m.cli.GetEtcdClient()); err != nil {
+		// Cleanup queries remain best effort after the metadata version is committed.
+		if errors.Is(err, errors.ErrEtcdAPIError) {
+			return nil
+		}
 		return err
 	}
 	log.Info("clean old etcd data successful")
@@ -291,22 +295,30 @@ func cleanOldData(ctx context.Context, client etcd.Client) error {
 			zap.Error(err))
 		return errors.WrapError(errors.ErrEtcdAPIError, err)
 	}
-	for _, kvPair := range resp.Kvs {
+	// Validate all display values before backing up or deleting any old keys.
+	displayValues := make([]string, len(resp.Kvs))
+	for i, kvPair := range resp.Kvs {
+		key := string(kvPair.Key)
+		if !shouldDelete(key) {
+			continue
+		}
+		displayValues[i] = string(kvPair.Value)
+		if strings.HasPrefix(key, oldChangefeedPrefix) {
+			displayValues[i], err = config.MaskChangefeedInfo(kvPair.Value)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for i, kvPair := range resp.Kvs {
 		key := string(kvPair.Key)
 		if shouldDelete(key) {
-			displayValue := string(kvPair.Value)
-			if strings.HasPrefix(key, oldChangefeedPrefix) {
-				displayValue, err = config.MaskChangefeedInfo(kvPair.Value)
-				if err != nil {
-					return err
-				}
-			}
 			// 0 is the backup version. For now, we only support version 0
 			newKey := etcd.MigrateBackupKey(0, key)
 			log.Info("renaming old etcd data",
 				zap.String("key", key),
 				zap.String("newKey", newKey),
-				zap.String("value", displayValue))
+				zap.String("value", displayValues[i]))
 			if _, err := client.Put(ctx, newKey,
 				string(kvPair.Value)); err != nil {
 				log.Info("put new key failed", zap.String("key", key),
