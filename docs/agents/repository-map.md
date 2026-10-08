@@ -4,7 +4,7 @@ Read this when choosing where to make a change or which tests to run.
 
 ## Runtime Components
 
-- `cmd/`: buildable binaries such as `cmd/cdc`, `cmd/consumer`, and helper tools.
+- `cmd/`: buildable binaries such as `cmd/cdc`, `cmd/kafka-consumer`, `cmd/storage-consumer`, and helper tools.
 - `server/`: server bootstrap and runtime service wiring.
 - `coordinator/`: changefeed metadata, scheduling coordination, operators, drain, and GC coordination.
 - `maintainer/`: table/span replication ownership, scheduling, split/range checks, and replica lifecycle.

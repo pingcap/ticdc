@@ -30,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -47,6 +47,7 @@ type kafkaReader struct {
 	offsets               map[*inputRecord]int64
 	polled                []*kgo.Record
 	polledIndex           int
+	ddlCopies             map[uint64][]*inputRecord
 	deliveredWatermark    uint64
 	hasDeliveredWatermark bool
 }
@@ -102,7 +103,7 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID, timez
 		return nil, errors.ErrKafkaAdminAPI.GenWithStackByArgs("get metadata", topic)
 	}
 
-	codecConfig := codeccommon.NewConfig(protocol)
+	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		client.Close()
 		return nil, err
@@ -169,9 +170,9 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID, timez
 	}
 
 	memory.externalBytes = client.BufferedFetchBytes
-	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, ddls: make(map[ddlKey]*readDDL)}
+	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions}
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
-	return &kafkaReader{client: client, upstreamDB: db, topic: topic, buffer: buffer, offsets: make(map[*inputRecord]int64)}, nil
+	return &kafkaReader{client: client, upstreamDB: db, topic: topic, buffer: buffer, offsets: make(map[*inputRecord]int64), ddlCopies: make(map[uint64][]*inputRecord)}, nil
 }
 
 func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
@@ -182,16 +183,34 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 		c.limitReads()
 		watermark, ready := c.globalWatermark()
 		if ready || len(c.buffer.pendingDDL) != 0 {
-			result, err := c.buffer.nextReady(watermark)
-			if err != nil || result != nil {
-				return result, err
+			if result := c.buffer.nextReady(watermark); result != nil {
+				return result, nil
 			}
 		}
 		if ready && (!c.hasDeliveredWatermark || watermark > c.deliveredWatermark) {
-			c.buffer.advance(watermark)
+			completed := make([]*inputRecord, 0)
+			for commitTs, records := range c.ddlCopies {
+				if commitTs <= watermark {
+					completed = append(completed, records...)
+					delete(c.ddlCopies, commitTs)
+				}
+			}
+			c.buffer.memory.readBytes.Add(-int64(len(completed)) * 128)
 			c.deliveredWatermark = watermark
 			c.hasDeliveredWatermark = true
-			return &readResult{watermark: watermark, hasWatermark: true}, nil
+			result := &readResult{watermark: watermark, hasWatermark: true}
+			if len(completed) != 0 {
+				// Earlier DDL results are written before this watermark is consumed.
+				// Its completion also waits for DML through the same timestamp.
+				result.onFlush = func() {
+					for _, record := range completed {
+						record.pending.Add(-1)
+						c.buffer.memory.effects.Add(-1)
+					}
+					c.buffer.memory.bytes.Add(-int64(len(completed)) * 128)
+				}
+			}
+			return result, nil
 		}
 		if c.polledIndex == len(c.polled) {
 			clear(c.polled)
@@ -257,7 +276,7 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 			break
 		}
 		switch messageType {
-		case codeccommon.MessageTypeRow:
+		case codecCommon.MessageTypeRow:
 			message := p.decoder.NextDMLMessage()
 			if message == nil {
 				if _, ok := p.decoder.(*simple.Decoder); !ok {
@@ -274,7 +293,7 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 			if err := c.buffer.queueDML(message.ToDMLEvent(), []*inputRecord{state}, p); err != nil {
 				return err
 			}
-		case codeccommon.MessageTypeDDL:
+		case codecCommon.MessageTypeDDL:
 			if c.buffer.protocol == config.ProtocolCanalJSON && record.Partition != 0 {
 				return errors.ErrCodecDecode.FastGenByArgs("Canal JSON DDL must come from partition 0")
 			}
@@ -331,10 +350,24 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 				}
 				continue
 			}
-			if err := c.buffer.queueDDL(ddl, state, record.Partition, record.Partition == 0); err != nil {
+			if record.Partition != 0 {
+				// Only partition zero supplies executable DDLs. Other copies wait
+				// for downstream progress without matching individual statements.
+				if err := c.buffer.memory.reserve(128); err != nil {
+					return err
+				}
+				if c.buffer.memory.effects.Add(1) > maxEffects {
+					return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DDL copies exceed the effect limit")
+				}
+				state.pending.Add(1)
+				c.buffer.memory.readBytes.Add(128)
+				c.ddlCopies[ddl.GetCommitTs()] = append(c.ddlCopies[ddl.GetCommitTs()], state)
+				continue
+			}
+			if err := c.buffer.queueDDL(ddl, state); err != nil {
 				return err
 			}
-		case codeccommon.MessageTypeResolved:
+		case codecCommon.MessageTypeResolved:
 			watermark := p.decoder.NextResolvedEvent()
 			if !p.hasWatermark || watermark > p.watermark {
 				p.watermark = watermark

@@ -27,47 +27,113 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+func TestKafkaReaderSplitRenameDDL(t *testing.T) {
+	codecConfig := codecCommon.NewConfig(config.ProtocolOpen)
+	encoder, err := open.NewBatchEncoder(codecConfig, nil)
+	require.NoError(t, err)
+	// A rename chain can carry the same final table name in different messages.
+	ddls := []*event.DDLEvent{
+		{FinishedTs: 10, SchemaName: "common", TableName: "test4", Type: byte(timodel.ActionRenameTable), Query: "RENAME TABLE `common_1`.`test1` TO `common`.`test2`;"},
+		{FinishedTs: 10, SchemaName: "common_1", TableName: "test4", Type: byte(timodel.ActionRenameTable), Query: "RENAME TABLE `common`.`test2` TO `common_1`.`test3`;"},
+		{FinishedTs: 10, SchemaName: "common_1", TableName: "test1", Type: byte(timodel.ActionRenameTable), Query: "RENAME TABLE `common`.`test4` TO `common_1`.`test1`;"},
+		{FinishedTs: 10, SchemaName: "common", TableName: "test4", Type: byte(timodel.ActionRenameTable), Query: "RENAME TABLE `common_1`.`test3` TO `common`.`test4`;"},
+		{FinishedTs: 11, SchemaName: "common_1", TableName: "test5", Type: byte(timodel.ActionCreateTable), Query: "CREATE TABLE `common_1`.`test5` (id int primary key);"},
+	}
+	watermark, err := encoder.EncodeCheckpointEvent(11)
+	require.NoError(t, err)
+	// Partition zero can resume halfway through the DDL job, or after it,
+	// while other partitions still replay every copy.
+	for _, startIndex := range []int{0, 1, len(ddls)} {
+		client, err := kgo.NewClient()
+		require.NoError(t, err)
+		t.Cleanup(client.Close)
+		memory := &bufferUsage{}
+		c := &kafkaReader{client: client, buffer: &readBuffer{memory: memory, protocol: config.ProtocolOpen, partitions: make(map[int32]*partition)}, offsets: make(map[*inputRecord]int64), ddlCopies: make(map[uint64][]*inputRecord)}
+		for partitionID := range int32(2) {
+			decoder, err := open.NewDecoder(t.Context(), int(partitionID), codecConfig, nil)
+			require.NoError(t, err)
+			c.buffer.partitions[partitionID] = &partition{decoder: decoder, schemas: make(map[schemaKey]bool), schemaPointers: make(map[*common.TableInfo]bool)}
+		}
+		// Noncanonical copies may arrive first and are never executed.
+		for _, partitionID := range []int32{1, 0} {
+			input := ddls
+			if partitionID == 0 {
+				input = input[startIndex:]
+			}
+			for offset, ddl := range input {
+				message, err := encoder.EncodeDDLEvent(ddl)
+				require.NoError(t, err)
+				require.NoError(t, c.processRecord(&kgo.Record{Partition: partitionID, Offset: int64(offset), Key: message.Key, Value: message.Value}))
+			}
+			require.NoError(t, c.processRecord(&kgo.Record{Partition: partitionID, Offset: int64(len(input)), Key: watermark.Key, Value: watermark.Value}))
+		}
+		downstream := mock.NewMockSink(gomock.NewController(t))
+		w := &writer{downstream: downstream, memory: memory}
+		for index, ddl := range ddls[startIndex:] {
+			result, err := c.Read(t.Context())
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, ddl.Query, result.ddl.Query)
+			require.EqualValues(t, 1, c.buffer.partitions[0].records[index].pending.Load())
+			downstream.EXPECT().FlushDMLBeforeBlock(result.ddl).Return(nil)
+			downstream.EXPECT().WriteBlockEvent(result.ddl).Return(nil)
+			require.NoError(t, w.writeDDL(t.Context(), t.Context(), result))
+			require.Zero(t, c.buffer.partitions[0].records[index].pending.Load())
+			for _, record := range c.buffer.partitions[1].records[:len(ddls)] {
+				require.EqualValues(t, 1, record.pending.Load())
+			}
+		}
+		result, err := c.Read(t.Context())
+		require.NoError(t, err)
+		require.True(t, result.hasWatermark)
+		require.EqualValues(t, 11, result.watermark)
+		require.NotNil(t, result.onFlush)
+		result.onFlush()
+		for _, p := range c.buffer.partitions {
+			for _, record := range p.records {
+				require.Zero(t, record.pending.Load())
+			}
+		}
+		require.Zero(t, memory.effects.Load())
+		remainingBytes := int64(0)
+		for record := range c.offsets {
+			remainingBytes += record.bytes.Load()
+		}
+		require.Equal(t, remainingBytes, memory.bytes.Load())
+		require.Equal(t, remainingBytes, memory.readBytes.Load())
+	}
+}
 
 func TestReaderDDLNormalization(t *testing.T) {
 	memory := &bufferUsage{}
-	buffer := &readBuffer{memory: memory, protocol: config.ProtocolOpen, partitions: map[int32]*partition{0: {}, 1: {}}, ddls: make(map[ddlKey]*readDDL)}
+	buffer := &readBuffer{memory: memory}
 	first, err := buffer.newRecord(128)
 	require.NoError(t, err)
-	second, err := buffer.newRecord(128)
-	require.NoError(t, err)
 	ddl := &event.DDLEvent{Type: byte(timodel.ActionAddColumn), SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
-	require.NoError(t, buffer.queueDDL(ddl, first, 0, true))
-	result, err := buffer.nextReady(9)
-	require.NoError(t, err)
+	require.NoError(t, buffer.queueDDL(ddl, first))
+	result := buffer.nextReady(9)
 	require.Nil(t, result)
-	_, err = buffer.nextReady(10)
-	require.Error(t, err)
-
-	// Copies are matched by identity, not compared by their contents.
-	copyDDL := *ddl
-	copyDDL.Query = "noncanonical copy"
-	require.NoError(t, buffer.queueDDL(&copyDDL, second, 1, false))
 	first.pending.Add(-1)
-	second.pending.Add(-1)
-	memory.effects.Add(-2)
+	memory.effects.Add(-1)
 	beforeDDL := &event.DMLEvent{CommitTs: 10}
 	afterDDL := &event.DMLEvent{CommitTs: 11}
 	buffer.pendingDML = []*readDML{{event: beforeDDL}, {event: afterDDL}}
-	result, err = buffer.nextReady(10)
-	require.NoError(t, err)
+	result = buffer.nextReady(10)
 	require.Same(t, beforeDDL, result.dml)
-	result, err = buffer.nextReady(10)
-	require.NoError(t, err)
+	result = buffer.nextReady(10)
 	require.Same(t, ddl, result.ddl)
 	require.EqualValues(t, 1, first.pending.Load())
-	require.EqualValues(t, 1, second.pending.Load())
 
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	gomock.InOrder(
@@ -77,15 +143,10 @@ func TestReaderDDLNormalization(t *testing.T) {
 	w := &writer{downstream: downstream, memory: memory}
 	require.NoError(t, w.writeDDL(t.Context(), t.Context(), result))
 	require.Zero(t, first.pending.Load())
-	require.Zero(t, second.pending.Load())
 	require.Zero(t, memory.effects.Load())
-	result, err = buffer.nextReady(11)
-	require.NoError(t, err)
+	result = buffer.nextReady(11)
 	require.Same(t, afterDDL, result.dml)
-	require.NoError(t, buffer.queueDDL(&copyDDL, second, 1, false))
-	require.Zero(t, second.pending.Load())
-	buffer.advance(11)
-	require.EqualValues(t, 256, memory.bytes.Load())
+	require.EqualValues(t, 128, memory.bytes.Load())
 }
 
 func TestKafkaReaderWatermark(t *testing.T) {
@@ -198,8 +259,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	require.NoError(t, buffer.queueDML(dml, []*inputRecord{record}, nil))
 	record.pending.Add(-1)
 	memory.effects.Add(-1)
-	result, err := buffer.nextReady(10)
-	require.NoError(t, err)
+	result := buffer.nextReady(10)
 	input := &storageReader{buffer: buffer, records: []*inputRecord{record}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })

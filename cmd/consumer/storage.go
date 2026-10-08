@@ -35,7 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -81,7 +81,7 @@ type storagePosition struct {
 type storageReader struct {
 	storage          storeapi.Storage
 	buffer           *readBuffer
-	codecConfig      *codeccommon.Config
+	codecConfig      *codecCommon.Config
 	columnSelectors  *columnselector.ColumnSelectors
 	dateSeparator    config.DateSeparator
 	fileExtension    string
@@ -99,7 +99,7 @@ type storageReader struct {
 	positions        map[*inputRecord]storagePosition
 	inputs           []storageInput
 	current          storageInput
-	decoder          codeccommon.Decoder
+	decoder          codecCommon.Decoder
 	record           *inputRecord
 	sortBeforeWrite  bool
 	groupReady       bool
@@ -117,7 +117,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string
 	if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
 		return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
 	}
-	codecConfig := codeccommon.NewConfig(protocol)
+	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		return nil, err
 	}
@@ -293,9 +293,8 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			return nil, err
 		}
 		if !c.sortBeforeWrite || c.groupReady {
-			result, err := c.buffer.nextReady(^uint64(0))
-			if err != nil || result != nil {
-				return result, err
+			if result := c.buffer.nextReady(^uint64(0)); result != nil {
+				return result, nil
 			}
 		}
 		if c.groupReady {
@@ -305,7 +304,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		if c.decoder != nil {
 			messageType, hasNext := c.decoder.HasNext()
 			if hasNext {
-				if messageType != codeccommon.MessageTypeRow {
+				if messageType != codecCommon.MessageTypeRow {
 					continue
 				}
 				message := c.decoder.NextDMLMessage()

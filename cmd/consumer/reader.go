@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 )
 
@@ -82,7 +82,7 @@ func (m *bufferUsage) reserve(bytes int64) error {
 }
 
 type partition struct {
-	decoder          codeccommon.Decoder
+	decoder          codecCommon.Decoder
 	watermark        uint64
 	hasWatermark     bool
 	records          []*inputRecord
@@ -99,19 +99,10 @@ type schemaKey struct {
 	version uint64
 }
 
-type ddlKey struct {
-	commitTs uint64
-	schema   string
-	table    string
-}
-
 type readDDL struct {
-	key        ddlKey
-	event      *event.DDLEvent
-	partitions map[int32]bool
-	records    []*inputRecord
-	delivered  bool
-	bytes      int64
+	event  *event.DDLEvent
+	record *inputRecord
+	bytes  int64
 }
 
 type readDML struct {
@@ -126,7 +117,6 @@ type readBuffer struct {
 	partitions  map[int32]*partition
 	pendingDML  []*readDML
 	pendingDDL  []*readDDL
-	ddls        map[ddlKey]*readDDL
 	schemaBytes int64
 	schemaCount int
 	dmlDirty    bool
@@ -222,47 +212,28 @@ func (b *readBuffer) trackSchema(p *partition, table *common.TableInfo) error {
 	return nil
 }
 
-func (b *readBuffer) queueDDL(ddl *event.DDLEvent, record *inputRecord, partitionID int32, canonical bool) error {
-	key := ddlKey{commitTs: ddl.GetCommitTs(), schema: ddl.GetSchemaName(), table: ddl.GetTableName()}
-	pending := b.ddls[key]
-	if pending != nil && pending.delivered {
-		return nil
-	}
-	if pending == nil {
-		bytes := int64(len(ddl.Query) + len(key.schema) + len(key.table) + 1024)
-		if err := b.memory.reserve(bytes); err != nil {
-			return err
-		}
-		pending = &readDDL{key: key, partitions: make(map[int32]bool), bytes: bytes}
-		b.memory.readBytes.Add(bytes)
-		b.ddls[key] = pending
-		b.pendingDDL = append(b.pendingDDL, pending)
-		b.ddlDirty = true
-	}
-	if err := b.memory.reserve(48); err != nil {
+func (b *readBuffer) queueDDL(ddl *event.DDLEvent, record *inputRecord) error {
+	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
+	if err := b.memory.reserve(bytes); err != nil {
 		return err
 	}
-	b.memory.readBytes.Add(48)
-	pending.bytes += 48
-	pending.partitions[partitionID] = true
-	pending.records = append(pending.records, record)
 	if b.memory.effects.Add(1) > maxEffects {
 		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DDL exceeds its effect limit")
 	}
 	record.pending.Add(1)
-	if canonical {
-		pending.event = ddl
-	}
+	b.memory.readBytes.Add(bytes)
+	b.pendingDDL = append(b.pendingDDL, &readDDL{event: ddl, record: record, bytes: bytes})
+	b.ddlDirty = true
 	return nil
 }
 
-func (b *readBuffer) nextReady(watermark uint64) (*readResult, error) {
+func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	if b.dmlDirty {
 		slices.SortStableFunc(b.pendingDML, func(a, b *readDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
 		b.dmlDirty = false
 	}
 	if b.ddlDirty {
-		slices.SortStableFunc(b.pendingDDL, func(a, b *readDDL) int { return cmp.Compare(a.key.commitTs, b.key.commitTs) })
+		slices.SortStableFunc(b.pendingDDL, func(a, b *readDDL) int { return cmp.Compare(a.event.GetCommitTs(), b.event.GetCommitTs()) })
 		b.ddlDirty = false
 	}
 	var ddl *readDDL
@@ -271,69 +242,34 @@ func (b *readBuffer) nextReady(watermark uint64) (*readResult, error) {
 	}
 	if len(b.pendingDML) != 0 {
 		dml := b.pendingDML[0]
-		if dml.event.CommitTs <= watermark && (ddl == nil || dml.event.CommitTs <= ddl.key.commitTs) {
+		if dml.event.CommitTs <= watermark && (ddl == nil || dml.event.CommitTs <= ddl.event.GetCommitTs()) {
 			b.pendingDML[0] = nil
 			b.pendingDML = b.pendingDML[1:]
 			b.memory.readBytes.Add(-dml.bytes)
-			return &readResult{dml: dml.event, bytes: dml.bytes}, nil
+			return &readResult{dml: dml.event, bytes: dml.bytes}
 		}
 	}
 	if ddl == nil {
-		return nil, nil
+		return nil
 	}
 	early := false
-	if ddl.event != nil {
-		switch timodel.ActionType(ddl.event.Type) {
-		case timodel.ActionCreateSchema:
-			early = true
-		case timodel.ActionCreateTable:
-			blocked := ddl.event.GetBlockedTables()
-			early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID && len(ddl.event.GetBlockedTableNames()) == 0
-		}
+	switch timodel.ActionType(ddl.event.Type) {
+	case timodel.ActionCreateSchema:
+		early = true
+	case timodel.ActionCreateTable:
+		blocked := ddl.event.GetBlockedTables()
+		early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID && len(ddl.event.GetBlockedTableNames()) == 0
 	}
-	if ddl.key.commitTs > watermark && !early {
-		return nil, nil
+	if ddl.event.GetCommitTs() > watermark && !early {
+		return nil
 	}
-	expected := len(b.partitions)
-	if b.protocol == config.ProtocolCanalJSON {
-		expected = 1
-	}
-	if len(ddl.partitions) != expected {
-		if ddl.key.commitTs > watermark {
-			return nil, nil
-		}
-		return nil, errors.ErrCodecDecode.FastGenByArgs("DDL is missing an expected copy at the complete boundary")
-	}
-	if ddl.event == nil {
-		return nil, errors.ErrCodecDecode.FastGenByArgs("DDL is missing its canonical event")
-	}
-	records := ddl.records
+	record := ddl.record
 	result := &readResult{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() {
-		for _, record := range records {
-			record.pending.Add(-1)
-			b.memory.effects.Add(-1)
-		}
+		record.pending.Add(-1)
+		b.memory.effects.Add(-1)
 	}}
-	ddl.delivered = true
-	ddl.event = nil
-	ddl.records = nil
-	ddl.partitions = nil
-	ddl.bytes = int64(len(ddl.key.schema) + len(ddl.key.table) + 192)
-	if err := b.memory.reserve(ddl.bytes); err != nil {
-		return nil, err
-	}
-	b.memory.readBytes.Add(ddl.bytes - result.bytes)
+	b.memory.readBytes.Add(-result.bytes)
 	b.pendingDDL[0] = nil
 	b.pendingDDL = b.pendingDDL[1:]
-	return result, nil
-}
-
-func (b *readBuffer) advance(watermark uint64) {
-	for key, ddl := range b.ddls {
-		if ddl.delivered && key.commitTs < watermark {
-			b.memory.bytes.Add(-ddl.bytes)
-			b.memory.readBytes.Add(-ddl.bytes)
-			delete(b.ddls, key)
-		}
-	}
+	return result
 }

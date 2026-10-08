@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -60,7 +60,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 	if protocol != config.ProtocolCanalJSON {
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar consumer requires canal-json")
 	}
-	codecConfig := codeccommon.NewConfig(protocol)
+	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 		partitions[int32(index)] = &partition{decoder: decoder, schemas: schemas, schemaPointers: schemaPointers}
 	}
 
-	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, ddls: make(map[ddlKey]*readDDL)}
+	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions}
 	c := &pulsarReader{client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs, messageIDs: make(map[*inputRecord]pulsar.MessageID)}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c, nil
@@ -197,16 +197,14 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 			return nil, err
 		}
 		if c.hasWatermark || len(c.buffer.pendingDDL) != 0 {
-			result, err := c.buffer.nextReady(c.watermark)
-			if err != nil || result != nil {
-				return result, err
+			if result := c.buffer.nextReady(c.watermark); result != nil {
+				return result, nil
 			}
 		}
 		if len(c.pendingWatermarks) != 0 {
 			result := c.pendingWatermarks[0]
 			c.pendingWatermarks[0] = nil
 			c.pendingWatermarks = c.pendingWatermarks[1:]
-			c.buffer.advance(result.watermark)
 			return result, nil
 		}
 		select {
@@ -240,7 +238,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 					break
 				}
 				switch messageType {
-				case codeccommon.MessageTypeRow:
+				case codecCommon.MessageTypeRow:
 					message := p.decoder.NextDMLMessage()
 					if message == nil {
 						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DML message")
@@ -248,7 +246,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 					if err := c.buffer.queueDML(message.ToDMLEvent(), []*inputRecord{record}, p); err != nil {
 						return nil, err
 					}
-				case codeccommon.MessageTypeDDL:
+				case codecCommon.MessageTypeDDL:
 					ddl := p.decoder.NextDDLEvent()
 					if ddl == nil || ddl.Query == "" {
 						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DDL event")
@@ -266,10 +264,10 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 						c.buffer.schemaBytes += 128
 						c.buffer.memory.readBytes.Add(128)
 					}
-					if err := c.buffer.queueDDL(ddl, record, 0, true); err != nil {
+					if err := c.buffer.queueDDL(ddl, record); err != nil {
 						return nil, err
 					}
-				case codeccommon.MessageTypeResolved:
+				case codecCommon.MessageTypeResolved:
 					watermark := p.decoder.NextResolvedEvent()
 					if c.buffer.memory.effects.Add(1) > maxEffects {
 						return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input exceeds its effect limit")
