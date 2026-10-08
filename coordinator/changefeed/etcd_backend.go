@@ -417,6 +417,10 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 			// Another goroutine (or a previous retry) already persisted the desired progress.
 			return nil
 		}
+		if progress == config.ProgressNone && status.Progress == config.ProgressRemoving {
+			// ProgressRemoving is a durable removal intent and must not be cleared.
+			return nil
+		}
 
 		status.Progress = progress
 		jobValue, err := status.Marshal()

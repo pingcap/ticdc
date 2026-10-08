@@ -42,6 +42,7 @@ type StopChangefeedOperator struct {
 	nodeID            node.ID
 	changefeedRemoved bool
 	finished          atomic.Bool
+	canceled          atomic.Bool
 	coordinatorNodeID node.ID
 	backend           changefeed.Backend
 	maintainerEpoch   uint64
@@ -115,6 +116,7 @@ func (m *StopChangefeedOperator) IsFinished() bool {
 }
 
 func (m *StopChangefeedOperator) OnTaskRemoved() {
+	m.canceled.Store(true)
 	m.finished.Store(true)
 }
 
@@ -124,6 +126,13 @@ func (m *StopChangefeedOperator) Start() {
 }
 
 func (m *StopChangefeedOperator) PostFinish() {
+	// A stop operator can be replaced by a remove operator. In that case the
+	// replacement has already persisted ProgressRemoving, so the canceled stop
+	// operator must not reset it to ProgressNone.
+	if m.canceled.Load() {
+		return
+	}
+
 	if m.changefeedRemoved {
 		if err := m.backend.DeleteChangefeed(context.Background(), m.cfID); err != nil {
 			log.Warn("failed to delete changefeed",

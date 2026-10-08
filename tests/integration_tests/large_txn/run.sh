@@ -18,7 +18,7 @@ function prepare() {
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	# Start CDC server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 
 	# Create changefeed
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?transaction-atomicity=none"
@@ -45,8 +45,11 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	echo "[$(date)] Workload completed, verifying data consistency with CDC sync..."
 
 	# Use sync_diff_inspector to verify data consistency
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml 200 3
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 fi

@@ -101,7 +101,10 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
 			DebeziumConfig: &DebeziumConfig{
-				IncludeStartTs: util.AddressOf(true),
+				IncludeStartTs:             util.AddressOf(true),
+				DecimalHandlingMode:        util.AddressOf("string"),
+				BigintUnsignedHandlingMode: util.AddressOf("string"),
+				BinaryHandlingMode:         util.AddressOf("hex"),
 			},
 			SimpleConfig: &SimpleConfig{
 				IncludeStartTs: util.AddressOf(true),
@@ -126,6 +129,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 			MaxLogSize:        util.AddressOf(int64(128)),
 			FlushIntervalInMs: util.AddressOf(int64(2000)),
 			Storage:           util.AddressOf("s3://test"),
+			SpoolDiskQuota:    util.AddressOf(int64(2048)),
+			SpoolBaseDir:      util.AddressOf("/tmp/redo-spool"),
 		},
 	}
 
@@ -143,6 +148,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Debezium.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
@@ -154,6 +162,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
 	// output_old_value is omitted in apiCfg and must keep its default (true).
 	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
 
@@ -169,6 +178,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
 	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
 	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
+	require.Nil(t, internalDebezium.Sink.Debezium.DecimalHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -189,6 +201,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
@@ -196,6 +211,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
+	require.Equal(t, int64(2048), *apiCfgBack.Consistent.SpoolDiskQuota)
 
 	// Test case 4: batch fields round trip and nil preservation
 	apiBatchCfg := &ReplicaConfig{

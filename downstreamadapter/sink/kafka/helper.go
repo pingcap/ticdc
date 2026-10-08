@@ -52,6 +52,9 @@ func (c components) close() {
 	if c.claimCheck != nil {
 		c.claimCheck.Close()
 	}
+	if c.factory != nil {
+		c.factory.Close()
+	}
 }
 
 func newKafkaSinkComponent(
@@ -59,6 +62,7 @@ func newKafkaSinkComponent(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -86,19 +90,19 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	comp.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, isAvroLike)
+		sinkConfig, caseSensitive, topic, false, isAvroLike)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	comp.columnSelector, err = columnselector.New(sinkConfig)
+	comp.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return comp, protocol, err
 	}
@@ -109,6 +113,9 @@ func newKafkaSinkComponent(
 	)
 	if err != nil {
 		return comp, protocol, err
+	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
 	}
 
 	comp.claimCheck, err = claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)

@@ -45,6 +45,7 @@ type mockSubscriptionStat struct {
 	span            heartbeatpb.TableSpan
 	startTs         uint64
 	advanceInterval int64
+	bdrMode         bool
 }
 
 type mockSubscriptionClient struct {
@@ -135,6 +136,7 @@ func (s *mockSubscriptionClient) Subscribe(
 		span:            span,
 		startTs:         startTs,
 		advanceInterval: advanceInterval,
+		bdrMode:         bdrMode,
 	}
 }
 
@@ -291,6 +293,56 @@ func TestEventStoreSeparatesSubscriptionsByPerformanceMode(t *testing.T) {
 				intervals[subscription.advanceInterval]++
 			}
 			require.Equal(t, map[int64]int{0: 1, 100: 1}, intervals)
+		})
+	}
+}
+
+func TestEventStoreSeparatesSubscriptionsByBDRMode(t *testing.T) {
+	for _, firstBDRMode := range []bool{false, true} {
+		name := "non-bdr-first"
+		if firstBDRMode {
+			name = "bdr-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			restoreCfg := setDataSharingForTest(t, true)
+			defer restoreCfg()
+
+			subClient, store := newEventStoreForTest(t.TempDir())
+			defer store.Close(context.Background())
+
+			const tableID int64 = 1
+			span := &heartbeatpb.TableSpan{TableID: tableID, StartKey: []byte("a"), EndKey: []byte("z")}
+			firstChangefeed := common.NewChangefeedID4Test("default", "first")
+			secondChangefeed := common.NewChangefeedID4Test("default", "second")
+			register := func(changefeedID common.ChangeFeedID, onlyReuse, bdrMode bool) bool {
+				return store.RegisterDispatcher(
+					changefeedID,
+					common.NewDispatcherID(),
+					span,
+					100,
+					func(uint64, uint64) {},
+					onlyReuse,
+					bdrMode,
+					false,
+				)
+			}
+
+			require.True(t, register(firstChangefeed, false, firstBDRMode))
+			markSubStatsInitializedForTest(store, tableID)
+			require.True(t, register(firstChangefeed, true, firstBDRMode))
+			require.False(t, register(secondChangefeed, true, !firstBDRMode))
+			require.True(t, register(secondChangefeed, false, !firstBDRMode))
+			require.True(t, register(secondChangefeed, false, !firstBDRMode))
+
+			mockSubClient := subClient.(*mockSubscriptionClient)
+			mockSubClient.mu.Lock()
+			defer mockSubClient.mu.Unlock()
+			require.Len(t, mockSubClient.subscriptions, 2)
+			modes := make(map[bool]int)
+			for _, subscription := range mockSubClient.subscriptions {
+				modes[subscription.bdrMode]++
+			}
+			require.Equal(t, map[bool]int{false: 1, true: 1}, modes)
 		})
 	}
 }

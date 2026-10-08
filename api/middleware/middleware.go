@@ -223,7 +223,32 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	}
 }
 
-// KeyspaceCheckerMiddleware check if the request keyspace is valid
+// KeyspaceNameCheckerMiddleware checks that a keyspace name is specified in
+// next-gen mode. It is used by APIs that only access TiCDC metadata and do not
+// require the upstream keyspace to still exist.
+func KeyspaceNameCheckerMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// We do not need to check keyspace for classic mode. If classic mode
+		// supports multiple keyspaces in the future, this needs to be revisited.
+		if kerneltype.IsClassic() {
+			c.Next()
+			return
+		}
+
+		if c.Query(api.APIOpVarKeyspace) == "" {
+			err := errors.ErrAPIInvalidParam.GenWithStack(
+				"missing required query parameter keyspace, please specify --keyspace or -k",
+			)
+			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// KeyspaceCheckerMiddleware checks if the request keyspace exists.
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// we not need to check keyspace for classic mode
@@ -275,4 +300,9 @@ func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
 		}
 	}
 	return meta
+}
+
+// SetKeyspaceInContext stores keyspace metadata for downstream middleware.
+func SetKeyspaceInContext(c *gin.Context, meta *keyspacepb.KeyspaceMeta) {
+	c.Set(ctxKeyspaceKey, meta)
 }

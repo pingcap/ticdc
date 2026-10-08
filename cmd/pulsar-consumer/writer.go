@@ -114,7 +114,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.replicaConfig.Sink, o.topic, false, o.protocol == config.ProtocolAvro)
+	eventRouter, err := eventrouter.NewEventRouter(o.replicaConfig.Sink, putil.GetOrZero(o.replicaConfig.CaseSensitive), o.topic, false, o.protocol == config.ProtocolAvro)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),

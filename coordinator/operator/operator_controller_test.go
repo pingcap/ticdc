@@ -27,6 +27,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	scheduleroperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
@@ -34,6 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type operatorEpochPDClient struct {
@@ -80,12 +83,87 @@ func TestController_StopChangefeed(t *testing.T) {
 
 	oc.StopChangefeed(context.Background(), cfID, false)
 	require.Len(t, oc.operators, 1)
-	// the old  PostFinish will be called
-	backend.EXPECT().SetChangefeedProgress(gomock.Any(), gomock.Any(), config.ProgressNone).Return(nil).Times(1)
+	// Replacing the pause operator must not run its successful PostFinish path,
+	// because the remove path has already persisted ProgressRemoving.
 	oc.StopChangefeed(context.Background(), cfID, true)
 	require.Len(t, oc.operators, 1)
 	oc.StopChangefeed(context.Background(), cfID, true)
 	require.Len(t, oc.operators, 1)
+}
+
+func TestController_PauseReplacedByRemove(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientURL, etcdServer, err := etcd.SetupEmbedEtcd(t.TempDir())
+	require.NoError(t, err)
+	defer etcdServer.Close()
+
+	rawClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{clientURL.String()},
+		DialTimeout: 3 * time.Second,
+	})
+	require.NoError(t, err)
+	defer rawClient.Close()
+
+	cdcClient, err := etcd.NewCDCEtcdClient(ctx, rawClient, "operator-controller-test")
+	require.NoError(t, err)
+	backend := changefeed.NewEtcdBackend(cdcClient)
+
+	for _, tc := range []struct {
+		name        string
+		finishPause bool
+	}{
+		{name: "pause-canceled"},
+		{name: "pause-finishes-before-replacement", finishPause: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfID := common.NewChangeFeedIDWithName(tc.name, common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "blackhole://",
+				StartTs:      1,
+				State:        config.StateNormal,
+			}
+			require.NoError(t, backend.CreateChangefeed(ctx, info))
+
+			changefeedDB := changefeed.NewChangefeedDB(1216)
+			cf := changefeed.NewChangefeed(cfID, info, info.StartTs, true)
+			oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+			changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+			// Match the controller's pause path, then persist the remove intent
+			// before installing the remove operator.
+			require.NoError(t, backend.PauseChangefeed(ctx, cfID))
+			pauseOp := oc.StopChangefeed(ctx, cfID, false)
+			require.NoError(t, backend.SetChangefeedProgress(ctx, cfID, config.ProgressRemoving))
+			if tc.finishPause {
+				// The executor can finish pause after RemoveChangefeed persists its
+				// intent but before it acquires the operator lock to replace pause.
+				pauseOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+					State:           heartbeatpb.ComponentState_Stopped,
+					MaintainerEpoch: info.Epoch,
+				})
+				oc.Execute()
+			}
+			removeOp := oc.StopChangefeed(ctx, cfID, true)
+			require.NotSame(t, pauseOp, removeOp)
+
+			status, _, err := cdcClient.GetChangeFeedStatus(ctx, cfID)
+			require.NoError(t, err)
+			require.Equal(t, config.ProgressRemoving, status.Progress)
+
+			removeOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+				State:           heartbeatpb.ComponentState_Stopped,
+				MaintainerEpoch: info.Epoch,
+			})
+			oc.Execute()
+
+			_, err = backend.GetChangefeedInfo(ctx, cfID)
+			require.True(t, errors.ErrChangeFeedNotExists.Equal(err))
+		})
+	}
 }
 
 func TestController_StopChangefeedWithMaintainerEpoch(t *testing.T) {
@@ -180,7 +258,6 @@ func TestController_StopChangefeedDoesNotReuseStaleOwnerCleanup(t *testing.T) {
 	staleOp := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, staleOwner.ID, false, 10)
 	require.Equal(t, staleOwner.ID, staleOp.Schedule().To)
 
-	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(nil).Times(1)
 	currentOp := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 20)
 	require.NotSame(t, staleOp, currentOp)
 	currentReqMsg := currentOp.Schedule()

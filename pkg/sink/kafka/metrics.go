@@ -89,6 +89,15 @@ var (
 
 // InitMetrics registers all metrics in this file.
 func InitMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(
+		outgoingBytesTotal,
+		requestsTotal,
+		requestDuration,
+		throttleTime,
+		recordsPerBatch,
+		batchesPerRequest,
+		compressionRatio,
+	)
 	registry.MustRegister(compressionRatioGauge)
 	registry.MustRegister(recordsPerRequestGauge)
 	registry.MustRegister(throttleTimeGauge)

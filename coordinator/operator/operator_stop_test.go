@@ -57,6 +57,7 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true, 10, stopChangefeedKindCurrentPlacement)
 	op.OnTaskRemoved()
 	require.True(t, op.finished.Load())
+	require.True(t, op.canceled.Load())
 }
 
 func TestStopChangefeedOperator_PostFinish(t *testing.T) {
@@ -79,4 +80,10 @@ func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false, 10, stopChangefeedKindCurrentPlacement)
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(errors.New("err"))
 	op2.PostFinish()
+
+	// A canceled pause operator must not overwrite ProgressRemoving persisted by
+	// the remove operation that replaced it.
+	op3 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false, 10, stopChangefeedKindCurrentPlacement)
+	op3.OnTaskRemoved()
+	op3.PostFinish()
 }

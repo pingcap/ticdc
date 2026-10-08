@@ -47,7 +47,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs, common.DefaultKeyspaceID)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, false, true, cleanUpJobs, common.DefaultKeyspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -737,10 +737,16 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil, common.DefaultKeyspaceID)
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, false, true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
-	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	spoolDir := filepath.Join(
+		spoolBaseDir,
+		cloudStorageSpoolDirectory,
+		config.GetGlobalServerConfig().AdvertiseAddr,
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+	)
 	_, err = os.Stat(spoolDir)
 	require.NoError(t, err)
 

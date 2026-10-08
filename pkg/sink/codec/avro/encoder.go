@@ -76,12 +76,13 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 	message.Callback = e.Callback
 	message.IncRowsCount()
 
-	if message.Length() > a.config.MaxMessageBytes {
+	length := a.config.MessageLength(message)
+	if length > a.config.MaxMessageBytes {
 		log.Warn("Single message is too large for avro",
 			zap.Int("maxMessageBytes", a.config.MaxMessageBytes),
-			zap.Int("length", message.Length()),
+			zap.Int("length", length),
 			zap.Any("table", e.TableInfo.TableName))
-		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), message.Length(), a.config.MaxMessageBytes)
+		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, a.config.MaxMessageBytes)
 	}
 
 	a.result = append(a.result, message)

@@ -117,6 +117,7 @@ type RedoRowEvent struct {
 	TableInfo       *common.TableInfo
 	Event           RowChange
 	Callback        func()
+	EnqueueCallback func()
 }
 
 const (
@@ -129,6 +130,13 @@ const (
 func (r *RedoRowEvent) PostFlush() {
 	if r.Callback != nil {
 		r.Callback()
+	}
+}
+
+// PostEnqueue marks this encoded row as accepted by the redo spool.
+func (r *RedoRowEvent) PostEnqueue() {
+	if r.EnqueueCallback != nil {
+		r.EnqueueCallback()
 	}
 }
 

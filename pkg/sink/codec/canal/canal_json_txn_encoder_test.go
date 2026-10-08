@@ -121,7 +121,7 @@ func TestCanalJSONTxnEventEncoderWithColumnSelector(t *testing.T) {
 		ColumnSelectors: []*config.ColumnSelector{
 			{Matcher: []string{"test.t"}, Columns: []string{"col1"}},
 		},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))

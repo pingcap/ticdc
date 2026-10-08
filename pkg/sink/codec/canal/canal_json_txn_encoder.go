@@ -50,7 +50,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(rowEvents []*commonEvent.RowEvent) 
 		if err != nil {
 			return err
 		}
-		length := len(value) + common.MaxRecordOverhead
+		length := j.config.MessageLengthForKeyValue(0, len(value))
 		if length > j.config.MaxMessageBytes {
 			log.Warn("Single message is too large for canal-json",
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
