@@ -14,6 +14,8 @@
 package config
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -192,4 +194,51 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *test
 			}
 		})
 	}
+}
+
+func TestChangeFeedRuntimeStorage(t *testing.T) {
+	info := &ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("runtime", "default"),
+		Config:       GetDefaultReplicaConfig(),
+		State:        StateFailed,
+		Error:        &RunningError{Code: "test", Message: strings.Repeat("x", 150)},
+		Epoch:        42,
+	}
+	for _, useRuntime := range []bool{false, true} {
+		info.UseRuntime = useRuntime
+		value, err := info.MarshalForStorage()
+		require.NoError(t, err)
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(value), &fields))
+		require.Contains(t, fields, "config")
+		for _, field := range []string{"state", "error", "epoch"} {
+			if useRuntime {
+				require.NotContains(t, fields, field)
+			} else {
+				require.Contains(t, fields, field)
+			}
+		}
+		clone, err := info.Clone()
+		require.NoError(t, err)
+		require.Equal(t, info.GetRuntime(), clone.GetRuntime())
+		require.Equal(t, info.UseRuntime, clone.UseRuntime)
+		require.Equal(t, info.ChangefeedID, clone.ChangefeedID)
+	}
+	runtimeValue, err := info.GetRuntime().Marshal()
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(runtimeValue), &fields))
+	require.Len(t, fields, 3)
+	loaded := &ChangeFeedInfo{UseRuntime: true}
+	require.NoError(t, loaded.UnmarshalRuntime([]byte(runtimeValue)))
+	require.Equal(t, info.State, loaded.State)
+	require.Equal(t, info.Epoch, loaded.Epoch)
+	require.Equal(t, strings.Repeat("x", 100)+"...", loaded.Error.Message)
+	require.Len(t, info.Error.Message, 150)
+	require.Error(t, loaded.UnmarshalRuntime(nil))
+	require.Error(t, loaded.UnmarshalRuntime([]byte("invalid")))
+	loaded.UseRuntime = false
+	before := loaded.GetRuntime()
+	require.NoError(t, loaded.UnmarshalRuntime([]byte(`{"state":"normal","epoch":99}`)))
+	require.Equal(t, before, loaded.GetRuntime())
 }

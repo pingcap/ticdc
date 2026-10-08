@@ -484,7 +484,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	cfs := make(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper)
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	backend.EXPECT().UpdateChangefeedRuntime(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mockBumpChangefeedEpoch(backend, cfs)
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
@@ -557,7 +557,7 @@ func TestScaleNode(t *testing.T) {
 		}
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	backend.EXPECT().UpdateChangefeedRuntime(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mockBumpChangefeedEpoch(backend, cfs)
 
 	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
@@ -1065,7 +1065,7 @@ func TestHandleStateChangePersistsRuntimeStateWhenStateChanges(t *testing.T) {
 	changefeedDB.AddAbsentChangefeed(cf)
 
 	backend.EXPECT().
-		UpdateChangefeed(gomock.Any(), gomock.Any(), uint64(1), config.ProgressNone).
+		UpdateChangefeedRuntime(gomock.Any(), gomock.Any(), uint64(1), config.ProgressNone).
 		DoAndReturn(func(_ context.Context, info *config.ChangeFeedInfo, _ uint64, _ config.Progress) error {
 			require.Equal(t, config.StateNormal, info.State)
 			require.Nil(t, info.Error)

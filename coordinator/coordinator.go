@@ -251,6 +251,11 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
+	// Serialize with config migration so a state update cannot restore a legacy
+	// info value after an API update has enabled runtime storage.
+	c.controller.apiLock.Lock()
+	defer c.controller.apiLock.Unlock()
+
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
@@ -295,7 +300,7 @@ func (c *coordinator) handleStateChange(
 	if event.state == config.StateFailed || event.state == config.StateFinished {
 		progress = config.ProgressStopping
 	}
-	if err = c.backend.UpdateChangefeed(ctx, cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
+	if err = c.backend.UpdateChangefeedRuntime(ctx, cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
 		log.Error("failed to update changefeed state",
 			zap.Error(err))
 		return errors.Trace(err)

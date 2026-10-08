@@ -180,3 +180,17 @@ func (mr *MockBackendMockRecorder) UpdateChangefeedCheckpointTs(ctx, checkpointT
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateChangefeedCheckpointTs", reflect.TypeOf((*MockBackend)(nil).UpdateChangefeedCheckpointTs), ctx, checkpointTs)
 }
+
+// UpdateChangefeedRuntime mocks base method.
+func (m *MockBackend) UpdateChangefeedRuntime(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateChangefeedRuntime", ctx, info, checkpointTs, progress)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateChangefeedRuntime indicates an expected call of UpdateChangefeedRuntime.
+func (mr *MockBackendMockRecorder) UpdateChangefeedRuntime(ctx, info, checkpointTs, progress interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateChangefeedRuntime", reflect.TypeOf((*MockBackend)(nil).UpdateChangefeedRuntime), ctx, info, checkpointTs, progress)
+}
