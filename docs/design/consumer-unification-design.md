@@ -16,7 +16,7 @@ TiCDC 当前使用三个独立程序消费 Kafka、Pulsar 和 Storage。它们�
 ## Goals
 
 - 提供一个 `cdc_consumer` 二进制，根据 upstream URI 使用 Kafka、Pulsar 或 Storage reader。
-- 删除 `cdc_kafka_consumer`、`cdc_pulsar_consumer` 和 `cdc_storage_consumer` 及其独立实现。
+- 三个旧程序由统一实现替代；旧构建入口作为 CI 临时别名保留。
 - 共享 DML 写入、flush、DDL 栅栏、完成记录、资源预算和生命周期；各 reader 保留自己的解码、顺序和确认规则。
 - 支持现有协议的 DDL 与 watermark 分区布局，包括单 partition DDL、全 partition DDL、非分区 Pulsar control message 和 partitioned Pulsar control message。
 - 来源位置对应的全部下游效果完成后，才推进 Kafka offset 或 Pulsar MessageID。
@@ -283,9 +283,11 @@ URI scheme 选择对应 reader：
 
 CI 通过 `tests/integration_tests/_utils/run_consumer WORK_DIR UPSTREAM_URI [CONFIG] [LOG_SUFFIX]` 启动程序。该入口使用 MySQL sink 默认 batch DML 路径，日志写入 `cdc_consumer[LOG_SUFFIX].log` 和 `cdc_consumer_stdout[LOG_SUFFIX].log`。需要跟踪子进程 PID 的用例直接启动同一二进制。
 
-### Removed commands
+### CI build compatibility
 
-以下二进制及源码目录被移除：
+`make kafka_consumer`、`make pulsar_consumer` 和 `make storage_consumer` 都依赖 `make consumer`，生成 `cdc_consumer`，并为对应旧产物名创建指向它的相对符号链接。现有 CI 的文件检查和缓存继续使用旧名字；仓库测试通过 `cdc_consumer` 启动统一程序。缓存只恢复旧链接时，缺失的目标文件使 CI 文件检查失败，随后通过旧 Make target 重建统一程序。
+
+以下独立实现及源码目录已移除：
 
 ```text
 cdc_kafka_consumer       cmd/kafka-consumer
@@ -293,7 +295,7 @@ cdc_pulsar_consumer      cmd/pulsar-consumer
 cdc_storage_consumer     cmd/storage-consumer
 ```
 
-Kafka、Pulsar、Storage 实现及公共生命周期全部完成后，镜像、发布产物、CI 脚本和部署示例一次性切换到 `cdc_consumer`，并移除三个旧程序及其专用代码。依赖旧进程名的停止命令和日志采集脚本同步更新。
+镜像、发布产物、仓库测试脚本和部署示例使用 `cdc_consumer`。本分支 CI 跑通后，外部流水线统一构建入口与缓存产物名，再移除三个临时 Make target 和旧产物链接。
 
 旧 Kafka group ID 或 Pulsar subscription name 作为新程序的 `--consumer-id` 使用。迁移时先停止旧 consumer，再启动 `cdc_consumer`；回退时执行相反顺序。新旧程序不得使用同一 consumer ID 并行写入同一目标。
 
@@ -325,7 +327,7 @@ consumer 使用结构化日志记录启动、关闭和退出原因。消费循�
 
 - `cdc_consumer` 可以根据 upstream URI 启动 Kafka、Pulsar 或 Storage reader。
 - 全部 consumer 实现位于 `cmd/consumer`，仓库不再包含三个旧 consumer 程序。
-- 构建、镜像、发布清单、CI 脚本和部署文档只引用 `cdc_consumer`。
+- 镜像、发布清单、仓库测试脚本和部署文档使用 `cdc_consumer`；外部 CI 通过临时构建别名使用相同实现。
 - Kafka 和 Pulsar 的确认前沿不会越过未完成的下游效果。
 - Kafka 支持本文列出的全部协议与 control message 分区布局。
 - Pulsar 支持非分区与 partitioned topic 的现有 DDL 和 watermark 布局。

@@ -3,7 +3,7 @@
 .PHONY: clean fmt check check-static local-static-check tidy \
 	check-go-version \
 	generate-protobuf generate_mock \
-	cdc consumer filter_helper \
+	cdc consumer kafka_consumer pulsar_consumer storage_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 	generate-next-gen-grafana check-next-gen-grafana
@@ -173,6 +173,10 @@ cdc: check-go-version
 
 consumer: check-go-version
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_consumer ./cmd/consumer
+
+# Temporary compatibility for CI jobs that still check and cache the old names.
+kafka_consumer pulsar_consumer storage_consumer: consumer
+	ln -sf cdc_consumer bin/cdc_$@
 
 oauth2_server:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/oauth2-server ./cmd/oauth2-server/main.go
