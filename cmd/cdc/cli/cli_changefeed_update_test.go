@@ -171,8 +171,8 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotContains(t, output.String(), "update-password-sentinel")
 	require.NotContains(t, output.String(), "stored-password-sentinel")
 	require.Contains(t, output.String(), "xxxxx")
-	require.Contains(t, output.String(), "SinkURI")
 	require.Contains(t, output.String(), config.MaskedSensitiveValue)
+	require.Equal(t, "stored-password-sentinel", *oldInfo.Config.Sink.KafkaConfig.SASLPassword)
 
 	// no diff
 	cmd = newCmdUpdateChangefeed(f)
@@ -189,4 +189,100 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abcd"
 	o.keyspace = "ks"
 	require.NotNil(t, o.run(cmd))
+}
+
+func TestChangefeedUpdatePassword(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	f := newMockFactory(ctrl)
+	oldInfo := &v2.ChangeFeedInfo{
+		ID:      "abc",
+		SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol",
+		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+	}
+	oldInfo.Config.Sink.KafkaConfig = &v2.KafkaConfig{
+		SASLUser:      util.AddressOf("alice"),
+		SASLPassword:  util.AddressOf("old-password-sentinel"),
+		SASLMechanism: util.AddressOf("SCRAM-SHA-256"),
+	}
+	f.changefeeds.EXPECT().Get(gomock.Any(), "default", "abc").Return(oldInfo, nil)
+	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "default").Return(&v2.Tables{}, nil)
+	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "default", "abc").
+		DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
+			require.Empty(t, cfg.SinkURI)
+			require.Equal(t, "new-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
+			require.Equal(t, "alice", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLUser)
+			return &v2.ChangeFeedInfo{
+				ID:      "abc",
+				SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol",
+				Config:  cfg.ReplicaConfig,
+			}, nil
+		})
+
+	configPath := filepath.Join(t.TempDir(), "cf.toml")
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte("[sink.kafka-config]\nsasl-password = \"new-password-sentinel\"\n"), 0o644))
+	cmd := newCmdUpdateChangefeed(f)
+	cmd.SetContext(t.Context())
+	cmd.SetArgs([]string{"--changefeed-id=abc", "--no-confirm=true", "--config=" + configPath})
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "old-password-sentinel", *oldInfo.Config.Sink.KafkaConfig.SASLPassword)
+	require.NotContains(t, output.String(), "old-password-sentinel")
+	require.NotContains(t, output.String(), "new-password-sentinel")
+	require.Contains(t, output.String(), config.MaskedSensitiveValue)
+}
+
+func TestChangefeedUpdateExplicitSinkURI(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		updateErr error
+	}{
+		{name: "success"},
+		{name: "authentication failure", updateErr: errors.New("authentication failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			f := newMockFactory(ctrl)
+			const sinkURI = "kafka://127.0.0.1:9092/topic?protocol=open-protocol&sasl-mechanism=SCRAM-SHA-256&sasl-password=xxxxx&sasl-user=alice"
+			oldInfo := &v2.ChangeFeedInfo{
+				ID:      "abc",
+				SinkURI: sinkURI,
+				Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+			}
+			f.changefeeds.EXPECT().Get(gomock.Any(), "default", "abc").Return(oldInfo, nil)
+			f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "default").Return(&v2.Tables{}, nil)
+			f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "default", "abc").
+				DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
+					require.Equal(t, sinkURI, cfg.SinkURI)
+					if tc.updateErr != nil {
+						return nil, tc.updateErr
+					}
+					return &v2.ChangeFeedInfo{ID: "abc", SinkURI: cfg.SinkURI, Config: cfg.ReplicaConfig}, nil
+				})
+
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			require.NoError(t, o.complete(f))
+			cmd := NewCmdCli()
+			o.addFlags(cmd)
+			cmd.SetContext(t.Context())
+			require.NoError(t, cmd.ParseFlags([]string{
+				"--changefeed-id=abc", "--no-confirm=true", "--sink-uri=" + sinkURI,
+			}))
+			output := new(bytes.Buffer)
+			cmd.SetOut(output)
+
+			err := o.run(cmd)
+			if tc.updateErr != nil {
+				require.ErrorIs(t, err, tc.updateErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, sinkURI, oldInfo.SinkURI)
+			require.NotContains(t, output.String(), "do nothing")
+		})
+	}
 }

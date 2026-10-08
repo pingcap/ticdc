@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/ticdc/pkg/config"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/r3labs/diff"
 	"github.com/spf13/cobra"
@@ -112,7 +111,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if len(changelog) == 0 {
+	// A supplied URI can match the masked GET result while changing its real password.
+	if len(changelog) == 0 && newInfo.SinkURI == "" {
 		cmd.Printf("changefeed config is the same with the old one, do nothing\n")
 		return nil
 	}
@@ -129,17 +129,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	visiblePaths := make(map[string]struct{}, len(safeChangelog))
 	for _, change := range safeChangelog {
 		cmd.Printf("%+v\n", change)
-		visiblePaths[strings.Join(change.Path, "\x00")] = struct{}{}
-	}
-	for _, change := range changelog {
-		if _, ok := visiblePaths[strings.Join(change.Path, "\x00")]; ok {
-			continue
-		}
-		cmd.Printf("{Type:%s Path:%v From:%s To:%s}\n",
-			change.Type, change.Path, config.MaskedSensitiveValue, config.MaskedSensitiveValue)
 	}
 
 	if !o.commonChangefeedOptions.noConfirm {

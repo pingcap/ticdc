@@ -971,14 +971,6 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
-	// Retain the URI returned by GET without replacing its masked password.
-	if updateCfConfig.SinkURI != "" {
-		maskedURI, maskErr := util.MaskSinkURI(oldCfInfo.SinkURI)
-		if maskErr == nil && updateCfConfig.SinkURI == maskedURI {
-			updateCfConfig.SinkURI = oldCfInfo.SinkURI
-		}
-	}
-
 	var configUpdated, sinkURIUpdated, targetTsUpdated bool
 	if updateCfConfig.TargetTs != 0 {
 		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {
