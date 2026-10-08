@@ -1236,7 +1236,7 @@ func NewDMLMessageDataWithDecoderFactory(
 ) *codeccommon.DMLMessageData {
 	return codeccommon.NewDMLMessageData(key, value,
 		func(data []byte) ([]*codeccommon.DMLMessage, error) {
-			key, value, err := unmarshalDMLMessageData(data)
+			key, value, err := UnmarshalDMLMessageData(data)
 			if err != nil {
 				return nil, err
 			}
@@ -1272,7 +1272,8 @@ func restoreDMLMessages(
 	}
 }
 
-func unmarshalDMLMessageData(data []byte) ([]byte, []byte, error) {
+// UnmarshalDMLMessageData restores the original key and value from a spill payload.
+func UnmarshalDMLMessageData(data []byte) ([]byte, []byte, error) {
 	key, data, err := readSpillBytes(data)
 	if err != nil {
 		return nil, nil, err
