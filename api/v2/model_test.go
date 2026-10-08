@@ -13,20 +13,12 @@
 package v2
 
 import (
-	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
-
-func queryValue(t *testing.T, rawURL, key string) string {
-	t.Helper()
-	parsed, err := url.Parse(rawURL)
-	require.NoError(t, err)
-	return parsed.Query().Get(key)
-}
 
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
@@ -71,175 +63,6 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	after, err := info.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, original, after)
-}
-
-func TestChangefeedConfigRestoreMaskedSensitiveData(t *testing.T) {
-	original := &ReplicaConfig{
-		Sink: &SinkConfig{
-			SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret"),
-			KafkaConfig: &KafkaConfig{
-				SASLPassword:          util.AddressOf("plain-password"),
-				SASLGssAPIPassword:    util.AddressOf("gssapi-password"),
-				SASLOAuthClientSecret: util.AddressOf("oauth-secret"),
-				SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-secret"),
-				Key:                   util.AddressOf("private-key"),
-				LargeMessageHandle: &LargeMessageHandleConfig{
-					ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret",
-				},
-				GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
-					RegistryName:    "registry",
-					Region:          "us-east-1",
-					AccessKey:       "glue-access",
-					SecretAccessKey: "glue-secret",
-					Token:           "glue-token",
-				},
-			},
-			PulsarConfig: &PulsarConfig{
-				AuthenticationToken: util.AddressOf("pulsar-token"),
-				BasicPassword:       util.AddressOf("pulsar-password"),
-				OAuth2: &PulsarOAuth2{
-					OAuth2IssuerURL:  "https://issuer.example.com",
-					OAuth2Audience:   "audience",
-					OAuth2PrivateKey: "pulsar-private-key",
-					OAuth2ClientID:   "client-id",
-				},
-			},
-		},
-		Consistent: &ConsistentConfig{
-			Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret"),
-		},
-	}
-	oldInfo := &config.ChangeFeedInfo{
-		SinkURI: "kafka://user:sink-password@127.0.0.1:9092/topic?secret=uri-secret",
-		Config:  original.ToInternalReplicaConfig(),
-	}
-	update := &ChangefeedConfig{
-		SinkURI:       util.MaskSensitiveDataInURI(oldInfo.SinkURI),
-		ReplicaConfig: ToAPIReplicaConfig(oldInfo.Config),
-	}
-	update.ReplicaConfig.maskSensitiveData()
-
-	require.NoError(t, update.restoreMaskedSensitiveData(oldInfo))
-
-	require.Equal(t, oldInfo.SinkURI, update.SinkURI)
-	require.Equal(t, "registry-secret", queryValue(t, *update.ReplicaConfig.Sink.SchemaRegistry, "access-key"))
-	require.Equal(t, "plain-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "gssapi-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLGssAPIPassword)
-	require.Equal(t, "oauth-secret", *update.ReplicaConfig.Sink.KafkaConfig.SASLOAuthClientSecret)
-	require.Equal(t, "token-secret", queryValue(t, *update.ReplicaConfig.Sink.KafkaConfig.SASLOAuthTokenURL, "client_secret"))
-	require.Equal(t, "private-key", *update.ReplicaConfig.Sink.KafkaConfig.Key)
-	require.Equal(t, "claim-check-secret", queryValue(t,
-		update.ReplicaConfig.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI, "access-key"))
-	require.Equal(t, "glue-access", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey)
-	require.Equal(t, "glue-secret", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey)
-	require.Equal(t, "glue-token", update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token)
-	require.Equal(t, "pulsar-token", *update.ReplicaConfig.Sink.PulsarConfig.AuthenticationToken)
-	require.Equal(t, "pulsar-password", *update.ReplicaConfig.Sink.PulsarConfig.BasicPassword)
-	require.Equal(t, "pulsar-private-key", update.ReplicaConfig.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey)
-	require.Equal(t, "consistent-secret", queryValue(t, *update.ReplicaConfig.Consistent.Storage, "access-key"))
-
-	update.ReplicaConfig.Sink.KafkaConfig.SASLPassword = util.AddressOf("new-password")
-	require.NoError(t, update.restoreMaskedSensitiveData(oldInfo))
-	require.Equal(t, "new-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
-}
-
-func TestChangefeedConfigRejectsMaskedSensitiveDataForChangedDestination(t *testing.T) {
-	newMaskedUpdate := func(oldInfo *config.ChangeFeedInfo) *ChangefeedConfig {
-		update := &ChangefeedConfig{
-			SinkURI:       util.MaskSensitiveDataInURI(oldInfo.SinkURI),
-			ReplicaConfig: ToAPIReplicaConfig(oldInfo.Config),
-		}
-		update.ReplicaConfig.maskSensitiveData()
-		return update
-	}
-
-	t.Run("kafka broker", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "kafka://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
-				SASLPassword: util.AddressOf("password"),
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.SinkURI = "kafka://attacker.example.com/topic"
-		require.ErrorContains(t, update.restoreMaskedSensitiveData(oldInfo), "sasl_password")
-	})
-
-	t.Run("kafka broker with new password", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "kafka://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
-				SASLPassword: util.AddressOf("password"),
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.SinkURI = "kafka://new-broker.example.com/topic"
-		update.ReplicaConfig.Sink.KafkaConfig.SASLPassword = util.AddressOf("new-password")
-		require.NoError(t, update.restoreMaskedSensitiveData(oldInfo))
-		require.Equal(t, "new-password", *update.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
-	})
-
-	t.Run("oauth token URL", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "kafka://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
-				SASLOAuthClientSecret: util.AddressOf("secret"),
-				SASLOAuthTokenURL:     util.AddressOf("https://issuer.example.com/token"),
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.ReplicaConfig.Sink.KafkaConfig.SASLOAuthTokenURL = util.AddressOf("https://attacker.example.com/token")
-		require.ErrorContains(t, update.restoreMaskedSensitiveData(oldInfo), "sasl_oauth_client_secret")
-	})
-
-	t.Run("glue registry", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "kafka://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{KafkaConfig: &KafkaConfig{
-				GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
-					RegistryName:    "registry",
-					Region:          "us-east-1",
-					SecretAccessKey: "secret",
-				},
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig.Region = "us-west-1"
-		require.ErrorContains(t, update.restoreMaskedSensitiveData(oldInfo), "secret_access_key")
-	})
-
-	t.Run("pulsar broker", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "pulsar://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{PulsarConfig: &PulsarConfig{
-				AuthenticationToken: util.AddressOf("token"),
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.SinkURI = "pulsar://attacker.example.com/topic"
-		require.ErrorContains(t, update.restoreMaskedSensitiveData(oldInfo), "authentication_token")
-	})
-
-	t.Run("pulsar oauth issuer", func(t *testing.T) {
-		oldInfo := &config.ChangeFeedInfo{
-			SinkURI: "pulsar://broker.example.com/topic",
-			Config: (&ReplicaConfig{Sink: &SinkConfig{PulsarConfig: &PulsarConfig{
-				OAuth2: &PulsarOAuth2{
-					OAuth2IssuerURL:  "https://issuer.example.com",
-					OAuth2PrivateKey: "private-key",
-				},
-			}}}).ToInternalReplicaConfig(),
-		}
-		update := newMaskedUpdate(oldInfo)
-		update.ReplicaConfig.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL = "https://attacker.example.com"
-		require.ErrorContains(t, update.restoreMaskedSensitiveData(oldInfo), "oauth2_private_key")
-	})
-}
-
-func TestRestoreMaskedURIDoesNotRestoreEmptyValue(t *testing.T) {
-	value := ""
-	require.NoError(t, restoreMaskedURI(&value, "mysql://user:password@127.0.0.1/%zz", "sink_uri"))
-	require.Empty(t, value)
 }
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,

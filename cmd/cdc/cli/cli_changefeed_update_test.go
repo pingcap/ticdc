@@ -120,15 +120,18 @@ func TestChangefeedUpdateCli(t *testing.T) {
 		SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
 		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
 	}
+	oldInfo.Config.Sink.KafkaConfig = &v2.KafkaConfig{SASLPassword: util.AddressOf("stored-password-sentinel")}
 	f.changefeeds.EXPECT().Get(gomock.Any(), gomock.Any(), "abc").Return(oldInfo, nil)
 	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
 		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
 		DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
 			require.Contains(t, cfg.SinkURI, "update-password-sentinel")
+			require.Equal(t, "stored-password-sentinel", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
 			return &v2.ChangeFeedInfo{
 				ID:      "abc",
 				SinkURI: "kafka://user:xxxxx@127.0.0.1:9092/topic",
+				Config:  cfg.ReplicaConfig,
 			}, nil
 		})
 	dir := t.TempDir()
@@ -166,6 +169,7 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
 	require.NotContains(t, output.String(), "update-password-sentinel")
+	require.NotContains(t, output.String(), "stored-password-sentinel")
 	require.Contains(t, output.String(), "xxxxx")
 	require.Contains(t, output.String(), "SinkURI")
 	require.Contains(t, output.String(), config.MaskedSensitiveValue)

@@ -572,14 +572,17 @@ func CfInfoToAPIModel(
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-		replicaConfig.maskSensitiveData()
+	}
+	sinkURI, err := util.MaskSinkURI(info.SinkURI)
+	if err != nil {
+		log.Error("failed to mask sink URI", zap.Error(util.MaskSensitiveDataInURLError(err)))
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
 		Keyspace:       info.ChangefeedID.Keyspace(),
-		SinkURI:        util.MaskSensitiveDataInURI(info.SinkURI),
+		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
 		TargetTs:       info.TargetTs,
@@ -968,9 +971,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
-	if err = updateCfConfig.restoreMaskedSensitiveData(oldCfInfo); err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
-		return
+	// Retain the URI returned by GET without replacing its masked password.
+	if updateCfConfig.SinkURI != "" {
+		maskedURI, maskErr := util.MaskSinkURI(oldCfInfo.SinkURI)
+		if maskErr == nil && updateCfConfig.SinkURI == maskedURI {
+			updateCfConfig.SinkURI = oldCfInfo.SinkURI
+		}
 	}
 
 	var configUpdated, sinkURIUpdated, targetTsUpdated bool

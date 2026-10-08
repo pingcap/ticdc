@@ -176,72 +176,41 @@ func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID)
 
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
 
-func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
+func TestCfInfoToAPIModelPreservesReplicaCredentials(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.SchemaRegistry = util.AddressOf(
-		"https://registry-user:registry-password-sentinel@registry.example.com?access-key=registry-access-sentinel")
+	replicaConfig.Sink.SchemaRegistry = util.AddressOf("https://user:registry-secret-sentinel@registry.example.com")
 	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
-		SASLUser:              util.AddressOf("ticdc-user"),
-		SASLPassword:          util.AddressOf("plain-password-sentinel"),
-		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
-		SASLOAuthClientID:     util.AddressOf("oauth-client-id"),
+		SASLPassword:          util.AddressOf("password-sentinel"),
 		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
-		SASLOAuthTokenURL: util.AddressOf(
-			"https://oauth.example.com/token?client_secret=token-url-secret-sentinel&audience=ticdc"),
-		Key: util.AddressOf("private-key-sentinel"),
 		LargeMessageHandle: &config.LargeMessageHandleConfig{
-			ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel",
-		},
-		GlueSchemaRegistryConfig: &config.GlueSchemaRegistryConfig{
-			AccessKey:       "glue-access-sentinel",
-			SecretAccessKey: "glue-secret-sentinel",
-			Token:           "glue-token-sentinel",
+			ClaimCheckStorageURI: "s3://bucket?access-key=storage-secret-sentinel",
 		},
 	}
 	info := &config.ChangeFeedInfo{
 		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		SinkURI: "kafka://sink-user:sink-password-sentinel@127.0.0.1:9092/topic" +
-			"?protocol=canal-json&sasl-password=uri-sasl-password-sentinel&secret-access-key=uri-secret-sentinel",
-		Config: replicaConfig,
+		SinkURI:      "kafka://user:sink-password-sentinel@host/topic?sasl-password=uri-password-sentinel",
+		Config:       replicaConfig,
 	}
-	status := &config.ChangeFeedStatus{CheckpointTs: 123}
-
-	apiInfo := CfInfoToAPIModel(info, status, nil)
-	response, err := apiInfo.Marshal()
+	original, err := info.Marshal()
 	require.NoError(t, err)
+	detail := CfInfoToAPIModel(info, &config.ChangeFeedStatus{CheckpointTs: 123}, nil)
 
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-sasl-password-sentinel",
-		"uri-secret-sentinel",
-		"registry-password-sentinel",
-		"registry-access-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"token-url-secret-sentinel",
-		"private-key-sentinel",
-		"claim-check-secret-sentinel",
-		"glue-access-sentinel",
-		"glue-secret-sentinel",
-		"glue-token-sentinel",
-	} {
-		require.NotContains(t, response, secret)
-	}
-	require.Contains(t, apiInfo.SinkURI, "sink-user:xxxxx@")
-	require.Contains(t, apiInfo.SinkURI, "sasl-password=xxxxx")
-	require.Contains(t, apiInfo.SinkURI, "secret-access-key=xxxxx")
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLGssAPIPassword)
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
-	require.Equal(t, "******", *apiInfo.Config.Sink.KafkaConfig.Key)
-	require.Equal(t, "ticdc-user", *apiInfo.Config.Sink.KafkaConfig.SASLUser)
-	require.Equal(t, "oauth-client-id", *apiInfo.Config.Sink.KafkaConfig.SASLOAuthClientID)
+	// API responses retain the replica config, so unrelated updates carry real credentials.
+	require.Equal(t, ToAPIReplicaConfig(replicaConfig), detail.Config)
+	detail.Config.MemoryQuota = util.AddressOf(uint64(2048))
+	updated := detail.Config.ToInternalReplicaConfig()
+	require.Equal(t, replicaConfig.Sink, updated.Sink)
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
 
-	// Building an API response must not modify the in-memory changefeed config.
-	require.Equal(t, "plain-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "oauth-secret-sentinel", *info.Config.Sink.KafkaConfig.SASLOAuthClientSecret)
-	require.Contains(t, info.SinkURI, "sink-password-sentinel")
+	// Only the display copy is masked.
+	masked, err := detail.CloneWithMaskedSensitiveData()
+	require.NoError(t, err)
+	output, err := masked.Marshal()
+	require.NoError(t, err)
+	require.NotContains(t, output, "sentinel")
+	require.Equal(t, "password-sentinel", *detail.Config.Sink.KafkaConfig.SASLPassword)
 }
 
 // TestVerifyRouteConflict covers route conflict detection for eligible and
