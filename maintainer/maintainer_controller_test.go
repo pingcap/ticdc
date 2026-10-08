@@ -1744,26 +1744,142 @@ func TestFinishBootstrapAddedTableHistory(t *testing.T) {
 		require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 		require.Equal(t, uint64(112), env.controller.bootstrapAddedTables[common.DefaultMode][1].startTs)
 	})
-	t.Run("unresolved history is retried before rebuilding tasks", func(t *testing.T) {
-		env := newMergeBootstrapTestEnv(t)
-		schemaStore := eventservice.NewMockSchemaStore()
-		schemaStore.SetResolvedTs(10)
-		schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
-			FinishedTs: 20, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
+	for _, resolvedTs := range []uint64{10, 20} {
+		t.Run(fmt.Sprintf("unresolved history at %d is retried before rebuilding tasks", resolvedTs), func(t *testing.T) {
+			env := newMergeBootstrapTestEnv(t)
+			schemaStore := eventservice.NewMockSchemaStore()
+			schemaStore.SetResolvedTs(resolvedTs)
+			schemaStore.AppendDDLEvent(common.DDLSpanTableID, commonEvent.DDLEvent{
+				FinishedTs: 20, NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1, Splitable: true}},
+			})
+			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+			spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
+			spanInfo.CheckpointTs = 25
+			responses := env.bootstrapResponses(nil, spanInfo)
+			_, err := env.controller.FinishBootstrap(responses, false)
+			require.ErrorIs(t, err, cerrors.ErrChangefeedRetryable)
+			require.False(t, env.controller.bootstrapped)
+			require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
+			schemaStore.SetResolvedTs(25)
+			_, err = env.controller.FinishBootstrap(responses, false)
+			require.NoError(t, err)
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 		})
-		appcontext.SetService(appcontext.SchemaStore, schemaStore)
-		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
-		spanInfo.CheckpointTs = 25
-		responses := env.bootstrapResponses(nil, spanInfo)
-		_, err := env.controller.FinishBootstrap(responses, false)
-		require.ErrorIs(t, err, cerrors.ErrChangefeedRetryable)
-		require.False(t, env.controller.bootstrapped)
-		require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
-		schemaStore.SetResolvedTs(25)
-		_, err = env.controller.FinishBootstrap(responses, false)
-		require.NoError(t, err)
-		require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
-	})
+	}
+}
+
+func TestFinishBootstrapReplaysAddedTableHistoryThroughCheckpoint(t *testing.T) {
+	table := commonEvent.Table{TableID: 1, SchemaID: 1, Splitable: true}
+	add := commonEvent.DDLEvent{FinishedTs: 20, NeedAddedTables: []commonEvent.Table{table}}
+	drop := commonEvent.DDLEvent{
+		FinishedTs: 30,
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{table.TableID},
+		},
+	}
+	dropDB := commonEvent.DDLEvent{
+		FinishedTs: 30,
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeDB, SchemaID: table.SchemaID,
+		},
+	}
+	dropOtherDB := commonEvent.DDLEvent{
+		FinishedTs: 30,
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeDB, SchemaID: 2,
+		},
+	}
+	moveSchema := commonEvent.DDLEvent{
+		FinishedTs:     25,
+		UpdatedSchemas: []commonEvent.SchemaIDChange{{TableID: table.TableID, OldSchemaID: 1, NewSchemaID: 2}},
+	}
+	paginatedHistory := []commonEvent.DDLEvent{add}
+	for ts := uint64(21); ts < 121; ts++ {
+		paginatedHistory = append(paginatedHistory, commonEvent.DDLEvent{FinishedTs: ts})
+	}
+	laterDrop := drop
+	laterDrop.FinishedTs = 121
+	paginatedHistory = append(paginatedHistory, laterDrop)
+
+	for _, tc := range []struct {
+		name            string
+		events          []commonEvent.DDLEvent
+		checkpointTs    uint64
+		expectedStartTs uint64
+		expectedSchema  int64
+	}{
+		{name: "create then drop table", events: []commonEvent.DDLEvent{add, drop}, checkpointTs: 30},
+		{name: "create then drop database", events: []commonEvent.DDLEvent{add, dropDB}, checkpointTs: 30},
+		{name: "drop on a later page", events: paginatedHistory, checkpointTs: 121},
+		{
+			name: "table drop after checkpoint", events: []commonEvent.DDLEvent{add, drop},
+			checkpointTs: 25, expectedStartTs: 20, expectedSchema: 1,
+		},
+		{
+			name: "database drop after checkpoint", events: []commonEvent.DDLEvent{add, dropDB},
+			checkpointTs: 25, expectedStartTs: 20, expectedSchema: 1,
+		},
+		{
+			name: "drop another database", events: []commonEvent.DDLEvent{add, dropOtherDB},
+			checkpointTs: 30, expectedStartTs: 20, expectedSchema: 1,
+		},
+		{
+			name: "recover after drop", events: []commonEvent.DDLEvent{
+				add, drop, {FinishedTs: 35, NeedAddedTables: []commonEvent.Table{table}},
+			},
+			checkpointTs: 40, expectedStartTs: 35, expectedSchema: 1,
+		},
+		{
+			name: "rename out of dropped database", events: []commonEvent.DDLEvent{add, moveSchema, dropDB},
+			checkpointTs: 30, expectedStartTs: 20, expectedSchema: 2,
+		},
+		{
+			name: "rename into dropped database", events: []commonEvent.DDLEvent{add, moveSchema, dropOtherDB},
+			checkpointTs: 30,
+		},
+		{
+			name: "rename after checkpoint", events: []commonEvent.DDLEvent{add, moveSchema, dropOtherDB},
+			checkpointTs: 20, expectedStartTs: 20, expectedSchema: 1,
+		},
+	} {
+		for _, state := range []heartbeatpb.ComponentState{heartbeatpb.ComponentState_Stopped, heartbeatpb.ComponentState_Removed} {
+			t.Run(fmt.Sprintf("%s/state=%s", tc.name, state), func(t *testing.T) {
+				env := newMergeBootstrapTestEnv(t)
+				env.controller.splitter = nil
+				schemaStore := eventservice.NewMockSchemaStore()
+				schemaStore.SetTables(nil)
+				schemaStore.SetResolvedTs(200)
+				schemaStore.AppendDDLEvent(common.DDLSpanTableID, tc.events...)
+				appcontext.SetService(appcontext.SchemaStore, schemaStore)
+				spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, state)
+				spanInfo.CheckpointTs = tc.checkpointTs
+				// Another candidate advances the scan past this table's checkpoint.
+				// Its history must not change this table's state beyond that bound.
+				otherSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
+				otherSpanInfo := env.bootstrapSpan(env.sourceDispatcherID2, &otherSpan, heartbeatpb.ComponentState_Working)
+				otherSpanInfo.CheckpointTs = 200
+				_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo, otherSpanInfo), false)
+				require.NoError(t, err)
+				require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
+				require.Empty(t, env.controller.spanController.GetTasksByTableID(otherSpan.TableID))
+				tasks := env.controller.spanController.GetTasksByTableID(table.TableID)
+				if tc.expectedStartTs == 0 {
+					require.Empty(t, env.controller.bootstrapAddedTables[common.DefaultMode])
+					require.Empty(t, tasks)
+					require.Zero(t, env.controller.spanController.GetAbsentSize())
+					env.controller.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+					require.Zero(t, env.controller.operatorController.OperatorSize())
+					return
+				}
+				added := env.controller.bootstrapAddedTables[common.DefaultMode][table.TableID]
+				require.Equal(t, tc.expectedStartTs, added.startTs)
+				require.Equal(t, tc.expectedSchema, added.table.SchemaID)
+				require.Len(t, tasks, 1)
+				require.Equal(t, tc.expectedStartTs, tasks[0].GetStatus().CheckpointTs)
+				require.Equal(t, 1, env.controller.spanController.GetAbsentSize())
+			})
+		}
+	}
 }
 
 func TestFinishBootstrapRestoresOperatorsForAddedTable(t *testing.T) {

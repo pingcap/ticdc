@@ -447,7 +447,7 @@ type bootstrapAddedTable struct {
 // an add: DROP may have completed before its remove reached the node.
 //
 // Only inspect history up to timestamps reported for missing tables, and only
-// recover tables whose add has already happened by their runtime timestamp.
+// recover tables that are still admitted at their runtime timestamp.
 func (c *Controller) loadBootstrapAddedTables(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	tables []commonEvent.Table,
@@ -487,22 +487,44 @@ func (c *Controller) loadBootstrapAddedTables(
 
 	dispatcherID := c.getSpanController(mode).GetDDLDispatcherID()
 	addedTables := make(map[int64]bootstrapAddedTable)
-	for cursor := startTs; cursor < endTs && len(candidates) > 0; {
+	// Keep tracking each candidate after an add: a later drop can invalidate it.
+	for cursor := startTs; cursor < endTs; {
 		events, resolvedTs, err := schemaStore.FetchTableTriggerDDLEvents(c.keyspaceMeta, dispatcherID, f, cursor, 100)
 		if err != nil {
 			return nil, err
 		}
 		for _, event := range events {
+			if dropped := event.NeedDroppedTables; dropped != nil {
+				switch dropped.InfluenceType {
+				case commonEvent.InfluenceTypeNormal:
+					for _, tableID := range dropped.TableIDs {
+						if upperTs, ok := candidates[tableID]; ok && event.FinishedTs <= upperTs {
+							delete(addedTables, tableID)
+						}
+					}
+				case commonEvent.InfluenceTypeDB:
+					for tableID, added := range addedTables {
+						if added.table.SchemaID == dropped.SchemaID && event.FinishedTs <= candidates[tableID] {
+							delete(addedTables, tableID)
+						}
+					}
+				}
+			}
 			for _, table := range event.NeedAddedTables {
 				if upperTs, ok := candidates[table.TableID]; ok && event.FinishedTs <= upperTs {
 					addedTables[table.TableID] = bootstrapAddedTable{table: table, startTs: event.FinishedTs}
-					delete(candidates, table.TableID)
+				}
+			}
+			for _, change := range event.UpdatedSchemas {
+				if added, ok := addedTables[change.TableID]; ok && event.FinishedTs <= candidates[change.TableID] {
+					added.table.SchemaID = change.NewSchemaID
+					addedTables[change.TableID] = added
 				}
 			}
 		}
-		if len(candidates) > 0 && resolvedTs <= cursor {
-			// Do not classify an unresolved add as a dropped table. Retry bootstrap
-			// after schema store catches up instead of deleting a live dispatcher.
+		if resolvedTs <= cursor {
+			// Retry bootstrap until history is resolved through every candidate's
+			// upper timestamp, even if its add has already been observed.
 			return nil, errors.ErrChangefeedRetryable.GenWithStack(
 				"schema store has not resolved bootstrap table history through %d (resolved %d)", endTs, resolvedTs)
 		}
