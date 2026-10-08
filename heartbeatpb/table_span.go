@@ -17,13 +17,16 @@ import "bytes"
 
 // Less compares two Spans, defines the order between spans.
 func (s *TableSpan) Less(other *TableSpan) bool {
-	if s.TableID < other.TableID {
-		return true
+	if s.KeyspaceID != other.KeyspaceID {
+		return s.KeyspaceID < other.KeyspaceID
 	}
-	if bytes.Compare(s.StartKey, other.StartKey) < 0 {
-		return true
+	if s.TableID != other.TableID {
+		return s.TableID < other.TableID
 	}
-	return false
+	if cmp := bytes.Compare(s.StartKey, other.StartKey); cmp != 0 {
+		return cmp < 0
+	}
+	return bytes.Compare(s.EndKey, other.EndKey) < 0
 }
 
 func (s *TableSpan) Equal(other *TableSpan) bool {

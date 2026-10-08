@@ -8,6 +8,21 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function view_is_not_scheduled() {
+	local changefeed_id=$1
+	local table_id=$2
+	local view_table_id=$3
+
+	curl -sS --fail --connect-timeout 2 --max-time 5 \
+		"http://${CDC_HOST}:${CDC_PORT}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=${KEYSPACE_NAME}" |
+		jq -e --argjson table_id "$table_id" --argjson view_table_id "$view_table_id" '
+			[.items[].table_ids[]?] as $table_ids |
+			(($table_ids | index($table_id)) != null) and
+			(($table_ids | index($view_table_id)) == null)
+		' >/dev/null
+}
+export -f view_is_not_scheduled
+
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
@@ -31,11 +46,22 @@ function run() {
 	run_sql "CREATE table capture_session_done_during_task.t (id int primary key auto_increment, a int)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE capture_session_done_during_task;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "CREATE table capture_session_done_during_task.t (id int primary key auto_increment, a int)" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	if [ "$SINK_TYPE" = "mysql" ]; then
+		run_sql "CREATE VIEW capture_session_done_during_task.v AS SELECT id, a FROM capture_session_done_during_task.t" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql "CREATE VIEW capture_session_done_during_task.v AS SELECT id, a FROM capture_session_done_during_task.t" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		table_id=$(get_table_id "capture_session_done_during_task" "t")
+		view_table_id=$(get_table_id "capture_session_done_during_task" "v")
+	fi
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "INSERT INTO capture_session_done_during_task.t values (),(),(),(),(),(),()" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/NewDispatcherManagerDelay=sleep(4000)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
+	if [ "$SINK_TYPE" = "mysql" ]; then
+		ensure 30 view_is_not_scheduled "$changefeed_id" "$table_id" "$view_table_id"
+		run_sql "DROP VIEW capture_session_done_during_task.v" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		check_table_not_exists "capture_session_done_during_task.v" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 30
+	fi
 	# wait task is dispatched
 	cdc_pid=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	echo "cdc pid: $cdc_pid"

@@ -102,4 +102,5 @@ message DispatcherRequest {
     int64 mode = 18;
     string txn_atomicity = 19;
     bool enable_ignore_update_only_columns = 20;
+    bool low_latency_mode = 21;
 }

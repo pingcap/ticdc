@@ -20,9 +20,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -96,7 +98,11 @@ func (k *schemaStoreGCKeeper) close(ctx context.Context) error {
 	)
 }
 
-func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() uint64) {
+func (k *schemaStoreGCKeeper) run(
+	ctx context.Context,
+	resolvedTsGetter func() uint64,
+	onTombstone func(),
+) {
 	ticker := time.NewTicker(schemaStoreGCRefreshInterval)
 	go func() {
 		defer ticker.Stop()
@@ -105,15 +111,44 @@ func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() u
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := k.refresh(ctx, resolvedTsGetter()); err != nil {
-					log.Warn("refresh schema store gc safepoint failed",
-						zap.Any("keyspace", k.keyspaceMeta),
-						zap.String("serviceID", k.serviceID()),
-						zap.Error(err))
+				if !k.refreshSafepoint(ctx, resolvedTsGetter()) {
+					onTombstone()
+					return
 				}
 			}
 		}
 	}()
+}
+
+// refreshSafepoint returns whether the keeper should continue running.
+func (k *schemaStoreGCKeeper) refreshSafepoint(ctx context.Context, resolvedTs uint64) bool {
+	err := k.refresh(ctx, resolvedTs)
+	if err == nil {
+		return true
+	}
+
+	var keyspaceStateErr error
+	if !kerneltype.IsClassic() {
+		// The safepoint API does not expose a typed tombstone error. Query the
+		// authoritative keyspace state only after a refresh failure, avoiding an
+		// extra PD request on the healthy path.
+		keyspaceMeta, loadErr := k.pdCli.LoadKeyspaceByID(ctx, k.keyspaceMeta.ID)
+		if loadErr == nil && keyspaceMeta.GetState() == keyspacepb.KeyspaceState_TOMBSTONE {
+			return false
+		}
+		keyspaceStateErr = loadErr
+	}
+
+	fields := []zap.Field{
+		zap.Any("keyspace", k.keyspaceMeta),
+		zap.String("serviceID", k.serviceID()),
+		zap.Error(err),
+	}
+	if keyspaceStateErr != nil {
+		fields = append(fields, zap.NamedError("keyspaceStateError", keyspaceStateErr))
+	}
+	log.Warn("refresh schema store gc safepoint failed", fields...)
+	return true
 }
 
 // serviceID returns the exact PD GC service ID used by this schema store keeper.

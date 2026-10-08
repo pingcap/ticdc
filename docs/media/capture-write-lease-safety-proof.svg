@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" width="1200" height="620">
+  <defs>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #111827; }
+    .title { font-size: 24px; font-weight: 700; }
+    .sub { font-size: 12px; fill: #6b7280; }
+    .row { font-size: 14px; font-weight: 700; }
+    .label { font-size: 12px; font-weight: 700; }
+    .small { font-size: 11px; fill: #4b5563; }
+  </style>
+  <rect width="1200" height="620" fill="#ffffff"/>
+
+  <text x="600" y="46" text-anchor="middle" class="title">Figure 2: Old and replacement writers cannot admit new writes together</text>
+  <text x="600" y="70" text-anchor="middle" class="sub">Conceptual timeline, not to scale; td is the linearizable deletion time of the old capture key</text>
+
+  <rect data-graph-role="decoration" x="650" y="105" width="250" height="245" fill="#ecfdf5" opacity="0.72"/>
+  <text x="775" y="126" text-anchor="middle" class="label" style="fill:#15803d">At least 5s safety gap</text>
+
+  <line x1="120" y1="370" x2="1130" y2="370" stroke="#6b7280" stroke-width="1.8" marker-end="url(#arrow-gray)"/>
+  <text x="1140" y="375" class="small">time</text>
+  <line x1="400" y1="96" x2="400" y2="390" stroke="#dc2626" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <line x1="650" y1="96" x2="650" y2="390" stroke="#d97706" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <line x1="900" y1="96" x2="900" y2="390" stroke="#16a34a" stroke-width="1.3" stroke-dasharray="6 4"/>
+
+  <text x="105" y="192" text-anchor="end" class="row">Old writer</text>
+  <rect x="120" y="160" width="530" height="48" rx="8" fill="#dbeafe" stroke="#60a5fa"/>
+  <text x="385" y="190" text-anchor="middle" class="label" style="fill:#1d4ed8">May still admit writes while required proofs are fresh</text>
+  <rect x="650" y="160" width="480" height="48" rx="8" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="890" y="190" text-anchor="middle" class="label" style="fill:#6b7280">Gate closed: no new downstream mutation may start</text>
+
+  <text x="105" y="282" text-anchor="end" class="row">Replacement</text>
+  <rect x="400" y="250" width="500" height="48" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="650" y="280" text-anchor="middle" class="label" style="fill:#b45309">captureRemoveTTL barrier: still not schedulable</text>
+  <rect x="900" y="250" width="230" height="48" rx="8" fill="#dcfce7" stroke="#86efac"/>
+  <text x="1015" y="280" text-anchor="middle" class="label" style="fill:#15803d">Earliest new admission</text>
+
+  <path d="M 400 115 V 98 H 650 V 115" fill="none" stroke="#d97706" stroke-width="1.5"/>
+  <text x="525" y="91" text-anchor="middle" class="small">Last etcd proof expires before td + 5s</text>
+  <path d="M 400 330 V 347 H 900 V 330" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="650" y="339" text-anchor="middle" class="small">After observing key deletion, wait captureRemoveTTL (10s by default)</text>
+
+  <text x="400" y="414" text-anchor="middle" class="label" style="fill:#b91c1c">td</text>
+  <text x="400" y="434" text-anchor="middle" class="small">old capture key deleted</text>
+  <text x="650" y="414" text-anchor="middle" class="label" style="fill:#b45309">td + 5s</text>
+  <text x="650" y="434" text-anchor="middle" class="small">old writer is blocked by this bound</text>
+  <text x="900" y="414" text-anchor="middle" class="label" style="fill:#15803d">tobs + R</text>
+  <text x="900" y="434" text-anchor="middle" class="small">replacement can start; R ≥ 10s</text>
+
+  <path d="M 625 160 C 720 82, 930 82, 1040 160" fill="none" stroke="#dc2626" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow-red)"/>
+  <circle cx="625" cy="160" r="5" fill="#dc2626"/>
+  <text x="825" y="95" text-anchor="middle" class="label" style="fill:#b91c1c">Residual risk: a pre-admitted transport call may finish late</text>
+
+  <rect x="120" y="470" width="1010" height="92" rx="12" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="625" y="505" text-anchor="middle" font-size="16" font-weight="700">oldLastAdmission &lt; td + 5s &lt; td + 10s ≤ tobs + R ≤ newFirstAdmission</text>
+  <text x="625" y="535" text-anchor="middle" class="small">This proves non-overlapping new admission windows, not cancellation of already admitted in-flight work.</text>
+  <text x="120" y="592" class="sub">R = captureRemoveTTL = max(captureSessionTTL / 2, 10s); with defaults, R = 10s.</text>
+</svg>

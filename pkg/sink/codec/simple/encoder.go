@@ -31,11 +31,7 @@ type Encoder struct {
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+func NewEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	marshaller, err := newMarshaller(config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -66,7 +62,8 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 	}
 
 	result.IncRowsCount()
-	length := result.Length()
+	length := e.config.MessageLength(result)
+	originLength := length
 	if length <= e.config.MaxMessageBytes {
 		e.messages = append(e.messages, result)
 		return nil
@@ -99,11 +96,12 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 	}
 	result.Value = value
 
-	if result.Length() <= e.config.MaxMessageBytes {
+	length = e.config.MessageLength(result)
+	if length <= e.config.MaxMessageBytes {
 		log.Warn("Single message is too large for simple, only encode handle key columns",
 			zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
-			zap.Int("originLength", length),
-			zap.Int("length", result.Length()),
+			zap.Int("originLength", originLength),
+			zap.Int("length", length),
 			zap.Any("table", event.TableInfo.TableName))
 		e.messages = append(e.messages, result)
 		return nil
@@ -111,9 +109,9 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 
 	log.Error("Single message is still too large for simple after only encode handle key columns",
 		zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
-		zap.Int("length", result.Length()),
+		zap.Int("length", length),
 		zap.Any("table", event.TableInfo.TableName))
-	return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
+	return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTargetTableName(), length, e.config.MaxMessageBytes)
 }
 
 // Build implement the RowEventEncoder interface
@@ -152,19 +150,13 @@ func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, 
 	}
 	result := common.NewMsg(nil, value)
 
-	if result.Length() > e.config.MaxMessageBytes {
+	length := e.config.MessageLength(result)
+	if length > e.config.MaxMessageBytes {
 		log.Error("DDL message is too large for simple",
 			zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
-			zap.Int("length", result.Length()),
+			zap.Int("length", length),
 			zap.String("table", event.GetTargetTableName()))
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.GetTargetTableName(), result.Length(), e.config.MaxMessageBytes)
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.GetTargetTableName(), length, e.config.MaxMessageBytes)
 	}
 	return result, nil
-}
-
-// CleanMetrics implement the RowEventEncoderBuilder interface
-func (e *Encoder) Clean() {
-	if e.claimCheck != nil {
-		e.claimCheck.CleanMetrics()
-	}
 }

@@ -26,6 +26,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -40,16 +42,21 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+	// defaultDDLPollInterval is how often a running downstream DDL is re-checked.
+	defaultDDLPollInterval = 5 * time.Second
 
 	dmlConnIdleTimeout = 5 * time.Minute
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
-	id           int
-	ctx          context.Context
-	cancel       context.CancelFunc
-	db           *sql.DB
+	id     int
+	ctx    context.Context
+	cancel context.CancelFunc
+	db     *sql.DB
+	// asyncDB is used only by the TiDB ADD INDEX execution path, whose
+	// read timeout is intentionally independent from the regular DB.
+	asyncDB      *sql.DB
 	cfg          *Config
 	ChangefeedID common.ChangeFeedID
 
@@ -64,7 +71,8 @@ type Writer struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
-	statistics *metrics.Statistics
+	statistics           *metrics.Statistics
+	rowsAffectedCounters sync.Map
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
 	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
@@ -85,6 +93,12 @@ type Writer struct {
 
 	// for dry-run mode
 	blockerTicker *time.Ticker
+
+	// ddlPollInterval is how often a running downstream DDL is re-checked.
+	// Tests lower it to avoid paying the production poll interval.
+	ddlPollInterval time.Duration
+
+	writeGate *writelease.Gate
 }
 
 func NewWriter(
@@ -115,6 +129,7 @@ func NewWriter(
 		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 		activeActiveSyncStatsInterval:  cfg.ActiveActiveSyncStatsInterval,
+		ddlPollInterval:                defaultDDLPollInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
@@ -131,6 +146,35 @@ func NewWriter(
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
+}
+
+// SetWriteGate configures capture-wide DML write admission for this transport
+// writer. A nil gate preserves the legacy behavior.
+func (w *Writer) SetWriteGate(gate *writelease.Gate) {
+	w.writeGate = gate
+}
+
+// grantWrite waits for a valid capture write lease. It returns false only when
+// the writer is shutting down, so callers must not execute the downstream write.
+func (w *Writer) grantWrite() bool {
+	if w.writeGate == nil {
+		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		return true
+	}
+	for {
+		if err := w.writeGate.WaitUntilWritable(w.ctx); err != nil {
+			return false
+		}
+		if w.writeGate.IsWritable() {
+			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			return true
+		}
+	}
+}
+
+// SetControlAsyncDB sets the DB pool used to execute TiDB ADD INDEX DDLs.
+func (w *Writer) SetControlAsyncDB(db *sql.DB) {
+	w.asyncDB = db
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
@@ -304,4 +348,32 @@ func (w *Writer) Close() {
 		w.cancel()
 	}
 	w.dmlSession.close(w)
+}
+
+type rowsAffectedLabels struct {
+	countType string
+	rowType   string
+}
+
+func (w *Writer) recordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
+	w.getRowsAffectedCounter("actual", "total").Add(float64(actualRowsAffected))
+	w.getRowsAffectedCounter("expected", "total").Add(float64(expectedRowsAffected))
+}
+
+func (w *Writer) recordRowsAffected(rowsAffected int64, rowType common.RowType) {
+	w.getRowsAffectedCounter("actual", rowType.String()).Add(float64(rowsAffected))
+	w.getRowsAffectedCounter("expected", rowType.String()).Add(1)
+	w.recordTotalRowsAffected(rowsAffected, 1)
+}
+
+func (w *Writer) getRowsAffectedCounter(countType, rowType string) prometheus.Counter {
+	labels := rowsAffectedLabels{countType: countType, rowType: rowType}
+	counter, loaded := w.rowsAffectedCounters.Load(labels)
+	if !loaded {
+		counter := execDMLEventRowsAffectedCounter.WithLabelValues(
+			w.ChangefeedID.Keyspace(), w.ChangefeedID.Name(), countType, rowType)
+		w.rowsAffectedCounters.Store(labels, counter)
+		return counter
+	}
+	return counter.(prometheus.Counter)
 }

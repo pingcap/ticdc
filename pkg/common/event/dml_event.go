@@ -344,7 +344,12 @@ func (b *BatchDMLEvent) GetStartTs() common.Ts {
 	return b.DMLEvents[0].GetStartTs()
 }
 
+// GetSize returns the in-memory size of the row payload.
+// Remote events keep their encoded rows in RawRows until AssembleRows decodes them.
 func (b *BatchDMLEvent) GetSize() int64 {
+	if b.Rows == nil {
+		return int64(len(b.RawRows))
+	}
 	return b.Rows.MemoryUsage()
 }
 
@@ -670,12 +675,41 @@ func (t *DMLEvent) PostFlush() {
 // This stage does not mean data is already written to downstream. The method is
 // idempotent and guarantees enqueue callbacks run at most once.
 func (t *DMLEvent) PostEnqueue() {
-	if !t.postEnqueueCalled.CAS(false, true) {
+	if !t.postEnqueueCalled.CompareAndSwap(false, true) {
 		return
 	}
 	for _, f := range t.PostTxnEnqueued {
 		f()
 	}
+}
+
+// DetachPostCallbacks returns callbacks with the same PostFlush/PostEnqueue
+// semantics as this event, then removes the callback slices from the event.
+// The returned closures intentionally do not capture the DMLEvent, so sinks can
+// keep callbacks after encoding without retaining the event rows.
+func (t *DMLEvent) DetachPostCallbacks() (postEnqueue func(), postFlush func()) {
+	postTxnEnqueued := append([]func(){}, t.PostTxnEnqueued...)
+	postTxnFlushed := append([]func(){}, t.PostTxnFlushed...)
+	t.PostTxnEnqueued = nil
+	t.PostTxnFlushed = nil
+
+	var postEnqueueCalled atomic.Bool
+	postEnqueueCalled.Store(t.postEnqueueCalled.Load())
+	postEnqueue = func() {
+		if !postEnqueueCalled.CompareAndSwap(false, true) {
+			return
+		}
+		for _, f := range postTxnEnqueued {
+			f()
+		}
+	}
+	postFlush = func() {
+		for _, f := range postTxnFlushed {
+			f()
+		}
+		postEnqueue()
+	}
+	return postEnqueue, postFlush
 }
 
 func (t *DMLEvent) GetSeq() uint64 {

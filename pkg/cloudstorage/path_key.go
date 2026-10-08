@@ -217,7 +217,7 @@ func (d DMLPathKey) generateDMLDataDirPath() string {
 }
 
 func (d *DMLPathKey) parseDMLDataDir(
-	dateSeparator string, parts []string, filePath string,
+	dateSeparator config.DateSeparator, parts []string, filePath string,
 ) error {
 	var (
 		key       DMLPathKey
@@ -228,14 +228,14 @@ func (d *DMLPathKey) parseDMLDataDir(
 		dateRE    string
 	)
 	switch dateSeparator {
-	case config.DateSeparatorNone.String():
-	case config.DateSeparatorYear.String():
+	case config.DateSeparatorNone:
+	case config.DateSeparatorYear:
 		hasDate = true
 		dateRE = config.DateSeparatorYear.GetPattern()
-	case config.DateSeparatorMonth.String():
+	case config.DateSeparatorMonth:
 		hasDate = true
 		dateRE = config.DateSeparatorMonth.GetPattern()
-	case config.DateSeparatorDay.String():
+	case config.DateSeparatorDay:
 		hasDate = true
 		dateRE = config.DateSeparatorDay.GetPattern()
 	default:
@@ -304,7 +304,7 @@ func (d *DMLPathKey) parseDMLDataDir(
 // <data-dir>/meta/CDC_<dispatcherID>.index. Only the data directory portion is
 // parsed here; the file index itself is stored in the index file content and is
 // read by the caller.
-func (d *DMLPathKey) ParseIndexFilePath(dateSeparator, path string) error {
+func (d *DMLPathKey) ParseIndexFilePath(dateSeparator config.DateSeparator, path string) error {
 	parts := strings.Split(path, "/")
 	if len(parts) < 4 || parts[len(parts)-2] != "meta" || !isDMLIndexFileName(parts[len(parts)-1]) {
 		return invalidDMLPathError(path)
@@ -316,7 +316,9 @@ func (d *DMLPathKey) ParseIndexFilePath(dateSeparator, path string) error {
 // index encoded in the file name.
 // Input is <data-dir>/CDC<idx><extension> or
 // <data-dir>/CDC_<dispatcherID>_<idx><extension>. Invalid paths panic.
-func (d *DMLPathKey) ParseDMLFilePath(dateSeparator, filePath, extension string) FileIndex {
+func (d *DMLPathKey) ParseDMLFilePath(
+	dateSeparator config.DateSeparator, filePath, extension string,
+) FileIndex {
 	parts := strings.Split(filePath, "/")
 	fileIndex, err := ParseFileIndexFromFileName(parts[len(parts)-1], extension)
 	if err != nil {

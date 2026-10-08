@@ -122,7 +122,7 @@ func GetKeyspaceTableRange(keyspaceID uint32, tableID int64) (startKey, endKey [
 	// But it actually use the keyspaceID only
 	// We construct a KeyspaceMeta to make the codec happy
 	meta := &keyspacepb.KeyspaceMeta{
-		Id: keyspaceID,
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: keyspaceID},
 	}
 
 	codec, err := tikv.NewCodecV2(tikv.ModeTxn, meta)

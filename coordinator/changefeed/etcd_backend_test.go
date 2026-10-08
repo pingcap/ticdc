@@ -491,6 +491,38 @@ func TestSetChangefeedProgressRetriesOnCASConflict(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSetChangefeedProgressPreservesRemoving(t *testing.T) {
+	// Verify a completed pause cannot clear ProgressRemoving.
+	// false: progress is already ProgressRemoving when pause tries to clear it.
+	// true: progress changes from ProgressStopping to ProgressRemoving while pause tries to clear it.
+	for _, conflict := range []bool{false, true} {
+		name := "already removing"
+		if conflict {
+			name = "remove wins while clearing progress"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+			etcdClient := etcd.NewMockClient(ctrl)
+			cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+			cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+			backend := NewEtcdBackend(cdcClient)
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+			if conflict {
+				cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+					Return(&config.ChangeFeedStatus{Progress: config.ProgressStopping}, int64(1), nil)
+				etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(&clientv3.TxnResponse{Succeeded: false}, nil)
+			}
+			cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+				Return(&config.ChangeFeedStatus{Progress: config.ProgressRemoving}, int64(2), nil)
+
+			require.NoError(t, backend.SetChangefeedProgress(context.Background(), cfID, config.ProgressNone))
+		})
+	}
+}
+
 func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

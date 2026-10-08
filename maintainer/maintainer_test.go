@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -736,6 +737,45 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
+	m := &Maintainer{
+		checkpointUpdateCh: make(chan struct{}, 1),
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.notifyCheckpointUpdate()
+	require.Empty(t, m.checkpointUpdateCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.notifyCheckpointUpdate()
+	m.notifyCheckpointUpdate()
+	require.Len(t, m.checkpointUpdateCh, 1)
+}
+
+func TestMaintainerStatusChangedNotification(t *testing.T) {
+	heartbeatCh := make(chan struct{}, 1)
+	m := &Maintainer{
+		statusChanged:      atomic.NewBool(false),
+		managerHeartbeatCh: heartbeatCh,
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.markStatusChanged()
+	require.True(t, m.statusChanged.Load())
+	require.Empty(t, heartbeatCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.markStatusChanged()
+	m.markStatusChanged()
+	require.Len(t, heartbeatCh, 1)
+}
+
+func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {
+	m := &Maintainer{}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
+	require.False(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}))
 }
 
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {

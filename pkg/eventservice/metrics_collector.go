@@ -278,8 +278,8 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 
 // collectPendingTaskMetrics collects metrics about pending tasks
 func (mc *metricsCollector) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
-	for _, ch := range mc.broker.taskChan {
-		snapshot.pendingTaskCount += len(ch)
+	for _, queue := range mc.broker.scanTaskQueues {
+		snapshot.pendingTaskCount += queue.len()
 	}
 }
 
@@ -337,7 +337,7 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 					time.Since(dispatcher.lastReceivedResolvedTsTime.Load())),
 			zap.Uint64("epoch", dispatcher.epoch),
 			zap.Uint64("seq", dispatcher.seq.Load()),
-			zap.Bool("isTaskScanning", dispatcher.isTaskScanning.Load()),
+			zap.Bool("isTaskScanning", dispatcher.isScanBusy()),
 		)
 	}
 }

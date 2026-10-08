@@ -69,6 +69,13 @@ var (
 			Name:      "kafka_producer_records_per_request",
 			Help:      "The number of records per request for all topics.",
 		}, []string{"namespace", "changefeed", "type"})
+	throttleTimeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_throttle_time",
+			Help:      "Kafka broker throttle time in seconds.",
+		}, []string{"namespace", "changefeed", "broker", "type"})
 
 	// Meter mark by 1 once a response received.
 	responseRateGauge = prometheus.NewGaugeVec(
@@ -82,8 +89,18 @@ var (
 
 // InitMetrics registers all metrics in this file.
 func InitMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(
+		outgoingBytesTotal,
+		requestsTotal,
+		requestDuration,
+		throttleTime,
+		recordsPerBatch,
+		batchesPerRequest,
+		compressionRatio,
+	)
 	registry.MustRegister(compressionRatioGauge)
 	registry.MustRegister(recordsPerRequestGauge)
+	registry.MustRegister(throttleTimeGauge)
 	registry.MustRegister(OutgoingByteRateGauge)
 	registry.MustRegister(RequestRateGauge)
 	registry.MustRegister(RequestLatencyGauge)

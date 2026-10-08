@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -67,13 +69,16 @@ type storageMetadata struct {
 
 type consumer struct {
 	replicationCfg  *config.ReplicaConfig
+	dateSeparator   config.DateSeparator
 	codecCfg        *common.Config
+	columnSelectors *columnselector.ColumnSelectors
 	externalStorage storeapi.Storage
 	fileExtension   string
 	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DMLPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
+	spillStore     *util.SpillStore
 	// tableDDLWatermark maintains a map of <`schema`.`table`, max executed DDL table version>.
 	// DML files with smaller table versions are considered stale replays and should be ignored.
 	tableDDLWatermark map[string]uint64
@@ -111,6 +116,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		log.Error("failed to validate replica config", zap.Error(err))
 		return nil, err
 	}
+	dateSeparator := putil.GetOrZero(replicaConfig.Sink.DateSeparator)
 
 	switch putil.GetOrZero(replicaConfig.Sink.Protocol) {
 	case config.ProtocolCsv.String():
@@ -132,6 +138,10 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
 
 	extension := helper.GetFileExtension(protocol)
 
@@ -148,7 +158,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
+	sink, err := sink.New(
+		stdCtx,
+		cfg,
+		commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName),
+		commonType.DefaultKeyspaceID,
+	)
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -156,19 +171,29 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	return &consumer{
 		replicationCfg:    replicaConfig,
+		dateSeparator:     dateSeparator,
 		codecCfg:          codecConfig,
+		columnSelectors:   columnSelectors,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
 		errCh:             errCh,
 		tableDMLIdxMap:    make(map[cloudstorage.DMLPathKey]fileIndexKeyMap),
 		eventsGroup:       make(map[int64]*util.EventsGroup),
+		spillStore:        util.NewSpillStore(),
 		tableDDLWatermark: make(map[string]uint64),
 		schemaFileMap:     make(map[string]map[uint64]*cloudstorage.SchemaFile),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
 	}, nil
+}
+
+func (c *consumer) getSpillStore() *util.SpillStore {
+	if c.spillStore == nil {
+		c.spillStore = util.NewSpillStore()
+	}
+	return c.spillStore
 }
 
 // map1 - map2
@@ -244,7 +269,6 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
-	dateSeparator := putil.GetOrZero(c.replicationCfg.Sink.DateSeparator)
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			c.parseSchemaFilePath(ctx, path)
@@ -252,7 +276,7 @@ func (c *consumer) getNewFiles(
 		}
 		if strings.HasSuffix(path, ".index") {
 			var dmlkey cloudstorage.DMLPathKey
-			if err := dmlkey.ParseIndexFilePath(dateSeparator, path); err != nil {
+			if err := dmlkey.ParseIndexFilePath(c.dateSeparator, path); err != nil {
 				log.Debug("ignore handling unsupported dml index file", zap.String("path", path))
 				return nil
 			}
@@ -270,39 +294,45 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes bool) {
+func (c *consumer) appendMessage2Group(
+	message *common.DMLMessage,
+	tableID int64,
+	enableTableAcrossNodes bool,
+) error {
 	var (
-		tableID  = dml.GetTableID()
-		schema   = dml.TableInfo.GetSchemaName()
-		table    = dml.TableInfo.GetTableName()
-		commitTs = dml.GetCommitTs()
+		schema   = message.Schema
+		table    = message.Table
+		commitTs = message.GetCommitTs()
 	)
 	group := c.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(0, tableID)
+		group = util.NewEventsGroup(0, tableID, c.getSpillStore())
 		c.eventsGroup[tableID] = group
 	}
 	if commitTs >= group.HighWatermark {
-		group.Append(dml, false)
+		if err := group.AppendMessage(message); err != nil {
+			return err
+		}
 		log.Debug("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		return
+			zap.Stringer("eventType", message.RowType))
+		return nil
 	}
 	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		group.Append(dml, true)
-		return
+			zap.Stringer("eventType", message.RowType))
+		return group.AppendMessage(message)
 	}
 	log.Warn("dml event commit ts fallback, ignore",
-		zap.Uint64("commitTs", dml.CommitTs),
+		zap.Uint64("commitTs", commitTs),
 		zap.Any("highWatermark", group.HighWatermark),
-		zap.Stringer("row", dml),
+		zap.String("schema", schema),
+		zap.String("table", table),
 	)
+	return nil
 }
 
 // appendDMLEvents decodes RowChangedEvents from file content and append them to event group.
@@ -322,7 +352,15 @@ func (c *consumer) appendDMLEvents(
 	var decoder common.Decoder
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, schemaFile.TableInfo(), content)
+		tableInfo := schemaFile.TableInfo()
+		// CSV rows contain selected values without column names, so decode with the same selector.
+		decoder, err = csv.NewDecoderWithColumnSelector(
+			ctx,
+			c.codecCfg,
+			tableInfo,
+			content,
+			c.columnSelectors.GetForTableInfo(tableInfo),
+		)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -334,10 +372,15 @@ func (c *consumer) appendDMLEvents(
 		decoder.AddKeyValue(nil, content)
 	}
 
+	spillDecoder := util.NewDMLMessageDecoderWithDataFactory(decoder,
+		func(_ common.Decoder, _, value []byte) *common.DMLMessageData {
+			return c.newDMLMessageData(ctx, schemaFile, value, tableID)
+		})
+	spillDecoder.SetRawMessage(nil, content)
 	cnt := 0
 	filteredCnt := 0
 	for {
-		tp, hasNext := decoder.HasNext()
+		tp, hasNext := spillDecoder.HasNext()
 		if err != nil {
 			log.Error("failed to decode message", zap.Error(err))
 			return err
@@ -350,9 +393,10 @@ func (c *consumer) appendDMLEvents(
 		if tp == common.MessageTypeRow {
 			c.dmlCount.Add(1)
 
-			row := decoder.NextDMLEvent()
-			row.PhysicalTableID = tableID
-			c.appendRow2Group(row, fileIdx.EnableTableAcrossNodes)
+			message := spillDecoder.NextDMLMessage()
+			if err := c.appendMessage2Group(message, tableID, fileIdx.EnableTableAcrossNodes); err != nil {
+				return err
+			}
 			filteredCnt++
 		}
 	}
@@ -365,26 +409,114 @@ func (c *consumer) appendDMLEvents(
 	return err
 }
 
+func (c *consumer) newDMLMessageData(
+	ctx context.Context,
+	schemaFile cloudstorage.SchemaFile,
+	content []byte,
+	tableID int64,
+) *common.DMLMessageData {
+	tableInfo := schemaFile.TableInfo()
+	selector := c.columnSelectors.GetForTableInfo(tableInfo)
+	messageData := util.NewDMLMessageDataWithDecoderFactory(nil, content,
+		func(_ []byte, value []byte) (common.Decoder, error) {
+			switch c.codecCfg.Protocol {
+			case config.ProtocolCsv:
+				return csv.NewDecoderWithColumnSelector(ctx, c.codecCfg, tableInfo, value, selector)
+			case config.ProtocolCanalJSON:
+				decoder := canal.NewTxnDecoder(c.codecCfg)
+				return decoder, nil
+			default:
+				return nil, errors.ErrSpillFileOp.FastGenByArgs("unsupported storage DML spill protocol")
+			}
+		})
+	decode := messageData.Restorer.Decode
+	messageData.Restorer = common.NewDMLMessageRestorer(func(data []byte) ([]*common.DMLMessage, error) {
+		messages, err := decode(data)
+		if err != nil {
+			return nil, err
+		}
+		for i, message := range messages {
+			messages[i] = messageWithPhysicalTableID(message, tableID)
+		}
+		return messages, nil
+	})
+	return messageData
+}
+
+func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *common.DMLMessage {
+	return common.NewDMLMessage(tableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
+		row := message.ToDMLEvent()
+		row.PhysicalTableID = tableID
+		return row
+	})
+}
+
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	group := c.eventsGroup[tableID]
 	if group == nil {
 		return nil
 	}
-	events := group.GetAllEvents()
-	total := len(events)
-	if total == 0 {
+	start := time.Now()
+	total := 0
+	for {
+		batch, hasMore, err := group.PrepareResolve(
+			math.MaxUint64, c.getSpillStore().ResolveLimit())
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			break
+		}
+		events := util.DMLMessagesToEvents(batch.Messages)
+		if len(events) != 0 {
+			fields := []zap.Field{zap.Int64("tableID", tableID)}
+			if events[0].TableInfo != nil {
+				fields = append(fields,
+					zap.String("schema", events[0].TableInfo.GetSchemaName()),
+					zap.String("table", events[0].TableInfo.GetTableName()))
+			}
+			if err := c.flushDMLBatch(ctx, events, fields...); err != nil {
+				return err
+			}
+			total += len(events)
+		}
+		if err := batch.Ack(); err != nil {
+			return err
+		}
+		if !hasMore {
+			break
+		}
+	}
+	if total != 0 {
+		stats := c.getSpillStore().Stats()
+		log.Info("flush DML events done", zap.Int64("tableID", tableID),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
+			zap.Int64("spillPayloadReadBytes", stats.PayloadReadBytes),
+			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
+			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
+			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
+			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
+			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
+			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes),
+			zap.Int("spillLivePayloads", stats.LivePayloads),
+			zap.Int("spillLiveSegments", stats.LiveSegments))
+	}
+	return nil
+}
+
+func (c *consumer) flushDMLBatch(
+	ctx context.Context, events []*event.DMLEvent, fields ...zap.Field,
+) error {
+	if len(events) == 0 {
 		return nil
 	}
+	total := len(events)
 	var (
-		schema string
-		table  string
+		flushed atomic.Int64
+		done    = make(chan struct{})
 	)
-	if events[0].TableInfo != nil {
-		schema = events[0].TableInfo.GetSchemaName()
-		table = events[0].TableInfo.GetTableName()
-	}
-	var flushed atomic.Int64
-	done := make(chan struct{})
 	for _, e := range events {
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
@@ -394,8 +526,6 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		c.sink.AddDMLEvent(e)
 	}
 
-	// Make sure all events are flushed to downstream.
-	start := time.Now()
 	ticker := time.NewTicker(defaultLogInterval)
 	defer ticker.Stop()
 	for {
@@ -403,15 +533,24 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events done",
-				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time",
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+			log.Warn("DML events cannot be flushed in time", append(fields,
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))...)
 		}
 	}
+}
+
+func (c *consumer) cleanupEventsGroups() error {
+	var cleanupErr error
+	for _, group := range c.eventsGroup {
+		_ = group.Cleanup()
+	}
+	if err := c.getSpillStore().Cleanup(); err != nil {
+		cleanupErr = err
+		log.Warn("cleanup spill store failed", zap.Error(err))
+	}
+	return cleanupErr
 }
 
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
@@ -672,6 +811,11 @@ func (c *consumer) handleNewFiles(
 				if err := c.appendDMLEvents(ctx, tableID, schemaFile, key, fileIndex); err != nil {
 					return err
 				}
+				if c.getSpillStore().ShouldDrain() {
+					if err := c.flushDMLEvents(ctx, tableID); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		if err := c.flushDMLEvents(ctx, tableID); err != nil {
@@ -731,7 +875,13 @@ func (c *consumer) handle(ctx context.Context) error {
 	}
 }
 
-func (c *consumer) run(ctx context.Context) error {
+func (c *consumer) run(ctx context.Context) (err error) {
+	defer func() {
+		if cleanupErr := c.cleanupEventsGroups(); err == nil && cleanupErr != nil {
+			err = cleanupErr
+		}
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.sink.Run(ctx)

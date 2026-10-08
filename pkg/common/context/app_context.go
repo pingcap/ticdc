@@ -39,6 +39,7 @@ const (
 	PDAPIClient             = "PDAPIClient"
 	RegionCache             = "RegionCache"
 	KeyspaceManager         = "keyspaceManager"
+	CaptureWriteGate        = "CaptureWriteGate"
 )
 
 // Put all the global instances here.

@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,7 +171,7 @@ func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload
 		},
 		TableInfoVersion: 1,
 		DispatcherID:     dispatcherID,
-	}, event)
+	}, event, nil)
 	msg := common.NewMsg(nil, []byte(payload))
 	msg.SetRowsCount(1)
 	t.encodedMsgs = []*common.Message{msg}

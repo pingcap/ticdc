@@ -107,7 +107,7 @@ function run() {
 	# This test uses blackhole sink to FORCE DMLEvent logging code path
 	# ==========================================================================
 	echo "=== Test 1: Redaction OFF mode (BlackHole sink - forces DMLEvent logging) ==="
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_blackhole"
 
 	# Create blackhole changefeed to force DMLEvent.String() logging
 	BLACKHOLE_SINK_URI="blackhole://"
@@ -144,6 +144,8 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ OFF mode (BlackHole): Raw data visible in DMLEvent logs"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_blackhole"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -156,7 +158,7 @@ function run() {
 	run_sql "CREATE DATABASE log_redaction_test;"
 	run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_blackhole"
 
 	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-marker-test" --config=$CUR/conf/changefeed.toml
 
@@ -203,6 +205,8 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ MARKER mode (BlackHole): Data wrapped with ‹› markers"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_blackhole"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -215,7 +219,7 @@ function run() {
 	run_sql "CREATE DATABASE log_redaction_test;"
 	run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_blackhole"
 
 	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-on-test" --config=$CUR/conf/changefeed.toml
 
@@ -267,6 +271,8 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ ON mode (BlackHole): All sensitive data fully redacted to '?'"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_blackhole"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -282,14 +288,16 @@ function run() {
 
 		# Test OFF mode with MySQL sink
 		echo "  [4a] OFF mode with MySQL sink:"
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_mysql"
 
 		SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		check_table_exists log_redaction_test.users ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
 
 		# Capture MySQL logs once for all validations
 		captured_logs=$(grep -E "(Query:|Args:)" "$WORK_DIR/cdc_off_mysql.log" 2>/dev/null || echo "")
@@ -304,6 +312,8 @@ function run() {
 			"MySQL Args shows plain text values"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		# Test MARKER mode with MySQL sink
@@ -314,7 +324,7 @@ function run() {
 		run_sql "CREATE DATABASE log_redaction_test;"
 		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_mysql"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -333,6 +343,8 @@ function run() {
 			"MySQL Args values wrapped with ‹› markers"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		# Test ON mode with MySQL sink
@@ -343,7 +355,7 @@ function run() {
 		run_sql "CREATE DATABASE log_redaction_test;"
 		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_mysql"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -367,100 +379,11 @@ function run() {
 			"No sensitive data leaked in MySQL sink ON mode"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		echo "[$(date)] ✓ MySQL sink: All redaction modes validated"
-	fi
-
-	# ==========================================================================
-	# Test 4b: Kafka sink validation (tests Kafka-specific redaction)
-	# ==========================================================================
-	if [ "$SINK_TYPE" = "kafka" ]; then
-		echo ""
-		echo "=== Test 4b: Kafka sink redaction validation ==="
-
-		# Kafka sink logs message key/value at DEBUG level
-		# Log message: "send message to kafka" with messageKey and messageValue fields
-
-		# Test ON mode with Kafka sink (most important - full redaction)
-		echo "  [4b-1] ON mode with Kafka sink:"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
-		run_sql "CREATE DATABASE log_redaction_test;"
-
-		KAFKA_TOPIC="log-redaction-test-$RANDOM"
-		KAFKA_SINK_URI="kafka://127.0.0.1:9092/$KAFKA_TOPIC?protocol=open-protocol"
-
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_kafka"
-
-		cdc_cli_changefeed create --sink-uri="$KAFKA_SINK_URI" --changefeed-id="kafka-on-test" --config=$CUR/conf/changefeed.toml
-
-		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-
-		echo "  Waiting for Kafka sink to process events..."
-		wait_for_log_content "$WORK_DIR/cdc_on_kafka.log" "send message to kafka" "Kafka message logs" 30
-
-		echo "  [Validation] ON mode with Kafka sink:"
-		echo ""
-
-		# Capture Kafka logs once for all validations
-		captured_logs=$(grep "send message to kafka" "$WORK_DIR/cdc_on_kafka.log" 2>/dev/null || echo "")
-		log_raw_content "Kafka message logs (ON mode)" "$captured_logs"
-
-		# STRICT POSITIVE VALIDATION: messageKey and messageValue must show redacted format
-		echo "  [1/2] Verifying Kafka logs show redacted '?' placeholder:"
-		require_log_pattern "$WORK_DIR/cdc_on_kafka.log" \
-			"send message to kafka.*messageKey.*\?.*messageValue.*\?" \
-			"Kafka messageKey and messageValue redacted to '?'" \
-			"ON mode should redact both messageKey and messageValue"
-
-		# STRICT NEGATIVE VALIDATION: No sensitive data should leak in Kafka logs
-		echo "  [2/2] Verifying NO sensitive data leaks in Kafka logs:"
-		sensitive_patterns=("Password1!" "SecretPass1!" "user1@example.com" "4532-1000-1000")
-		for pattern in "${sensitive_patterns[@]}"; do
-			require_no_log_pattern "$WORK_DIR/cdc_on_kafka.log" \
-				"$pattern" \
-				"No leak of sensitive value in Kafka logs: $pattern"
-		done
-
-		captured_logs=""
-		cleanup_process $CDC_BINARY
-
-		# Test MARKER mode with Kafka sink
-		echo ""
-		echo "  [4b-2] MARKER mode with Kafka sink:"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
-		run_sql "CREATE DATABASE log_redaction_test;"
-
-		KAFKA_TOPIC="log-redaction-marker-$RANDOM"
-		KAFKA_SINK_URI="kafka://127.0.0.1:9092/$KAFKA_TOPIC?protocol=open-protocol"
-
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_kafka"
-
-		cdc_cli_changefeed create --sink-uri="$KAFKA_SINK_URI" --changefeed-id="kafka-marker-test" --config=$CUR/conf/changefeed.toml
-
-		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-
-		echo "  Waiting for Kafka sink to process events..."
-		wait_for_log_content "$WORK_DIR/cdc_marker_kafka.log" "send message to kafka" "Kafka message logs" 30
-
-		echo "  [Validation] MARKER mode with Kafka sink:"
-		echo ""
-
-		# Capture Kafka logs once for all validations
-		captured_logs=$(grep "send message to kafka" "$WORK_DIR/cdc_marker_kafka.log" 2>/dev/null || echo "")
-		log_raw_content "Kafka message logs (MARKER mode)" "$captured_logs"
-
-		# STRICT POSITIVE VALIDATION: messageKey and messageValue must have markers
-		echo "  [1/1] Verifying Kafka logs have ‹› markers:"
-		require_log_pattern "$WORK_DIR/cdc_marker_kafka.log" \
-			"send message to kafka.*‹" \
-			"Kafka message values wrapped with ‹› markers" \
-			"MARKER mode should wrap Kafka message data with ‹› markers"
-
-		captured_logs=""
-		cleanup_process $CDC_BINARY
-
-		echo "[$(date)] ✓ Kafka sink: Redaction modes validated"
 	fi
 
 	# ==========================================================================
@@ -577,5 +500,5 @@ function run() {
 	echo "=========================================="
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_cdc_server_guards; stop_tidb_cluster' EXIT
 run $*

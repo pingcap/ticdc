@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,8 +28,10 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -99,6 +102,9 @@ type persistentStorage struct {
 
 	// tableID -> total registered count
 	tableRegisteredCount map[int64]int
+
+	// encryptionManager for encrypting/decrypting data (optional)
+	encryptionManager encryption.EncryptionManager
 }
 
 func exists(path string) bool {
@@ -144,6 +150,9 @@ func newPersistentStorage(
 	storage kv.Storage,
 	gcSafePoint uint64,
 ) (*persistentStorage, error) {
+	// Try to get encryption manager from appcontext (optional)
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
+
 	dataStorage := &persistentStorage{
 		rootDir:                root,
 		keyspaceID:             keyspaceID,
@@ -156,6 +165,7 @@ func newPersistentStorage(
 		tableTriggerDDLHistory: make([]uint64, 0),
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
+		encryptionManager:      encMgr,
 	}
 	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
 	err := dataStorage.initialize(gcSafePoint)
@@ -225,7 +235,8 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Uint64("snapTs", gcTs))
 
 	var err error
-	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
+	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
 		// TODO: retry
 		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
 	}
@@ -250,11 +261,13 @@ func (p *persistentStorage) initializeFromDisk() {
 	defer storageSnap.Close()
 
 	var err error
-	if p.databaseMap, err = loadDatabasesInKVSnap(storageSnap, p.gcTs); err != nil {
+	if p.databaseMap, err = loadDatabasesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load database info from disk failed")
 	}
 
-	if p.tableMap, p.partitionMap, err = loadTablesInKVSnap(storageSnap, p.gcTs, p.databaseMap); err != nil {
+	if p.tableMap, p.partitionMap, err = loadTablesInKVSnapWithEncryption(
+		storageSnap, p.gcTs, p.databaseMap, p.encryptionManager, p.keyspaceID); err != nil {
 		log.Fatal("load tables in kv snapshot failed")
 	}
 
@@ -264,7 +277,9 @@ func (p *persistentStorage) initializeFromDisk() {
 		p.upperBound.FinishedDDLTs,
 		p.databaseMap,
 		p.tableMap,
-		p.partitionMap); err != nil {
+		p.partitionMap,
+		p.encryptionManager,
+		p.keyspaceID); err != nil {
 		log.Fatal("fail to initialize from disk")
 	}
 }
@@ -305,7 +320,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
 }
 
 // only return when table info is initialized
@@ -360,20 +375,49 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 	return store.getTableInfo(ts)
 }
 
-func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+// getTableInfoAtTs reads the table schema at ts without
+// reconstructing every retained version for tables without local dispatchers.
+func (p *persistentStorage) getTableInfoAtTs(tableID int64, ts uint64) (*common.TableInfo, error) {
 	p.mu.RLock()
-	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
 		p.mu.RUnlock()
+		store.waitTableInfoInitialized()
 		return store.getTableInfo(ts)
 	}
-	p.mu.RUnlock()
-	// build a temp store to get table info
-	store := newEmptyVersionedTableInfoStore(tableID)
-	if err := p.buildVersionedTableInfoStore(store); err != nil {
-		return nil, err
+	gcTs := p.gcTs
+	if ts < gcTs {
+		p.mu.RUnlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts, gcTs)
 	}
-	return store.getTableInfo(ts)
+	// Capture the disk snapshot, GC timestamp and history together. History entries
+	// are append-only and GC only reslices them, so reading this prefix does not
+	// require copying the entire history while concurrent appends or GC proceed.
+	storageSnap := p.db.NewSnapshot()
+	history := p.tablesDDLHistory[tableID]
+	end := sort.Search(len(history), func(i int) bool { return history[i] > ts })
+	history = history[:end]
+	p.mu.RUnlock()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
+
+	for _, version := range slices.Backward(history) {
+		event := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
+		handler := allDDLHandlers[model.ActionType(event.Type)]
+		tableInfo, deleted := handler.extractTableInfoFunc(&event, tableID)
+		if tableInfo != nil {
+			return tableInfo, nil
+		}
+		if deleted {
+			return nil, &TableDeletedError{}
+		}
+		// For example, CREATE TABLE LIKE is recorded for the referenced table,
+		// but does not change that table's schema.
+	}
+	if tableInfo := readTableInfoInKVSnapWithEncryption(storageSnap, tableID, gcTs, p.encryptionManager, p.keyspaceID); tableInfo != nil {
+		return tableInfo, nil
+	}
+	return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
 }
 
 // TODO: this may consider some shouldn't be send ddl, like create table, does it matter?
@@ -431,8 +475,8 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	// TODO: if the first event is a create table ddl, return error?
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
-		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, tableID)
+		rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
+		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -501,9 +545,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
-			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			// the tableID of buildDDLEvent is not used in this function, set it to 0
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
+			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -521,22 +564,30 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
 	tableID := store.getTableID()
-	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
-	storageSnap := p.db.NewSnapshot()
-	defer storageSnap.Close()
-
 	p.mu.RLock()
+	// Create the disk snapshot and copy the DDL history in the same critical
+	// section, so they describe a consistent view. A DDL persisted before this
+	// view but not yet added to history will be applied through the online path.
+	storageSnap := p.db.NewSnapshot()
+	failpoint.Inject("afterCreatingVersionStoreSnapshot", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterCreatingVersionStoreSnapshot", p)
+	})
 	kvSnapVersion := p.gcTs
 	var allDDLFinishedTs []uint64
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
+	defer func() {
+		_ = storageSnap.Close()
+	}()
 
-	if err := addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap); err != nil {
+	if err := addTableInfoFromKVSnap(
+		store, kvSnapVersion, storageSnap, p.encryptionManager, p.keyspaceID,
+	); err != nil {
 		return err
 	}
 
 	for _, version := range allDDLFinishedTs {
-		ddlEvent := readPersistedDDLEvent(storageSnap, version)
+		ddlEvent := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
 	store.setTableInfoInitialized()
@@ -547,8 +598,12 @@ func addTableInfoFromKVSnap(
 	store *versionedTableInfoStore,
 	kvSnapVersion uint64,
 	snap *pebble.Snapshot,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) error {
-	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
+	tableInfo := readTableInfoInKVSnapWithEncryption(
+		snap, store.getTableID(), kvSnapVersion, encMgr, keyspaceID,
+	)
 	if tableInfo != nil {
 		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}
@@ -596,7 +651,8 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 	}
 
 	start := time.Now()
-	_, _, _, err := persistSchemaSnapshot(p.db, p.kvStorage, gcTs, false)
+	_, _, _, err := persistSchemaSnapshotWithEncryption(
+		p.db, p.kvStorage, gcTs, false, p.encryptionManager, p.keyspaceID)
 	if err != nil {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
@@ -717,25 +773,57 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
 
-	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+	if handler.prepareJobFunc != nil {
+		if err := handler.prepareJobFunc(p, job); err != nil {
+			return err
+		}
+	}
+
+	p.mu.Lock()
+
+	ddlEvent, err := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
 
 	p.mu.Unlock()
 
-	// TODO: do we have a better way to do this?
-	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		// ExtraTableInfo is the normal table info before exchange
-		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
+	// Bind view dependencies to the catalog at this DDL's commit, before storing
+	// the SQL. Current in-memory metadata omits newly created views, and replay
+	// must not depend on the latest catalog or on a changefeed's route rules.
+	if job.Type == model.ActionCreateView && ddlEvent.TableInfo != nil && ddlEvent.TableInfo.View != nil {
+		resolve := newViewTableResolver(getSnapshotMeta(p.kvStorage, ddlEvent.FinishedTs))
+		if err := normalizeCreateViewQueryWithStoredSelect(&ddlEvent, resolve); err != nil {
+			return err
+		}
 	}
+
+	if handler.enrichPersistedDDLEventFunc != nil {
+		if err := handler.enrichPersistedDDLEventFunc(p.getTableInfoAtTs, &ddlEvent); err != nil {
+			return err
+		}
+	}
+	failpoint.Inject("beforePersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/beforePersistingDDL")
+	})
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-	writePersistedDDLEvent(p.db, &ddlEvent)
+	err = writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	failpoint.Inject("afterPersistingDDL", func() {
+		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
+	})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -751,6 +839,28 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
+	// Iterate before updating schema metadata because some DDLs, such as drop
+	// schema, need the old metadata to determine their affected physical tables.
+	handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+		event:        &ddlEvent,
+		databaseMap:  p.databaseMap,
+		partitionMap: p.partitionMap,
+		apply: func(tableIDs ...int64) {
+			for _, tableID := range tableIDs {
+				if store, ok := p.tableInfoStoreMap[tableID]; ok {
+					switch job.Type {
+					case model.ActionCreateTable, model.ActionCreateTables:
+						log.Warn("table was registered before create DDL was handled",
+							zap.Int64("tableID", tableID),
+							zap.Uint64("finishedTs", ddlEvent.FinishedTs))
+					default:
+					}
+					store.applyDDL(&ddlEvent)
+				}
+			}
+		},
+	})
+
 	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 		event:        &ddlEvent,
 		databaseMap:  p.databaseMap,
@@ -758,26 +868,11 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
-		for _, tableID := range tableIDs {
-			if store, ok := p.tableInfoStoreMap[tableID]; ok {
-				// do some safety check
-				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
-					// newly created tables should not be registered before this ddl are handled
-					log.Panic("should not be registered", zap.Int64("tableID", tableID))
-				default:
-				}
-				store.applyDDL(&ddlEvent)
-			}
-		}
-	})
-
 	return nil
 }
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
-	switch model.ActionType(job.Type) {
+	switch job.Type {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
@@ -837,7 +932,6 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionAlterCacheTable,
 		model.ActionAlterNoCacheTable,
 		model.ActionFlashbackCluster,
-		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:
@@ -851,13 +945,44 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-// NOTE: tableID is only used in fetchTableDDLEvents to fetch exchange table partition and rename tables DDL
-// for the corresponding dispatcher.
-// It's not used in fetchTableTriggerDDLEvents, so it can be 0.
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
 	}
-	return handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	return handler
+}
+
+// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	return getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+}
+
+// buildTableDDLEvent builds the DDL event fetched for one physical table
+// dispatcher and attaches the state of that table after the DDL.
+//
+// extractTableInfoFunc is the single source of truth for how a DDL changes a
+// physical table: it drives both the versioned table info store and the table
+// state carried by the event. When it returns a table info, the event carries
+// that info as DDLEvent.TableInfo, so the event collector can replace the
+// dispatcher's cached table info with the event's own table info without
+// knowing the DDL type.
+func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	handler := getDDLHandler(rawEvent)
+	ddlEvent, ok, err := handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
+	change := &commonEvent.TableStateChange{
+		PhysicalTableID: tableID,
+		Kind:            commonEvent.TableStateUnchanged,
+	}
+	if tableInfo != nil {
+		change.Kind = commonEvent.TableStateUpdated
+		ddlEvent.TableInfo = tableInfo
+	}
+	ddlEvent.TableStateChange = change
+	return ddlEvent, true, nil
 }

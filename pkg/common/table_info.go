@@ -551,6 +551,26 @@ func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	return false
 }
 
+// IsSplitable returns whether a table with the given primary key and indexes
+// is eligible for split in all sinks.
+// Only a table with a primary key and no unique key can always be split in all
+// sinks.
+func IsSplitable(pkColInfo *model.ColumnInfo, indices []*model.IndexInfo) bool {
+	if pkColInfo == nil {
+		return false
+	}
+
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
+}
+
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {

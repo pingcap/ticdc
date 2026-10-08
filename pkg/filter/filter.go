@@ -71,6 +71,9 @@ type Filter interface {
 	ShouldIgnoreSchema(schema string) bool
 	// IsEligibleTable returns true if the table is eligible to be replicated.
 	IsEligibleTable(tableInfo *common.TableInfo) bool
+	// IsForceReplicateEnabled reports whether tables without a primary key or
+	// a non-null unique key are eligible for replication.
+	IsForceReplicateEnabled() bool
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
 	Verify(tableInfos []*common.TableInfo) error
@@ -185,8 +188,9 @@ func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionTy
 		return true
 	}
 
-	// If the DDL is a schema DDL, we should ignore it if the schema is not allowed.
-	if IsSchemaDDL(ddlType) {
+	// Schema DDLs without a table are filtered at schema scope. Some schema
+	// DDLs, such as recover schema, also carry tables that need table filtering.
+	if IsSchemaDDL(ddlType) && table == "" {
 		return f.ShouldIgnoreSchema(schema)
 	}
 
@@ -241,6 +245,10 @@ func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
 	return tableInfo.IsEligible(f.forceReplicate)
 }
 
+func (f *filter) IsForceReplicateEnabled() bool {
+	return f.forceReplicate
+}
+
 func (f *filter) shouldIgnoreStartTs(ts uint64) bool {
 	for _, ignoreTs := range f.ignoreTxnStartTs {
 		if ignoreTs == ts {
@@ -259,7 +267,7 @@ func isAllowedDDL(actionType timodel.ActionType) bool {
 func IsSchemaDDL(actionType timodel.ActionType) bool {
 	switch actionType {
 	case timodel.ActionCreateSchema, timodel.ActionDropSchema,
-		timodel.ActionModifySchemaCharsetAndCollate:
+		timodel.ActionModifySchemaCharsetAndCollate, timodel.ActionRecoverSchema:
 		return true
 	default:
 		return false

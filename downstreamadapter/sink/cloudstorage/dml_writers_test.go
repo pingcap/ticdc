@@ -196,7 +196,7 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.FileIndexWidth = putil.AddressOf(6)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -309,7 +309,7 @@ func verifyCloudStorageWriteEventsWithDateSeparator(
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorDay.String())
+	replicaConfig.Sink.DateSeparator = putil.AddressOf(config.DateSeparatorDay)
 	replicaConfig.Sink.FileIndexWidth = putil.AddressOf(6)
 
 	mockClock := pclock.NewMock()

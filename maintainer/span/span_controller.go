@@ -394,12 +394,31 @@ func (c *Controller) AddReplicatingSpan(span *replica.SpanReplication) {
 	c.untrackNonReplicatingSpan(span)
 }
 
-// MarkSpanAbsent marks span as absent
-func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) {
+// MarkSpanAbsent marks span as absent if it is still the current task for its dispatcher ID.
+func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) bool {
+	if span == nil {
+		return false
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.MarkAbsentWithoutLock(span)
-	c.trackNonReplicatingSpan(span)
+	return c.markSpanAbsentIfCurrentWithoutLock(span)
+}
+
+// MarkSpanAbsentIfCurrent marks span as absent if it is still the current task
+// and is still bound to expectedNode.
+func (c *Controller) MarkSpanAbsentIfCurrent(span *replica.SpanReplication, expectedNode node.ID) bool {
+	if span == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current, ok := c.allTasks[span.ID]
+	if !ok || current != span || current.GetNodeID() != expectedNode {
+		return false
+	}
+	return c.markSpanAbsentIfCurrentWithoutLock(span)
 }
 
 // MarkSpanScheduling marks span as scheduling
@@ -605,6 +624,16 @@ func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
 		}
 		delete(c.allTasks, span.ID)
 	}
+}
+
+func (c *Controller) markSpanAbsentIfCurrentWithoutLock(span *replica.SpanReplication) bool {
+	current, ok := c.allTasks[span.ID]
+	if !ok || current != span {
+		return false
+	}
+	c.MarkAbsentWithoutLock(current)
+	c.trackNonReplicatingSpan(current)
+	return true
 }
 
 func (c *Controller) trackNonReplicatingSpan(span *replica.SpanReplication) {

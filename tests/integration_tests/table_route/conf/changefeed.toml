@@ -1,6 +1,8 @@
 # Changefeed configuration for table route integration test
 # This tests schema and table routing for MySQL sinks
 
+case-sensitive = true
+
 [filter]
 rules = ['source_db.*', 'source_extra_db.*']
 

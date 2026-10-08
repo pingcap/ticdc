@@ -332,6 +332,7 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 // rowChangedEvent2CSVMsg converts a RowChangedEvent to a csv record.
 func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMessage, error) {
 	tableInfo := e.TableInfo
+	selector := e.ColumnSelector
 	csvMsg := &csvMessage{
 		config:     csvConfig,
 		tableName:  tableInfo.GetTargetTableName(),
@@ -348,14 +349,14 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 	var err error
 	if e.IsDelete() {
 		csvMsg.opType = operationDelete
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
 		if err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		// This is a insert operation.
 		csvMsg.opType = operationInsert
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
 		if err != nil {
 			return nil, err
 		}
@@ -368,12 +369,12 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 					"the column length of preColumns %d doesn't equal to that of columns %d",
 					e.GetPreRows().Len(), e.GetRows().Len())
 			}
-			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo)
+			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo, selector)
 			if err != nil {
 				return nil, err
 			}
 		}
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo, selector)
 		if err != nil {
 			return nil, err
 		}
@@ -381,13 +382,16 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 	return csvMsg, nil
 }
 
-func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, tableInfo *commonType.TableInfo) ([]any, error) {
+func rowChangeColumns2CSVColumns(
+	csvConfig *common.Config,
+	row *chunk.Row,
+	tableInfo *commonType.TableInfo,
+	selector event.Selector,
+) ([]any, error) {
 	var csvColumns []any
 
 	for i, col := range tableInfo.GetColumns() {
-		// column could be nil in a condition described in
-		// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
-		if col == nil || col.IsVirtualGenerated() {
+		if !shouldEncodeColumn(col, selector) {
 			continue
 		}
 
@@ -400,6 +404,15 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 	}
 
 	return csvColumns, nil
+}
+
+func shouldEncodeColumn(col *timodel.ColumnInfo, selector event.Selector) bool {
+	// column could be nil in a condition described in
+	// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
+	if col == nil || col.IsVirtualGenerated() {
+		return false
+	}
+	return selector == nil || selector.Select(col)
 }
 
 // The header should contain the name corresponding to the file record field,

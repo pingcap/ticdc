@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
@@ -84,7 +85,7 @@ func main() {
 		}
 	}
 
-	columnFilter, err := columnselector.New(replicaConfig.Sink)
+	columnFilter, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		log.Panic("cannot create column filter", zap.Error(err))
 	}

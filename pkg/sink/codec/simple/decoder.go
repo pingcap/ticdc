@@ -57,8 +57,8 @@ type Decoder struct {
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
-	// CachedRowChangedEvents are events just decoded from the cachedMessages
-	CachedRowChangedEvents []*commonEvent.DMLEvent
+	// CachedDMLMessages are messages just released from the cachedMessages.
+	CachedDMLMessages []*common.DMLMessage
 }
 
 // NewDecoder returns a new Decoder
@@ -147,42 +147,68 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next dml message if exists
+func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		log.Panic("invalid data for the DML event", zap.String("message", util.RedactAny(d.msg)))
 	}
 
-	if d.msg.ClaimCheckLocation != "" {
-		return d.assembleClaimCheckRowChangedEvent(d.msg.ClaimCheckLocation)
-	}
+	msg := d.msg
+	d.msg = nil
 
-	if d.msg.HandleKeyOnly {
-		return d.assembleHandleKeyOnlyRowChangedEvent(d.msg)
-	}
-
-	tableInfo := d.memo.Read(d.msg.Schema, d.msg.Table, d.msg.SchemaVersion)
+	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
-		log.Debug("table info not found for the event, "+
-			"the consumer should cache this event temporarily, and update the tableInfo after it's received",
-			zap.String("schema", d.msg.Schema),
-			zap.String("table", d.msg.Table),
-			zap.Uint64("version", d.msg.SchemaVersion))
-		d.cachedMessages.PushBack(d.msg)
-		d.msg = nil
+		log.Debug("table info not found for the message, "+
+			"the consumer should cache this message temporarily, and update the tableInfo after it's received",
+			zap.String("schema", msg.Schema),
+			zap.String("table", msg.Table),
+			zap.Uint64("version", msg.SchemaVersion))
+		d.cachedMessages.PushBack(msg)
 		return nil
 	}
 
-	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
-	d.msg = nil
+	return d.newDMLMessage(msg, tableInfo)
+}
 
-	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
+func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
+	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
+	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
+		return d.assembleDMLEvent(msg, tableInfo)
+	})
+}
+
+func rowTypeFromMessageType(tp MessageType) commonType.RowType {
+	switch tp {
+	case DMLTypeInsert:
+		return commonType.RowTypeInsert
+	case DMLTypeUpdate:
+		return commonType.RowTypeUpdate
+	case DMLTypeDelete:
+		return commonType.RowTypeDelete
+	default:
+		log.Panic("unknown row type for the DML message", zap.Any("type", tp))
+	}
+	return commonType.RowTypeInsert
+}
+
+func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo) *commonEvent.DMLEvent {
+	if msg.ClaimCheckLocation != "" {
+		return d.assembleClaimCheckRowChangedEvent(msg.ClaimCheckLocation, tableInfo)
+	}
+
+	if msg.HandleKeyOnly {
+		return d.assembleHandleKeyOnlyRowChangedEvent(msg, tableInfo)
+	}
+
+	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
 }
 
-func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(
+	claimCheckLocation string, tableInfo *commonType.TableInfo,
+) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
@@ -210,23 +236,12 @@ func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *
 	if err != nil {
 		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
-	d.msg = m
-	return d.NextDMLEvent()
+	return d.assembleDMLEvent(m, tableInfo)
 }
 
-func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
-	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
-	if tableInfo == nil {
-		log.Debug("table info not found for the event, "+
-			"the consumer should cache this event temporarily, and update the tableInfo after it's received",
-			zap.String("schema", d.msg.Schema),
-			zap.String("table", d.msg.Table),
-			zap.Uint64("version", d.msg.SchemaVersion))
-		d.cachedMessages.PushBack(d.msg)
-		d.msg = nil
-		return nil
-	}
-
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(
+	m *message, tableInfo *commonType.TableInfo,
+) *commonEvent.DMLEvent {
 	fieldTypeMap := make(map[string]*types.FieldType, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
 		fieldTypeMap[col.Name.O] = &col.FieldType
@@ -239,6 +254,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 		TableID:       m.TableID,
 		Type:          m.Type,
 		CommitTs:      m.CommitTs,
+		StartTs:       m.StartTs,
 		SchemaVersion: m.SchemaVersion,
 	}
 
@@ -259,8 +275,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.
 		result.Old = d.buildData(holder, fieldTypeMap, timezone)
 	}
 
-	d.msg = result
-	return d.NextDMLEvent()
+	return d.assembleDMLEvent(result, tableInfo)
 }
 
 func (d *Decoder) buildData(
@@ -291,22 +306,28 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.memo.Write(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
-		d.msg = ele.Value.(*message)
-		event := d.NextDMLEvent()
-		d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, event)
-
+		msg := ele.Value.(*message)
 		next := ele.Next()
-		d.cachedMessages.Remove(ele)
+		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
+		if tableInfo != nil {
+			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			d.cachedMessages.Remove(ele)
+		}
 		ele = next
 	}
 	return ddl
 }
 
-// GetCachedEvents returns the cached events
-func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
-	result := d.CachedRowChangedEvents
-	d.CachedRowChangedEvents = nil
+// GetCachedMessages returns the cached messages.
+func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
+	result := d.CachedDMLMessages
+	d.CachedDMLMessages = nil
 	return result
+}
+
+// GetTableIDs identifies every table and partition whose events belong to the logical table.
+func (d *Decoder) GetTableIDs(schema, table string) []int64 {
+	return tableIDAllocator.GetBlockedTables(schema, table)
 }
 
 // TableInfoProvider is used to store and read table info
@@ -579,8 +600,16 @@ func parseValue(
 	return val
 }
 
+func startTsFromMessage(msg *message) uint64 {
+	if msg.StartTs != 0 {
+		return msg.StartTs
+	}
+	return msg.CommitTs
+}
+
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
+		StartTs:         startTsFromMessage(msg),
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
@@ -639,14 +668,15 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
 	for _, col := range columns {
 		raw, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		data[col.Name.O] = formatValue(raw, col.FieldType)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return data
+	return result
 }
 
 // formatValue formats the value according to the field type

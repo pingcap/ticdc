@@ -53,7 +53,8 @@ type Controller struct {
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
 
-	// admissionMu serializes removing-mode quiesce with normal operator side effects.
+	// admissionMu serializes removing-mode quiesce and remove-operator replacement
+	// with normal operator side effects.
 	// A normal operator must hold the read side from its final allow check through
 	// Start or Schedule/SendCommand so it cannot cross the handoff boundary after
 	// QuiesceExcept has made the controller quiescing.
@@ -259,7 +260,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
+	return oc.pushOperatorWithAdmission(op, false)
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -453,20 +454,28 @@ func (oc *Controller) finalizeOperator(
 		zap.String("operator", op.String()))
 }
 
-func (oc *Controller) cancelOperator(opID common.DispatcherID) {
+func (oc *Controller) cancelOperator(
+	expected operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	// Serialize rollback with remove-operator replacement. Otherwise a stale rollback
+	// could resolve the dispatcher ID after the replacement and cancel the new operator.
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
+	opID := expected.ID()
 	oc.mu.RLock()
 	item, ok := oc.operators[opID]
 	oc.mu.RUnlock()
-	if !ok {
+	if !ok || item.OP != expected {
 		return
 	}
-	item.OP.OnTaskRemoved()
+	expected.OnTaskRemoved()
 	oc.finalizeOperator(item, opID)
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
 
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
@@ -488,35 +497,32 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.pushOperatorWithAdmission(op)
+	oc.pushOperatorWithAdmission(op, true)
 }
 
-// pushOperator add an operator to the controller queue.
-func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+func (oc *Controller) pushOperatorWithAdmission(
+	op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	replaceExisting bool,
+) bool {
+	withTime := operator.NewOperatorWithTime(op, time.Now())
+	opID := op.ID()
 
-	if !oc.isOperatorAllowed(op.ID()) {
-		log.Info("skip operator while controller is quiescing",
+	oc.mu.Lock()
+	if old, ok := oc.operators[opID]; ok && !replaceExisting {
+		oc.mu.Unlock()
+		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("dispatcherID", op.ID().String()),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
-}
-
-func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.operators[opID] = withTime
+	oc.mu.Unlock()
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
-	withTime := operator.NewOperatorWithTime(op, time.Now())
-
-	oc.mu.Lock()
-	oc.operators[op.ID()] = withTime
-	oc.mu.Unlock()
 
 	op.Start()
 	// Check affected nodes after Start to avoid operators being forced into terminal states
@@ -576,6 +582,36 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	return true
 }
 
+// addMergeOccupyOperators reserves every source replica or rolls back the partial reservation.
+func (oc *Controller) addMergeOccupyOperators(
+	affectedReplicaSets []*replica.SpanReplication,
+) ([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], bool) {
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		occupyOperator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
+		if oc.AddOperator(occupyOperator) {
+			operators = append(operators, occupyOperator)
+			continue
+		}
+		log.Error("failed to add occupy dispatcher operator",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Int64("group", replicaSet.GetGroupID()),
+			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.String("operator", occupyOperator.String()))
+		oc.cancelMergeOccupyOperators(operators)
+		return nil, false
+	}
+	return operators, true
+}
+
+func (oc *Controller) cancelMergeOccupyOperators(
+	operators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	for _, op := range operators {
+		oc.cancelOperator(op)
+	}
+}
+
 // AddMergeOperator creates a merge operator, which merge consecutive replica sets.
 // We need create a mergeOperator for the new replicaset, and create len(affectedReplicaSets) empty operator
 // to occupy these replica set not evolve other scheduling among merging.
@@ -586,23 +622,9 @@ func (oc *Controller) AddMergeOperator(
 		return nil
 	}
 
-	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
-	for _, replicaSet := range affectedReplicaSets {
-		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
-		ret := oc.AddOperator(operator)
-		if ret {
-			operators = append(operators, operator)
-		} else {
-			log.Error("failed to add occupy dispatcher operator",
-				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.Int64("group", replicaSet.GetGroupID()),
-				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
-				zap.String("operator", operator.String()))
-			for _, op := range operators {
-				oc.cancelOperator(op.ID())
-			}
-			return nil
-		}
+	operators, ok := oc.addMergeOccupyOperators(affectedReplicaSets)
+	if !ok {
+		return nil
 	}
 
 	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators, oc.MaintainerEpoch())
@@ -612,13 +634,52 @@ func (oc *Controller) AddMergeOperator(
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
-		for _, op := range operators {
-			oc.cancelOperator(op.ID())
-		}
+		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
 		return nil
 	}
 	log.Info("add merge operator",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+	)
+	return mergeOperator
+}
+
+// AddRestoredMergeOperator rebuilds a merge operator from bootstrap state after maintainer failover.
+func (oc *Controller) AddRestoredMergeOperator(
+	affectedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	if mergedReplicaSet == nil {
+		return nil
+	}
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
+	operators, ok := oc.addMergeOccupyOperators(affectedReplicaSets)
+	if !ok {
+		return nil
+	}
+
+	mergeOperator := NewRestoredMergeDispatcherOperator(
+		oc.spanController,
+		affectedReplicaSets,
+		mergedReplicaSet,
+		operators,
+		oc.MaintainerEpoch(),
+	)
+	ret := oc.AddOperator(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator when restoring merge",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.String("operator", mergeOperator.String()))
+		oc.cancelMergeOccupyOperators(operators)
+		return nil
+	}
+	log.Info("restore merge operator",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),

@@ -216,6 +216,8 @@ func TestBatchDMLEventAssembleRowsKeepsOriginalTableInfoForLocalRowsWithoutRouti
 	require.Equal(t, "t", batchDMLEvent.TableInfo.GetTargetTableName())
 }
 
+// TestBatchDMLEventAssembleRowsDecodesRemoteRawRows verifies size accounting
+// before and after a remotely received batch decodes its raw row payload.
 func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
@@ -233,6 +235,9 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 		Rows:          dmlEvent.Rows,
 		TableInfo:     dmlEvent.TableInfo,
 	}
+	require.Equal(t, batchDMLEvent.Rows.MemoryUsage(), batchDMLEvent.GetSize())
+	require.Positive(t, batchDMLEvent.GetSize())
+
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
 
@@ -241,10 +246,13 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, reverseEvents.Rows)
 	require.NotEmpty(t, reverseEvents.RawRows)
+	require.Equal(t, int64(len(reverseEvents.RawRows)), reverseEvents.GetSize())
 
 	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
 
 	require.Nil(t, reverseEvents.RawRows)
+	require.Equal(t, reverseEvents.Rows.MemoryUsage(), reverseEvents.GetSize())
+	require.Positive(t, reverseEvents.GetSize())
 	require.Same(t, batchDMLEvent.TableInfo, reverseEvents.TableInfo)
 	require.Equal(t, batchDMLEvent.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()), reverseEvents.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()))
 }
@@ -463,6 +471,7 @@ func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
 	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
 	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
+	t.Run("detach callbacks", verifyDMLEventDetachPostCallbacks)
 }
 
 func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
@@ -528,4 +537,27 @@ func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int64(1), enqueueCalled.Load())
+}
+
+func verifyDMLEventDetachPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	require.Empty(t, event.PostTxnFlushed)
+	require.Empty(t, event.PostTxnEnqueued)
+
+	postFlush()
+	postEnqueue()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue"}, order)
 }
