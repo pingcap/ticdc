@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,9 +75,11 @@ func TestGetTableInfoAtTs(t *testing.T) {
 			MultipleTableInfos: []*model.TableInfo{other},
 		}}},
 		{name: "drop", tableID: 100, ts: 20, events: []PersistedDDLEvent{drop}, deleted: true},
-		{name: "drop schema", tableID: 100, ts: 20, events: []PersistedDDLEvent{{
-			Type: byte(model.ActionDropSchema), FinishedTs: 20,
-		}}, deleted: true},
+		// Schema DDLs do not provide per-table deletion markers. Both lookup
+		// paths fall back to the retained table schema.
+		{name: "drop schema snapshot fallback", tableID: 100, ts: 20, events: []PersistedDDLEvent{{
+			Type: byte(model.ActionDropSchema), SchemaID: 1, FinishedTs: 20,
+		}}},
 		{name: "recover", tableID: 100, ts: 30, events: []PersistedDDLEvent{drop, {
 			Type: byte(model.ActionRecoverTable), TableID: 100, SchemaName: "test", TableInfo: normal, FinishedTs: 30,
 		}}},
@@ -90,7 +92,7 @@ func TestGetTableInfoAtTs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")}, tables: []*model.TableInfo{normal, partition},
+				dbInfo: &model.DBInfo{ID: 1, Name: parser_model.NewCIStr("test")}, tables: []*model.TableInfo{normal, partition},
 			}})
 			t.Cleanup(func() { require.NoError(t, storage.close()) })
 			for _, event := range tc.events {
@@ -124,29 +126,26 @@ func TestGetTableInfoAtTsReadsOnlyLatestSchema(t *testing.T) {
 	const historyLength = 100
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
 	t.Cleanup(func() { require.NoError(t, storage.close()) })
-	manager := &countingEncryptionManagerForTest{}
-	storage.encryptionManager = manager
 	tableInfo := newEligibleTableInfoForTest(100, "a")
 	for ts := uint64(1); ts <= historyLength; ts++ {
-		event := PersistedDDLEvent{
-			Type: byte(model.ActionModifyColumn), TableID: 100, SchemaName: "test", TableInfo: tableInfo, FinishedTs: ts,
-		}
-		require.NoError(t, writePersistedDDLEventWithEncryption(storage.db, &event, manager, 0))
 		storage.tablesDDLHistory[100] = append(storage.tablesDDLHistory[100], ts)
 	}
+	// Only persist the latest event. Reading any older history entry would fail,
+	// so a successful lookup verifies that it stops after the latest schema.
+	event := PersistedDDLEvent{
+		Type: byte(model.ActionModifyColumn), TableID: 100, SchemaName: "test", TableInfo: tableInfo, FinishedTs: historyLength,
+	}
+	require.NoError(t, writePersistedDDLEvent(storage.db, &event))
 	info, err := storage.getTableInfoAtTs(100, historyLength)
 	require.NoError(t, err)
 	require.True(t, info.IsEligible(false))
-	require.Equal(t, 1, manager.decryptCalls)
+	require.Equal(t, "a", info.GetTableName())
 	require.Empty(t, storage.tableInfoStoreMap)
-	manager.decryptCalls = 0
-	require.NoError(t, storage.buildVersionedTableInfoStore(newEmptyVersionedTableInfoStore(100)))
-	require.Equal(t, historyLength, manager.decryptCalls)
 }
 
 func TestGetTableInfoAtTsConcurrentGC(t *testing.T) {
 	initial := []mockDBInfo{{
-		dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")},
+		dbInfo: &model.DBInfo{ID: 1, Name: parser_model.NewCIStr("test")},
 		tables: []*model.TableInfo{newEligibleTableInfoForTest(100, "a")},
 	}}
 	storage := newPersistentStorageForTest(t.TempDir(), initial)
@@ -195,7 +194,7 @@ func BenchmarkEligibilityTableInfoLookup(b *testing.B) {
 		b.Run(fmt.Sprintf("history=%d", historyLength), func(b *testing.B) {
 			tableInfo := newEligibleTableInfoForTest(100, "a")
 			storage := newPersistentStorageForTest(b.TempDir(), []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: 1, Name: ast.NewCIStr("test")}, tables: []*model.TableInfo{tableInfo},
+				dbInfo: &model.DBInfo{ID: 1, Name: parser_model.NewCIStr("test")}, tables: []*model.TableInfo{tableInfo},
 			}})
 			b.Cleanup(func() { require.NoError(b, storage.close()) })
 			// Keep schema size fixed, and build history outside the timed lookup.

@@ -107,18 +107,17 @@ func TestSendDDLTsPreservesReplicationKeyLossRecovery(t *testing.T) {
 					},
 				}
 				mock.ExpectBegin()
-				mock.ExpectExec(buildInsertItemQuery(blockedIDs, "default", "test/test", "120", "0", "0")).
+				mock.ExpectExec(insertItemQuery(blockedIDs, "default", "test/test", "120", "0", "0")).
 					WillReturnResult(sqlmock.NewResult(0, int64(len(blockedIDs))))
 				mock.ExpectCommit()
 				require.NoError(t, writer.SendDDLTsPre(event))
 
 				mock.ExpectBegin()
-				mock.ExpectExec(buildInsertItemQuery(blockedIDs, "default", "test/test", "120", "1", "0")).
+				mock.ExpectExec(insertItemQuery(blockedIDs, "default", "test/test", "120", "1", "0")).
 					WillReturnResult(sqlmock.NewResult(0, int64(len(blockedIDs))))
 				if tc.remove {
-					for _, query := range dropItemQueries(physicalIDs, "default", "test/test", writer.maxDDLTsBatch) {
-						mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(0, int64(len(physicalIDs))))
-					}
+					mock.ExpectExec(dropItemQuery(physicalIDs, "default", "test/test")).
+						WillReturnResult(sqlmock.NewResult(0, int64(len(physicalIDs))))
 				}
 				mock.ExpectCommit()
 				require.NoError(t, writer.SendDDLTs(event))
