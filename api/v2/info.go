@@ -43,6 +43,6 @@ func (h *OpenAPIV2) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
 		}
 		_, _ = fmt.Fprintf(&output, "%s\n\t%s\n\n", string(kv.Key), value)
 	}
-	fmt.Fprintf(w, "\n\n*** etcd info ***:\n\n")
+	_, _ = fmt.Fprintf(w, "\n\n*** etcd info ***:\n\n")
 	_, _ = output.WriteTo(w)
 }
