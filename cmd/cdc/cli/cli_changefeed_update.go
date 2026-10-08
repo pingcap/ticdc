@@ -111,7 +111,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if len(changelog) == 0 {
+	// A supplied URI can match the masked GET result while changing its real password.
+	if len(changelog) == 0 && newInfo.SinkURI == "" {
 		cmd.Printf("changefeed config is the same with the old one, do nothing\n")
 		return nil
 	}
@@ -180,7 +181,11 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	infoStr, err := info.Marshal()
+	maskedInfo, err := info.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	infoStr, err := maskedInfo.Marshal()
 	if err != nil {
 		return err
 	}

@@ -582,15 +582,19 @@ func CfInfoToAPIModel(
 
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
+		// Keep credentials intact for clients that read, modify, and update the config.
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-		replicaConfig.maskSensitiveData()
+	}
+	sinkURI, err := util.MaskSinkURI(info.SinkURI)
+	if err != nil {
+		log.Error("failed to mask sink URI", zap.Error(util.MaskSensitiveDataInURLError(err)))
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
 		Keyspace:       info.ChangefeedID.Keyspace(),
-		SinkURI:        util.MaskSensitiveDataInURI(info.SinkURI),
+		SinkURI:        sinkURI,
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
 		TargetTs:       info.TargetTs,

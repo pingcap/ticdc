@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -645,7 +645,10 @@ func TestMaskChangefeedData(t *testing.T) {
 	}
 	data, err := json.Marshal(&info)
 	require.Nil(t, err)
-	masked := maskChangefeedInfo(data)
+	masked, err := config.MaskChangefeedInfo(data)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "sasl-password-sentinel")
+	require.Equal(t, "sasl-password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
 	maskedInfo := config.ChangeFeedInfo{}
 	err = json.Unmarshal([]byte(masked), &maskedInfo)
 	require.Nil(t, err)
@@ -655,5 +658,7 @@ func TestMaskChangefeedData(t *testing.T) {
 	require.NotContains(t, masked, "oauth-secret-sentinel")
 	require.Contains(t, maskedInfo.SinkURI, "root:xxxxx@127.0.0.1:9092")
 	require.Equal(t, "******", *maskedInfo.Config.Sink.KafkaConfig.SASLPassword)
-	require.Equal(t, "<redacted>", maskChangefeedInfo([]byte(`{"sink-uri":`)))
+	masked, err = config.MaskChangefeedInfo([]byte(`{"sink-uri":`))
+	require.Error(t, err)
+	require.Empty(t, masked)
 }

@@ -1506,7 +1506,7 @@ func (c *ReplicaConfig) maskSensitiveData() {
 	}
 	for _, field := range sensitiveFields {
 		if field != nil && *field != "" {
-			*field = "******"
+			*field = config.MaskedSensitiveValue
 		}
 	}
 }
