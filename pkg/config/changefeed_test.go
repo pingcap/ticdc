@@ -65,21 +65,6 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
-<<<<<<< HEAD
-=======
-
-func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
-	info := &ChangeFeedInfo{
-		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-		Config:       replicaConfig,
-	}
-
-	changefeedConfig := info.ToChangefeedConfig()
-	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
-	require.True(t, changefeedConfig.IsLowLatencyMode())
-}
 
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
@@ -127,39 +112,3 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, after)
 }
-
-func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		protocol     Protocol
-		keepRegistry bool
-	}{
-		{protocol: ProtocolAvro, keepRegistry: true},
-		{protocol: ProtocolDebeziumAvro, keepRegistry: true},
-		{protocol: ProtocolDebezium, keepRegistry: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.protocol.String(), func(t *testing.T) {
-			t.Parallel()
-
-			cfg := GetDefaultReplicaConfig()
-			cfg.Sink.Protocol = util.AddressOf(tt.protocol.String())
-			cfg.Sink.SchemaRegistry = util.AddressOf("http://127.0.0.1:8088")
-			info := &ChangeFeedInfo{
-				SinkURI: "kafka://127.0.0.1:9092/topic",
-				Config:  cfg,
-			}
-
-			info.RmUnusedFields()
-			if tt.keepRegistry {
-				require.NotNil(t, info.Config.Sink.SchemaRegistry)
-				require.Equal(t, "http://127.0.0.1:8088", *info.Config.Sink.SchemaRegistry)
-			} else {
-				require.Nil(t, info.Config.Sink.SchemaRegistry)
-			}
-		})
-	}
-}
->>>>>>> 0c2f2e610 (api,cli: redact credentials in changefeed output (#6102))

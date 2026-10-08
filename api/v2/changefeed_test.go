@@ -176,32 +176,6 @@ func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID)
 
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
 
-<<<<<<< HEAD
-=======
-// TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
-// fields. It checks both a valid URI with secret query parameters and an invalid
-// URI parse error that previously exposed raw credentials.
-func TestMaskSinkURIForError(t *testing.T) {
-	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
-		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
-
-	maskedURI := util.MaskSensitiveDataInURIForError(sinkURI)
-	require.NotContains(t, maskedURI, "verysecure")
-	require.NotContains(t, maskedURI, "rawsecret")
-	require.Contains(t, maskedURI, "sasl-password=xxxxx")
-	require.Contains(t, maskedURI, "secret-access-key=xxxxx")
-	require.Contains(t, maskedURI, "sasl-user=ticdc")
-
-	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
-	require.Equal(t, "<invalid uri>", util.MaskSensitiveDataInURIForError(invalidURI))
-
-	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
-	require.NotContains(t, err.Error(), "verysecure")
-	require.Contains(t, err.Error(), "<invalid uri>")
-	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
-	require.Contains(t, err.Error(), "invalid URL escape")
-}
-
 func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.SchemaRegistry = util.AddressOf(
@@ -270,15 +244,6 @@ func TestCfInfoToAPIModelMasksKafkaCredentials(t *testing.T) {
 	require.Contains(t, info.SinkURI, "sink-password-sentinel")
 }
 
-func mustParseURLError(t *testing.T, rawURL string) error {
-	t.Helper()
-
-	_, err := url.Parse(rawURL)
-	require.Error(t, err)
-	return err
-}
-
->>>>>>> 0c2f2e610 (api,cli: redact credentials in changefeed output (#6102))
 // TestVerifyRouteConflict covers route conflict detection for eligible and
 // ineligible source tables. It exercises the safe cases first, then verifies
 // that conflicts report both the shared target table and conflicting sources.
@@ -343,7 +308,7 @@ func TestMaskSinkURIForError(t *testing.T) {
 	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
 		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
 
-	maskedURI := maskSinkURIForError(sinkURI)
+	maskedURI := util.MaskSensitiveDataInURIForError(sinkURI)
 	require.NotContains(t, maskedURI, "verysecure")
 	require.NotContains(t, maskedURI, "rawsecret")
 	require.Contains(t, maskedURI, "sasl-password=xxxxx")
@@ -351,7 +316,7 @@ func TestMaskSinkURIForError(t *testing.T) {
 	require.Contains(t, maskedURI, "sasl-user=ticdc")
 
 	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
-	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+	require.Equal(t, "<invalid uri>", util.MaskSensitiveDataInURIForError(invalidURI))
 
 	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
 	require.NotContains(t, err.Error(), "verysecure")

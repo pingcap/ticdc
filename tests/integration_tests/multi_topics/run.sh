@@ -21,7 +21,7 @@ function run() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="kafka://127.0.0.1:9092/$DEFAULT_TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true&kafka-version=${KAFKA_VERSION}"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config $CUR/conf/changefeed.toml
@@ -40,12 +40,16 @@ function run() {
 	for i in $(seq 1 3); do
 		check_table_exists test.table${i} ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 	done
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	run_sql "rename table test.table1 to test.table10, test.table2 to test.table20" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists test.table10 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 	check_table_exists test.table20 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	run_sql_file $CUR/data/step2.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	sleep 30
@@ -54,8 +58,11 @@ function run() {
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/test_finish?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true" "$CUR/conf/changefeed.toml" "" "finish"
 
 	check_table_exists test.finish ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -82,6 +83,9 @@ func (bs *blackHoleDMLWriter) AddDMLEvents(_ context.Context, events ...*event.R
 	return
 }
 
+func (bs *blackHoleDMLWriter) SetWriteGate(_ *writelease.Gate) {
+}
+
 func (bs *blackHoleDMLWriter) Close() error {
 	return nil
 }
@@ -98,6 +102,9 @@ func (bs *blackHoleDDLWriter) WriteDDLEvent(_ context.Context, event *event.DDLE
 }
 
 func (bs *blackHoleDDLWriter) SetTableSchemaStore(_ *event.TableSchemaStore) {
+}
+
+func (bs *blackHoleDDLWriter) SetWriteGate(_ *writelease.Gate) {
 }
 
 func (bs *blackHoleDDLWriter) Close() error {
