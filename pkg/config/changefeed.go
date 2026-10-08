@@ -354,12 +354,16 @@ func (info *ChangeFeedInfo) String() (str string) {
 }
 
 // MaskChangefeedInfo masks sensitive fields in serialized changefeed metadata.
-func MaskChangefeedInfo(data []byte) string {
+func MaskChangefeedInfo(data []byte) (string, error) {
 	info := new(ChangeFeedInfo)
 	if err := info.Unmarshal(data); err != nil {
-		return "<redacted>"
+		return "", err
 	}
-	return info.String()
+	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
+	if info.Config != nil {
+		info.Config.MaskSensitiveData()
+	}
+	return info.Marshal()
 }
 
 // GetStartTs returns StartTs if it's specified or using the

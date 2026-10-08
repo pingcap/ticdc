@@ -278,23 +278,29 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 		return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 	}
 	log.Info("etcd data migration successful")
-	cleanOldData(ctx, m.cli.GetEtcdClient())
+	if err := cleanOldData(ctx, m.cli.GetEtcdClient()); err != nil {
+		return err
+	}
 	log.Info("clean old etcd data successful")
 	return nil
 }
 
-func cleanOldData(ctx context.Context, client etcd.Client) {
+func cleanOldData(ctx context.Context, client etcd.Client) error {
 	resp, err := client.Get(ctx, "/tidb/cdc", clientV3.WithPrefix())
 	if err != nil {
 		log.Warn("query data from etcd failed",
 			zap.Error(err))
+		return errors.Trace(err)
 	}
 	for _, kvPair := range resp.Kvs {
 		key := string(kvPair.Key)
 		if shouldDelete(key) {
 			value := string(kvPair.Value)
 			if strings.HasPrefix(key, oldChangefeedPrefix) {
-				value = config.MaskChangefeedInfo(kvPair.Value)
+				value, err = config.MaskChangefeedInfo(kvPair.Value)
+				if err != nil {
+					return err
+				}
 			}
 			// 0 is the backup version. For now, we only support version 0
 			newKey := etcd.MigrateBackupKey(0, key)
@@ -314,6 +320,7 @@ func cleanOldData(ctx context.Context, client etcd.Client) {
 			}
 		}
 	}
+	return nil
 }
 
 // old key prefix that should be removed
