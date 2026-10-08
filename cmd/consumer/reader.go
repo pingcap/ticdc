@@ -32,23 +32,22 @@ import (
 // partially successful confirmation. Close runs after both have stopped.
 type reader interface {
 	Read(ctx context.Context) (*readResult, error)
-	Confirm(ctx context.Context, completed []*inputRecord) error
+	Confirm(ctx context.Context) error
 	BufferedBytes() int64
 	Close() error
 }
 
-// The decoding reference stays outstanding until every derived effect has
+// Reader-owned decoding references stay outstanding until every derived effect has
 // been registered. Each effect is released only after its downstream write.
 type inputRecord struct {
-	pending   atomic.Int64
-	bytes     atomic.Int64
-	completed bool // Accessed only by Confirm, under the reader's confirmation lock.
+	pending atomic.Int64
+	bytes   atomic.Int64
 }
 
 type readResult struct {
 	dml          *event.DMLEvent
 	ddl          *event.DDLEvent
-	records      []*inputRecord
+	onFlush      func()
 	bytes        int64
 	watermark    uint64
 	hasWatermark bool
@@ -61,6 +60,8 @@ type bufferUsage struct {
 	readBytes     atomic.Int64
 	records       atomic.Int64
 	effects       atomic.Int64
+	received      atomic.Int64
+	confirmed     atomic.Int64
 	externalBytes func() int64
 }
 
@@ -114,9 +115,8 @@ type readDDL struct {
 }
 
 type readDML struct {
-	event   *event.DMLEvent
-	records []*inputRecord
-	bytes   int64
+	event *event.DMLEvent
+	bytes int64
 }
 
 // Shared read-side storage contains decoded input, never a downstream sink.
@@ -145,6 +145,7 @@ func (b *readBuffer) newRecord(bytes int64) (*inputRecord, error) {
 	record.pending.Store(1)
 	b.memory.readBytes.Add(bytes)
 	b.memory.records.Add(1)
+	b.memory.received.Add(1)
 	b.memory.effects.Add(1)
 	return record, nil
 }
@@ -171,8 +172,14 @@ func (b *readBuffer) queueDML(dml *event.DMLEvent, records []*inputRecord, p *pa
 	for _, record := range records {
 		record.pending.Add(1)
 	}
+	dml.AddPostFlushFunc(func() {
+		for _, record := range records {
+			record.pending.Add(-1)
+			b.memory.effects.Add(-1)
+		}
+	})
 	b.memory.readBytes.Add(bytes)
-	b.pendingDML = append(b.pendingDML, &readDML{event: dml, records: records, bytes: bytes})
+	b.pendingDML = append(b.pendingDML, &readDML{event: dml, bytes: bytes})
 	b.dmlDirty = true
 	return nil
 }
@@ -182,7 +189,7 @@ func (b *readBuffer) trackSchema(p *partition, table *common.TableInfo) error {
 		return nil
 	}
 	key := schemaKey{schema: table.GetSchemaName(), table: table.GetTableName(), version: table.GetUpdateTS()}
-	unversioned := b.protocol == config.ProtocolCanalJSON && table.GetUpdateTS() == 0
+	unversioned := table.GetUpdateTS() == 0 && (b.protocol == config.ProtocolCanalJSON || b.protocol == config.ProtocolOpen)
 	if unversioned {
 		if p.schemaPointers[table] {
 			return nil
@@ -264,11 +271,11 @@ func (b *readBuffer) nextReady(watermark uint64) (*readResult, error) {
 	}
 	if len(b.pendingDML) != 0 {
 		dml := b.pendingDML[0]
-		if dml.event.CommitTs <= watermark && (ddl == nil || dml.event.CommitTs < ddl.key.commitTs) {
+		if dml.event.CommitTs <= watermark && (ddl == nil || dml.event.CommitTs <= ddl.key.commitTs) {
 			b.pendingDML[0] = nil
 			b.pendingDML = b.pendingDML[1:]
 			b.memory.readBytes.Add(-dml.bytes)
-			return &readResult{dml: dml.event, records: dml.records, bytes: dml.bytes}, nil
+			return &readResult{dml: dml.event, bytes: dml.bytes}, nil
 		}
 	}
 	if ddl == nil {
@@ -300,7 +307,13 @@ func (b *readBuffer) nextReady(watermark uint64) (*readResult, error) {
 	if ddl.event == nil {
 		return nil, errors.ErrCodecDecode.FastGenByArgs("DDL is missing its canonical event")
 	}
-	result := &readResult{ddl: ddl.event, records: ddl.records, bytes: ddl.bytes}
+	records := ddl.records
+	result := &readResult{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() {
+		for _, record := range records {
+			record.pending.Add(-1)
+			b.memory.effects.Add(-1)
+		}
+	}}
 	ddl.delivered = true
 	ddl.event = nil
 	ddl.records = nil

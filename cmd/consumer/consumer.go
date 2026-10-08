@@ -32,7 +32,6 @@ import (
 type consumer struct {
 	reader            reader
 	writer            *writer
-	records           map[*inputRecord]bool
 	pendingWatermarks []*readResult
 	watermarks        map[int64]uint64
 }
@@ -61,8 +60,8 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 		return err
 	}
 	c := &consumer{
-		reader: input, writer: &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*mutation)},
-		records: make(map[*inputRecord]bool), watermarks: make(map[int64]uint64),
+		reader: input, writer: &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)},
+		watermarks: make(map[int64]uint64),
 	}
 	c.writer.confirm = c.confirmCompleted
 	results := make(chan *readResult, 1)
@@ -127,17 +126,15 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 	var pendingDDL *readResult
 run:
 	for {
-		if err = c.writer.finishBatches(); err != nil {
-			break
-		}
+		c.writer.finishBatches()
 		if err = c.confirmCompleted(readCtx); err != nil {
 			break
 		}
 		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
 			c.writer.lastProgressLog = time.Now()
-			log.Info("consumer progress", zap.Int64("receivedInputs", c.writer.receivedInputs),
+			log.Info("consumer progress", zap.Int64("receivedInputs", memory.received.Load()),
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
-				zap.Int64("completedInputs", c.writer.completedInputs), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
+				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
 				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
 				zap.Int64("uncompletedInputs", memory.records.Load()), zap.Int64("readerBufferedBytes", input.BufferedBytes()),
 				zap.Int64("bufferedBytes", c.writer.bufferedBytes()))
@@ -201,14 +198,8 @@ run:
 }
 
 func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) error {
-	for _, record := range result.records {
-		if !c.records[record] {
-			c.records[record] = true
-			c.writer.receivedInputs++
-		}
-	}
 	if result.dml != nil {
-		c.writer.pendingDML = append(c.writer.pendingDML, &pendingDML{event: result.dml, records: result.records, bytes: result.bytes})
+		c.writer.pendingDML = append(c.writer.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
 		c.writer.dmlBytes += result.bytes
 		c.writer.dmlDirty = true
 		c.writer.decodedRows += int64(result.dml.Len())
@@ -220,7 +211,7 @@ func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) er
 	}
 	if result.hasWatermark {
 		c.watermarks[result.tableID] = max(c.watermarks[result.tableID], result.watermark)
-		if len(result.records) != 0 {
+		if result.onFlush != nil {
 			c.pendingWatermarks = append(c.pendingWatermarks, result)
 		}
 	}
@@ -249,31 +240,12 @@ func (c *consumer) confirmCompleted(ctx context.Context) error {
 			remaining = append(remaining, control)
 			continue
 		}
-		for _, record := range control.records {
-			if record.pending.Add(-1) < 0 {
-				return errors.ErrInternalCheckFailed.FastGenByArgs("watermark completed more than once")
-			}
-			c.writer.memory.effects.Add(-1)
-		}
+		control.onFlush()
 	}
 	clear(c.pendingWatermarks[len(remaining):])
 	c.pendingWatermarks = remaining
-	completed := make([]*inputRecord, 0)
-	for record := range c.records {
-		count := record.pending.Load()
-		if count < 0 {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("input completed more than once")
-		}
-		if count == 0 {
-			completed = append(completed, record)
-		}
-	}
-	if err := c.reader.Confirm(ctx, completed); err != nil {
+	if err := c.reader.Confirm(ctx); err != nil {
 		return err
-	}
-	for _, record := range completed {
-		delete(c.records, record)
-		c.writer.completedInputs++
 	}
 	for tableID, watermark := range c.watermarks {
 		c.writer.advanceReplay(watermark, tableID)

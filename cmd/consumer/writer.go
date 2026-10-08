@@ -17,7 +17,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"slices"
 	"sync/atomic"
@@ -51,9 +50,8 @@ const (
 )
 
 type pendingDML struct {
-	event   *event.DMLEvent
-	records []*inputRecord
-	bytes   int64
+	event *event.DMLEvent
+	bytes int64
 }
 
 type writer struct {
@@ -61,7 +59,7 @@ type writer struct {
 	memory          *bufferUsage
 	pendingDML      []*pendingDML
 	inFlight        []*writeBatch
-	mutations       map[mutationKey]*mutation
+	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
 	readySince      time.Time
 	dmlDirty        bool
 	writtenBefore   uint64
@@ -69,10 +67,8 @@ type writer struct {
 	mutationBytes   int64
 	inFlightBytes   int64
 	confirm         func(context.Context) error
-	receivedInputs  int64
 	decodedRows     int64
 	writtenRows     int64
-	completedInputs int64
 	lastProgressLog time.Time
 }
 type writeBatch struct {
@@ -90,11 +86,6 @@ type mutationKey struct {
 	commitTs uint64
 	rowType  common.RowType
 	handle   string
-}
-
-type mutation struct {
-	batch  *writeBatch
-	digest [sha256.Size]byte
 }
 
 func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) error {
@@ -117,11 +108,8 @@ func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) err
 	if err := c.downstream.WriteBlockEvent(result.ddl); err != nil {
 		return err
 	}
-	for _, record := range result.records {
-		if record.pending.Add(-1) < 0 {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("input effect completed more than once")
-		}
-		c.memory.effects.Add(-1)
+	if result.onFlush != nil {
+		result.onFlush()
 	}
 	c.memory.bytes.Add(-result.bytes)
 	return nil
@@ -240,9 +228,7 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 			})
 			c.downstream.AddDMLEvent(dml)
 		}
-		if err := c.finishBatches(); err != nil {
-			return err
-		}
+		c.finishBatches()
 	}
 	c.readySince = time.Time{}
 	return nil
@@ -255,16 +241,14 @@ func (c *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-batch.done:
-			if err := c.finishBatches(); err != nil {
-				return err
-			}
+			c.finishBatches()
 			return c.confirm(ctx)
 		case <-tick:
 			if time.Since(c.lastProgressLog) >= progressLogInterval {
 				c.lastProgressLog = time.Now()
 				log.Info("consumer waiting for batch",
-					zap.Int64("receivedInputs", c.receivedInputs), zap.Int64("decodedRows", c.decodedRows),
-					zap.Int64("writtenRows", c.writtenRows), zap.Int64("completedInputs", c.completedInputs),
+					zap.Int64("receivedInputs", c.memory.received.Load()), zap.Int64("decodedRows", c.decodedRows),
+					zap.Int64("writtenRows", c.writtenRows), zap.Int64("completedInputs", c.memory.confirmed.Load()),
 					zap.Int("pendingDMLCount", len(c.pendingDML)),
 					zap.Int("inFlightBatches", len(c.inFlight)), zap.Int64("inFlightBytes", c.inFlightBytes),
 					zap.Int64("uncompletedInputs", c.memory.records.Load()), zap.Int64("bufferedBytes", c.bufferedBytes()))
@@ -273,7 +257,7 @@ func (c *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	}
 }
 
-func (c *writer) finishBatches() error {
+func (c *writer) finishBatches() {
 	remaining := c.inFlight[:0]
 	for _, batch := range c.inFlight {
 		select {
@@ -288,16 +272,8 @@ func (c *writer) finishBatches() error {
 		for _, dml := range batch.events {
 			c.writtenRows += int64(dml.Len())
 		}
-		for _, item := range batch.items {
-			for _, record := range item.records {
-				if record.pending.Add(-1) < 0 {
-					return errors.ErrInternalCheckFailed.FastGenByArgs("input effect completed more than once")
-				}
-				c.memory.effects.Add(-1)
-			}
-		}
 		for _, key := range batch.keys {
-			c.mutations[key].batch = nil
+			c.mutations[key] = nil
 		}
 		c.dmlBytes -= batch.bytes
 		c.memory.bytes.Add(-batch.bytes)
@@ -305,7 +281,6 @@ func (c *writer) finishBatches() error {
 	}
 	clear(c.inFlight[len(remaining):])
 	c.inFlight = remaining
-	return nil
 }
 
 func (c *writer) advanceReplay(watermark uint64, tableID int64) {
@@ -371,32 +346,9 @@ func (c *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 		retain := true
 		if len(handle) != 0 {
 			key := mutationKey{tableID: dml.PhysicalTableID, commitTs: dml.CommitTs, rowType: row.RowType, handle: string(handle)}
-			var data []byte
-			for _, values := range []chunk.Row{row.PreRow, row.Row} {
-				if values.IsEmpty() {
-					data = append(data, 0)
-					continue
-				}
-				data = append(data, 1)
-				for offset, column := range dml.TableInfo.GetColumns() {
-					value := common.ExtractColVal(&values, column, offset)
-					if value == nil {
-						data = append(data, 0)
-						continue
-					}
-					data = append(data, 1)
-					valueString := common.ColumnValueString(value)
-					data = binary.AppendUvarint(data, uint64(len(valueString)))
-					data = append(data, valueString...)
-				}
-			}
-			digest := sha256.Sum256(data)
-			if previous := c.mutations[key]; previous != nil {
-				if previous.digest != digest {
-					return nil, errors.ErrCodecDecode.FastGenByArgs("conflicting rows share a table, commit-ts, mutation type and handle key")
-				}
-				if previous.batch != nil && previous.batch != batch {
-					if err := c.waitBatch(ctx, previous.batch); err != nil {
+			if previous, exists := c.mutations[key]; exists {
+				if previous != nil && previous != batch {
+					if err := c.waitBatch(ctx, previous); err != nil {
 						return nil, err
 					}
 				}
@@ -409,7 +361,7 @@ func (c *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 				if err := c.memory.reserve(bytes); err != nil {
 					return nil, err
 				}
-				c.mutations[key] = &mutation{batch: batch, digest: digest}
+				c.mutations[key] = batch
 				c.mutationBytes += bytes
 				batch.keys = append(batch.keys, key)
 			}

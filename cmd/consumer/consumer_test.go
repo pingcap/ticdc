@@ -57,10 +57,15 @@ func TestReaderDDLNormalization(t *testing.T) {
 	first.pending.Add(-1)
 	second.pending.Add(-1)
 	memory.effects.Add(-2)
+	beforeDDL := &event.DMLEvent{CommitTs: 10}
+	afterDDL := &event.DMLEvent{CommitTs: 11}
+	buffer.pendingDML = []*readDML{{event: beforeDDL}, {event: afterDDL}}
+	result, err = buffer.nextReady(10)
+	require.NoError(t, err)
+	require.Same(t, beforeDDL, result.dml)
 	result, err = buffer.nextReady(10)
 	require.NoError(t, err)
 	require.Same(t, ddl, result.ddl)
-	require.Len(t, result.records, 2)
 	require.EqualValues(t, 1, first.pending.Load())
 	require.EqualValues(t, 1, second.pending.Load())
 
@@ -74,6 +79,9 @@ func TestReaderDDLNormalization(t *testing.T) {
 	require.Zero(t, first.pending.Load())
 	require.Zero(t, second.pending.Load())
 	require.Zero(t, memory.effects.Load())
+	result, err = buffer.nextReady(11)
+	require.NoError(t, err)
+	require.Same(t, afterDDL, result.dml)
 	require.NoError(t, buffer.queueDDL(&copyDDL, second, 1, false))
 	require.Zero(t, second.pending.Load())
 	buffer.advance(11)
@@ -108,20 +116,29 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 	memory.effects.Add(-1)
 	file.pending.Add(2)
 	memory.effects.Add(2)
-	first := &writeBatch{items: []*pendingDML{{records: []*inputRecord{file}}}, done: make(chan bool)}
-	second := &writeBatch{items: []*pendingDML{{records: []*inputRecord{file}}}, done: make(chan bool)}
+	firstDML, secondDML := &event.DMLEvent{}, &event.DMLEvent{}
+	for _, dml := range []*event.DMLEvent{firstDML, secondDML} {
+		dml.AddPostFlushFunc(func() {
+			file.pending.Add(-1)
+			memory.effects.Add(-1)
+		})
+	}
+	first := &writeBatch{events: []*event.DMLEvent{firstDML}, done: make(chan bool)}
+	second := &writeBatch{events: []*event.DMLEvent{secondDML}, done: make(chan bool)}
 	input := &storageReader{buffer: buffer, records: []*inputRecord{file, later}}
 	w := &writer{memory: memory, inFlight: []*writeBatch{first, second}}
-	c := &consumer{reader: input, writer: w, records: map[*inputRecord]bool{file: true, later: true}}
+	c := &consumer{reader: input, writer: w}
 	// A later input cannot release positions past an incomplete file.
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Len(t, input.records, 2)
+	secondDML.PostFlush()
 	close(second.done)
-	require.NoError(t, w.finishBatches())
+	w.finishBatches()
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.EqualValues(t, 2, file.pending.Load())
+	firstDML.PostFlush()
 	close(first.done)
-	require.NoError(t, w.finishBatches())
+	w.finishBatches()
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.EqualValues(t, 1, file.pending.Load())
 	require.Len(t, input.records, 2)
@@ -130,7 +147,7 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 	memory.effects.Add(-1)
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, input.records)
-	require.Empty(t, c.records)
+	require.EqualValues(t, 2, memory.confirmed.Load())
 	require.Zero(t, memory.bytes.Load())
 	require.Zero(t, memory.readBytes.Load())
 	require.Zero(t, memory.records.Load())
@@ -146,14 +163,17 @@ func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	batch := &writeBatch{items: []*pendingDML{{event: &event.DMLEvent{CommitTs: 10}}}, done: make(chan bool)}
 	w := &writer{memory: memory, inFlight: []*writeBatch{batch}}
 	c := &consumer{
-		reader: input, writer: w, records: map[*inputRecord]bool{record: true},
-		pendingWatermarks: []*readResult{{watermark: 10, records: []*inputRecord{record}}},
+		reader: input, writer: w,
+		pendingWatermarks: []*readResult{{watermark: 10, onFlush: func() {
+			record.pending.Add(-1)
+			memory.effects.Add(-1)
+		}}},
 	}
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.EqualValues(t, 1, record.pending.Load())
 	require.Len(t, input.records, 1)
 	close(batch.done)
-	require.NoError(t, w.finishBatches())
+	w.finishBatches()
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, input.records)
 	require.Empty(t, c.pendingWatermarks)
@@ -183,8 +203,8 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	input := &storageReader{buffer: buffer, records: []*inputRecord{record}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
-	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*mutation)}
-	c := &consumer{reader: input, writer: w, records: make(map[*inputRecord]bool)}
+	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
+	c := &consumer{reader: input, writer: w}
 	w.confirm = c.confirmCompleted
 	require.NoError(t, c.consume(t.Context(), t.Context(), result))
 	require.Len(t, w.pendingDML, 1)
@@ -200,7 +220,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
 	dml := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, TableInfo: table}
-	w := &writer{memory: &bufferUsage{}, mutations: make(map[mutationKey]*mutation)}
+	w := &writer{memory: &bufferUsage{}, mutations: make(map[mutationKey]*writeBatch)}
 	w.advanceReplay(20, 1)
 	filtered, err := w.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
@@ -234,14 +254,17 @@ func TestDDLRetryAfterReadCancellation(t *testing.T) {
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
 	batch := &writeBatch{items: []*pendingDML{{event: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan bool)}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
-	result := &readResult{ddl: ddl, records: []*inputRecord{record}}
+	result := &readResult{ddl: ddl, onFlush: func() {
+		record.pending.Add(-1)
+		memory.effects.Add(-1)
+	}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	gomock.InOrder(
 		downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil),
 		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil),
 	)
 	w := &writer{downstream: downstream, memory: memory, inFlight: []*writeBatch{batch}}
-	c := &consumer{reader: input, writer: w, records: make(map[*inputRecord]bool)}
+	c := &consumer{reader: input, writer: w}
 	w.confirm = c.confirmCompleted
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

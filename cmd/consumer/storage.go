@@ -42,7 +42,6 @@ import (
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -281,23 +280,9 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 		return key, false, err
 	}
 	c.buffer.memory.readBytes.Add(bytes)
-	// Schema files carry primary-key flags. Rebuild offsets and an explicit
-	// primary index, including composite keys, for the default batch DML path.
-	table := file.TableInfo().ToTiDBTableInfo()
+	table := file.TableInfo()
 	table.UpdateTS = file.TableVersion
-	table.PKIsHandle = false
-	primary := &timodel.IndexInfo{ID: 1, Name: ast.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic}
-	for offset, column := range table.Columns {
-		column.Offset = offset
-		column.State = timodel.StatePublic
-		if mysql.HasPriKeyFlag(column.GetFlag()) {
-			primary.Columns = append(primary.Columns, &timodel.IndexColumn{Name: column.Name, Offset: offset})
-		}
-	}
-	if len(primary.Columns) != 0 {
-		table.Indices = []*timodel.IndexInfo{primary}
-	}
-	c.schemas[key] = &storageSchema{file: file, tableInfo: common.NewTableInfo4Decoder(file.Schema, table)}
+	c.schemas[key] = &storageSchema{file: file, tableInfo: table}
 	c.buffer.schemaBytes += bytes
 	return key, true, nil
 }
@@ -464,7 +449,10 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], key.TableVersion)
 			}
 			// This record's initial reference is the DDL write itself.
-			return &readResult{ddl: ddl, records: []*inputRecord{record}}, nil
+			return &readResult{ddl: ddl, onFlush: func() {
+				record.pending.Add(-1)
+				c.buffer.memory.effects.Add(-1)
+			}}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
 			if !input.groupEnd {
@@ -518,22 +506,22 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			c.decoder = canal.NewTxnDecoder(c.codecConfig)
 			c.decoder.AddKeyValue(nil, data)
 		}
-		return &readResult{records: []*inputRecord{record}}, nil
 	}
 }
 
-func (c *storageReader) Confirm(ctx context.Context, completed []*inputRecord) error {
+func (c *storageReader) Confirm(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, record := range completed {
-		record.completed = true
-	}
 	count := 0
 	for _, record := range c.records {
-		if !record.completed {
+		pending := record.pending.Load()
+		if pending < 0 {
+			return errors.ErrInternalCheckFailed.FastGenByArgs("Storage input completed more than once")
+		}
+		if pending != 0 {
 			break
 		}
 		if position, ok := c.positions[record]; ok {
@@ -554,6 +542,7 @@ func (c *storageReader) Confirm(ctx context.Context, completed []*inputRecord) e
 	copy(c.records, c.records[count:])
 	clear(c.records[len(c.records)-count:])
 	c.records = c.records[:len(c.records)-count]
+	c.buffer.memory.confirmed.Add(int64(count))
 	return nil
 }
 

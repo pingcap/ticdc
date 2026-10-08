@@ -53,7 +53,7 @@ function run() {
 
 	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $changefeed_id "normal" "null" ""
 
-	run_consumer "$WORK_DIR" "${SINK_URI}&upstream-tidb-dsn=$(printf '%s' "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" | jq -sRr @uri)" "$CUR/conf/changefeed.toml"
+	run_consumer "$WORK_DIR" "${SINK_URI}&upstream-tidb-dsn=$(printf '%s' "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" | jq -sRr @uri)" "$CUR/conf/new_changefeed.toml"
 
 	run_sql "INSERT INTO dispatcher.index values (2, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO dispatcher.index values (3, 4);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

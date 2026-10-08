@@ -277,35 +277,31 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 					record.pending.Add(1)
 					c.watermark = max(c.watermark, watermark)
 					c.hasWatermark = true
-					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, records: []*inputRecord{record}})
+					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
+						record.pending.Add(-1)
+						c.buffer.memory.effects.Add(-1)
+					}})
 				default:
 					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
 				}
 			}
 			record.pending.Add(-1)
 			c.buffer.memory.effects.Add(-1)
-			return &readResult{records: []*inputRecord{record}}, nil
 		}
 	}
 }
 
-func (c *pulsarReader) Confirm(ctx context.Context, completed []*inputRecord) error {
+func (c *pulsarReader) Confirm(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, record := range completed {
-		if _, ok := c.messageIDs[record]; !ok {
-			// A previous call can ACK one partition before another fails.
-			if record.completed {
-				continue
-			}
-			return errors.ErrInternalCheckFailed.FastGenByArgs("unknown Pulsar input confirmation")
-		}
-		record.completed = true
-	}
 	for _, p := range c.buffer.partitions {
 		count := 0
 		for _, record := range p.records {
-			if !record.completed {
+			pending := record.pending.Load()
+			if pending < 0 {
+				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
+			}
+			if pending != 0 {
 				break
 			}
 			count++
@@ -329,6 +325,7 @@ func (c *pulsarReader) Confirm(ctx context.Context, completed []*inputRecord) er
 		copy(p.records, p.records[count:])
 		clear(p.records[len(p.records)-count:])
 		p.records = p.records[:len(p.records)-count]
+		c.buffer.memory.confirmed.Add(int64(count))
 	}
 	return nil
 }
