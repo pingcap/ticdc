@@ -27,6 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -78,6 +79,7 @@ type Writer struct {
 	// ddlPollInterval is how often a running downstream DDL is re-checked.
 	// Tests lower it to avoid paying the production poll interval.
 	ddlPollInterval time.Duration
+	writeGate       *writelease.Gate
 }
 
 func NewWriter(
@@ -114,6 +116,30 @@ func NewWriter(
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
+}
+
+// SetWriteGate configures capture-wide DML write admission for this transport
+// writer. A nil gate preserves the legacy behavior.
+func (w *Writer) SetWriteGate(gate *writelease.Gate) {
+	w.writeGate = gate
+}
+
+// grantWrite waits for a valid capture write lease. It returns false only when
+// the writer is shutting down, so callers must not execute the downstream write.
+func (w *Writer) grantWrite() bool {
+	if w.writeGate == nil {
+		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		return true
+	}
+	for {
+		if err := w.writeGate.WaitUntilWritable(w.ctx); err != nil {
+			return false
+		}
+		if w.writeGate.IsWritable() {
+			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			return true
+		}
+	}
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {

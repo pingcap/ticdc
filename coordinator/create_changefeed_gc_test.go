@@ -27,6 +27,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -124,6 +125,9 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	gcManager.EXPECT().
 		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
 		Return(nil).Times(1)
+	gcManager.EXPECT().
+		CheckStaleCheckpointTs(cfID, info.StartTs).
+		Return(nil).Times(1)
 
 	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
 
@@ -135,6 +139,49 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	require.NotNil(t, cf)
 	require.Equal(t, config.StateNormal, cf.GetInfo().State)
 	require.Nil(t, cf.GetInfo().Error)
+}
+
+func TestUpdateGCSafepointChecksFailedChangefeedGCTTL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+	co.changefeedChangeCh = make(chan []*changefeedChange, 1)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	checkpointTs := common.Ts(100)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		State:        config.StateFailed,
+		Error: &config.RunningError{
+			Code: string(errors.ErrTableRouteConflict.ID()),
+		},
+		Config:     config.GetDefaultReplicaConfig(),
+		SinkURI:    "kafka://127.0.0.1:9092",
+		KeyspaceID: 1,
+	}
+	changefeedDB.AddStoppedChangefeed(changefeed.NewChangefeed(cfID, info, checkpointTs, false))
+
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafepoint(gomock.Any(), checkpointTs-1).
+		Return(nil).Times(1)
+	ttlErr := errors.ErrGCTTLExceeded.GenWithStackByArgs(checkpointTs, cfID)
+	gcManager.EXPECT().
+		CheckStaleCheckpointTs(cfID, checkpointTs).
+		Return(ttlErr).Times(1)
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
+
+	select {
+	case changes := <-co.changefeedChangeCh:
+		require.Len(t, changes, 1)
+		require.Equal(t, config.StateFailed, changes[0].state)
+		require.Equal(t, ChangeState, changes[0].changeType)
+		require.Equal(t, string(errors.ErrGCTTLExceeded.ID()), changes[0].err.Code)
+	default:
+		require.FailNow(t, "expected gc ttl state change")
+	}
 }
 
 func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) {
@@ -261,6 +308,10 @@ func TestConcurrentChangefeedReplaceKeepsSafepoint(t *testing.T) {
 			Times(0)
 		gcManager.EXPECT().
 			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(newInfo.StartTs-1)).
+			Return(nil).
+			Times(1)
+		gcManager.EXPECT().
+			CheckStaleCheckpointTs(newID, newInfo.StartTs).
 			Return(nil).
 			Times(1)
 
