@@ -33,7 +33,6 @@ import (
 type reader interface {
 	Read(ctx context.Context) (*readResult, error)
 	Confirm(ctx context.Context) error
-	BufferedBytes() int64
 	Close() error
 }
 
@@ -104,25 +103,6 @@ type readBuffer struct {
 	dmlBoundary uint64
 }
 
-func (b *readBuffer) newAck(ctx context.Context, bytes int64) (*ack, error) {
-	if bytes < 0 || bytes > maxMemoryBytes-2*maxInFlightBytes {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its memory budget")
-	}
-	// Admit new input only when decoding and filtering can also make progress.
-	if err := b.memory.reserve(ctx, bytes+2*maxInFlightBytes); err != nil {
-		return nil, err
-	}
-	b.memory.release(2 * maxInFlightBytes)
-	record := &ack{}
-	record.memory.Store(bytes)
-	record.refs.Store(1)
-	b.memory.readBytes.Add(bytes)
-	b.memory.records.Add(1)
-	b.memory.received.Add(1)
-	b.memory.effects.Add(1)
-	return record, nil
-}
-
 func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, p *partition) error {
 	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
@@ -139,17 +119,14 @@ func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records 
 	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
-	b.memory.effects.Add(int64(len(records)))
 	for _, record := range records {
 		record.refs.Add(1)
 	}
 	dml.AddPostFlushFunc(func() {
 		for _, record := range records {
 			record.refs.Add(-1)
-			b.memory.effects.Add(-1)
 		}
 	})
-	b.memory.readBytes.Add(bytes)
 	b.pendingDML = append(b.pendingDML, &readDML{event: dml, bytes: bytes})
 	b.dmlDirty = true
 	return nil
@@ -181,7 +158,6 @@ func (b *readBuffer) trackSchema(ctx context.Context, p *partition, table *commo
 	} else {
 		p.schemas[key] = true
 	}
-	b.memory.readBytes.Add(bytes)
 	return nil
 }
 
@@ -190,9 +166,7 @@ func (b *readBuffer) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *
 	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
-	b.memory.effects.Add(1)
 	record.refs.Add(1)
-	b.memory.readBytes.Add(bytes)
 	b.pendingDDL = append(b.pendingDDL, &readDDL{event: ddl, record: record, bytes: bytes})
 	return nil
 }
@@ -213,7 +187,10 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 		dmlBoundary = b.dmlBoundary
 	}
 	for index, dml := range b.pendingDML {
-		if dml.event.CommitTs <= dmlBoundary && (ddl == nil || dml.event.CommitTs <= ddl.event.GetCommitTs()) {
+		// The head DDL is a scoped barrier. Independent tables' DDLs need not
+		// arrive in commit order, so only release DML belonging to this barrier.
+		if dml.event.CommitTs <= dmlBoundary && (ddl == nil ||
+			(dml.event.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, dml.event))) {
 			if index == 0 {
 				b.pendingDML[0] = nil
 				b.pendingDML = b.pendingDML[1:]
@@ -222,10 +199,9 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 				b.pendingDML[len(b.pendingDML)-1] = nil
 				b.pendingDML = b.pendingDML[:len(b.pendingDML)-1]
 			}
-			b.memory.readBytes.Add(-dml.bytes)
 			return &readResult{dml: dml.event, bytes: dml.bytes}
 		}
-		if !b.orderedDML {
+		if !b.orderedDML && dml.event.CommitTs > dmlBoundary {
 			break
 		}
 	}
@@ -246,10 +222,40 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	record := ddl.record
 	result := &readResult{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() {
 		record.refs.Add(-1)
-		b.memory.effects.Add(-1)
 	}}
-	b.memory.readBytes.Add(-result.bytes)
 	b.pendingDDL[0] = nil
 	b.pendingDDL = b.pendingDDL[1:]
 	return result
+}
+
+func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
+	// Incomplete multi-table metadata must retain a global barrier.
+	if ddl.SchemaName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeAll) {
+		return true
+	}
+	if (ddl.Type == byte(timodel.ActionRenameTables) || ddl.Type == byte(timodel.ActionExchangeTablePartition)) && len(ddl.BlockedTableNames) == 0 && len(ddl.MultipleTableInfos) == 0 {
+		return true
+	}
+	table := dml.TableInfo
+	if table == nil {
+		return true
+	}
+	if (table.GetSchemaName() == ddl.SchemaName && table.GetTableName() == ddl.TableName) ||
+		(table.GetSchemaName() == ddl.ExtraSchemaName && table.GetTableName() == ddl.ExtraTableName) {
+		return true
+	}
+	for _, name := range ddl.BlockedTableNames {
+		if table.GetSchemaName() == name.SchemaName && table.GetTableName() == name.TableName {
+			return true
+		}
+	}
+	for _, info := range ddl.MultipleTableInfos {
+		if info != nil && table.GetSchemaName() == info.GetSchemaName() && table.GetTableName() == info.GetTableName() {
+			return true
+		}
+	}
+	if ddl.BlockedTables != nil && slices.Contains(ddl.BlockedTables.TableIDs, dml.PhysicalTableID) {
+		return true
+	}
+	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && table.GetSchemaName() == ddl.SchemaName
 }

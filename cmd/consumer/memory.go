@@ -17,24 +17,65 @@ package main
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/uber-go/atomic"
 )
 
 const maxMemoryBytes = 1 << 30
 
 type memoryUsage struct {
 	bytes         atomic.Int64
-	readBytes     atomic.Int64
-	records       atomic.Int64
-	effects       atomic.Int64
 	received      atomic.Int64
 	confirmed     atomic.Int64
 	externalBytes func() int64
 	mu            sync.Mutex
 	changed       chan struct{}
 	completed     chan struct{}
+}
+
+// An input can be confirmed after decoding and downstream writes release all refs.
+type ack struct {
+	refs   atomic.Int64
+	memory atomic.Int64
+}
+
+func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
+	if bytes < 0 || bytes > maxMemoryBytes-2*maxInFlightBytes {
+		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its memory budget")
+	}
+	// Leave room for decoding and filtering while the input is retained.
+	if err := m.reserve(ctx, bytes+2*maxInFlightBytes); err != nil {
+		return nil, err
+	}
+	m.release(2 * maxInFlightBytes)
+	record := &ack{}
+	record.memory.Store(bytes)
+	record.refs.Store(1)
+	m.received.Inc()
+	return record, nil
+}
+
+func (m *memoryUsage) confirm(record *ack) {
+	m.release(record.memory.Load())
+	m.confirmed.Inc()
+}
+
+func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
+	m.release(record.memory.Swap(retainedBytes) - retainedBytes)
+	record.refs.Add(-1)
+	select {
+	case m.completed <- struct{}{}:
+	default:
+	}
+}
+
+func (m *memoryUsage) used() int64 {
+	bytes := m.bytes.Load()
+	if m.externalBytes != nil {
+		bytes += m.externalBytes()
+	}
+	return bytes
 }
 
 func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
@@ -46,12 +87,7 @@ func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
 			return err
 		}
 		m.mu.Lock()
-		used := m.bytes.Load()
-		external := int64(0)
-		if m.externalBytes != nil {
-			external = m.externalBytes()
-		}
-		if used+bytes+external <= maxMemoryBytes {
+		if m.used()+bytes <= maxMemoryBytes {
 			m.bytes.Add(bytes)
 			m.mu.Unlock()
 			return nil

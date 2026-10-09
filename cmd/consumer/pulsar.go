@@ -204,7 +204,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 				return result, nil
 			}
 		}
-		if len(c.pendingWatermarks) != 0 {
+		if len(c.pendingWatermarks) != 0 && len(c.buffer.pendingDDL) == 0 {
 			result := c.pendingWatermarks[0]
 			c.pendingWatermarks[0] = nil
 			c.pendingWatermarks = c.pendingWatermarks[1:]
@@ -225,7 +225,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 			if size > maxRecordBytes {
 				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
 			}
-			record, err := c.buffer.newAck(ctx, size)
+			record, err := c.buffer.memory.newAck(ctx, size)
 			if err != nil {
 				return nil, err
 			}
@@ -260,34 +260,23 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 							return nil, err
 						}
 						p.schemas[key] = true
-						c.buffer.memory.readBytes.Add(128)
 					}
 					if err := c.buffer.queueDDL(ctx, ddl, record); err != nil {
 						return nil, err
 					}
 				case codecCommon.MessageTypeResolved:
 					watermark := p.decoder.NextResolvedEvent()
-					c.buffer.memory.effects.Add(1)
 					record.refs.Add(1)
 					c.watermark = max(c.watermark, watermark)
 					c.hasWatermark = true
 					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
 						record.refs.Add(-1)
-						c.buffer.memory.effects.Add(-1)
 					}})
 				default:
 					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
 				}
 			}
-			released := record.memory.Swap(256) - 256
-			c.buffer.memory.readBytes.Add(-released)
-			c.buffer.memory.release(released)
-			record.refs.Add(-1)
-			c.buffer.memory.effects.Add(-1)
-			select {
-			case c.buffer.memory.completed <- struct{}{}:
-			default:
-			}
+			c.buffer.memory.decoded(record, 256)
 		}
 	}
 }
@@ -317,22 +306,14 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
 		for _, record := range p.records[:count] {
-			size := record.memory.Load()
-			c.buffer.memory.release(size)
-			c.buffer.memory.readBytes.Add(-size)
-			c.buffer.memory.records.Add(-1)
+			c.buffer.memory.confirm(record)
 			delete(c.messageIDs, record)
 		}
 		copy(p.records, p.records[count:])
 		clear(p.records[len(p.records)-count:])
 		p.records = p.records[:len(p.records)-count]
-		c.buffer.memory.confirmed.Add(int64(count))
 	}
 	return nil
-}
-
-func (c *pulsarReader) BufferedBytes() int64 {
-	return c.buffer.memory.readBytes.Load() + int64(len(c.consumer.Chan()))*maxRecordBytes
 }
 
 func (c *pulsarReader) Close() error {

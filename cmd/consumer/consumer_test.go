@@ -137,6 +137,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 		}
 		downstream := mock.NewMockSink(gomock.NewController(t))
 		w := &writer{downstream: downstream, memory: memory}
+		consumer := &consumer{writer: w}
 		for index, ddl := range ddls[startIndex:] {
 			result, err := c.Read(t.Context())
 			require.NoError(t, err)
@@ -145,7 +146,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			require.EqualValues(t, 1, c.buffer.partitions[0].records[index].refs.Load())
 			downstream.EXPECT().FlushDMLBeforeBlock(result.ddl).Return(nil)
 			downstream.EXPECT().WriteBlockEvent(result.ddl).Return(nil)
-			require.NoError(t, w.writeDDL(t.Context(), result))
+			require.NoError(t, consumer.writeDDL(t.Context(), result))
 			require.Zero(t, c.buffer.partitions[0].records[index].refs.Load())
 			for _, record := range c.buffer.partitions[1].records[:len(ddls)] {
 				require.EqualValues(t, 1, record.refs.Load())
@@ -162,27 +163,24 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				require.Zero(t, record.refs.Load())
 			}
 		}
-		require.Zero(t, memory.effects.Load())
 		remainingBytes := int64(0)
 		for record := range c.offsets {
 			remainingBytes += record.memory.Load()
 		}
 		require.Equal(t, remainingBytes, memory.bytes.Load())
-		require.Equal(t, remainingBytes, memory.readBytes.Load())
 	}
 }
 
 func TestReaderDDLNormalization(t *testing.T) {
 	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	first, err := buffer.newAck(t.Context(), 128)
+	first, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	ddl := &event.DDLEvent{Type: byte(timodel.ActionAddColumn), SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
 	require.NoError(t, buffer.queueDDL(t.Context(), ddl, first))
 	result := buffer.nextReady(9)
 	require.Nil(t, result)
 	first.refs.Add(-1)
-	memory.effects.Add(-1)
 	beforeDDL := &event.DMLEvent{CommitTs: 10}
 	afterDDL := &event.DMLEvent{CommitTs: 11}
 	buffer.pendingDML = []*readDML{{event: beforeDDL}, {event: afterDDL}}
@@ -198,9 +196,9 @@ func TestReaderDDLNormalization(t *testing.T) {
 		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil),
 	)
 	w := &writer{downstream: downstream, memory: memory}
-	require.NoError(t, w.writeDDL(t.Context(), result))
+	c := &consumer{writer: w}
+	require.NoError(t, c.writeDDL(t.Context(), result))
 	require.Zero(t, first.refs.Load())
-	require.Zero(t, memory.effects.Load())
 	result = buffer.nextReady(11)
 	require.Same(t, afterDDL, result.dml)
 	require.EqualValues(t, 128, memory.bytes.Load())
@@ -230,8 +228,6 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 	copyRecord.refs.Store(1)
 	memory := &memoryUsage{}
 	memory.bytes.Store(128)
-	memory.readBytes.Store(128)
-	memory.effects.Store(1)
 	c := &kafkaReader{
 		buffer: &readBuffer{
 			memory: memory, orderedDML: true,
@@ -259,26 +255,22 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 	require.EqualValues(t, 1, copyRecord.refs.Load())
 	result.onFlush()
 	require.Zero(t, copyRecord.refs.Load())
-	require.Zero(t, memory.effects.Load())
 	require.Zero(t, memory.bytes.Load())
 }
 
 func TestInputCompletionAcrossBatches(t *testing.T) {
 	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	file, err := buffer.newAck(t.Context(), 256)
+	file, err := buffer.memory.newAck(t.Context(), 256)
 	require.NoError(t, err)
-	later, err := buffer.newAck(t.Context(), 256)
+	later, err := buffer.memory.newAck(t.Context(), 256)
 	require.NoError(t, err)
 	later.refs.Add(-1)
-	memory.effects.Add(-1)
 	file.refs.Add(2)
-	memory.effects.Add(2)
 	firstDML, secondDML := &event.DMLEvent{}, &event.DMLEvent{}
 	for _, dml := range []*event.DMLEvent{firstDML, secondDML} {
 		dml.AddPostFlushFunc(func() {
 			file.refs.Add(-1)
-			memory.effects.Add(-1)
 		})
 	}
 	first := &writeBatch{events: []*event.DMLEvent{firstDML}, done: make(chan bool)}
@@ -302,20 +294,16 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 	require.Len(t, input.records, 2)
 	// Both batches are durable, but the decoder may still register more rows.
 	file.refs.Add(-1)
-	memory.effects.Add(-1)
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, input.records)
 	require.EqualValues(t, 2, memory.confirmed.Load())
 	require.Zero(t, memory.bytes.Load())
-	require.Zero(t, memory.readBytes.Load())
-	require.Zero(t, memory.records.Load())
-	require.Zero(t, memory.effects.Load())
 }
 
 func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	record, err := buffer.newAck(t.Context(), 128)
+	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	input := &storageReader{buffer: buffer, records: []*ack{record}}
 	batch := &writeBatch{items: []*pendingDML{{event: &event.DMLEvent{CommitTs: 10}}}, done: make(chan bool)}
@@ -324,15 +312,13 @@ func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 		reader: input, writer: w,
 		pendingWatermarks: []*readResult{{watermark: 10, onFlush: func() {
 			record.refs.Add(-1)
-			memory.effects.Add(-1)
 		}}},
 	}
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.EqualValues(t, 1, record.refs.Load())
 	require.Len(t, input.records, 1)
 	close(batch.done)
-	w.finishBatches()
-	require.NoError(t, c.confirmCompleted(t.Context()))
+	require.NoError(t, c.waitBatch(t.Context(), batch))
 	require.Empty(t, input.records)
 	require.Empty(t, c.pendingWatermarks)
 	require.Zero(t, memory.bytes.Load())
@@ -351,21 +337,19 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	dml.Length = 1
 	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	record, err := buffer.newAck(t.Context(), 128)
+	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	require.NoError(t, buffer.queueDML(t.Context(), dml, []*ack{record}, nil))
 	record.refs.Add(-1)
-	memory.effects.Add(-1)
 	result := buffer.nextReady(10)
 	input := &storageReader{buffer: buffer, records: []*ack{record}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
 	c := &consumer{reader: input, writer: w}
-	w.confirm = c.confirmCompleted
 	require.NoError(t, c.consume(t.Context(), result))
 	require.Len(t, w.pendingDML, 1)
-	require.NoError(t, w.flushDML(t.Context()))
+	require.NoError(t, c.flushDML(t.Context(), nil))
 	require.Empty(t, w.pendingDML)
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, input.records)
@@ -376,13 +360,14 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
 	dml := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, TableInfo: table}
 	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
+	c := &consumer{writer: w}
 	w.advanceReplay(20, 1)
-	filtered, err := w.filterRows(t.Context(), dml, &writeBatch{})
+	filtered, err := c.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
 	require.Same(t, dml, filtered)
 	// A true topic-wide complete watermark retains the MQ replay cutoff.
 	w.advanceReplay(20, 0)
-	filtered, err = w.filterRows(t.Context(), dml, &writeBatch{})
+	filtered, err = c.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
 	require.Nil(t, filtered)
 }
@@ -403,9 +388,8 @@ func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	memory.release(128)
 	require.NoError(t, memory.reserve(t.Context(), 128))
 	buffer := &readBuffer{memory: memory}
-	_, err := buffer.newAck(ctx, 256)
+	_, err := buffer.memory.newAck(ctx, 256)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, memory.records.Load())
 }
 
 func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
@@ -455,10 +439,64 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	require.Same(t, secondDDL, buffer.nextReady(^uint64(0)).ddl)
 }
 
+func TestReaderDDLArrivalOrder(t *testing.T) {
+	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
+	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
+	beforeA, afterA := &event.DMLEvent{CommitTs: 280, TableInfo: tableA}, &event.DMLEvent{CommitTs: 310, TableInfo: tableA}
+	beforeB, afterB := &event.DMLEvent{CommitTs: 180, TableInfo: tableB}, &event.DMLEvent{CommitTs: 220, TableInfo: tableB}
+	buffer := &readBuffer{
+		memory: &memoryUsage{}, orderedDML: true, dmlBoundary: ^uint64(0),
+		pendingDML: []*readDML{{event: beforeB}, {event: afterB}, {event: beforeA}, {event: afterA}},
+	}
+	ddlA := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 300}
+	ddlB := &event.DDLEvent{SchemaName: "test", TableName: "b", FinishedTs: 200}
+	require.NoError(t, buffer.queueDDL(t.Context(), ddlA, &ack{}))
+	require.NoError(t, buffer.queueDDL(t.Context(), ddlB, &ack{}))
+	// Only the head DDL's table is drained, even though B's DML has smaller timestamps.
+	require.Same(t, beforeA, buffer.nextReady(300).dml)
+	require.Same(t, ddlA, buffer.nextReady(300).ddl)
+	require.Same(t, beforeB, buffer.nextReady(300).dml)
+	require.Same(t, ddlB, buffer.nextReady(300).ddl)
+	require.Same(t, afterB, buffer.nextReady(300).dml)
+	require.Same(t, afterA, buffer.nextReady(300).dml)
+}
+
+func TestDDLScope(t *testing.T) {
+	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
+	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
+	tableC := common.NewTableInfo4Decoder("other", &timodel.TableInfo{ID: 3, Name: ast.NewCIStr("c")})
+	a := &event.DMLEvent{PhysicalTableID: 10, TableInfo: tableA}
+	b := &event.DMLEvent{PhysicalTableID: 20, TableInfo: tableB}
+	c := &event.DMLEvent{PhysicalTableID: 30, TableInfo: tableC}
+	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a"}
+	require.True(t, ddlBlocksTable(ddl, a))
+	require.True(t, ddlBlocksTable(ddl, &event.DMLEvent{PhysicalTableID: 11, TableInfo: tableA}))
+	require.False(t, ddlBlocksTable(ddl, b))
+	ddl = &event.DDLEvent{SchemaName: "test", BlockedTables: &event.InfluencedTables{InfluenceType: event.InfluenceTypeDB}}
+	require.True(t, ddlBlocksTable(ddl, a))
+	require.True(t, ddlBlocksTable(ddl, b))
+	require.False(t, ddlBlocksTable(ddl, c))
+	ddl = &event.DDLEvent{SchemaName: "test", TableName: "a", ExtraSchemaName: "other", ExtraTableName: "c", Type: byte(timodel.ActionRenameTable)}
+	require.True(t, ddlBlocksTable(ddl, a))
+	require.True(t, ddlBlocksTable(ddl, c))
+	require.False(t, ddlBlocksTable(ddl, b))
+	ddl = &event.DDLEvent{
+		SchemaName: "test", TableName: "a", Type: byte(timodel.ActionExchangeTablePartition),
+		BlockedTableNames: []event.SchemaTableName{{SchemaName: "test", TableName: "a"}, {SchemaName: "other", TableName: "c"}},
+	}
+	require.True(t, ddlBlocksTable(ddl, a))
+	require.True(t, ddlBlocksTable(ddl, c))
+	require.False(t, ddlBlocksTable(ddl, b))
+	ddl = &event.DDLEvent{SchemaName: "test", BlockedTables: &event.InfluencedTables{InfluenceType: event.InfluenceTypeAll}}
+	require.True(t, ddlBlocksTable(ddl, a))
+	require.True(t, ddlBlocksTable(ddl, b))
+	require.True(t, ddlBlocksTable(ddl, c))
+}
+
 func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	record, err := buffer.newAck(t.Context(), 128)
+	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	input := &storageReader{buffer: buffer, records: []*ack{record}}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
@@ -466,12 +504,10 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
 	result := &readResult{ddl: ddl, onFlush: func() {
 		record.refs.Add(-1)
-		memory.effects.Add(-1)
 	}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	w := &writer{downstream: downstream, memory: memory, inFlight: []*writeBatch{batch}, inFlightEvents: len(batch.items)}
 	c := &consumer{reader: input, writer: w}
-	w.confirm = c.confirmCompleted
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, c.consume(ctx, result), context.Canceled)
@@ -488,12 +524,11 @@ func TestConsumerCancellationDuringStartup(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.Protocol = new("csv")
 	upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir()}
-	memory := &memoryUsage{}
-	input, err := newStorageReader(ctx, upstreamURI, "UTC", replicaConfig, memory)
+	c, err := newConsumer(ctx, upstreamURI, "blackhole://", "", "UTC", replicaConfig)
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
-	wg.Go(func() { done <- runConsumer(ctx, &wg, input, "blackhole://", replicaConfig, memory) })
+	wg.Go(func() { done <- c.start(ctx) })
 	cancel()
 	select {
 	case err := <-done:

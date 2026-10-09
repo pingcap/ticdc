@@ -200,7 +200,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 				return result, nil
 			}
 		}
-		if ready && (!c.hasDeliveredWatermark || watermark > c.deliveredWatermark) {
+		if ready && len(c.buffer.pendingDDL) == 0 && (!c.hasDeliveredWatermark || watermark > c.deliveredWatermark) {
 			completed := make([]*ack, 0)
 			for commitTs, records := range c.ddlCopies {
 				if commitTs <= watermark {
@@ -208,7 +208,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 					delete(c.ddlCopies, commitTs)
 				}
 			}
-			c.buffer.memory.readBytes.Add(-int64(len(completed)) * 128)
 			c.deliveredWatermark = watermark
 			c.hasDeliveredWatermark = true
 			result := &readResult{watermark: watermark, hasWatermark: true}
@@ -218,7 +217,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 				result.onFlush = func() {
 					for _, record := range completed {
 						record.refs.Add(-1)
-						c.buffer.memory.effects.Add(-1)
 					}
 					c.buffer.memory.release(int64(len(completed)) * 128)
 				}
@@ -252,7 +250,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return nil, err
 			}
-			c.buffer.memory.readBytes.Add(bytes)
 			continue
 		}
 		queue := c.polled[partitionID]
@@ -267,7 +264,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 		c.buffer.partitions[partitionID].readSequence = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
 		c.buffer.memory.release(bytes)
-		c.buffer.memory.readBytes.Add(-bytes)
 		if err := c.processRecord(ctx, record); err != nil {
 			return nil, err
 		}
@@ -283,7 +279,7 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 	if bytes > maxRecordBytes {
 		return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record exceeds its size limit")
 	}
-	state, err := c.buffer.newAck(ctx, bytes)
+	state, err := c.buffer.memory.newAck(ctx, bytes)
 	if err != nil {
 		return err
 	}
@@ -305,7 +301,6 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 				}
 				state.refs.Add(1)
-				c.buffer.memory.effects.Add(1)
 				p.cachedUnreleased++
 				p.cachedRecords = append(p.cachedRecords, state)
 				continue
@@ -336,7 +331,6 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 						return err
 					}
 					p.schemas[key] = true
-					c.buffer.memory.readBytes.Add(128)
 				}
 			}
 			if decoder, ok := p.decoder.(*simple.Decoder); ok {
@@ -352,11 +346,7 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 				}
 				if p.cachedUnreleased == 0 {
 					for _, cached := range p.cachedRecords {
-						released := cached.memory.Swap(128) - 128
-						c.buffer.memory.readBytes.Add(-released)
-						c.buffer.memory.release(released)
-						cached.refs.Add(-1)
-						c.buffer.memory.effects.Add(-1)
+						c.buffer.memory.decoded(cached, 128)
 					}
 					clear(p.cachedRecords)
 					p.cachedRecords = nil
@@ -374,9 +364,7 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 				if err := c.buffer.memory.reserve(ctx, 128); err != nil {
 					return err
 				}
-				c.buffer.memory.effects.Add(1)
 				state.refs.Add(1)
-				c.buffer.memory.readBytes.Add(128)
 				c.ddlCopies[ddl.GetCommitTs()] = append(c.ddlCopies[ddl.GetCommitTs()], state)
 				continue
 			}
@@ -394,15 +382,9 @@ func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) err
 		}
 	}
 	if !slices.Contains(p.cachedRecords, state) {
-		released := state.memory.Swap(128) - 128
-		c.buffer.memory.readBytes.Add(-released)
-		c.buffer.memory.release(released)
-	}
-	state.refs.Add(-1)
-	c.buffer.memory.effects.Add(-1)
-	select {
-	case c.buffer.memory.completed <- struct{}{}:
-	default:
+		c.buffer.memory.decoded(state, 128)
+	} else {
+		state.refs.Add(-1)
 	}
 	return nil
 }
@@ -447,16 +429,12 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 	for partitionID, count := range counts {
 		p := c.buffer.partitions[partitionID]
 		for _, record := range p.records[:count] {
-			bytes := record.memory.Load()
-			c.buffer.memory.release(bytes)
-			c.buffer.memory.readBytes.Add(-bytes)
-			c.buffer.memory.records.Add(-1)
+			c.buffer.memory.confirm(record)
 			delete(c.offsets, record)
 		}
 		copy(p.records, p.records[count:])
 		clear(p.records[len(p.records)-count:])
 		p.records = p.records[:len(p.records)-count]
-		c.buffer.memory.confirmed.Add(int64(count))
 	}
 	return nil
 }
@@ -504,10 +482,6 @@ func (c *kafkaReader) nextPartition() int32 {
 		}
 	}
 	return selected
-}
-
-func (c *kafkaReader) BufferedBytes() int64 {
-	return c.buffer.memory.readBytes.Load() + c.client.BufferedFetchBytes()
 }
 
 func (c *kafkaReader) Close() error {

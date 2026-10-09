@@ -115,8 +115,10 @@ func start(ctx context.Context, options *options) (err error) {
 		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
-	var wg sync.WaitGroup
-	var profileServer *http.Server
+	var (
+		wg            sync.WaitGroup
+		profileServer *http.Server
+	)
 	defer func() {
 		cancel(err)
 		if profileServer != nil {
@@ -172,12 +174,11 @@ func start(ctx context.Context, options *options) (err error) {
 			}
 		})
 	}
-	memory := &memoryUsage{}
-	reader, err := newReader(ctx, upstreamURI, consumerID, options.timezone, replicaConfig, memory)
+	c, err := newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
 	if err != nil {
 		return cmp.Or(context.Cause(ctx), err)
 	}
-	err = runConsumer(ctx, &wg, reader, options.downstreamURI, replicaConfig, memory)
+	err = c.start(ctx)
 	return cmp.Or(context.Cause(ctx), err)
 }
 

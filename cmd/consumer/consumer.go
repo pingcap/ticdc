@@ -17,8 +17,8 @@ package main
 import (
 	"cmp"
 	"context"
+	"net/url"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -37,11 +37,39 @@ type consumer struct {
 	watermarks        map[int64]uint64
 }
 
-func runConsumer(ctx context.Context, wg *sync.WaitGroup, reader reader, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (err error) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	defer func() {
+func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
+	memory := &memoryUsage{completed: make(chan struct{}, 1)}
+	reader, err := newReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
+	if err != nil {
+		return nil, err
+	}
+	replicaConfig.Sink.TiDBSourceID = 1
+	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
+	target, err := sink.New(ctx, &config.ChangefeedConfig{
+		ChangefeedID: changefeedID, SinkURI: downstreamURI, SinkConfig: replicaConfig.Sink,
+		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive), EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
+	}, changefeedID, common.DefaultKeyspaceID)
+	if err != nil {
 		if closeErr := reader.Close(); closeErr != nil {
+			log.Error("consumer reader close failed", zap.Error(closeErr))
+		}
+		return nil, err
+	}
+	return &consumer{
+		reader: reader, writer: &writer{downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch), serialDML: putil.GetOrZero(replicaConfig.Sink.Protocol) == "csv"},
+		watermarks: make(map[int64]uint64),
+	}, nil
+}
+
+func (c *consumer) start(ctx context.Context) (err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	var wg sync.WaitGroup
+	defer func() {
+		cancel(err)
+		// Close also wakes sinks whose input channel is blocked while idle.
+		c.writer.downstream.Close()
+		wg.Wait()
+		if closeErr := c.reader.Close(); closeErr != nil {
 			if err == nil {
 				err = closeErr
 			} else {
@@ -49,46 +77,13 @@ func runConsumer(ctx context.Context, wg *sync.WaitGroup, reader reader, downstr
 			}
 		}
 	}()
-	replicaConfig.Sink.TiDBSourceID = 1
-	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
-		ChangefeedID: changefeedID, SinkURI: downstreamURI, SinkConfig: replicaConfig.Sink,
-		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive), EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
-	}, changefeedID, common.DefaultKeyspaceID)
-	if err != nil {
-		return err
-	}
-	c := &consumer{
-		reader: reader, writer: &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)},
-		watermarks: make(map[int64]uint64),
-	}
-	c.writer.confirm = c.confirmCompleted
-	memory.completed = make(chan struct{}, 1)
 	results := make(chan *readResult, 64)
-	readDone, sinkDone := make(chan bool), make(chan bool)
 	wg.Go(func() {
-		defer close(readDone)
 		defer close(results)
-		for ctx.Err() == nil {
-			result, err := reader.Read(ctx)
-			if err != nil {
-				cancel(err)
-				return
-			}
-			if result == nil {
-				cancel(errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result"))
-				return
-			}
-			select {
-			case results <- result:
-			case <-ctx.Done():
-				return
-			}
-		}
+		cancel(c.read(ctx, results))
 	})
 	wg.Go(func() {
-		defer close(sinkDone)
-		if err := downstream.Run(ctx); err != nil {
+		if err := c.writer.downstream.Run(ctx); err != nil {
 			cancel(err)
 			return
 		}
@@ -96,19 +91,35 @@ func runConsumer(ctx context.Context, wg *sync.WaitGroup, reader reader, downstr
 			cancel(errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly"))
 		}
 	})
-	defer func() {
-		cancel(err)
-		// Close also wakes sinks whose input channel is blocked while idle.
-		downstream.Close()
-		<-readDone
-		<-sinkDone
-	}()
+	err = c.write(ctx, results)
+	return cmp.Or(context.Cause(ctx), err)
+}
+
+func (c *consumer) read(ctx context.Context, results chan<- *readResult) error {
+	for ctx.Err() == nil {
+		result, err := c.reader.Read(ctx)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
+		}
+		select {
+		case results <- result:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return context.Cause(ctx)
+}
+
+func (c *consumer) write(ctx context.Context, results <-chan *readResult) error {
+	memory := c.writer.memory
 	tick := time.Tick(progressLogInterval)
-run:
 	for {
 		c.writer.finishBatches()
-		if err = c.confirmCompleted(ctx); err != nil {
-			break
+		if err := c.confirmCompleted(ctx); err != nil {
+			return err
 		}
 		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
 			c.writer.lastProgressLog = time.Now()
@@ -116,52 +127,50 @@ run:
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
 				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
 				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int64("uncompletedInputs", memory.records.Load()), zap.Int64("readerBufferedBytes", reader.BufferedBytes()),
-				zap.Int64("bufferedBytes", c.writer.bufferedBytes()))
+				zap.Int64("uncompletedInputs", memory.received.Load()-memory.confirmed.Load()), zap.Int64("bufferedBytes", memory.used()))
 		}
 		select {
 		case <-ctx.Done():
-			err = context.Cause(ctx)
-			break run
+			return context.Cause(ctx)
 		case result, ok := <-results:
 			if !ok {
-				err = context.Cause(ctx)
-				break run
+				return context.Cause(ctx)
 			}
-			rows, bytes, inputs := int64(0), int64(0), 0
-		drain:
-			for {
-				if err = c.consume(ctx, result); err != nil {
-					break run
-				}
-				inputs++
-				if result.dml != nil {
-					rows += int64(result.dml.Len())
-					bytes += result.bytes
-				}
-				if rows >= batchRows || bytes >= batchBytes || inputs >= cap(results) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					err = context.Cause(ctx)
-					break run
-				case result, ok = <-results:
-					if !ok {
-						break drain
-					}
-				default:
-					break drain
-				}
-			}
-			if err = c.writer.flushDML(ctx); err != nil {
-				break run
+			if err := c.consumeBatch(ctx, results, result); err != nil {
+				return err
 			}
 		case <-memory.completed:
 		case <-tick:
 		}
 	}
-	return cmp.Or(context.Cause(ctx), err)
+}
+
+func (c *consumer) consumeBatch(ctx context.Context, results <-chan *readResult, result *readResult) error {
+	rows, bytes, inputs := int64(0), int64(0), 0
+	for {
+		if err := c.consume(ctx, result); err != nil {
+			return err
+		}
+		inputs++
+		if result.dml != nil {
+			rows += int64(result.dml.Len())
+			bytes += result.bytes
+		}
+		if rows >= batchRows || bytes >= batchBytes || inputs >= cap(results) {
+			return c.flushDML(ctx, nil)
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case next, ok := <-results:
+			if !ok {
+				return c.flushDML(ctx, nil)
+			}
+			result = next
+		default:
+			return c.flushDML(ctx, nil)
+		}
+	}
 }
 
 func (c *consumer) consume(ctx context.Context, result *readResult) error {
@@ -174,7 +183,7 @@ func (c *consumer) consume(ctx context.Context, result *readResult) error {
 		c.writer.decodedRows += int64(result.dml.Len())
 	}
 	if result.ddl != nil {
-		if err := c.writer.writeDDL(ctx, result); err != nil {
+		if err := c.writeDDL(ctx, result); err != nil {
 			return err
 		}
 	}
@@ -185,12 +194,6 @@ func (c *consumer) consume(ctx context.Context, result *readResult) error {
 		}
 	}
 	return nil
-}
-
-// An input can be confirmed after decoding and downstream writes release all refs.
-type ack struct {
-	refs   atomic.Int64
-	memory atomic.Int64
 }
 
 func (c *consumer) confirmCompleted(ctx context.Context) error {

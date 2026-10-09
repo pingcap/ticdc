@@ -221,7 +221,6 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
-			c.buffer.memory.readBytes.Add(bytes)
 		}
 		if _, known := indices[index.FileIndexKey]; !known {
 			if len(indices) >= maxRecords {
@@ -232,7 +231,6 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
-			c.buffer.memory.readBytes.Add(bytes)
 		}
 
 		previous := indices[index.FileIndexKey]
@@ -276,7 +274,6 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 		return key, false, err
 	}
-	c.buffer.memory.readBytes.Add(bytes)
 	table := file.TableInfo()
 	table.UpdateTS = file.TableVersion
 	c.schemas[key] = &storageSchema{file: file, tableInfo: table}
@@ -326,15 +323,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				continue
 			}
 			// All rows have their own write references before decoding is released.
-			size := c.record.memory.Swap(256)
-			c.buffer.memory.release(size - 256)
-			c.buffer.memory.readBytes.Add(256 - size)
-			c.record.refs.Add(-1)
-			c.buffer.memory.effects.Add(-1)
-			select {
-			case c.buffer.memory.completed <- struct{}{}:
-			default:
-			}
+			c.buffer.memory.decoded(c.record, 256)
 			c.fileIndices[c.current.key][c.current.index.FileIndexKey] = c.current.index.Idx
 			c.decoder = nil
 			c.record = nil
@@ -374,7 +363,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 					if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 						return nil, err
 					}
-					c.buffer.memory.readBytes.Add(256)
 					c.inputs = append(c.inputs, storageInput{key: key})
 					continue
 				}
@@ -387,7 +375,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 						if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 							return nil, err
 						}
-						c.buffer.memory.readBytes.Add(256)
 						c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: index}, sort: sortBeforeWrite})
 						if len(c.inputs) > maxRecords {
 							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage scan exceeds its input limit")
@@ -400,7 +387,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 					return nil, err
 				}
-				c.buffer.memory.readBytes.Add(256)
 				c.inputs = append(c.inputs, storageInput{key: key, groupEnd: true})
 			}
 			continue
@@ -409,7 +395,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		c.inputs[0] = storageInput{}
 		c.inputs = c.inputs[1:]
 		c.buffer.memory.release(256)
-		c.buffer.memory.readBytes.Add(-256)
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
 			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
@@ -436,7 +421,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			ddl := schema.file.DDLEvent()
 			ddl.TableInfo = schema.tableInfo
 			size := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-			record, err := c.buffer.newAck(ctx, size)
+			record, err := c.buffer.memory.newAck(ctx, size)
 			if err != nil {
 				return nil, err
 			}
@@ -450,7 +435,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			// This record's initial reference is the DDL write itself.
 			return &readResult{ddl: ddl, onFlush: func() {
 				record.refs.Add(-1)
-				c.buffer.memory.effects.Add(-1)
 			}}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
@@ -469,7 +453,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			if err := c.buffer.memory.reserve(ctx, size); err != nil {
 				return nil, err
 			}
-			c.buffer.memory.readBytes.Add(size)
 			c.nextTableID++
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
@@ -496,7 +479,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			_ = file.Close()
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file exceeds the consumer memory budget")
 		}
-		record, err := c.buffer.newAck(ctx, size+256)
+		record, err := c.buffer.memory.newAck(ctx, size+256)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
@@ -553,20 +536,14 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 			indices[position.index.FileIndexKey] = position.index.Idx
 			delete(c.positions, record)
 		}
-		size := record.memory.Load()
-		c.buffer.memory.release(size)
-		c.buffer.memory.readBytes.Add(-size)
-		c.buffer.memory.records.Add(-1)
+		c.buffer.memory.confirm(record)
 		count++
 	}
 	copy(c.records, c.records[count:])
 	clear(c.records[len(c.records)-count:])
 	c.records = c.records[:len(c.records)-count]
-	c.buffer.memory.confirmed.Add(int64(count))
 	return nil
 }
-
-func (c *storageReader) BufferedBytes() int64 { return c.buffer.memory.readBytes.Load() }
 
 func (c *storageReader) Close() error {
 	c.storage.Close()
