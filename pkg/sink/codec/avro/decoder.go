@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"maps"
 	"math/big"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
+	// valueSchemas supplies the column layout for subsequent key-only deletes.
+	valueSchemas map[[2]string]map[string]any
+
 	schemaM schemamanager.SchemaManager
 	codecs  *lru.Cache
 
@@ -77,6 +81,7 @@ func NewDecoder(
 		schemaM:      schemaM,
 		codecs:       codecs,
 		upstreamTiDB: db,
+		valueSchemas: make(map[[2]string]map[string]any),
 	}
 }
 
@@ -167,17 +172,33 @@ func (d *decoder) decodeDMLPayload() (
 	isDelete = !hasValue
 	if !hasValue {
 		// Legacy delete event only has the key payload or a delete marker value.
-		// It can only be decoded as a delete row with key columns in PreRow.
+		// Reuse the last value schema to preserve the full column layout.
 		if isDeleteValue {
 			deleteCommitTs = d.decodeDeleteCommitTs()
 		}
 		valueMap = keyMap
 		valueSchema = keySchema
+		schemaName, tableName := schemaAndTableName(keySchema)
+		if cached := d.valueSchemas[[2]string{schemaName, tableName}]; cached != nil {
+			valueSchema = cached
+			valueMap = maps.Clone(keyMap)
+			for _, field := range cached["fields"].([]any) {
+				name := field.(map[string]any)["name"].(string)
+				if isAvroExtensionField(name) {
+					break
+				}
+				if _, ok := valueMap[name]; !ok {
+					valueMap[name] = nil
+				}
+			}
+		}
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
+		schemaName, tableName := schemaAndTableName(valueSchema)
+		d.valueSchemas[[2]string{schemaName, tableName}] = valueSchema
 		if operation, ok := valueMap[tidbOp]; ok {
 			isDelete = operation == deleteOperation
 		}
@@ -216,7 +237,12 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		} else {
 			checksum.Current = uint32(expectedChecksum)
 		}
-		event.Checksum = []*integrity.Checksum{checksum}
+		if event.Len() == 2 {
+			// The synthetic keyed delete carries no before-image checksum.
+			event.Checksum = []*integrity.Checksum{{}, checksum}
+		} else {
+			event.Checksum = []*integrity.Checksum{checksum}
+		}
 	}
 
 	if corrupted {
@@ -261,7 +287,7 @@ func (d *decoder) decodeDeleteCommitTs() uint64 {
 // assembleEvent return a row changed event
 // keyMap hold primary key or unique key columns
 // valueMap holds all columns for insert/update and before-value delete.
-// For legacy delete, valueMap is keyMap and only contains handle columns.
+// Legacy deletes use key values with NULLs for non-key columns from the cached schema.
 // schema is corresponding to the valueMap, it can be used to decode the valueMap to construct columns.
 func assembleEvent(
 	keyMap, valueMap, schema map[string]any, isDelete bool, hasValue bool,
@@ -285,6 +311,26 @@ func assembleEvent(
 		_, beforeData, err = avroData2Columns(beforeMap, fields)
 		if err != nil {
 			return nil, errors.Trace(err)
+		}
+	}
+
+	// Without a before image, represent an update as a keyed delete followed
+	// by an insert. Both operations stay in one event for downstream batching.
+	updateWithoutBefore := !isDelete && !hasBefore && valueMap[tidbOp] == updateOperation
+	var deleteData map[string]any
+	if updateWithoutBefore {
+		if len(keyMap) == 0 {
+			return nil, errors.ErrCodecDecode.GenWithStack("update without before value requires a handle key")
+		}
+		deleteData = make(map[string]any, len(keyMap))
+		for name, keyValue := range keyMap {
+			value, ok := data[name]
+			if !ok || value == nil || keyValue == nil {
+				return nil, errors.ErrCodecDecode.GenWithStack("update without before value has an invalid handle column: %s", name)
+			}
+			// Handle-key changes are split upstream, so the after image
+			// contains the same key, already converted to the chunk type.
+			deleteData[name] = value
 		}
 	}
 
@@ -322,8 +368,13 @@ func assembleEvent(
 	} else if hasBefore {
 		common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
 	} else {
+		if updateWithoutBefore {
+			common.AppendRow2Chunk(deleteData, event.TableInfo.GetColumns(), event.Rows)
+			event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+			event.Length++
+		}
 		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
 		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
 	}
@@ -410,9 +461,10 @@ func avroData2Columns(
 		data[colName] = value
 
 		tiCol := &timodel.ColumnInfo{
-			ID:    int64(idx),
-			Name:  ast.NewCIStr(colName),
-			State: timodel.StatePublic,
+			ID:     int64(idx),
+			Offset: idx,
+			Name:   ast.NewCIStr(colName),
+			State:  timodel.StatePublic,
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
@@ -444,17 +496,26 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	indexColumns := make([]*timodel.IndexColumn, 0)
 	for _, col := range columns {
 		if _, ok := keyMap[col.Name.O]; ok {
+			col.AddFlag(mysql.PriKeyFlag)
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name: col.Name,
+				Name:   col.Name,
+				Offset: col.Offset,
 			})
 		}
 	}
-	tidbTableInfo.Indices = []*timodel.IndexInfo{{
-		Primary: true,
-		Name:    ast.NewCIStr("primary"),
-		Columns: indexColumns,
-		State:   timodel.StatePublic,
-	}}
+	// A message without a key column carries no row locator: an empty primary
+	// index would tell the sink the row is located by the primary key while the
+	// WHERE clause has no column to compare.
+	if len(indexColumns) != 0 {
+		tidbTableInfo.Indices = []*timodel.IndexInfo{{
+			Primary: true,
+			Unique:  true,
+			Name:    ast.NewCIStr("primary"),
+			Columns: indexColumns,
+			State:   timodel.StatePublic,
+		}}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
+	}
 	return commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 }
 

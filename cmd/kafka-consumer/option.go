@@ -77,9 +77,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`")
 	}
 
-	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
-		return r == '/'
-	})
+	o.topic = strings.Trim(upstreamURI.Path, "/")
 	if len(o.topic) == 0 {
 		log.Panic("no topic provided for the consumer")
 	}
