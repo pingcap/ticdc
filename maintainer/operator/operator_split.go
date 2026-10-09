@@ -52,6 +52,7 @@ type SplitDispatcherOperator struct {
 	splitSpans       []*heartbeatpb.TableSpan
 	splitSpanInfo    string
 	splitTargetNodes []node.ID
+	maintainerEpoch  uint64
 	// postFinish is invoked for each newly created span after ReplaceReplicaSet. It is mainly used by
 	// the split-balance scheduler to schedule the new spans to specific nodes.
 	// Note: when postFinish is not nil, splitTargetNodes is expected to be aligned with splitSpans.
@@ -74,6 +75,7 @@ func NewSplitDispatcherOperator(
 	replicaSet *replica.SpanReplication,
 	splitSpans []*heartbeatpb.TableSpan,
 	splitTargetNodes []node.ID,
+	maintainerEpoch uint64,
 	postFinish func(span *replica.SpanReplication, node node.ID) bool,
 ) *SplitDispatcherOperator {
 	var spansInfo strings.Builder
@@ -89,6 +91,7 @@ func NewSplitDispatcherOperator(
 		spanController:   spanController,
 		splitSpanInfo:    spansInfo.String(),
 		splitTargetNodes: splitTargetNodes,
+		maintainerEpoch:  maintainerEpoch,
 		postFinish:       postFinish,
 		sendThrottler:    newSendThrottler(),
 	}
@@ -147,7 +150,7 @@ func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, heartbeatpb.OperatorType_O_Split)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, heartbeatpb.OperatorType_O_Split, m.maintainerEpoch)
 }
 
 // OnTaskRemoved is called when the task is removed by ddl

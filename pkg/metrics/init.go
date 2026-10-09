@@ -39,6 +39,7 @@ func InitMetrics(registry *prometheus.Registry) {
 	initLogPullerMetrics(registry)
 	common.InitCommonMetrics(registry)
 	initDynamicStreamMetrics(registry)
+	initCaptureWriteLeaseMetrics(registry)
 
 	kafka.InitMetrics(registry)
 	gc.InitMetrics(registry)
@@ -47,7 +48,8 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDDLMetrics(registry)
 }
 
-func getKeyspaceLabel() string {
+// GetKeyspaceLabel returns the keyspace label name used by TiCDC metrics.
+func GetKeyspaceLabel() string {
 	if kerneltype.IsNextGen() {
 		return "keyspace_name"
 	}

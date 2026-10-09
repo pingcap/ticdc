@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -40,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -99,6 +99,9 @@ type DispatcherManager struct {
 		maintainerEpoch uint64
 		maintainerID    node.ID
 	}
+	// MaintainerFenceMu serializes maintainer owner/epoch changes with request
+	// fence checks and scheduler side effects.
+	MaintainerFenceMu sync.Mutex
 
 	pdClock pdutil.Clock
 
@@ -112,16 +115,15 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	// currentOperatorMap stores one in-flight scheduling request per dispatcherID.
 	//
-	// It is used for:
-	//   - suppressing duplicate maintainer requests for the same dispatcher,
-	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
-	//   - cleaning up remove requests when a dispatcher is fully removed.
-	//
-	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
-	// future maintainer requests for the same dispatcherID will be ignored.
+	// The value carries sender and maintainer epoch so bootstrap recovery can
+	// return only current-epoch operators, and precheck can replace stale entries.
+	// Entries must be deleted on completion, otherwise future requests for the
+	// same dispatcherID will be ignored.
 	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
+	// mergeOperatorMap keeps in-flight merge requests so bootstrap can reconstruct merge operators after maintainer failover.
+	mergeOperatorMap sync.Map // map[mergedDispatcherID.String()]*heartbeatpb.MergeDispatcherRequest
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -143,13 +145,19 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+	// writeSink is the capture-write-gated view passed to dispatchers.
+	// sink remains the concrete implementation used for lifecycle and
+	// sink-specific recovery operations.
+	writeSink sink.Sink
 
 	// redo related
 	// redoEnabled is immutable and set to true if enabled.
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
-	redoSink  *redo.Sink
+	// redoSink is the capture-write-gated sink used by redo dispatchers and for
+	// lifecycle management.
+	redoSink sink.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -208,6 +216,7 @@ func NewDispatcherManager(
 	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
+	maintainerEpoch uint64,
 	newChangefeed bool,
 	registerInitializing func(*DispatcherManager) bool,
 ) (manager *DispatcherManager, err error) {
@@ -230,6 +239,7 @@ func NewDispatcherManager(
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
+		mergeOperatorMap:      sync.Map{},
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
@@ -255,8 +265,10 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Set the epoch and maintainerID of the event dispatcher manager
-	manager.meta.maintainerEpoch = cfConfig.Epoch
+	// Trust only the explicit request maintainer epoch for receiver fencing. The
+	// config epoch may be newer than an old rolling-upgrade request and must not
+	// turn epoch 0 compatibility traffic into strict-mode traffic.
+	manager.meta.maintainerEpoch = maintainerEpoch
 	manager.meta.maintainerID = maintainerID
 	cleanupManager := manager
 	defer func() {
@@ -280,7 +292,7 @@ func NewDispatcherManager(
 		}
 	}
 
-	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID)
+	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID, manager.keyspaceID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -291,11 +303,23 @@ func NewDispatcherManager(
 		return nil, newWritePathClosedError()
 	}
 	manager.sink = createdSink
+	manager.writeSink = withCaptureWriteGate(ctx, createdSink)
 	manager.writePathMu.Unlock()
+
+	sinkType := manager.sink.SinkType()
+	if sinkType != common.KafkaSinkType {
+		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
+		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			log.Warn("ignore update only columns is configured but does not take effect for this sink",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
+		}
+	}
 
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch manager.sink.SinkType() {
+	switch sinkType {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -304,7 +328,7 @@ func NewDispatcherManager(
 
 	router, err := routing.NewRouter(
 		manager.changefeedID,
-		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.CaseSensitive,
 		manager.config.SinkConfig.DispatchRules,
 	)
 	if err != nil {
@@ -315,6 +339,7 @@ func NewDispatcherManager(
 	// Create shared info for all dispatchers
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		manager.config.IsLowLatencyMode(),
 		manager.config.TimeZone,
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
@@ -406,6 +431,34 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
+func withCaptureWriteGate(ctx context.Context, inner sink.Sink) sink.Sink {
+	gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
+	if !ok {
+		return inner
+	}
+	return sink.WithWriteGate(ctx, inner, gate)
+}
+
+func (e *DispatcherManager) getWriteSink() sink.Sink {
+	if e.writeSink != nil {
+		return e.writeSink
+	}
+	return e.sink
+}
+
+func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
+	if filter == nil {
+		return 0
+	}
+	count := 0
+	for _, rule := range filter.EventFilters {
+		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
+			count++
+		}
+	}
+	return count
+}
+
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
 	var (
 		batchCount = s.BatchCount()
@@ -427,7 +480,7 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
 	infos[dispatcherID] = dispatcherCreateInfo{
-		Id:        dispatcherID,
+		ID:        dispatcherID,
 		TableSpan: common.KeyspaceDDLSpan(e.keyspaceID),
 		StartTs:   startTs,
 		SchemaID:  0,
@@ -589,7 +642,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			skipSyncpointAtStartTsList[idx],
 			skipDMLAsStartTs,
 			currentPdTs,
-			e.sink,
+			e.getWriteSink(),
 			e.sharedInfo,
 			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
@@ -927,6 +980,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			}
 		}
 	}
+	e.cleanupFinishedMergeOperators()
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
 	e.metricResolvedTs.Set(float64(message.Watermark.ResolvedTs))
@@ -976,7 +1030,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs will be set later after calculating real startTs
 		0,     // currentPDTs will be calculated later.
-		e.sink,
+		e.getWriteSink(),
 		e.sharedInfo,
 		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
@@ -1129,7 +1183,7 @@ func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
 	if e.writePathClosed.Load() {
 		return
 	}
-	e.sink.AddCheckpointTs(checkpointTs)
+	e.getWriteSink().AddCheckpointTs(checkpointTs)
 }
 
 func (e *DispatcherManager) finishClose() {

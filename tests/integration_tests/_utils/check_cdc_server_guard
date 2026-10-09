@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -eu
+
+workdir=
+logsuffix=
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--workdir)
+		workdir=$2
+		shift
+		;;
+	--logsuffix)
+		logsuffix=$2
+		shift
+		;;
+	*)
+		echo "Unknown parameter: $1" >&2
+		exit 1
+		;;
+	esac
+	shift
+done
+
+guard_failure_file="$workdir/cdc$logsuffix.guard_failed"
+if [ -f "$guard_failure_file" ]; then
+	echo "CDC liveness guard failed: $(<"$guard_failure_file")" >&2
+	exit 1
+fi

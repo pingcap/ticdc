@@ -23,13 +23,37 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
+	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+type pdRouterOptionRecorder struct {
+	pd.Client
+	option pdopt.DynamicOption
+	value  any
+}
+
+func (c *pdRouterOptionRecorder) UpdateOption(option pdopt.DynamicOption, value any) error {
+	c.option = option
+	c.value = value
+	return nil
+}
+
+type pdClientStorage struct {
+	tidbkv.Storage
+	client pd.Client
+}
+
+func (s pdClientStorage) GetPDClient() pd.Client {
+	return s.client
+}
 
 func TestUpstreamShouldClose(t *testing.T) {
 	t.Parallel()
@@ -148,4 +172,13 @@ func TestIsCreateTiStoreRetryable(t *testing.T) {
 	cancel()
 	require.False(t, isCreateTiStoreRetryable(canceledCtx, context.Canceled))
 	require.False(t, isCreateTiStoreRetryable(canceledCtx, errors.Trace(context.Canceled)))
+}
+
+func TestDisablePDRouterClient(t *testing.T) {
+	t.Parallel()
+
+	client := &pdRouterOptionRecorder{}
+	require.NoError(t, DisablePDRouterClient(pdClientStorage{client: client}))
+	require.Equal(t, pdopt.EnableRouterClient, client.option)
+	require.Equal(t, false, client.value)
 }

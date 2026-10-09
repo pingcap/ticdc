@@ -79,7 +79,6 @@ func (b *bootstrapWorker) run(ctx context.Context) error {
 	sendTicker := time.NewTicker(bootstrapWorkerTickerInterval)
 	gcTicker := time.NewTicker(bootstrapWorkerGCInterval)
 	defer func() {
-		b.rowEventEncoder.Clean()
 		gcTicker.Stop()
 		sendTicker.Stop()
 	}()

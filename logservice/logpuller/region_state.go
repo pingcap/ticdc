@@ -15,7 +15,9 @@ package logpuller
 
 import (
 	"sync"
+	"sync/atomic"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/tikv/client-go/v2/tikv"
@@ -46,11 +48,9 @@ type regionInfo struct {
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
-}
-
-func (s *regionInfo) isStopped() bool {
-	// lockedRange only nil when the region's subscribedTable is stopped.
-	return s.lockedRangeState == nil
+	// scanPriority is sent to TiKV/CSE so remote incremental scan admission can
+	// preserve TiCDC's business priority across retries.
+	scanPriority cdcpb.ScanPriority
 }
 
 func newRegionInfo(
@@ -66,6 +66,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
+		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}
 }
 
@@ -89,6 +90,9 @@ type regionFeedState struct {
 	region    regionInfo
 	requestID uint64 // It is also the subscription ID
 	matcher   *matcher
+	// onInitialized runs once when the region finishes its first successful
+	// initialization for this request lifecycle.
+	onInitialized func(*regionFeedState)
 
 	// Transform: normal -> stopped -> removed.
 	// normal: the region is in replicating.
@@ -102,20 +106,27 @@ type regionFeedState struct {
 		// `err` is used to retrieve errors generated outside.
 		err error
 	}
+	regionReq atomic.Pointer[regionReq]
 
 	worker *regionRequestWorker
 }
 
-func newRegionFeedState(region regionInfo, requestID uint64, worker *regionRequestWorker) *regionFeedState {
-	return &regionFeedState{
-		region:    region,
-		requestID: requestID,
-		worker:    worker,
+func newRegionFeedState(
+	region regionInfo,
+	requestID uint64,
+	worker *regionRequestWorker,
+	request *regionReq,
+	onInitialized func(*regionFeedState),
+) *regionFeedState {
+	state := &regionFeedState{
+		region:        region,
+		requestID:     requestID,
+		matcher:       newMatcher(),
+		onInitialized: onInitialized,
+		worker:        worker,
 	}
-}
-
-func (s *regionFeedState) start() {
-	s.matcher = newMatcher()
+	state.regionReq.Store(request)
+	return state
 }
 
 // mark regionFeedState as stopped with the given error if possible.
@@ -126,7 +137,7 @@ func (s *regionFeedState) markStopped(err error) {
 		s.state.v = stateStopped
 		s.state.err = err
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 }
 
 // mark regionFeedState as removed if possible.
@@ -138,7 +149,7 @@ func (s *regionFeedState) markRemoved() (changed bool) {
 		changed = true
 		s.matcher.clear()
 	}
-	s.worker.requestCache.markStopped(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	s.abortScanIfNeeded()
 	return
 }
 
@@ -161,8 +172,27 @@ func (s *regionFeedState) isInitialized() bool {
 }
 
 func (s *regionFeedState) setInitialized() {
-	s.region.lockedRangeState.Initialized.Store(true)
-	s.worker.requestCache.resolve(s.region.subscribedSpan.subID, s.region.verID.GetID())
+	if !s.region.lockedRangeState.Initialized.CompareAndSwap(false, true) {
+		return
+	}
+	s.finishScan()
+	if s.onInitialized != nil {
+		s.onInitialized(s)
+	}
+}
+
+func (s *regionFeedState) finishScan() {
+	request := s.regionReq.Swap(nil)
+	if request != nil {
+		request.finish()
+	}
+}
+
+func (s *regionFeedState) abortScanIfNeeded() {
+	request := s.regionReq.Swap(nil)
+	if request != nil {
+		request.abort()
+	}
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

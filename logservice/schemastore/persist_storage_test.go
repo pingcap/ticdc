@@ -14,21 +14,27 @@
 package schemastore
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -213,6 +219,94 @@ func TestApplyDDLJobs(t *testing.T) {
 				303: {1020, 1030},
 			},
 			[]uint64{1000, 1010, 1020, 1030},
+			nil,
+			nil,
+			nil,
+		},
+		// test recover schema restores database and table metadata
+		{
+			"recover_schema",
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),
+					buildCreateTableJobForTest(100, 200, "t1", 1010),
+					buildCreatePartitionTableJobForTest(100, 300, "pt", []int64{301, 302}, 1020),
+					buildDropSchemaJobForTest(100, 1030),
+					buildRecoverSchemaJobForTest(100, "test", []*model.TableInfo{
+						newEligibleTableInfoForTest(200, "t1"),
+						newEligiblePartitionTableInfoForTest(300, "pt", []model.PartitionDefinition{{ID: 301}, {ID: 302}}),
+					}, 1040),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				200: {SchemaID: 100, Name: "t1"},
+				300: {SchemaID: 100, Name: "pt"},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {301: nil, 302: nil},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{200: true, 300: true},
+				},
+			},
+			map[int64][]uint64{
+				200: {1010, 1030, 1040},
+				301: {1020, 1030, 1040},
+				302: {1020, 1030, 1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
+			nil,
+			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1039,
+					limit:       1,
+					result: []commonEvent.DDLEvent{
+						{
+							SchemaID:   100,
+							Type:       byte(model.ActionRecoverSchema),
+							FinishedTs: 1040,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{common.DDLSpanTableID},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{SchemaID: 100, TableID: 200, Splitable: true},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		// test a recovered schema can be dropped again
+		{
+			"recover_schema_then_drop_schema",
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),
+					buildCreateTableJobForTest(100, 200, "t1", 1010),
+					buildDropSchemaJobForTest(100, 1020),
+					buildRecoverSchemaJobForTest(100, "test", []*model.TableInfo{
+						newEligibleTableInfoForTest(200, "t1"),
+					}, 1030),
+					buildDropSchemaJobForTest(100, 1040),
+				}
+			}(),
+			nil,
+			nil,
+			nil,
+			map[int64][]uint64{
+				200: {1010, 1020, 1030, 1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
 			nil,
 			nil,
 			nil,
@@ -2340,7 +2434,7 @@ func TestApplyDDLJobs(t *testing.T) {
 			map[int64][]uint64{
 				300: {1010, 1020, 1030, 1040, 1050, 1060, 1080, 1090, 1100, 1110, 1130, 1140, 1150},
 			},
-			[]uint64{1110, 1120},
+			[]uint64{1010, 1110, 1120},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
@@ -2392,6 +2486,8 @@ func TestApplyDDLJobs(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.testName, func(t *testing.T) {
+			t.Parallel()
+
 			dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 			pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
 			checkState := func(fromDisk bool) {
@@ -2641,6 +2737,60 @@ func TestApplyDDLJobs(t *testing.T) {
 	}
 }
 
+func TestPrepareRecoverSchemaJob(t *testing.T) {
+	tikvStore, err := mockstore.NewMockStore()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tikvStore.Close()) })
+
+	dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	txn, err := tikvStore.Begin()
+	require.NoError(t, err)
+	metaMutator := meta.NewMutator(txn)
+	require.NoError(t, metaMutator.CreateDatabase(dbInfo))
+	require.NoError(t, metaMutator.CreateTableOrView(dbInfo.ID, tableInfo))
+	require.NoError(t, txn.Commit(context.Background()))
+
+	job := buildRecoverSchemaJobForTest(100, "test", nil, math.MaxUint64)
+	args, err := model.GetRecoverArgs(job)
+	require.NoError(t, err)
+	args.RecoverInfo.LoadTablesOnExecute = true
+
+	storage := &persistentStorage{
+		ctx:       context.Background(),
+		kvStorage: tikvStore,
+	}
+	require.NoError(t, prepareRecoverSchemaJob(storage, job))
+	require.Len(t, args.RecoverInfo.RecoverTableInfos, 1)
+	require.Equal(t, tableInfo.ID, args.RecoverInfo.RecoverTableInfos[0].TableInfo.ID)
+
+	jobV1 := &model.Job{
+		Version:  model.JobVersion1,
+		Type:     model.ActionRecoverSchema,
+		SchemaID: dbInfo.ID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: math.MaxUint64,
+		},
+	}
+	jobV1.FillArgs(&model.RecoverArgs{
+		RecoverInfo: &model.RecoverSchemaInfo{
+			DBInfo:              dbInfo,
+			LoadTablesOnExecute: true,
+			SnapshotTS:          math.MaxUint64,
+			OldSchemaName:       dbInfo.Name,
+		},
+	})
+	rawJob, err := jobV1.Encode(true)
+	require.NoError(t, err)
+	decodedJobV1 := &model.Job{}
+	require.NoError(t, decodedJobV1.Decode(rawJob))
+	require.NoError(t, prepareRecoverSchemaJob(storage, decodedJobV1))
+	argsV1, err := model.GetRecoverArgs(decodedJobV1)
+	require.NoError(t, err)
+	require.Len(t, argsV1.RecoverInfo.RecoverTableInfos, 1)
+	require.Equal(t, tableInfo.ID, argsV1.RecoverInfo.RecoverTableInfos[0].TableInfo.ID)
+}
+
 func TestReadWriteMeta(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	err := os.RemoveAll(dbPath)
@@ -2715,6 +2865,55 @@ func TestRegisterTable(t *testing.T) {
 		postDDLTables []int64
 		queryCases    []QueryTableInfoTestCase
 	}{
+		{
+			name: "create table registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTableJobForTest(50, 99, "t1", 1000),
+			},
+			preDDLTables: []int64{99},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+			},
+		},
+		{
+			name: "create tables registered before DDL",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: []*model.Job{
+				buildCreateTablesJobForTest(50, []int64{99, 100}, []string{"t1", "t2"}, 1000),
+			},
+			preDDLTables: []int64{99, 100},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1000,
+					name:    "t1",
+				},
+				{
+					tableID: 100,
+					snapTs:  1000,
+					name:    "t2",
+				},
+			},
+		},
 		{
 			name: "rename table",
 			initialDBInfos: []mockDBInfo{
@@ -2860,6 +3059,58 @@ func TestRegisterTable(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "drop schema",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: ast.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						newEligibleTableInfoForTest(99, "t1"),
+						newEligibleTableInfoForTest(100, "t2"),
+						{
+							ID:        102,
+							Name:      ast.NewCIStr("pt"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202}),
+						},
+					},
+				},
+			},
+			preDDLTables:  []int64{99, 201},
+			postDDLTables: []int64{100, 202},
+			ddlJobs: []*model.Job{
+				buildDropSchemaJobForTest(50, 1030),
+			},
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 99,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 99,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 100,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 201,
+					snapTs:  1030,
+					deleted: true,
+				},
+				{
+					tableID: 202,
+					snapTs:  1030,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2892,6 +3143,116 @@ func TestRegisterTable(t *testing.T) {
 			pStorage.close()
 		})
 	}
+}
+
+func TestRegisterTableBuildsConsistentVersionStoreSnapshot(t *testing.T) {
+	const (
+		schemaID = int64(50)
+		tableID  = int64(99)
+		ddlTs    = uint64(1000)
+	)
+
+	pStorage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{
+			dbInfo: &model.DBInfo{
+				ID:   schemaID,
+				Name: ast.NewCIStr("test"),
+			},
+			tables: []*model.TableInfo{
+				{
+					ID:   tableID,
+					Name: ast.NewCIStr("t1"),
+				},
+			},
+		},
+	})
+	t.Cleanup(func() {
+		require.NoError(t, pStorage.close())
+	})
+
+	ddlReadyToPersist := make(chan struct{})
+	continuePersistDDL := make(chan struct{})
+	ddlPersisted := make(chan struct{})
+	continueDDL := make(chan struct{})
+	versionStoreSnapshotCreated := make(chan bool, 1)
+	continueRegisterTable := make(chan struct{})
+	var releasePersistDDLOnce, releaseDDLOnce, releaseRegisterTableOnce sync.Once
+	releasePersistDDL := func() {
+		releasePersistDDLOnce.Do(func() { close(continuePersistDDL) })
+	}
+	releaseDDL := func() {
+		releaseDDLOnce.Do(func() { close(continueDDL) })
+	}
+	releaseRegisterTable := func() {
+		releaseRegisterTableOnce.Do(func() { close(continueRegisterTable) })
+	}
+	t.Cleanup(func() {
+		releaseRegisterTable()
+		releaseDDL()
+		releasePersistDDL()
+	})
+
+	const failpointPrefix = "github.com/pingcap/ticdc/logservice/schemastore/"
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"beforePersistingDDL", func() {
+		close(ddlReadyToPersist)
+		<-continuePersistDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"beforePersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterPersistingDDL", func() {
+		close(ddlPersisted)
+		<-continueDDL
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterPersistingDDL"))
+	})
+	require.NoError(t, failpoint.EnableCall(failpointPrefix+"afterCreatingVersionStoreSnapshot", func(storage *persistentStorage) {
+		lockProtected := !storage.mu.TryLock()
+		if !lockProtected {
+			storage.mu.Unlock()
+		}
+		versionStoreSnapshotCreated <- lockProtected
+		<-continueRegisterTable
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable(failpointPrefix+"afterCreatingVersionStoreSnapshot"))
+	})
+
+	ddlDone := make(chan error, 1)
+	go func() {
+		ddlDone <- pStorage.handleDDLJob(buildRenameTableJobForTest(schemaID, tableID, "t2", ddlTs, nil))
+	}()
+	<-ddlReadyToPersist
+
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- pStorage.registerTable(tableID, 0)
+	}()
+	lockProtected := <-versionStoreSnapshotCreated
+
+	releasePersistDDL()
+	<-ddlPersisted
+
+	// The DDL is now on disk but cannot publish its history while registration
+	// holds the read lock. Registration captures the old disk/history view, and
+	// the DDL is subsequently added through the normal online apply path.
+	releaseDDL()
+	if !lockProtected {
+		// Force the original inconsistent view when the read lock is absent:
+		// the history is published before registration resumes from its old snapshot.
+		require.NoError(t, <-ddlDone)
+	}
+	releaseRegisterTable()
+	require.NoError(t, <-registerDone)
+	if lockProtected {
+		require.NoError(t, <-ddlDone)
+	}
+	require.True(t, lockProtected,
+		"the Pebble snapshot and DDL history must be captured under the same read lock")
+	tableInfo, err := pStorage.getTableInfo(tableID, ddlTs)
+	require.NoError(t, err)
+	require.Equal(t, "t2", tableInfo.TableName.Table)
 }
 
 func TestGCPersistStorage(t *testing.T) {
@@ -3076,7 +3437,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t3",
 	})
 	job.Query = "RENAME TABLE t3 TO test.t1"
-	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3097,7 +3458,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3118,7 +3479,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "ALTER TABLE t1 RENAME TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3145,7 +3506,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3163,7 +3524,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3184,7 +3545,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3195,6 +3556,171 @@ func TestRenameTable(t *testing.T) {
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
+}
+
+func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
+	t.Run("same schema", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
+			Database: "test",
+			Table:    "t1",
+		})
+		job.Query = "RENAME TABLE t1 TO t2"
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{101: true}},
+			},
+			// Simulate a snapshot that already contains the post-rename table name.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t2"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", rawEvent.Query)
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "test", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t2"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+
+	t.Run("cross schema with old TiDB job args", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "t1", 100, nil)
+		job.Version = model.JobVersion1
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:  200,
+			NewTableName: ast.NewCIStr("t1"),
+		})
+		_, err := job.Encode(true)
+		require.NoError(t, err)
+		job.Query = "RENAME TABLE t1 TO target_db.t1"
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+			},
+			// Simulate a snapshot that has already moved the table to the new schema.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "t1"},
+			},
+		})
+
+		require.Equal(t, "RENAME TABLE `source_db`.`t1` TO `target_db`.`t1`", rawEvent.Query)
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "t1", rawEvent.ExtraTableName)
+
+		ddlEvent, ok, err := buildDDLEventForRenameTable(&rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []commonEvent.SchemaIDChange{{
+			TableID:     101,
+			OldSchemaID: 200,
+			NewSchemaID: 100,
+		}}, ddlEvent.UpdatedSchemas)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName:  []commonEvent.SchemaTableName{{SchemaName: "target_db", TableName: "t1"}},
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+
+		ddlEvent, ok, err = buildDDLEventForRenameTable(
+			&rawEvent, buildTableFilterByNameForTest("source_db", "*"), 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{101},
+		}, ddlEvent.NeedDroppedTables)
+		require.Equal(t, &commonEvent.TableNameChange{
+			DropName: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "t1"}},
+		}, ddlEvent.TableNameChange)
+	})
+
+	t.Run("parse normalized query with ANSI quotes", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "NewTable", 100, &model.InvolvingSchemaInfo{
+			Database: "sourcedb",
+			Table:    "oldtable",
+		})
+		job.Version = model.JobVersion2
+		job.SQLMode = mysql.ModeANSIQuotes
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("SourceDB"),
+			NewTableName:  ast.NewCIStr("NewTable"),
+		})
+		job.Query = `RENAME TABLE "SourceDB"."OldTable" TO "TargetDB"."NewTable"`
+
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "TargetDB", Tables: map[int64]bool{101: true}},
+				200: {Name: "SourceDB", Tables: map[int64]bool{}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "NewTable"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "SourceDB", rawEvent.ExtraSchemaName)
+		require.Equal(t, "OldTable", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `SourceDB`.`OldTable` TO `TargetDB`.`NewTable`", rawEvent.Query)
+	})
+
+	t.Run("prefer job args when query schema ID is inconsistent", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+		job.Version = model.JobVersion2
+		job.FillArgs(&model.RenameTableArgs{
+			OldSchemaID:   200,
+			OldSchemaName: ast.NewCIStr("source_db"),
+			NewTableName:  ast.NewCIStr("target_t"),
+		})
+		job.Query = "RENAME TABLE wrong_db.source_t TO target_db.target_t"
+
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "target_db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source_db", Tables: map[int64]bool{}},
+				300: {Name: "wrong_db", Tables: map[int64]bool{}},
+			},
+			// The snapshot contains the post-rename identity and must not be mixed in.
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "target_t"},
+			},
+		})
+
+		require.Equal(t, int64(200), rawEvent.ExtraSchemaID)
+		require.Equal(t, "source_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "source_t", rawEvent.ExtraTableName)
+		require.Equal(t, "RENAME TABLE `source_db`.`source_t` TO `target_db`.`target_t`", rawEvent.Query)
+	})
+
+	t.Run("fall back to complete snapshot identity", func(t *testing.T) {
+		job := buildRenameTableJobForTest(100, 101, "target_t", 100, nil)
+
+		rawEvent, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "snapshot_db", Tables: map[int64]bool{101: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "snapshot_t"},
+			},
+		})
+
+		require.Equal(t, int64(100), rawEvent.ExtraSchemaID)
+		require.Equal(t, "snapshot_db", rawEvent.ExtraSchemaName)
+		require.Equal(t, "snapshot_t", rawEvent.ExtraTableName)
+	})
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
@@ -3209,7 +3735,7 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T)
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3243,7 +3769,7 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRename(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `test`.`a` TO `test`.`c`, `test`.`b` TO `test`.`a`, `test`.`c` TO `test`.`b`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
@@ -3274,7 +3800,7 @@ func TestBuildPersistedDDLEventForRenameTablesPreferQueryNames(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`, `source_db`.`source_t2_from_query` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3307,7 +3833,7 @@ func TestBuildPersistedDDLEventForRenameTablesKeepArgsWhenQueryUnavailable(t *te
 	job.Query = "RENAME TABLE"
 
 	require.NotPanics(t, func() {
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3341,7 +3867,7 @@ func TestBuildPersistedDDLEventForRenameTablesPanicOnQueryInfoLengthMismatch(t *
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`, `source_db`.`source_t3` TO `target_db`.`target_t3`"
 
 	require.Panics(t, func() {
-		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		_, _ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3367,7 +3893,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 			1010,
 		)
 
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source`db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3393,13 +3919,14 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		// Keep empty to force using InvolvingSchemaInfo as source name.
 		job.Query = ""
 
-		ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target`db", Tables: map[int64]bool{101: true}},
+				200: {Name: "source`db", Tables: map[int64]bool{}},
 			},
 			tableMap: map[int64]*BasicTableInfo{
-				101: {SchemaID: 100, Name: "source`t"},
+				101: {SchemaID: 200, Name: "source`t"},
 			},
 		})
 
@@ -3408,7 +3935,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("drop table", func(t *testing.T) {
 		job := buildDropTableJobForTest(100, 200, 1000)
-		ddl := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{200: true}},
@@ -3423,7 +3950,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 	t.Run("drop view", func(t *testing.T) {
 		job := buildDropViewJobForTest(100, 1000)
 		job.TableName = "view`x"
-		ddl := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{}},
@@ -3436,7 +3963,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
 		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
-		ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
@@ -3659,12 +4186,14 @@ func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
 		},
 	}
 
-	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			101: {Name: "target_db", Tables: map[int64]bool{}},
 		},
 	})
+
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
@@ -3684,12 +4213,14 @@ func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelec
 		},
 	}
 
-	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			101: {Name: "target_db", Tables: map[int64]bool{}},
 		},
 	})
+
+	require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 
 	require.Equal(t,
 		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
@@ -3755,13 +4286,14 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 				},
 			}
 
-			ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+			ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
 				job: job,
 				databaseMap: map[int64]*BasicDatabaseInfo{
 					101: {Name: "target_db", Tables: map[int64]bool{}},
 				},
 			})
 
+			require.NoError(t, normalizeCreateViewQueryWithStoredSelect(&ddl, nil))
 			require.Equal(t, tc.expected, ddl.Query)
 			require.Equal(t, "target_db", ddl.SchemaName)
 			require.Equal(t, "v", ddl.TableName)
@@ -3874,7 +4406,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			}
 			partitionMap[tc.expectedReferID] = partitionInfo
 		}
-		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
@@ -3902,7 +4434,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		{Database: "extra", Table: "b"},
 		{Database: "test", Table: "a", Mode: model.SharedInvolving},
 	}
-	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true}},
@@ -3924,7 +4456,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *tes
 		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
 	}
 
-	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "dst_db", Tables: map[int64]bool{200: true}},
@@ -3963,7 +4495,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(
 			{Database: "test", Table: "src", Mode: model.SharedInvolving},
 		}
 
-		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
@@ -4000,6 +4532,35 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.ElementsMatch(t, []int64{common.DDLSpanTableID, 111, 112}, ddlEvent.BlockedTables.TableIDs)
+}
+
+func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTablesRespectFilter(t *testing.T) {
+	rawEvent := &PersistedDDLEvent{
+		Type:         byte(model.ActionCreateTable),
+		SchemaID:     1,
+		TableID:      2,
+		SchemaName:   "test",
+		TableName:    "t_new",
+		Query:        "CREATE TABLE `t_new` LIKE `t_ref`",
+		TableInfo:    newEligibleTableInfoForTest(2, "t_new"),
+		ExtraTableID: 101,
+	}
+
+	ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_new"), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ElementsMatch(t, []int64{common.DDLSpanTableID}, ddlEvent.BlockedTables.TableIDs)
+
+	rawEvent.ReferTablePartitionIDs = []int64{111, 112}
+	ddlEvent, ok, err = buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_new"), 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ElementsMatch(t, []int64{common.DDLSpanTableID}, ddlEvent.BlockedTables.TableIDs)
+
+	ddlEvent, ok, err = buildDDLEventForNewTableDDL(rawEvent, buildTableFilterByNameForTest("test", "t_ref"), 0)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, ddlEvent.BlockedTables)
 }
 
 func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {
@@ -4053,4 +4614,527 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 		require.Nil(t, tableInfo)
 		require.False(t, deleted)
 	})
+}
+
+func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
+	testCases := []struct {
+		name        string
+		initial     []mockDBInfo
+		jobs        []*model.Job
+		snapshotTs  uint64
+		expectedIDs []int64
+	}{
+		{
+			name: "drop schema",
+			initial: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					tables: []*model.TableInfo{
+						newEligibleTableInfoForTest(100, "t"),
+						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
+					},
+				},
+			},
+			jobs:        []*model.Job{buildDropSchemaJobForTest(10, 1000)},
+			snapshotTs:  1000,
+			expectedIDs: nil,
+		},
+		{
+			name: "exchange partition",
+			initial: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					tables: []*model.TableInfo{
+						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}, {ID: 203}}),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{ID: 20, Name: ast.NewCIStr("test2")},
+					tables: []*model.TableInfo{newEligibleTableInfoForTest(300, "t")},
+				},
+			},
+			jobs: []*model.Job{
+				buildExchangePartitionJobForTest(20, 300, 200, "pt", []int64{201, 202, 300}, 1000),
+			},
+			snapshotTs:  1000,
+			expectedIDs: []int64{201, 202, 203, 300},
+		},
+		{
+			name: "rename tables",
+			initial: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					tables: []*model.TableInfo{
+						newEligibleTableInfoForTest(100, "t1"),
+						newEligibleTableInfoForTest(101, "t2"),
+					},
+				},
+			},
+			jobs: []*model.Job{
+				buildRenameTablesJobForTest(
+					[]int64{10, 10}, []int64{10, 10}, []int64{100, 101},
+					[]string{"test", "test"}, []string{"t1", "t2"}, []string{"t1_new", "t2_new"}, 1000),
+			},
+			snapshotTs:  1000,
+			expectedIDs: []int64{100, 101},
+		},
+		{
+			name: "create tables",
+			initial: []mockDBInfo{
+				{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+			},
+			jobs: []*model.Job{
+				buildCreateTablesJobForTest(10, []int64{100, 101}, []string{"t1", "t2"}, 1000),
+			},
+			snapshotTs:  1000,
+			expectedIDs: []int64{100, 101},
+		},
+		{
+			name: "reorganize partition",
+			initial: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					tables: []*model.TableInfo{
+						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}, {ID: 203}}),
+					},
+				},
+			},
+			jobs: []*model.Job{
+				buildPartitionTableRelatedJobForTest(
+					model.ActionReorganizePartition, 10, 200, "pt", []int64{201, 204, 205}, 1000),
+			},
+			snapshotTs:  1000,
+			expectedIDs: []int64{201, 204, 205},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := t.TempDir()
+			storage := newPersistentStorageForTest(dbPath, tc.initial)
+			for _, job := range tc.jobs {
+				require.NoError(t, storage.handleDDLJob(job))
+			}
+
+			assertPhysicalTableIDs(t, storage, tc.snapshotTs, tc.expectedIDs)
+			require.NoError(t, storage.close())
+
+			storage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+			t.Cleanup(func() { require.NoError(t, storage.close()) })
+			assertPhysicalTableIDs(t, storage, tc.snapshotTs, tc.expectedIDs)
+		})
+	}
+}
+
+func TestUpdateFullTableInfoForPartitioningDDL(t *testing.T) {
+	for _, action := range []model.ActionType{
+		model.ActionAlterTablePartitioning,
+		model.ActionRemovePartitioning,
+	} {
+		t.Run(action.String(), func(t *testing.T) {
+			const oldTableID int64 = 100
+			const newTableID int64 = 200
+			newTableInfo := newEligibleTableInfoForTest(newTableID, "t")
+			tableInfoMap := map[int64]*model.TableInfo{
+				oldTableID: newEligibleTableInfoForTest(oldTableID, "t"),
+			}
+
+			handler, ok := allDDLHandlers[action]
+			require.True(t, ok)
+			handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
+				event: &PersistedDDLEvent{
+					Type:         byte(action),
+					TableID:      newTableID,
+					ExtraTableID: oldTableID,
+					TableInfo:    newTableInfo,
+				},
+				tableInfoMap: tableInfoMap,
+			})
+
+			require.NotContains(t, tableInfoMap, oldTableID)
+			require.Same(t, newTableInfo, tableInfoMap[newTableID])
+			require.Len(t, tableInfoMap, 1)
+		})
+	}
+}
+
+func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
+	t.Run("rename tables", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+			{
+				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				tables: []*model.TableInfo{
+					newEligibleTableInfoForTest(100, "t1"),
+					newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
+				},
+			},
+		})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		require.NoError(t, storage.registerTable(100, 0))
+		require.NoError(t, storage.registerTable(201, 0))
+		job := buildRenameTablesJobForTest(
+			[]int64{10, 10}, []int64{10, 10}, []int64{100, 200},
+			[]string{"test", "test"}, []string{"t1", "pt"}, []string{"t1_new", "pt_new"}, 1000)
+		job.BinlogInfo.MultipleTableInfos[1] = newEligiblePartitionTableInfoForTest(
+			200, "pt_new", []model.PartitionDefinition{{ID: 201}, {ID: 202}})
+		require.NoError(t, storage.handleDDLJob(job))
+
+		assertTableInfoName(t, storage, 100, 1000, "t1_new")
+		assertTableInfoName(t, storage, 201, 1000, "pt_new")
+		require.NoError(t, storage.registerTable(202, 1000))
+		assertTableInfoName(t, storage, 202, 1000, "pt_new")
+	})
+
+	t.Run("alter table partitioning", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+			{
+				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				tables: []*model.TableInfo{newEligibleTableInfoForTest(100, "t")},
+			},
+		})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		require.NoError(t, storage.registerTable(100, 0))
+		require.NoError(t, storage.handleDDLJob(
+			buildAlterTablePartitioningJobForTest(10, 100, 200, []int64{201, 202}, "t", 1000)))
+		assertTableDeleted(t, storage, 100, 1000)
+		require.NoError(t, storage.registerTable(201, 1000))
+		assertTableInfoName(t, storage, 201, 1000, "t")
+	})
+
+	t.Run("remove partitioning", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+			{
+				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				tables: []*model.TableInfo{
+					newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
+				},
+			},
+		})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		require.NoError(t, storage.registerTable(201, 0))
+		require.NoError(t, storage.handleDDLJob(buildRemovePartitioningJobForTest(10, 200, 300, "pt", 1000)))
+		assertTableDeleted(t, storage, 201, 1000)
+		require.NoError(t, storage.registerTable(300, 1000))
+		assertTableInfoName(t, storage, 300, 1000, "pt")
+	})
+}
+
+func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
+	testCases := []struct {
+		name                 string
+		raw                  PersistedDDLEvent
+		expectedInfluence    commonEvent.InfluenceType
+		expectedSchemaID     int64
+		expectedDropDatabase string
+		expectDroppedTables  bool
+	}{
+		{
+			name: "drop schema",
+			raw: PersistedDDLEvent{
+				Type: byte(model.ActionDropSchema), SchemaID: 10, SchemaName: "test", FinishedTs: 1000,
+			},
+			expectedInfluence:    commonEvent.InfluenceTypeDB,
+			expectedSchemaID:     10,
+			expectedDropDatabase: "test",
+			expectDroppedTables:  true,
+		},
+		{
+			name: "modify schema charset",
+			raw: PersistedDDLEvent{
+				Type: byte(model.ActionModifySchemaCharsetAndCollate), SchemaID: 10, SchemaName: "test", FinishedTs: 1000,
+			},
+			expectedInfluence: commonEvent.InfluenceTypeDB,
+			expectedSchemaID:  10,
+		},
+		{
+			name: "create view",
+			raw: PersistedDDLEvent{
+				Type: byte(model.ActionCreateView), SchemaID: 10, SchemaName: "test", TableName: "v", FinishedTs: 1000,
+			},
+			expectedInfluence: commonEvent.InfluenceTypeAll,
+		},
+		{
+			name: "drop view",
+			raw: PersistedDDLEvent{
+				Type: byte(model.ActionDropView), SchemaID: 10, SchemaName: "test", TableName: "v", FinishedTs: 1000,
+			},
+			expectedInfluence: commonEvent.InfluenceTypeNormal,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ddlEvent, ok, err := buildDDLEvent(&tc.raw, nil, 0)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.NotNil(t, ddlEvent.BlockedTables)
+			require.Equal(t, tc.expectedInfluence, ddlEvent.BlockedTables.InfluenceType)
+			require.Equal(t, tc.expectedSchemaID, ddlEvent.BlockedTables.SchemaID)
+			if tc.name == "drop view" {
+				require.Equal(t, []int64{common.DDLSpanTableID}, ddlEvent.BlockedTables.TableIDs)
+			}
+			if tc.expectDroppedTables {
+				require.NotNil(t, ddlEvent.NeedDroppedTables)
+				require.Equal(t, commonEvent.InfluenceTypeDB, ddlEvent.NeedDroppedTables.InfluenceType)
+				require.Equal(t, tc.expectedSchemaID, ddlEvent.NeedDroppedTables.SchemaID)
+			}
+			if tc.expectedDropDatabase != "" {
+				require.NotNil(t, ddlEvent.TableNameChange)
+				require.Equal(t, tc.expectedDropDatabase, ddlEvent.TableNameChange.DropDatabaseName)
+			}
+
+			_, ok, err = buildDDLEvent(
+				&tc.raw, buildTableFilterByNameForTest("unrelated", "table"), 0)
+			require.NoError(t, err)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	t.Cleanup(helper.Close)
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, c1 int)")
+	job := helper.DDL2Job("alter table t add index (c1)")
+	expectedIndexIDs := getIndexIDs(job)
+	require.Len(t, expectedIndexIDs, 1)
+
+	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{
+			dbInfo: &model.DBInfo{ID: job.SchemaID, Name: ast.NewCIStr("test")},
+			tables: []*model.TableInfo{newEligibleTableInfoForTest(job.TableID, "t")},
+		},
+	})
+	t.Cleanup(func() { require.NoError(t, storage.close()) })
+	require.NoError(t, storage.handleDDLJob(job))
+
+	events, err := storage.fetchTableDDLEvents(
+		common.NewDispatcherID(), job.TableID, nil,
+		job.BinlogInfo.FinishedTS-1, job.BinlogInfo.FinishedTS)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, byte(model.ActionAddIndex), events[0].Type)
+	require.Equal(t, expectedIndexIDs, events[0].IndexIDs)
+}
+
+func TestHandleDDLJobSkipRules(t *testing.T) {
+	t.Run("duplicate create table", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+			{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+		})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(10, 100, "t", 1000)))
+		require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(10, 100, "t", 1010)))
+		require.Equal(t, []uint64{1000}, storage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1000}, storage.tablesDDLHistory[100])
+		require.Len(t, storage.tableMap, 1)
+	})
+
+	t.Run("duplicate create tables", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+			{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+		})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		first := buildCreateTablesJobForTest(10, []int64{100, 101}, []string{"t1", "t2"}, 1000)
+		duplicate := buildCreateTablesJobForTest(10, []int64{100, 101}, []string{"t1", "t2"}, 1010)
+		require.NoError(t, storage.handleDDLJob(first))
+		require.NoError(t, storage.handleDDLJob(duplicate))
+		require.Equal(t, []uint64{1000}, storage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1000}, storage.tablesDDLHistory[100])
+		require.Equal(t, []uint64{1000}, storage.tablesDDLHistory[101])
+		require.Len(t, storage.tableMap, 2)
+	})
+
+	t.Run("ignored action", func(t *testing.T) {
+		storage := newPersistentStorageForTest(t.TempDir(), nil)
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+		require.NoError(t, storage.handleDDLJob(&model.Job{
+			Type: model.ActionLockTable,
+			BinlogInfo: &model.HistoryInfo{
+				FinishedTS: 1000,
+			},
+		}))
+		require.Empty(t, storage.tableTriggerDDLHistory)
+		require.Empty(t, storage.tablesDDLHistory)
+		require.Empty(t, storage.databaseMap)
+		require.Empty(t, storage.tableMap)
+	})
+}
+
+func assertPhysicalTableIDs(t *testing.T, storage *persistentStorage, ts uint64, expected []int64) {
+	t.Helper()
+	tables, err := storage.getAllPhysicalTables(ts, nil)
+	require.NoError(t, err)
+	actual := make([]int64, 0, len(tables))
+	for _, table := range tables {
+		actual = append(actual, table.TableID)
+	}
+	require.ElementsMatch(t, expected, actual)
+}
+
+func assertTableInfoName(t *testing.T, storage *persistentStorage, tableID int64, ts uint64, expected string) {
+	t.Helper()
+	info, err := storage.getTableInfo(tableID, ts)
+	require.NoError(t, err)
+	require.Equal(t, expected, info.GetTableName())
+}
+
+func assertTableDeleted(t *testing.T, storage *persistentStorage, tableID int64, ts uint64) {
+	t.Helper()
+	info, err := storage.getTableInfo(tableID, ts)
+	require.Nil(t, info)
+	require.IsType(t, &TableDeletedError{}, err)
+}
+
+func TestExchangeTableInfo(t *testing.T) {
+	for _, partitionSchema := range []string{"normal_db", "partition_db"} {
+		t.Run(partitionSchema, func(t *testing.T) {
+			normal := common.WrapTableInfo("normal_db", newEligibleTableInfoForTest(200, "nt"))
+			partition := newEligiblePartitionTableInfoForTest(100, "pt", []model.PartitionDefinition{{ID: 200}, {ID: 102}})
+			raw := &PersistedDDLEvent{
+				Type: byte(model.ActionExchangeTablePartition), SchemaName: "normal_db", TableName: "nt", TableID: 200,
+				ExtraSchemaName: partitionSchema, ExtraTableName: "pt", ExtraTableID: 100,
+				TableInfo: partition, ExtraTableInfo: normal, PrevPartitions: []int64{101, 102},
+			}
+			// The event fetched by a physical table dispatcher describes the state
+			// of that physical table after the exchange.
+			for _, tc := range []struct {
+				physical, logical int64
+				schema, table     string
+				partition         bool
+			}{
+				{200, 100, partitionSchema, "pt", true},
+				{101, 101, "normal_db", "nt", false},
+			} {
+				ddl, ok, err := buildTableDDLEvent(raw, nil, tc.physical)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, &commonEvent.TableStateChange{
+					PhysicalTableID: tc.physical,
+					Kind:            commonEvent.TableStateUpdated,
+				}, ddl.TableStateChange)
+				require.Equal(t, tc.schema, ddl.TableInfo.GetSchemaName())
+				require.Equal(t, tc.table, ddl.TableInfo.GetTableName())
+				require.Equal(t, tc.logical, ddl.TableInfo.TableName.TableID)
+				require.Equal(t, tc.partition, ddl.TableInfo.TableName.IsPartition)
+				require.Equal(t, partitionSchema, ddl.MultipleTableInfos[0].GetSchemaName())
+				require.Same(t, normal, ddl.MultipleTableInfos[1])
+				stored, deleted := extractTableInfoFuncForExchangeTablePartition(raw, tc.physical)
+				require.False(t, deleted)
+				require.Equal(t, stored.TableName, ddl.TableInfo.TableName)
+				require.Equal(t, stored.GetColumns(), ddl.TableInfo.GetColumns())
+			}
+
+			// The table trigger event has no physical table, so it keeps the
+			// event-level table info and carries no state change.
+			trigger, ok, err := buildDDLEvent(raw, nil, 0)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Nil(t, trigger.TableStateChange)
+			require.Equal(t, partitionSchema, trigger.TableInfo.GetSchemaName())
+			require.Equal(t, "pt", trigger.TableInfo.GetTableName())
+			require.Equal(t, int64(100), trigger.TableInfo.TableName.TableID)
+			require.Equal(t, int64(200), normal.TableName.TableID)
+		})
+	}
+}
+
+func TestBuildTableDDLEventTableStateChange(t *testing.T) {
+	tableInfo := newEligibleTableInfoForTest(300, "t1")
+	truncateTable := func() *PersistedDDLEvent {
+		return &PersistedDDLEvent{
+			Type: byte(model.ActionTruncateTable), SchemaID: 100, SchemaName: "test", TableName: "t1",
+			TableID: 300, ExtraTableID: 301,
+			TableInfo: newEligibleTableInfoForTest(301, "t1"),
+		}
+	}
+
+	for _, tc := range []struct {
+		name             string
+		rawEvent         *PersistedDDLEvent
+		physicalTableID  int64
+		kind             commonEvent.TableStateChangeKind
+		eventTableInfoID int64
+	}{
+		{
+			name: "alter table updates the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionAddColumn), SchemaID: 100, SchemaName: "test", TableName: "t1", TableID: 300,
+				TableInfo: tableInfo,
+			},
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUpdated,
+			eventTableInfoID: 300,
+		},
+		{
+			name: "create view received by another table keeps the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionCreateView), SchemaID: 100, SchemaName: "test", TableName: "v1", TableID: 500,
+				TableInfo: newEligibleTableInfoForTest(500, "v1"),
+			},
+			// The view event is tracked in every table's DDL history for barrier
+			// coordination, but it does not change another table's schema.
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 500,
+		},
+		{
+			name: "create table like keeps the referenced table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionCreateTable), SchemaID: 100, SchemaName: "test", TableName: "b", TableID: 140,
+				ExtraTableID: 138, Query: "CREATE TABLE `b` LIKE `a`",
+				TableInfo: newEligibleTableInfoForTest(140, "b"),
+			},
+			physicalTableID:  138,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 140,
+		},
+		{
+			name:             "truncate table updates the new physical table",
+			rawEvent:         truncateTable(),
+			physicalTableID:  301,
+			kind:             commonEvent.TableStateUpdated,
+			eventTableInfoID: 301,
+		},
+		{
+			name:             "truncate table does not update the old physical table",
+			rawEvent:         truncateTable(),
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 301,
+		},
+		{
+			name: "drop table does not update the table state",
+			rawEvent: &PersistedDDLEvent{
+				Type: byte(model.ActionDropTable), SchemaID: 100, SchemaName: "test", TableName: "t1", TableID: 300,
+				TableInfo: tableInfo,
+			},
+			physicalTableID:  300,
+			kind:             commonEvent.TableStateUnchanged,
+			eventTableInfoID: 300,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ddl, ok, err := buildTableDDLEvent(tc.rawEvent, nil, tc.physicalTableID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, &commonEvent.TableStateChange{
+				PhysicalTableID: tc.physicalTableID,
+				Kind:            tc.kind,
+			}, ddl.TableStateChange)
+			// The event still carries its own table info for routing and sinks.
+			require.NotNil(t, ddl.TableInfo)
+			require.Equal(t, tc.eventTableInfoID, ddl.TableInfo.TableName.TableID)
+			if tc.kind == commonEvent.TableStateUpdated {
+				require.Equal(t, tc.physicalTableID, ddl.TableInfo.TableName.TableID)
+			}
+		})
+	}
 }

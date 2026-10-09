@@ -41,7 +41,6 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 		pulsarURL = "pulsar" + "://" + strings.Join(option.address, ",")
 	}
 	topicName := option.topic
-	subscriptionName := "pulsar-test-subscription"
 
 	clientOption := pulsar.ClientOptions{
 		URL:    pulsarURL,
@@ -82,7 +81,7 @@ func newConsumer(ctx context.Context, option *option) *consumer {
 
 	consumerConfig := pulsar.ConsumerOptions{
 		Topic:                       topicName,
-		SubscriptionName:            subscriptionName,
+		SubscriptionName:            option.subscriptionName,
 		Type:                        pulsar.Exclusive,
 		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
 	}
@@ -111,11 +110,14 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case consumerMsg := <-msgChan:
 			log.Debug("Received message", zap.Stringer("msgId", consumerMsg.ID()), zap.ByteString("content", consumerMsg.Payload()))
-			needCommit := c.writer.WriteMessage(ctx, consumerMsg)
+			needCommit, writeErr := c.writer.WriteMessage(ctx, consumerMsg)
+			if writeErr != nil {
+				return writeErr
+			}
 			if !needCommit {
 				continue
 			}
-			err := c.pulsarConsumer.AckID(consumerMsg.ID())
+			err := c.pulsarConsumer.AckIDCumulative(consumerMsg.ID())
 			if err != nil {
 				log.Panic("Error ack message", zap.Error(err))
 			}
@@ -124,7 +126,13 @@ func (c *consumer) readMessage(ctx context.Context) error {
 }
 
 // Run the consumer, read data and write to the downstream target.
-func (c *consumer) Run(ctx context.Context) error {
+func (c *consumer) Run(ctx context.Context) (err error) {
+	defer func() {
+		if cleanupErr := c.writer.cleanupEventsGroups(); err == nil && cleanupErr != nil {
+			err = cleanupErr
+		}
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.writer.run(ctx)

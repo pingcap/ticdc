@@ -26,7 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const timeFormat = `"2006-01-02 15:04:05.000"`
+const (
+	timeFormat     = `"2006-01-02 15:04:05.000"`
+	textTimeFormat = "2006-01-02 15:04:05.000"
+)
 
 // JSONTime used to wrap time into json format
 type JSONTime time.Time
@@ -49,6 +52,22 @@ func (t *JSONTime) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler so that TOML (and other text
+// encoders) serialize JSONTime as a string value instead of a table/struct.
+func (t JSONTime) MarshalText() ([]byte, error) {
+	return []byte(time.Time(t).Format(textTimeFormat)), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for round-trip support.
+func (t *JSONTime) UnmarshalText(data []byte) error {
+	tm, err := time.Parse(textTimeFormat, string(data))
+	if err != nil {
+		return err
+	}
+	*t = JSONTime(tm)
+	return nil
+}
+
 // HTTPError of cdc http api
 type HTTPError struct {
 	Error string `json:"error_msg"`
@@ -67,7 +86,8 @@ func NewHTTPError(err error) HTTPError {
 // httpBadRequestError is some errors that will cause a BadRequestError in http handler
 var httpBadRequestError = []*errors.Error{
 	cerror.ErrAPIInvalidParam, cerror.ErrSinkURIInvalid, cerror.ErrStartTsBeforeGC,
-	cerror.ErrChangeFeedNotExists, cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
+	cerror.ErrChangeFeedNotExists, cerror.ErrChangeFeedAlreadyExists,
+	cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
 	cerror.ErrFilterRuleInvalid, cerror.ErrChangefeedUpdateRefused, cerror.ErrMySQLConnectionError,
 	cerror.ErrMySQLInvalidConfig, cerror.ErrCaptureNotExist, cerror.ErrSchedulerRequestFailed,
 	cerror.ErrActiveActiveTSOIndexIncompatible,

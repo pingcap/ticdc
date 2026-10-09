@@ -94,6 +94,7 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 
 	// Simulate a stale in-flight append that races with RemovePath.
 	appendEvent(2, 7)
+	require.Equal(t, []*mockEvent{{id: 2, path: path.path}}, handler.drainDroppedEvents())
 
 	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 0)

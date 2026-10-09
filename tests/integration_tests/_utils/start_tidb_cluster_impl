@@ -292,6 +292,11 @@ run_sql "CREATE user 'normal'@'%' identified by '123456';" ${DOWN_TIDB_HOST} ${D
 run_sql "GRANT select,insert,update,delete,index,create,drop,alter,create view,references ON *.* TO 'normal'@'%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 run_sql "FLUSH privileges" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+if [[ "${SKIP_TIFLASH:-0}" == "1" ]]; then
+	echo "Skipping TiFlash startup"
+	exit 0
+fi
+
 cat - >"$OUT_DIR/tiflash-config.toml" <<EOF
 tmp_path = "${OUT_DIR}/tiflash/tmp"
 display_name = "TiFlash"

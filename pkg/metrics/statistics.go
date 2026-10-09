@@ -14,8 +14,6 @@
 package metrics
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,20 +24,21 @@ import (
 // NewStatistics creates a statistics
 func NewStatistics(
 	changefeed common.ChangeFeedID,
+	keyspaceID uint32,
 	sinkType string,
 ) *Statistics {
 	statistics := &Statistics{
-		sinkType:        sinkType,
-		changefeedID:    changefeed,
-		ddlTypes:        sync.Map{},
-		rowsAffectedMap: sync.Map{},
+		sinkType:     sinkType,
+		changefeedID: changefeed,
+		keyspaceID:   FormatKeyspaceID(keyspaceID),
+		ddlTypes:     sync.Map{},
 	}
 
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType, statistics.keyspaceID)
 	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecErrCntForDDL = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
@@ -52,10 +51,10 @@ func NewStatistics(
 // Statistics maintains some status and metrics of the Sink
 // Note: All methods of Statistics should be thread-safe.
 type Statistics struct {
-	sinkType        string
-	changefeedID    common.ChangeFeedID
-	ddlTypes        sync.Map
-	rowsAffectedMap sync.Map
+	sinkType     string
+	changefeedID common.ChangeFeedID
+	keyspaceID   string
+	ddlTypes     sync.Map
 
 	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
@@ -113,36 +112,12 @@ func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 	return nil
 }
 
-func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
-	b.getRowsAffected("actual", "total").Add(float64(actualRowsAffected))
-	b.getRowsAffected("expected", "total").Add(float64(expectedRowsAffected))
-}
-
-func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
-	b.getRowsAffected("actual", rowType.String()).Add(float64(rowsAffected))
-	b.getRowsAffected("expected", rowType.String()).Add(1)
-	b.RecordTotalRowsAffected(rowsAffected, 1)
-}
-
-func (b *Statistics) getRowsAffected(countType, rowType string) prometheus.Counter {
-	key := fmt.Sprintf("%s-%s", countType, rowType)
-	counter, loaded := b.rowsAffectedMap.Load(key)
-	if !loaded {
-		keyspace := b.changefeedID.Keyspace()
-		changefeedID := b.changefeedID.Name()
-		counter := ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, countType, rowType)
-		b.rowsAffectedMap.Store(key, counter)
-		return counter
-	}
-	return counter.(prometheus.Counter)
-}
-
 // Close release some internal resources.
 func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
+	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType, b.keyspaceID)
 	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
@@ -150,13 +125,6 @@ func (b *Statistics) Close() {
 	b.ddlTypes.Range(func(key, value any) bool {
 		ddlType := key.(string)
 		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
-		return true
-	})
-	b.rowsAffectedMap.Range(func(key, value any) bool {
-		countTypeAndRowType := key.(string)
-		splitTypes := strings.Split(countTypeAndRowType, "-")
-		countType, rowType := splitTypes[0], splitTypes[1]
-		ExecDMLEventRowsAffectedCounter.DeleteLabelValues(keyspace, changefeedID, countType, rowType)
 		return true
 	})
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID, b.sinkType)

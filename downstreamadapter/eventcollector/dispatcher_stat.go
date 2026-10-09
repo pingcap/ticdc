@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -333,6 +334,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, st
 // 3. Finally: Forward valid events to target with wake callback
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
 	var validEvents []dispatcher.DispatcherEvent
+	hasDML := false
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
@@ -354,6 +356,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			validEvents = append(validEvents, event)
 		case commonEvent.TypeDMLEvent:
 			if d.shouldForwardEventByCommitTs(event) {
+				hasDML = true
 				validEvents = append(validEvents, event)
 			}
 		case commonEvent.TypeBatchDMLEvent:
@@ -374,6 +377,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.shouldForwardEventByCommitTs(dmlEvent) {
+					hasDML = true
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
@@ -388,7 +392,17 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 		return false
 	}
 	d.updateCommitTsStateByEvents(state, validEvents)
-	return d.target.HandleEvents(validEvents, func() { d.wake() })
+	handled := d.target.HandleEvents(validEvents, func() { d.wake() })
+	if hasDML {
+		failpoint.Inject("InjectResetDispatcherAfterBatchDataEvents", func() {
+			log.Info("inject dispatcher reset after batch data events",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
+				zap.Uint64("checkpointTs", d.target.GetCheckpointTs()))
+			d.session.resetCurrentEventService()
+		})
+	}
+	return handled
 }
 
 // handleSingleDataEvents processes a single DDL or SyncPoint event with the following algorithm:
@@ -444,9 +458,9 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	return d.target.HandleEvents(events, func() { d.wake() })
 }
 
-// updateTableInfoByDDL advances the table schema version and, when the DDL
-// event carries a TableInfo matching the dispatcher's table, refreshes the
-// cached TableInfo used for DML row assembly.
+// updateTableInfoByDDL advances the table schema version and refreshes the
+// cached TableInfo used for DML row assembly when the DDL changes the schema of
+// the dispatcher's physical table.
 //
 // Must be called from the per-dispatcher event loop (handleSingleDataEvents),
 // which guarantees serial access to dispatcherStat fields for a given table.
@@ -464,16 +478,48 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 	// tableInfoVersion with existing schema files.
 	d.tableInfoVersion.Store(ddl.FinishedTs)
 
+	// The schema store describes the state of this dispatcher's physical table
+	// after the DDL, so the event collector does not need to know which DDL types
+	// can replace the cached table info. A table dispatcher can still receive
+	// DDLs that are unrelated to its own table for barrier coordination, for
+	// example CREATE VIEW is tracked in every table's DDL history.
+	change := ddl.TableStateChange
+	if change == nil {
+		// Events produced by an older schema store carry no table state, so
+		// fall back to comparing table identities.
+		d.updateTableInfoByTableID(ddl, tableSpan.TableID)
+		return
+	}
+
+	if change.PhysicalTableID != tableSpan.TableID {
+		log.Error("table state change was delivered to the wrong dispatcher",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Int64("expectedPhysicalTableID", tableSpan.TableID),
+			zap.Int64("actualPhysicalTableID", change.PhysicalTableID),
+			zap.Uint64("commitTs", ddl.FinishedTs))
+		return
+	}
+	if change.Kind != commonEvent.TableStateUpdated {
+		return
+	}
+
+	d.tableInfo.Store(ddl.TableInfo)
+}
+
+// updateTableInfoByTableID refreshes the cached table info only when the event's
+// table info matches the dispatcher's table identity. It serves events from
+// schema stores that do not attach a TableStateChange yet and can be removed
+// once no supported schema store version predates TableStateChange.
+func (d *dispatcherStat) updateTableInfoByTableID(ddl *commonEvent.DDLEvent, physicalTableID int64) {
 	if ddl.TableInfo == nil {
 		return
 	}
 
-	// A table dispatcher can receive DDLs unrelated to its own table for barrier
-	// coordination, for example CREATE VIEW is tracked in every table's DDL history.
-	// The cached table info is used to assemble subsequent DML rows. For partition
-	// tables, the dispatcher span ID is a physical partition ID while TableInfo
-	// carries the logical table ID, so compare with the cached table info first.
-	expectedTableID := tableSpan.TableID
+	// For partition tables, the dispatcher span ID is a physical partition ID
+	// while TableInfo carries the logical table ID, so compare with the cached
+	// table info first.
+	expectedTableID := physicalTableID
 	current := d.tableInfo.Load()
 	if current != nil {
 		expectedTableID = current.(*common.TableInfo).TableName.TableID

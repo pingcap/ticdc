@@ -265,11 +265,11 @@ func TestInvalidExpression(t *testing.T) {
 	topicExpr := Expression(invalidExpr)
 
 	err := topicExpr.validate()
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	require.ErrorContains(t, err, invalidExpr)
 
 	err = topicExpr.validateForAvro()
-	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 	require.ErrorContains(t, err, "Avro")
 	require.ErrorContains(t, err, invalidExpr)
 }

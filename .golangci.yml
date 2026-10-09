@@ -84,9 +84,11 @@ linters:
         - name: var-naming
 
     # G104: Audit errors not checked (duplicates errcheck).
+    # G115: integer overflow conversions are too noisy for this codebase.
     gosec:
       excludes:
         - G104
+        - G115
 
     # ST1000: don't require package comments.
     # ST1003: don't enforce naming conventions on legacy identifiers.

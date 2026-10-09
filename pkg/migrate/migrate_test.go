@@ -558,6 +558,8 @@ func TestMigrateGcServiceSafePoint(t *testing.T) {
 }
 
 func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
+	// The test counts the retries of the safepoint update, so it needs a
+	// context that outlives them.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mockClient := newMockPDClient(true)
@@ -597,15 +599,16 @@ func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
 	mockClient.testServer.Close()
 }
 
-func TestListServiceSafePointFailed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+func TestListServiceSafePointTimeout(t *testing.T) {
+	// An invalid response keeps the PD API client retrying until the caller's deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	mockClient := newMockPDClient(true)
 
 	m := &migrator{}
 	mockClient.respData = "xxx"
 	err := m.migrateGcServiceSafePoint(ctx, mockClient, &security.Credential{}, "abcd", 10)
-	require.NotNil(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestNoServiceSafePoint(t *testing.T) {
@@ -631,9 +634,14 @@ func TestNoServiceSafePoint(t *testing.T) {
 }
 
 func TestMaskChangefeedData(t *testing.T) {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLPassword:          util.AddressOf("sasl-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+	}
 	info := config.ChangeFeedInfo{
-		SinkURI: "mysql://root:root@127.0.0.1:3306",
-		StartTs: 1, TargetTs: 100, State: config.StateNormal,
+		SinkURI: "kafka://root:sink-password-sentinel@127.0.0.1:9092/topic?sasl-password=uri-password-sentinel",
+		StartTs: 1, TargetTs: 100, State: config.StateNormal, Config: replicaConfig,
 	}
 	data, err := json.Marshal(&info)
 	require.Nil(t, err)
@@ -641,7 +649,11 @@ func TestMaskChangefeedData(t *testing.T) {
 	maskedInfo := config.ChangeFeedInfo{}
 	err = json.Unmarshal([]byte(masked), &maskedInfo)
 	require.Nil(t, err)
-	require.Equal(t, "mysql://username:password@***", maskedInfo.SinkURI)
-	maskedInfo.SinkURI = "mysql://root:root@127.0.0.1:3306"
-	require.Equal(t, info, maskedInfo)
+	require.NotContains(t, masked, "sink-password-sentinel")
+	require.NotContains(t, masked, "uri-password-sentinel")
+	require.NotContains(t, masked, "sasl-password-sentinel")
+	require.NotContains(t, masked, "oauth-secret-sentinel")
+	require.Contains(t, maskedInfo.SinkURI, "root:xxxxx@127.0.0.1:9092")
+	require.Equal(t, "******", *maskedInfo.Config.Sink.KafkaConfig.SASLPassword)
+	require.Equal(t, "<redacted>", maskChangefeedInfo([]byte(`{"sink-uri":`)))
 }

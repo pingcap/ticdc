@@ -41,6 +41,7 @@ const (
 	ProtocolCsv
 	ProtocolDebezium
 	ProtocolSimple
+	ProtocolDebeziumAvro
 )
 
 // IsBatchEncode returns whether the protocol is a batch encoder.
@@ -71,6 +72,8 @@ func ParseSinkProtocolFromString(protocol string) (Protocol, error) {
 		return ProtocolCsv, nil
 	case "debezium":
 		return ProtocolDebezium, nil
+	case "debezium-avro":
+		return ProtocolDebeziumAvro, nil
 	case "simple":
 		return ProtocolSimple, nil
 	default:
@@ -101,6 +104,8 @@ func (p Protocol) String() string {
 		return "debezium"
 	case ProtocolSimple:
 		return "simple"
+	case ProtocolDebeziumAvro:
+		return "debezium-avro"
 	default:
 		panic("unreachable")
 	}

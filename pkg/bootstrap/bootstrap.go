@@ -152,6 +152,21 @@ func (b *Bootstrapper[T]) GetAllNodeIDs() []node.ID {
 	return result
 }
 
+// GetInitializedNodeIDs returns a snapshot of nodes that have reported a
+// bootstrap response.
+func (b *Bootstrapper[T]) GetInitializedNodeIDs() []node.ID {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	result := make([]node.ID, 0, len(b.nodes))
+	for id, status := range b.nodes {
+		if status.Initialized() {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
 // HasNode returns whether the bootstrapper is still tracking the given node.
 func (b *Bootstrapper[T]) HasNode(id node.ID) bool {
 	b.mutex.Lock()

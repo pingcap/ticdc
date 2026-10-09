@@ -44,6 +44,7 @@ type DispatcherService interface {
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
+	IsLowLatencyMode() bool
 	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
 	GetRouter() routing.Router
@@ -58,6 +59,7 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
+	EnableIgnoreUpdateOnlyColumns() bool
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events

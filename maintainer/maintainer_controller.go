@@ -14,7 +14,9 @@
 package maintainer
 
 import (
+	"bytes"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -44,6 +46,8 @@ type Controller struct {
 	// it's not affected by new node join the cluster.
 	bootstrapped bool
 	startTs      uint64
+	// Immutable after bootstrap; restored cleanup operators may repair ranges later.
+	bootstrapAddedTables map[int64]map[int64]bootstrapAddedTable
 
 	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
@@ -58,8 +62,9 @@ type Controller struct {
 
 	splitter *split.Splitter
 
-	replicaConfig *config.ReplicaConfig
-	changefeedID  common.ChangeFeedID
+	replicaConfig   *config.ReplicaConfig
+	changefeedID    common.ChangeFeedID
+	maintainerEpoch atomic.Uint64
 
 	taskPool threadpool.ThreadPool
 
@@ -94,6 +99,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 	balanceMoveBatchSize int,
+	maintainerEpoch uint64,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -160,6 +166,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		controller.drainState,
 		balanceMoveBatchSize,
 	)
+	controller.SetMaintainerEpoch(maintainerEpoch)
 	return controller
 }
 
@@ -168,6 +175,20 @@ func (c *Controller) SetErrorReporter(reportError func(error)) {
 	if c.routeAdmin != nil {
 		c.routeAdmin.SetErrorReporter(reportError)
 	}
+}
+
+// SetMaintainerEpoch propagates the changefeed epoch used to fence
+// dispatcher-manager control requests from stale maintainers.
+func (c *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
+	c.maintainerEpoch.Store(maintainerEpoch)
+	c.operatorController.SetMaintainerEpoch(maintainerEpoch)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.SetMaintainerEpoch(maintainerEpoch)
+	}
+}
+
+func (c *Controller) currentMaintainerEpoch() uint64 {
+	return c.maintainerEpoch.Load()
 }
 
 // HandleStatus handle the status report from the node.
@@ -217,7 +238,16 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove))
+				msg := replica.NewRemoveDispatcherMessage(
+					from,
+					c.changefeedID,
+					status.ID,
+					nil,
+					status.Mode,
+					heartbeatpb.OperatorType_O_Remove,
+					c.currentMaintainerEpoch(),
+				)
+				_ = c.messageCenter.SendCommand(msg)
 			}
 			continue
 		}
@@ -254,22 +284,56 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		// rescheduling, so we mark the span absent to let the scheduler recreate it.
 		//
 		// Safety against message reordering/resend:
-		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
-		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
-		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
-		//   statuses, the worst case is an extra no-op absent mark.
+		// MarkSpanAbsentIfCurrent atomically verifies that stm is still the current desired task and is still bound
+		// to the reporting node. A concurrent split, merge, move, or DDL removal therefore makes this a no-op.
 		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
 			if op := operatorController.GetOperator(dispatcherID); op == nil {
-				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("from", from.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.Any("status", status))
-				spanController.MarkSpanAbsent(stm)
+				if c.removeTerminalSpanCoveredByMergedSpan(spanController, stm) {
+					continue
+				}
+				if spanController.MarkSpanAbsentIfCurrent(stm, from) {
+					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+						zap.String("changefeed", c.changefeedID.Name()),
+						zap.String("from", from.String()),
+						zap.String("dispatcherID", dispatcherID.String()),
+						zap.Any("status", status))
+				}
 			}
 		}
 	}
+}
+
+func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
+	spanController *span.Controller,
+	stm *replica.SpanReplication,
+) bool {
+	if stm == nil || stm.Span == nil {
+		return false
+	}
+	for _, candidate := range spanController.GetTasksByTableID(stm.Span.TableID) {
+		if candidate == nil || candidate == stm || candidate.ID == stm.ID || candidate.Span == nil {
+			continue
+		}
+		if candidate.GetMode() != stm.GetMode() || !spanController.IsReplicating(candidate) {
+			continue
+		}
+		if bytes.Compare(candidate.Span.StartKey, stm.Span.StartKey) <= 0 &&
+			bytes.Compare(candidate.Span.EndKey, stm.Span.EndKey) >= 0 {
+			// A successful merge can leave old source dispatchers reporting terminal statuses after
+			// maintainer failover. When the merged span already covers the source range, the source
+			// is obsolete desired state and must be removed instead of being marked absent.
+			log.Info("remove terminal span covered by merged span",
+				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("dispatcherID", stm.ID.String()),
+				zap.String("coveringDispatcherID", candidate.ID.String()),
+				zap.String("span", common.FormatTableSpan(stm.Span)),
+				zap.String("coveringSpan", common.FormatTableSpan(candidate.Span)))
+			spanController.RemoveReplicatingSpan(stm)
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {

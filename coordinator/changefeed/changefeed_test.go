@@ -14,11 +14,14 @@
 package changefeed
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -41,6 +44,21 @@ func TestNewChangefeed(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
+func TestNewChangefeedRejectsInvalidInfo(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	require.Panics(t, func() {
+		NewChangefeed(cfID, nil, 100, true)
+	})
+	require.Panics(t, func() {
+		NewChangefeed(cfID, &config.ChangeFeedInfo{
+			SinkURI: "kafka://127.0.0.1:9092",
+			State:   config.StateNormal,
+		}, 100, true)
+	})
+}
+
 func TestChangefeed_GetSetInfo(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
@@ -57,6 +75,9 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	}
 	cf.SetInfo(newInfo)
 	require.Equal(t, newInfo, cf.GetInfo())
+	require.Panics(t, func() {
+		cf.SetInfo(nil)
+	})
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {
@@ -88,6 +109,119 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	require.Equal(t, config.StateNormal, state)
 	require.Nil(t, err)
 	require.Equal(t, newStatus, cf.GetStatus())
+}
+
+func TestCheckpointRegression(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 200, true)
+
+	regressedStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 150}
+	updated, state, err := cf.UpdateStatus(regressedStatus)
+	require.False(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+
+	retryableErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "retryable error",
+	}
+	regressedStatus = &heartbeatpb.MaintainerStatus{
+		CheckpointTs: 150,
+		Err:          []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err = cf.UpdateStatus(regressedStatus)
+	require.True(t, updated)
+	require.Equal(t, config.StateWarning, state)
+	require.Same(t, retryableErr, err)
+	require.Equal(t, uint64(150), regressedStatus.CheckpointTs)
+	status := cf.GetStatus()
+	require.Equal(t, uint64(200), status.CheckpointTs)
+	require.Len(t, status.Err, 1)
+	require.Same(t, retryableErr, status.Err[0])
+	require.False(t, cf.ShouldRun())
+	require.True(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.isRestarting.Load())
+}
+
+func TestBootstrapDoneFastFail(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	fastFailErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    string(errors.ErrTableRouteConflict.RFCCode()),
+		Message: "table route conflict",
+	}
+	newStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  200,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{fastFailErr},
+	}
+	updated, state, err := cf.UpdateStatus(newStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateFailed, state)
+	require.Same(t, fastFailErr, err)
+	require.Equal(t, newStatus, cf.GetStatus())
+	require.False(t, cf.ShouldRun())
+}
+
+func TestBootstrapDoneRetryableError(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	retryableErr := &heartbeatpb.RunningError{
+		Node:    "node-1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "retryable error",
+	}
+	newStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  100,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err := cf.UpdateStatus(newStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateNormal, state)
+	require.Nil(t, err)
+	require.Equal(t, newStatus, cf.GetStatus())
+	require.True(t, cf.ShouldRun())
+	require.False(t, cf.backoff.retrying.Load())
+	require.False(t, cf.backoff.isRestarting.Load())
+	require.True(t, cf.backoff.nextRetryTime.Load().IsZero())
+
+	nextStatus := &heartbeatpb.MaintainerStatus{
+		CheckpointTs:  100,
+		BootstrapDone: true,
+		Err:           []*heartbeatpb.RunningError{retryableErr},
+	}
+	updated, state, err = cf.UpdateStatus(nextStatus)
+
+	require.True(t, updated)
+	require.Equal(t, config.StateWarning, state)
+	require.Same(t, retryableErr, err)
+	require.Equal(t, nextStatus, cf.GetStatus())
+	require.False(t, cf.ShouldRun())
+	require.True(t, cf.backoff.retrying.Load())
+	require.True(t, cf.backoff.isRestarting.Load())
 }
 
 func TestChangefeed_IsMQSink(t *testing.T) {
@@ -152,28 +286,22 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
+		Epoch:   7,
 	}
+	info.KeyspaceID = 123
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
 	msg := cf.NewAddMaintainerMessage(server)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
-}
-
-func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		SinkURI: "kafka://127.0.0.1:9092",
-		State:   config.StateNormal,
-		Config:  config.GetDefaultReplicaConfig(),
-	}
-	cf := NewChangefeed(cfID, info, 100, true)
-
-	server := node.ID("server-1")
-	msg := cf.NewRemoveMaintainerMessage(server, true, true)
-	require.Equal(t, server, msg.To)
-	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, info.KeyspaceID, req.KeyspaceId)
+	require.Equal(t, info.Epoch, req.MaintainerEpoch)
+	configInfo := &config.ChangeFeedInfo{}
+	require.NoError(t, json.Unmarshal(req.Config, configInfo))
+	require.Equal(t, info.Epoch, configInfo.Epoch)
+	require.Equal(t, info.SinkURI, configInfo.SinkURI)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
@@ -194,9 +322,11 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 func TestRemoveMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	server := node.ID("server-1")
-	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true)
+	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true, 10)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
 }
 
 func TestChangefeedGetStatusForResume(t *testing.T) {
@@ -208,9 +338,10 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 			Name:     "test-changefeed",
 			Keyspace: "test-keyspace",
 		},
-		CheckpointTs: 789,
-		FeedState:    "normal",
-		State:        heartbeatpb.ComponentState_Working,
+		CheckpointTs:    789,
+		FeedState:       "normal",
+		State:           heartbeatpb.ComponentState_Working,
+		MaintainerEpoch: 42,
 		Err: []*heartbeatpb.RunningError{
 			{
 				Time:    "2024-01-01 00:00:00",
@@ -237,6 +368,7 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
 	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
 	require.Equal(t, originalStatus.State, clonedStatus.State)
+	require.Equal(t, originalStatus.MaintainerEpoch, clonedStatus.MaintainerEpoch)
 
 	require.Equal(t, 0, len(clonedStatus.Err))
 }
@@ -265,4 +397,33 @@ func TestChangefeed_GetKeyspaceID(t *testing.T) {
 		info: atomic.NewPointer(info),
 	}
 	require.Equal(t, uint32(1), c2.GetKeyspaceID())
+}
+
+func TestBootstrapRegression(t *testing.T) {
+	for _, targetTs := range []uint64{0, 200} {
+		t.Run(fmt.Sprintf("target %d", targetTs), func(t *testing.T) {
+			info := &config.ChangeFeedInfo{
+				SinkURI: "mysql://localhost:3306", State: config.StateNormal,
+				Config: config.GetDefaultReplicaConfig(), TargetTs: targetTs,
+			}
+			cf := NewChangefeed(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), info, 100, true)
+			cf.UpdateStatus(&heartbeatpb.MaintainerStatus{CheckpointTs: 200, BootstrapDone: true})
+			incoming := &heartbeatpb.MaintainerStatus{CheckpointTs: 200}
+			if targetTs == 0 {
+				incoming.Err = []*heartbeatpb.RunningError{{Code: "CDC:ErrChangefeedRetryable", Message: "retry"}}
+			}
+			changed, state, err := cf.UpdateStatus(incoming)
+			require.True(t, changed)
+			require.True(t, cf.GetStatus().BootstrapDone)
+			require.False(t, incoming.BootstrapDone)
+			if targetTs == 0 {
+				require.Equal(t, config.StateWarning, state)
+				require.Same(t, incoming.Err[0], err)
+				require.False(t, cf.ShouldRun())
+			} else {
+				require.Equal(t, config.StateFinished, state)
+				require.Nil(t, err)
+			}
+		})
+	}
 }

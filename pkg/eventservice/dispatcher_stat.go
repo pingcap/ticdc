@@ -14,10 +14,12 @@
 package eventservice
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -37,6 +39,25 @@ const (
 	minScanLimitInBytes     = 1024        // 1KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
+)
+
+// dispatcherScanState serializes scan preparation and execution for one dispatcher.
+// An EventStore notification claims Idle -> Running for inline preparation. If
+// data must be read, preparation changes Running or RunningPending -> Queued,
+// and a worker changes Queued -> Running. Internal requests enqueue directly
+// from Idle. In low-latency mode, a request received while Running changes it
+// to RunningPending, and completion queues one coalesced continuation. A scan
+// stopped by SchemaStore changes to SchemaBlocked and is queued again after the
+// schema frontier advances. isRemoved is the terminal lifecycle flag and is
+// independent of scanState.
+type dispatcherScanState uint8
+
+const (
+	dispatcherScanIdle dispatcherScanState = iota
+	dispatcherScanQueued
+	dispatcherScanRunning
+	dispatcherScanRunningPending
+	dispatcherScanSchemaBlocked
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -104,10 +125,18 @@ type dispatcherStat struct {
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
 
-	// The last scanned DML event start-ts.
-	// These two values are used to construct the scan range for the next scan task.
-	lastScannedCommitTs atomic.Uint64
-	lastScannedStartTs  atomic.Uint64
+	// lastScanProgress is the resume point produced by the previous scan. It keeps
+	// the transaction cursor and optional row-level cursor in one immutable snapshot,
+	// so the next scan cannot combine fields from different scan attempts and resume
+	// from an invalid position.
+	lastScanProgress atomic.Pointer[scanProgress]
+
+	largeTxnStateMu sync.Mutex
+	largeTxnState   *largeTxnScanState
+
+	// bigTxnMetrics aggregates one sample per logical transaction across row-level
+	// scan interruptions. It is updated only by this dispatcher's serialized scan task.
+	bigTxnMetrics bigTxnMetricTracker
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// it is set to true in the following two cases:
@@ -124,11 +153,21 @@ type dispatcherStat struct {
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
 
-	// Scan task related
-	// taskScanning is used to indicate whether the scan task is running.
-	// If so, we should wait until it is done before we send next resolvedTs event of
-	// this dispatcher.
-	isTaskScanning atomic.Bool
+	// Scan task related. scanMu protects scanState and schemaBlockedUntilTs.
+	scanMu               sync.Mutex
+	scanState            dispatcherScanState
+	schemaBlockedUntilTs uint64
+
+	// activeScanMu protects activeScan and serializes scan registration with
+	// markRemoved. activeScan lets reset/remove cancel the in-flight scan before
+	// cleaning up its large-transaction state, including interrupting TiKV/KMS
+	// calls made by spill encryption.
+	activeScanMu sync.Mutex
+	activeScan   *activeDispatcherScan
+}
+
+type activeDispatcherScan struct {
+	cancel context.CancelFunc
 }
 
 func newDispatcherStat(
@@ -167,8 +206,7 @@ func newDispatcherStat(
 
 	dispStat.sentResolvedTs.Store(startTs)
 
-	dispStat.lastScannedCommitTs.Store(startTs)
-	dispStat.lastScannedStartTs.Store(0)
+	dispStat.storeScanProgress(newTxnScanProgress(startTs, 0))
 	dispStat.lastReadySendTime.Store(0)
 	dispStat.readyInterval.Store(1)
 	dispStat.resetScanLimit()
@@ -196,8 +234,65 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
 }
 
+func (a *dispatcherStat) beginScan() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() || a.scanState != dispatcherScanQueued {
+		return false
+	}
+	a.scanState = dispatcherScanRunning
+	return true
+}
+
+func (a *dispatcherStat) isScanBusy() bool {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+	if a.isRemoved.Load() {
+		return false
+	}
+	return a.scanState == dispatcherScanQueued ||
+		a.scanState == dispatcherScanRunning ||
+		a.scanState == dispatcherScanRunningPending
+}
+
 func (a *dispatcherStat) isHandshaked() bool {
 	return a.seq.Load() > 0
+}
+
+func (a *dispatcherStat) beginActiveScan(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	activeScan := &activeDispatcherScan{cancel: cancel}
+
+	a.activeScanMu.Lock()
+	if a.isRemoved.Load() {
+		cancel()
+	} else {
+		a.activeScan = activeScan
+	}
+	a.activeScanMu.Unlock()
+
+	return ctx, func() {
+		cancel()
+		a.activeScanMu.Lock()
+		if a.activeScan == activeScan {
+			a.activeScan = nil
+		}
+		a.activeScanMu.Unlock()
+	}
+}
+
+func (a *dispatcherStat) markRemoved() {
+	a.isRemoved.Store(true)
+	a.scanMu.Lock()
+	a.schemaBlockedUntilTs = 0
+	a.scanMu.Unlock()
+
+	a.activeScanMu.Lock()
+	activeScan := a.activeScan
+	a.activeScanMu.Unlock()
+	if activeScan != nil {
+		activeScan.cancel()
+	}
 }
 
 func (a *dispatcherStat) setHandshaked() {
@@ -211,8 +306,30 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 }
 
 func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
-	a.lastScannedCommitTs.Store(txnCommitTs)
-	a.lastScannedStartTs.Store(txnStartTs)
+	a.updateScanRangeWithPosition(txnCommitTs, txnStartTs, nil)
+}
+
+func (a *dispatcherStat) updateScanRangeWithPosition(
+	txnCommitTs uint64,
+	txnStartTs uint64,
+	position eventstore.ScanPosition,
+) {
+	a.storeScanProgress(newRowLevelScanProgress(txnCommitTs, txnStartTs, position))
+}
+
+func (a *dispatcherStat) storeScanProgress(progress scanProgress) {
+	progress.rowLevelScanPosition = cloneScanPosition(progress.rowLevelScanPosition)
+	a.lastScanProgress.Store(&progress)
+}
+
+func (a *dispatcherStat) loadScanProgress() scanProgress {
+	progress := a.lastScanProgress.Load()
+	if progress == nil {
+		return scanProgress{}
+	}
+	result := *progress
+	result.rowLevelScanPosition = cloneScanPosition(result.rowLevelScanPosition)
+	return result
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
@@ -235,23 +352,35 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&a.eventStoreCommitTs, latestCommitTs)
 }
 
-// getDataRange returns the data range that the dispatcher needs to scan.
-func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
-	lastTxnCommitTs := a.lastScannedCommitTs.Load()
-	lastTxnStartTs := a.lastScannedStartTs.Load()
+// getScanRequest returns the range and cursor that the dispatcher needs to scan.
+func (a *dispatcherStat) getScanRequest() (eventstore.ScanRequest, bool) {
+	progress := a.loadScanProgress()
+	lastTxnCommitTs := progress.txnCommitTs
+	lastTxnStartTs := progress.txnStartTs
+	lastPosition := progress.rowLevelScanPosition
+	hasPendingLargeTxn := a.hasPendingLargeTxnState()
 
 	// the data not received by the event store yet, so just skip it.
 	resolvedTs := a.receivedResolvedTs.Load()
-	if lastTxnCommitTs >= resolvedTs {
-		return common.DataRange{}, false
+	if lastTxnCommitTs > resolvedTs {
+		return eventstore.ScanRequest{}, false
 	}
-	// Range: (CommitTsStart-lastScannedStartTs, CommitTsEnd],
-	// since the CommitTsStart(and the data before startTs) is already sent to the dispatcher.
-	r := common.DataRange{
-		Span:                  a.info.GetTableSpan(),
-		CommitTsStart:         lastTxnCommitTs,
-		CommitTsEnd:           resolvedTs,
-		LastScannedTxnStartTs: lastTxnStartTs,
+	if lastTxnCommitTs == resolvedTs && lastTxnStartTs == 0 &&
+		len(lastPosition) == 0 && !hasPendingLargeTxn {
+		return eventstore.ScanRequest{}, false
+	}
+	// Range is (CommitTsStart, CommitTsEnd], with Cursor identifying any
+	// unfinished transaction or row at CommitTsStart.
+	r := eventstore.ScanRequest{
+		Range: common.DataRange{
+			Span:          a.info.GetTableSpan(),
+			CommitTsStart: lastTxnCommitTs,
+			CommitTsEnd:   resolvedTs,
+		},
+		Cursor: eventstore.ScanCursor{
+			TxnStartTs: lastTxnStartTs,
+			Position:   lastPosition,
+		},
 	}
 	return r, true
 }
@@ -414,8 +543,11 @@ func (c *resolvedTsCache) reset() {
 }
 
 type changefeedStatus struct {
-	changefeedID common.ChangeFeedID
-	filter       filter.Filter
+	changefeedID   common.ChangeFeedID
+	lowLatencyMode bool
+	filter         filter.Filter
+	// mounter configuration is changefeed scoped.
+	mounter pevent.Mounter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 

@@ -34,6 +34,7 @@ import (
 type SharedInfo struct {
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
+	lowLatencyMode       bool
 	timezone             string
 	bdrMode              bool
 	enableActiveActive   bool
@@ -87,6 +88,7 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
+	lowLatencyMode bool,
 	timezone string,
 	bdrMode bool,
 	enableActiveActive bool,
@@ -105,6 +107,7 @@ func NewSharedInfo(
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
 		changefeedID:             changefeedID,
+		lowLatencyMode:           lowLatencyMode,
 		timezone:                 timezone,
 		bdrMode:                  bdrMode,
 		enableActiveActive:       enableActiveActive,
@@ -145,6 +148,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) IsLowLatencyMode() bool {
+	return d.sharedInfo.lowLatencyMode
 }
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -193,6 +200,10 @@ func (d *BasicDispatcher) GetTimezone() string {
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
+}
+
+func (d *BasicDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return d.sink.SinkType() == common.KafkaSinkType
 }
 
 func (d *BasicDispatcher) GetRouter() routing.Router {

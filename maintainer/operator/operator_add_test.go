@@ -56,7 +56,7 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
-	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -66,6 +66,8 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 	msg := op.Schedule()
 	require.NotNil(t, msg)
 	require.Equal(t, nodeB.String(), msg.To.String())
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
 
 	// Node B is removed before it reports working status
 	op.OnNodeRemove(nodeB)
@@ -87,7 +89,7 @@ func TestAddOperator_DestReportsWorking(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
-	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -119,7 +121,7 @@ func TestAddOperator_DestReportsRemoved(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
-	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -149,7 +151,7 @@ func TestAddOperator_StoppedStatusIgnored(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
-	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -176,7 +178,7 @@ func TestAddOperator_TaskRemovedDoesNotReintroduceSpan(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
-	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
 	require.NotNil(t, op)
 
 	op.Start()

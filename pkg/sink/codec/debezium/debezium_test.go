@@ -14,9 +14,11 @@
 package debezium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -26,6 +28,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -120,13 +127,102 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, decoded.TableInfo)
+}
+
+func TestDebeziumNumericStringHandling(t *testing.T) {
+	const decimalValue = "12345678901234567890123456789012345.123456789012345678901234567890"
+	helper := NewSQLTestHelper(t, "numeric_precision", `create table numeric_precision (
+		id bigint unsigned primary key default 18446744073709551615,
+		signed_value bigint default 9223372036854775807,
+		amount decimal(65,30) default `+decimalValue+`,
+		nullable_amount decimal(65,30)
+	)`)
+	defer helper.Close()
+
+	insert := helper.helper.DML2Event("test", "numeric_precision", "insert into numeric_precision () values ()")
+	update, _ := helper.helper.DML2UpdateEvent("test", "numeric_precision",
+		"insert into numeric_precision (id) values (18446744073709551614)",
+		"update numeric_precision set signed_value = -9223372036854775808, amount = -"+decimalValue+" where id = 18446744073709551614")
+	deleted := helper.helper.DML2DeleteEvent("test", "numeric_precision",
+		"insert into numeric_precision (id) values (18446744073709551613)",
+		"delete from numeric_precision where id = 18446744073709551613")
+
+	for _, event := range []*commonEvent.DMLEvent{insert, update, deleted} {
+		row, ok := event.GetNextRow()
+		require.True(t, ok)
+		for _, disableSchema := range []bool{false, true} {
+			cfg := common.NewConfig(config.ProtocolDebezium)
+			cfg.EnableTiDBExtension = true
+			cfg.TimeZone = time.UTC
+			cfg.DebeziumDisableSchema = disableSchema
+			cfg.DebeziumDecimalHandlingMode = common.DecimalHandlingModeString
+			cfg.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+			encoder := NewBatchEncoder(cfg, "dbserver1")
+			require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", &commonEvent.RowEvent{
+				TableInfo:      helper.tableInfo,
+				CommitTs:       1,
+				Event:          row,
+				ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			}))
+			messages := encoder.Build()
+			require.Len(t, messages, 1)
+
+			var key, value map[string]any
+			dec := json.NewDecoder(bytes.NewReader(messages[0].Key))
+			dec.UseNumber()
+			require.NoError(t, dec.Decode(&key))
+			dec = json.NewDecoder(bytes.NewReader(messages[0].Value))
+			dec.UseNumber()
+			require.NoError(t, dec.Decode(&value))
+			payload := value["payload"].(map[string]any)
+			for _, field := range []string{"before", "after"} {
+				data, ok := payload[field].(map[string]any)
+				if !ok {
+					continue
+				}
+				expectedRow := row.Row
+				if field == "before" {
+					expectedRow = row.PreRow
+				}
+				require.Equal(t, strconv.FormatUint(expectedRow.GetUint64(0), 10), data["id"])
+				require.Equal(t, key["payload"].(map[string]any)["id"], data["id"])
+				require.Equal(t, json.Number(strconv.FormatInt(expectedRow.GetInt64(1), 10)), data["signed_value"])
+				require.Equal(t, expectedRow.GetMyDecimal(2).String(), data["amount"])
+				require.Nil(t, data["nullable_amount"])
+			}
+			if disableSchema {
+				require.NotContains(t, key, "schema")
+				require.NotContains(t, value, "schema")
+				continue
+			}
+
+			keyField := schemaFieldsByName(t, key["schema"].(map[string]any), "id")
+			require.Equal(t, "string", keyField["type"])
+			require.Equal(t, "18446744073709551615", keyField["default"])
+			afterSchema := schemaFieldsByName(t, value["schema"].(map[string]any), "after")
+			amountField := schemaFieldsByName(t, afterSchema, "amount")
+			require.Equal(t, "string", amountField["type"])
+			require.Equal(t, decimalValue, amountField["default"])
+			signedField := schemaFieldsByName(t, afterSchema, "signed_value")
+			require.Equal(t, "int64", signedField["type"])
+			require.Equal(t, json.Number("9223372036854775807"), signedField["default"])
+
+			decoder := NewDecoder(cfg, 0, nil)
+			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			change, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
+			decoded.PostFlush()
+		}
+	}
 }
 
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
@@ -178,6 +274,7 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Nil(err)
 
 	helper := NewSQLTestHelper(s.T(), "foo", string(dataDDL))
+	defer helper.Close()
 
 	helper.MustExec(`SET sql_mode='';`)
 	helper.MustExec(`SET time_zone='UTC';`)
@@ -206,4 +303,223 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Len(messages, 1)
 	s.requireDebeziumJSONEq(dataDbzOutput, messages[0].Value)
 	s.requireDebeziumJSONEq(keyDbzOutput, messages[0].Key)
+}
+
+func TestEncodeStartTsInSource(t *testing.T) {
+	// The field is emitted when debezium-include-start-ts is enabled,
+	// independent of enable-tidb-extension.
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.DebeziumIncludeStartTs = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+	dec.UseNumber()
+	var value map[string]any
+	require.NoError(t, dec.Decode(&value))
+	payload := value["payload"].(map[string]any)
+	source := payload["source"].(map[string]any)
+	startTs, err := source["start_ts"].(json.Number).Int64()
+	require.NoError(t, err)
+	require.Equal(t, int64(5), startTs)
+
+	// The source schema declares start_ts under the same switch, so
+	// schema-validated consumers can see it without enable-tidb-extension.
+	schema := value["schema"].(map[string]any)
+	sourceSchema := schemaFieldsByName(t, schema, "source")
+	require.NotNil(t, sourceSchema)
+	require.NotNil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
+
+	// round-trip: decoding restores the true start ts. The TiCDC-side decoder
+	// requires enable-tidb-extension: it relies on the per-column tidb_type in
+	// the schema to reconstruct column types, so the encoded message must
+	// carry the extension fields as well.
+	cfg2 := common.NewConfig(config.ProtocolDebezium)
+	cfg2.DebeziumIncludeStartTs = true
+	cfg2.EnableTiDBExtension = true
+	cfg2.TimeZone = time.UTC
+	encoder2 := NewBatchEncoder(cfg2, "dbserver1")
+	require.NoError(t, encoder2.AppendRowChangedEvent(context.Background(), "", rowEvent))
+	messages2 := encoder2.Build()
+	require.Len(t, messages2, 1)
+
+	decoder := NewDecoder(cfg2, 0, nil)
+	decoder.AddKeyValue(messages2[0].Key, messages2[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	require.Equal(t, uint64(5), decoded.GetStartTs())
+}
+
+func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
+	// A message produced without debezium-include-start-ts (the pre-feature
+	// format) has no start_ts in the source block; decoding it must fall back
+	// to commit_ts, keeping the old behavior.
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true // required to decode the message back
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+	dec.UseNumber()
+	var value map[string]any
+	require.NoError(t, dec.Decode(&value))
+	payload := value["payload"].(map[string]any)
+	source := payload["source"].(map[string]any)
+	require.NotContains(t, source, "start_ts")
+	schema := value["schema"].(map[string]any)
+	sourceSchema := schemaFieldsByName(t, schema, "source")
+	require.NotNil(t, sourceSchema)
+	require.Nil(t, schemaFieldsByName(t, sourceSchema, "start_ts"))
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
+	require.NotEqual(t, uint64(5), decoded.GetStartTs())
+}
+
+func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.DebeziumIncludeStartTs = true
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	rowEvent := common.NewRoutedRowEvent4Test()
+	rowEvent.StartTs = 5
+	require.NoError(t, encoder.AppendRowChangedEvent(context.Background(), "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	for _, tc := range []struct {
+		name    string
+		startTs json.Number
+	}{
+		{name: "zero", startTs: json.Number("0")},
+		{name: "negative", startTs: json.Number("-1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := json.NewDecoder(bytes.NewReader(messages[0].Value))
+			dec.UseNumber()
+			var value map[string]any
+			require.NoError(t, dec.Decode(&value))
+			payload := value["payload"].(map[string]any)
+			source := payload["source"].(map[string]any)
+			source["start_ts"] = tc.startTs
+			valueBytes, err := json.Marshal(value)
+			require.NoError(t, err)
+
+			decoder := NewDecoder(cfg, 0, nil)
+			decoder.AddKeyValue(messages[0].Key, valueBytes)
+			messageType, hasNext := decoder.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
+		})
+	}
+}
+
+// schemaFieldsByName returns the sub-schema object of a field inside a Debezium
+// struct schema, or nil when the field is not declared.
+func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[string]any {
+	fields, ok := schema["fields"].([]any)
+	require.True(t, ok)
+	for _, f := range fields {
+		fm := f.(map[string]any)
+		if fm["field"] == name {
+			return fm
+		}
+	}
+	return nil
+}
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// builds from a payload: a composite primary key must stay the handle key, with
+// the real column offsets, because that is what the MySQL sink locates rows by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", compositeKeyRowEvent(t)))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := decoder.NextDMLMessage().ToDMLEvent()
+	common.RequireRowLocatorByPrimaryKey(t, event.TableInfo, "a", "b")
+}
+
+// compositeKeyRowEvent builds an insert into test.t(a, b, c) with primary key
+// (a, b), the shape a composite key arrives in from an upstream table.
+func compositeKeyRowEvent(t *testing.T) *commonEvent.RowEvent {
+	t.Helper()
+
+	newColumn := func(id int64, offset int, name string, tp byte) *model.ColumnInfo {
+		return &model.ColumnInfo{
+			ID:        id,
+			Name:      ast.NewCIStr(name),
+			FieldType: *types.NewFieldType(tp),
+			State:     model.StatePublic,
+			Offset:    offset,
+		}
+	}
+	tidbTableInfo := &model.TableInfo{
+		Name: ast.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{
+			newColumn(1, 0, "a", mysql.TypeLong),
+			newColumn(2, 1, "b", mysql.TypeLong),
+			newColumn(3, 2, "c", mysql.TypeVarchar),
+		},
+		Indices: []*model.IndexInfo{{
+			Name:    ast.NewCIStr("primary"),
+			Primary: true,
+			Unique:  true,
+			State:   model.StatePublic,
+			Columns: []*model.IndexColumn{
+				{Name: ast.NewCIStr("a"), Offset: 0},
+				{Name: ast.NewCIStr("b"), Offset: 1},
+			},
+		}},
+	}
+	tableInfo := commonType.NewTableInfo4Decoder("test", tidbTableInfo)
+
+	row := commonEvent.RowChange{
+		RowType: commonType.RowTypeInsert,
+		Row:     chunk.MutRowFromValues(int64(1), int64(2), "x").ToRow(),
+	}
+	return &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       2,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
 }

@@ -373,11 +373,7 @@ type JSONRowEventEncoder struct {
 }
 
 // NewJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, err
-	}
+func NewJSONRowEventEncoder(config *common.Config, claimCheck *claimcheck.ClaimCheck) (common.EventEncoder, error) {
 	return &JSONRowEventEncoder{
 		messages:   make([]*common.Message, 0, 1),
 		config:     config,
@@ -467,8 +463,8 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	m.IncRowsCount()
 
 	targetTable := e.TableInfo.GetTargetTableName()
-	originLength := m.Length()
-	if m.Length() > c.config.MaxMessageBytes {
+	originLength := c.config.MessageLength(m)
+	if originLength > c.config.MaxMessageBytes {
 		// for single message that is longer than max-message-bytes, do not send it.
 		if c.config.LargeMessageHandle.Disabled() {
 			log.Error("Single message is too large for canal-json",
@@ -491,7 +487,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 			}
 
 			m.Value = value
-			length := m.Length()
+			length := c.config.MessageLength(m)
 			if length > c.config.MaxMessageBytes {
 				log.Error("Single message is still too large for canal-json only encode handle-key columns",
 					zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -544,7 +540,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
-	length := result.Length()
+	length := c.config.MessageLength(result)
 	if length > c.config.MaxMessageBytes {
 		log.Warn("Single message is too large for canal-json, when create the claim check location message",
 			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -581,10 +577,4 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 	}
 
 	return common.NewMsg(nil, value), nil
-}
-
-func (c *JSONRowEventEncoder) Clean() {
-	if c.claimCheck != nil {
-		c.claimCheck.CleanMetrics()
-	}
 }

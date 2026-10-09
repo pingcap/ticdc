@@ -18,12 +18,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 // DetermineEventType infers the event type based on MessageLogInfo content.
-func DetermineEventType(info *common.MessageLogInfo) string {
+func DetermineEventType(info *codecCommon.MessageLogInfo) string {
 	if info == nil {
 		return "unknown"
 	}
@@ -39,14 +38,11 @@ func DetermineEventType(info *common.MessageLogInfo) string {
 	return "unknown"
 }
 
-// BuildEventLogContext builds a textual representation of event info.
-func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogInfo) string {
+// BuildEventLogContext builds a textual representation of the event carried by
+// a message. Callers log keyspace and changefeed as their own fields.
+func BuildEventLogContext(info *codecCommon.MessageLogInfo) string {
 	var sb strings.Builder
-	sb.WriteString("keyspace=")
-	sb.WriteString(keyspace)
-	sb.WriteString(", changefeed=")
-	sb.WriteString(changefeed)
-	sb.WriteString(", eventType=")
+	sb.WriteString("eventType=")
 	sb.WriteString(DetermineEventType(info))
 
 	if info == nil {
@@ -83,22 +79,7 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	return sb.String()
 }
 
-// AnnotateEventError logs the event context and annotates the error with that context.
-func AnnotateEventError(
-	keyspace, changefeed string,
-	info *common.MessageLogInfo,
-	err error,
-) error {
-	if err == nil {
-		return nil
-	}
-	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
-		return errors.Annotate(err, contextStr+"; ErrorInfo:"+err.Error())
-	}
-	return err
-}
-
-func formatDMLInfo(rows []common.RowLogInfo) string {
+func formatDMLInfo(rows []codecCommon.RowLogInfo) string {
 	data, err := json.Marshal(rows)
 	if err != nil {
 		return ""

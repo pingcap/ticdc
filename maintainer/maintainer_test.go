@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -138,9 +139,10 @@ func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage)
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: req.ChangefeedID,
-		Spans:        m.bootstrapTables,
-		CheckpointTs: req.StartTs,
+		ChangefeedID:    req.ChangefeedID,
+		Spans:           m.bootstrapTables,
+		CheckpointTs:    req.StartTs,
+		MaintainerEpoch: req.MaintainerEpoch,
 	}
 	m.changefeedID = req.ChangefeedID
 	m.checkpointTs = req.StartTs
@@ -171,6 +173,7 @@ func (m *mockDispatcherManager) onPostBootstrapRequest(msg *messaging.TargetMess
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 		Err:                           nil,
+		MaintainerEpoch:               req.MaintainerEpoch,
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
 		m.maintainerID,
@@ -240,8 +243,9 @@ func (m *mockDispatcherManager) onDispatchRequest(
 func (m *mockDispatcherManager) onMaintainerCloseRequest(msg *messaging.TargetMessage) {
 	_ = m.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From,
 		messaging.MaintainerTopic, &heartbeatpb.MaintainerCloseResponse{
-			ChangefeedID: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
-			Success:      true,
+			ChangefeedID:    msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
+			Success:         true,
+			MaintainerEpoch: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).MaintainerEpoch,
 		}))
 }
 
@@ -258,6 +262,67 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 		m.checkpointTs++
 		m.sendMessages(response)
 	}
+}
+
+func TestMaintainerPostBootstrapResponseRequiresCurrentEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID: cfID,
+		info:         &config.ChangeFeedInfo{Epoch: 2},
+		postBootstrapMsg: &heartbeatpb.MaintainerPostBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+		},
+	}
+
+	m.onMaintainerPostBootstrapResponse(messaging.NewSingleTargetMessage(
+		node.ID("current"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.MaintainerPostBootstrapResponse{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 1,
+		},
+	))
+	require.NotNil(t, m.postBootstrapMsg)
+
+	m.onMaintainerPostBootstrapResponse(messaging.NewSingleTargetMessage(
+		node.ID("current"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.MaintainerPostBootstrapResponse{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+		},
+	))
+	require.Nil(t, m.postBootstrapMsg)
+}
+
+func TestMaintainerEpochRequestRequiresCompatOrCurrentEpoch(t *testing.T) {
+	compatMaintainer := &Maintainer{info: &config.ChangeFeedInfo{}}
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(2))
+
+	strictMaintainer := &Maintainer{info: &config.ChangeFeedInfo{Epoch: 2}}
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(1))
+	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(2))
+}
+
+func TestMaintainerCloseResponseIgnoredBeforeRemoving(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID: cfID,
+		info:         &config.ChangeFeedInfo{Epoch: 2},
+		closedNodes:  make(map[node.ID]struct{}),
+	}
+
+	m.onMaintainerCloseResponse(node.ID("old"), &heartbeatpb.MaintainerCloseResponse{
+		ChangefeedID:    cfID.ToPB(),
+		Success:         true,
+		MaintainerEpoch: 0,
+	})
+
+	require.Empty(t, m.closedNodes)
+	require.False(t, m.removing.Load())
 }
 
 func TestMaintainerSchedule(t *testing.T) {
@@ -383,6 +448,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 
 	m := &Maintainer{
 		changefeedID: cfID,
+		info:         &config.ChangeFeedInfo{Epoch: 3},
 		controller: &Controller{
 			spanController: spanController,
 		},
@@ -398,6 +464,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	status := m.GetMaintainerStatus()
 	require.Equal(t, uint64(20), status.CheckpointTs)
 	require.Equal(t, uint64(50), status.LastSyncedTs)
+	require.Equal(t, uint64(3), status.MaintainerEpoch)
 }
 
 func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
@@ -421,7 +488,7 @@ func TestMaintainerHeartbeatDuringRemovingSkipsFailoverRecovery(t *testing.T) {
 			}, captureID, false)
 		refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 		controller := NewController(cfID, 10, &mockThreadPool{},
-			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
+			config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 1)
 
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 		dispatcherID := common.NewDispatcherID()
@@ -611,6 +678,7 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 			replicaSet,
 			selfNodeID,
 			heartbeatpb.OperatorType_O_Add,
+			m.controller.currentMaintainerEpoch(),
 		)))
 
 		m.removing.Store(true)
@@ -669,6 +737,45 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
+	m := &Maintainer{
+		checkpointUpdateCh: make(chan struct{}, 1),
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.notifyCheckpointUpdate()
+	require.Empty(t, m.checkpointUpdateCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.notifyCheckpointUpdate()
+	m.notifyCheckpointUpdate()
+	require.Len(t, m.checkpointUpdateCh, 1)
+}
+
+func TestMaintainerStatusChangedNotification(t *testing.T) {
+	heartbeatCh := make(chan struct{}, 1)
+	m := &Maintainer{
+		statusChanged:      atomic.NewBool(false),
+		managerHeartbeatCh: heartbeatCh,
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.markStatusChanged()
+	require.True(t, m.statusChanged.Load())
+	require.Empty(t, heartbeatCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.markStatusChanged()
+	m.markStatusChanged()
+	require.Len(t, heartbeatCh, 1)
+}
+
+func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {
+	m := &Maintainer{}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
+	require.False(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}))
 }
 
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {

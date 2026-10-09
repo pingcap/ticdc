@@ -47,10 +47,20 @@ func TestParseLogFileName(t *testing.T) {
 			wantFileType: RedoRowLogFileType,
 		},
 		{
-			name: "happy row .log",
+			name: "happy row v2 .log",
 			args: arg{
 				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
 					"keyspace", "test",
+					RedoRowLogFileType, 1, uuid.NewString(), LogEXT),
+			},
+			wantTs:       1,
+			wantFileType: RedoRowLogFileType,
+		},
+		{
+			name: "happy row v2 .log keyspace with underscores",
+			args: arg{
+				name: fmt.Sprintf(RedoLogFileFormatV2, "cp",
+					"keyspace_with_underscores", "test",
 					RedoRowLogFileType, 1, uuid.NewString(), LogEXT),
 			},
 			wantTs:       1,

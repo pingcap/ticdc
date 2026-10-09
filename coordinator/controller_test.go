@@ -30,12 +30,61 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 )
+
+type noopScheduler struct{}
+
+func (noopScheduler) Execute() time.Time {
+	return time.Now().Add(time.Hour)
+}
+
+func (noopScheduler) Name() string {
+	return pkgscheduler.BasicScheduler
+}
+
+func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+
+	keyspace := common.DefaultKeyspaceName
+	name := "finished-metrics"
+	keyspaceID := uint32(123)
+	pdTime := time.UnixMilli(2000)
+	checkpointTs := oracle.ComposeTS(1000, 0)
+
+	require.True(t, updateChangefeedCheckpointMetrics(
+		keyspace,
+		name,
+		keyspaceID,
+		config.StateNormal,
+		checkpointTs,
+		pdTime,
+	))
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+
+	require.False(t, updateChangefeedCheckpointMetrics(
+		keyspace,
+		name,
+		keyspaceID,
+		config.StateFinished,
+		checkpointTs,
+		pdTime,
+	))
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+}
 
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 	newController := func(t *testing.T) (*Controller, chan *messaging.TargetMessage, *changefeed.ChangefeedDB, node.ID) {
@@ -59,7 +108,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		return &Controller{
 			changefeedDB: changefeedDB,
 			operatorController: operator.NewOperatorController(
-				self, changefeedDB, backend, 10,
+				self, changefeedDB, backend, nil, 10,
 			),
 			nodeManager:     nodeManager,
 			initialized:     atomic.NewBool(true),
@@ -205,6 +254,7 @@ func TestMaintainerHeartbeatAdmissionRequiresInitializedSender(t *testing.T) {
 			&node.Info{ID: node.ID("coordinator")},
 			db,
 			nil,
+			nil,
 			10,
 		),
 		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
@@ -257,6 +307,364 @@ func TestMaintainerHeartbeatAdmissionRequiresInitializedSender(t *testing.T) {
 	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
 }
 
+func TestMaintainerHeartbeatAdmissionDropsStaleMaintainerEpoch(t *testing.T) {
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	owner := node.ID("owner")
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+		Epoch:        2,
+	}, 100, false)
+	db.AddReplicatingMaintainer(cf, owner)
+
+	controller := &Controller{
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			&node.Info{ID: node.ID("coordinator")},
+			db,
+			nil,
+			nil,
+			10,
+		),
+	}
+
+	stale := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    200,
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
+	}
+	require.Nil(t, controller.handleSingleMaintainerStatus(owner, stale, cfID))
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
+	staleTerminal := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    300,
+		State:           heartbeatpb.ComponentState_Stopped,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
+	}
+	require.Nil(t, controller.handleSingleMaintainerStatus(owner, staleTerminal, cfID))
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
+	current := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    200,
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 2,
+	}
+	require.NotNil(t, controller.handleSingleMaintainerStatus(owner, current, cfID))
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+}
+
+func TestMaintainerMovePreservesOriginFinalCheckpoint(t *testing.T) {
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	origin := node.ID("origin")
+	target := node.ID("target")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+		Epoch:        1,
+	}, 100, false)
+	db.AddReplicatingMaintainer(cf, origin)
+
+	opController := operator.NewOperatorController(
+		&node.Info{ID: node.ID("coordinator")},
+		db,
+		nil,
+		nil,
+		10,
+	)
+	moveOp := operator.NewMoveMaintainerOperator(db, cf, origin, target)
+	require.True(t, opController.AddOperator(moveOp))
+
+	// A move persists the next owner epoch before the old owner reports its
+	// final checkpoint.
+	info, err := cf.GetInfo().Clone()
+	require.NoError(t, err)
+	info.Epoch = 2
+	cf.SetInfo(info)
+
+	controller := &Controller{
+		changefeedDB:       db,
+		operatorController: opController,
+	}
+	finalStatus := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    200,
+		State:           heartbeatpb.ComponentState_Stopped,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
+	}
+	change := controller.handleSingleMaintainerStatus(origin, finalStatus, cfID)
+	require.NotNil(t, change)
+	require.Equal(t, ChangeTs, change.changeType)
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+
+	addMessage := moveOp.Schedule()
+	require.NotNil(t, addMessage)
+	addRequest := addMessage.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(200), addRequest.CheckpointTs)
+	require.Equal(t, uint64(2), addRequest.MaintainerEpoch)
+}
+
+func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	db := changefeed.NewChangefeedDB(1)
+	controller := &Controller{
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			&node.Info{ID: node.ID("coordinator")},
+			db,
+			nil,
+			nil,
+			10,
+		),
+		messageCenter: mc,
+	}
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+
+	controller.handleNonExistentChangefeed(cfID, node.ID("owner"), &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		State:           heartbeatpb.ComponentState_Working,
+		MaintainerEpoch: 7,
+	})
+
+	msg := <-mc.GetMessageChannel()
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
+	require.True(t, req.Cascade)
+	require.True(t, req.Removed)
+}
+
+func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T) {
+	testCases := []struct {
+		name          string
+		progress      config.Progress
+		expectRemoved bool
+		expectInDB    bool
+		expectAbsent  bool
+		expectStopped bool
+	}{
+		{
+			name:         "running",
+			progress:     config.ProgressNone,
+			expectInDB:   true,
+			expectAbsent: true,
+		},
+		{
+			name:          "removing",
+			progress:      config.ProgressRemoving,
+			expectRemoved: true,
+		},
+		{
+			name:          "stopping",
+			progress:      config.ProgressStopping,
+			expectInDB:    true,
+			expectStopped: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			backend := mock_changefeed.NewMockBackend(ctrl)
+			mc := messaging.NewMockMessageCenter()
+			appcontext.SetService(appcontext.MessageCenter, mc)
+			appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+
+			nodeManager := watcher.NewNodeManager(nil, nil)
+			appcontext.SetService(watcher.NodeManagerName, nodeManager)
+			oldNode := node.ID("old-owner")
+			nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
+
+			db := changefeed.NewChangefeedDB(1)
+			cfID := common.NewChangeFeedIDWithName(tc.name, common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "blackhole://",
+				State:        config.StateNormal,
+				Epoch:        2,
+			}
+			db.Init(map[common.ChangeFeedID]*changefeed.Changefeed{
+				cfID: changefeed.NewChangefeed(cfID, info, 100, false),
+			})
+			backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{
+				cfID: {
+					Info:   info,
+					Status: &config.ChangeFeedStatus{CheckpointTs: 100, Progress: tc.progress},
+				},
+			}, nil).Times(1)
+
+			self := &node.Info{ID: node.ID("coordinator")}
+			controller := &Controller{
+				selfNode:     self,
+				initialized:  atomic.NewBool(false),
+				backend:      backend,
+				changefeedDB: db,
+				operatorController: operator.NewOperatorController(
+					self,
+					db,
+					backend,
+					nil,
+					10,
+				),
+				nodeManager:   nodeManager,
+				taskScheduler: threadpool.NewThreadPool(1),
+				scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
+					pkgscheduler.BasicScheduler: noopScheduler{},
+				}),
+				messageCenter: mc,
+			}
+			t.Cleanup(controller.taskScheduler.Stop)
+
+			controller.finishBootstrap(context.Background(), map[common.ChangeFeedID][]remoteMaintainer{
+				cfID: {{
+					nodeID: oldNode,
+					status: &heartbeatpb.MaintainerStatus{
+						ChangefeedID:    cfID.ToPB(),
+						State:           heartbeatpb.ComponentState_Working,
+						CheckpointTs:    200,
+						BootstrapDone:   true,
+						MaintainerEpoch: 1,
+					},
+				}},
+			})
+
+			if tc.expectInDB {
+				require.NotNil(t, db.GetByID(cfID))
+			} else {
+				require.Nil(t, db.GetByID(cfID))
+			}
+			if tc.expectAbsent {
+				require.Equal(t, 1, db.GetAbsentSize())
+			}
+			if tc.expectStopped {
+				require.Equal(t, 1, db.GetStoppedSize())
+			}
+
+			op := controller.operatorController.GetOperator(cfID)
+			require.NotNil(t, op)
+			require.False(t, op.IsFinished())
+			reqMsg := op.Schedule()
+			require.Equal(t, oldNode, reqMsg.To)
+			req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+			require.Equal(t, uint64(1), req.MaintainerEpoch)
+			require.Equal(t, tc.expectRemoved, req.Removed)
+		})
+	}
+}
+
+func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	mc := messaging.NewMockMessageCenter()
+	oldNode := node.ID("old-owner")
+	currentNode := node.ID("current-owner")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
+	nodeManager.GetAliveNodes()[currentNode] = &node.Info{ID: currentNode}
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	cfID := common.NewChangeFeedIDWithName("duplicate-epoch", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+		Epoch:        2,
+	}
+	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{
+		cfID: {
+			Info:   info,
+			Status: &config.ChangeFeedStatus{CheckpointTs: 100},
+		},
+	}, nil).Times(1)
+
+	db := changefeed.NewChangefeedDB(1)
+	self := &node.Info{ID: node.ID("coordinator")}
+	controller := &Controller{
+		selfNode:     self,
+		initialized:  atomic.NewBool(false),
+		backend:      backend,
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			self,
+			db,
+			backend,
+			nil,
+			10,
+		),
+		nodeManager:   nodeManager,
+		taskScheduler: threadpool.NewThreadPool(1),
+		scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
+			pkgscheduler.BasicScheduler: noopScheduler{},
+		}),
+		messageCenter: mc,
+		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
+			"test",
+			func(node.ID, string) *messaging.TargetMessage { return nil },
+		),
+	}
+	t.Cleanup(controller.taskScheduler.Stop)
+
+	require.NotPanics(t, func() {
+		controller.handleBootstrapResponses(context.Background(), map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse{
+			oldNode: {
+				Statuses: []*heartbeatpb.MaintainerStatus{{
+					ChangefeedID:    cfID.ToPB(),
+					State:           heartbeatpb.ComponentState_Working,
+					CheckpointTs:    150,
+					BootstrapDone:   true,
+					MaintainerEpoch: 1,
+				}},
+			},
+			currentNode: {
+				Statuses: []*heartbeatpb.MaintainerStatus{{
+					ChangefeedID:    cfID.ToPB(),
+					State:           heartbeatpb.ComponentState_Working,
+					CheckpointTs:    200,
+					BootstrapDone:   true,
+					MaintainerEpoch: 2,
+				}},
+			},
+		})
+	})
+
+	cf := db.GetByID(cfID)
+	require.NotNil(t, cf)
+	require.Equal(t, currentNode, cf.GetNodeID())
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+
+	op := controller.operatorController.GetOperator(cfID)
+	require.NotNil(t, op)
+	reqMsg := op.Schedule()
+	require.Equal(t, oldNode, reqMsg.To)
+	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(1), req.MaintainerEpoch)
+	require.False(t, req.Removed)
+}
+
 func TestResumeChangefeed(t *testing.T) {
 	// Scenario: resume should propagate backend failures and update in-memory state after success.
 	// Steps: try a missing changefeed, simulate a backend resume failure, then return a persisted
@@ -280,11 +688,12 @@ func TestResumeChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("failed")).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), uint64(12)).
+		Return(nil, errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
+	expectResumeChangefeed(t, backend, cfID, cf, 12)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
@@ -338,7 +747,7 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
+	expectResumeChangefeed(t, backend, cfID, cf, newCheckpointTs)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
@@ -375,7 +784,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
+	expectResumeChangefeed(t, backend, cfID, cf, 100)
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
@@ -392,8 +801,8 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
 	// Scenario: stopped changefeed metadata can be edited directly in the backend while
 	// the coordinator still has an older in-memory copy. Steps: resume the changefeed
-	// with backend-returned info whose sink URI differs from memory, then verify the
-	// in-memory changefeed uses the backend value instead of overwriting it.
+	// with epoch-bumped backend info whose sink URI differs from memory, then verify
+	// the in-memory changefeed uses the backend value instead of overwriting it.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -414,14 +823,46 @@ func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
 	require.NoError(t, err)
 	backendInfo.SinkURI = "mysql://upstream:4000"
 	backendInfo.State = config.StateNormal
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, uint64(100)).Return(backendInfo, nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), uint64(100)).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, checkpointTs uint64) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.Equal(t, uint64(100), checkpointTs)
+			backendInfo.Epoch = candidateEpoch
+			return backendInfo, nil
+		}).Times(1)
 
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 	require.Equal(t, "mysql://upstream:4000", changefeedDB.GetByID(cfID).GetInfo().SinkURI)
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
+func expectResumeChangefeed(
+	t *testing.T,
+	backend *mock_changefeed.MockBackend,
+	cfID common.ChangeFeedID,
+	cf *changefeed.Changefeed,
+	checkpointTs uint64,
+) {
+	t.Helper()
+
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, gomock.Any(), checkpointTs).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, gotCheckpointTs uint64) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.Equal(t, checkpointTs, gotCheckpointTs)
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.State = config.StateNormal
+			info.Epoch = candidateEpoch
+			return info, nil
+		}).Times(1)
+}
+
 func TestPauseChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -438,7 +879,7 @@ func TestPauseChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -458,7 +899,8 @@ func TestPauseChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	backend.EXPECT().PauseChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
@@ -598,6 +1040,11 @@ func TestGetChangefeedReturnedInfoMutationDoesNotRaceWithStoredInfo(t *testing.T
 }
 
 func TestRemoveChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -613,7 +1060,7 @@ func TestRemoveChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -629,7 +1076,8 @@ func TestRemoveChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
@@ -647,6 +1095,41 @@ func TestRemoveChangefeed(t *testing.T) {
 	require.Equal(t, uint64(1), cp)
 }
 
+func TestUpdateChangefeedCheckpointTsSkipsStoppedAndRemovedChangefeeds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{backend: backend, changefeedDB: changefeedDB}
+
+	runningID := common.NewChangeFeedIDWithName("running", common.DefaultKeyspaceName)
+	stoppedID := common.NewChangeFeedIDWithName("stopped", common.DefaultKeyspaceName)
+	removedID := common.NewChangeFeedIDWithName("removed", common.DefaultKeyspaceName)
+	running := changefeed.NewChangefeed(runningID, &config.ChangeFeedInfo{
+		ChangefeedID: runningID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+	}, 1, true)
+	stopped := changefeed.NewChangefeed(stoppedID, &config.ChangeFeedInfo{
+		ChangefeedID: stoppedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(running)
+	changefeedDB.AddStoppedChangefeed(stopped)
+
+	checkpointTs := map[common.ChangeFeedID]uint64{
+		runningID: 100,
+		stoppedID: 200,
+		removedID: 300,
+	}
+	backend.EXPECT().UpdateChangefeedCheckpointTs(gomock.Any(), map[common.ChangeFeedID]uint64{
+		runningID: 100,
+	}).Return(nil)
+
+	require.NoError(t, controller.updateChangefeedCheckpointTs(context.Background(), checkpointTs))
+	require.Equal(t, map[common.ChangeFeedID]uint64{runningID: 100}, checkpointTs)
+}
+
 func TestListChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -658,7 +1141,7 @@ func TestListChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -705,7 +1188,7 @@ func TestCreateChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 		initialized: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

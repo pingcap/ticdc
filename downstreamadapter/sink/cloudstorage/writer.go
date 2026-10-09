@@ -20,12 +20,13 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -50,6 +51,12 @@ type writer struct {
 
 	metricFlushBytes    prometheus.Observer
 	metricFlushDuration prometheus.Observer
+	writeGate           *writelease.Gate
+}
+
+func (d *writer) setWriteGate(gate *writelease.Gate) {
+	d.writeGate = gate
+	d.filePathGenerator.SetWriteGate(gate)
 }
 
 // flushTask is internal and never crosses component boundary.
@@ -147,7 +154,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
+				tableVersion, hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -168,6 +175,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Int("shardID", d.shardID))
 					continue
 				}
+				table.TableInfoVersion = tableVersion
 
 				date := d.filePathGenerator.GenerateDateStr()
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)
@@ -179,15 +187,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return err
 				}
-				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
-				if err != nil {
-					log.Error("failed to generate index file path",
-						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
-						zap.Int("shardID", d.shardID),
-						zap.Error(err))
-					return err
-				}
+				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
 				payload, err := buildPayload(d.spool, tableTask)
 				if err != nil {
@@ -228,6 +228,9 @@ func (d *writer) discardEntries(entries []*spool.Entry) {
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
 	keyspace := d.changeFeedID.Keyspace()
 	changefeed := d.changeFeedID.Name()
+	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
+		return err
+	}
 	start := time.Now()
 
 	err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
@@ -269,6 +272,9 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
+	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
+		return err
+	}
 	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
 	if err != nil {
 		log.Error("failed to write index file to external storage",

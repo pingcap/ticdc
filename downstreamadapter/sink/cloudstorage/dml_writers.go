@@ -17,18 +17,23 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	serverconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
+
+const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
 
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
@@ -43,8 +48,15 @@ type dmlWriters struct {
 	encodeGroup *encoderGroup
 	spool       *spool.Spool
 
-	writers []*writer
-	closed  atomic.Bool
+	columnSelector *columnselector.ColumnSelectors
+	writers        []*writer
+	closed         atomic.Bool
+}
+
+func (d *dmlWriters) setWriteGate(gate *writelease.Gate) {
+	for _, writer := range d.writers {
+		writer.setWriteGate(gate)
+	}
 }
 
 func newDMLWriters(
@@ -54,6 +66,7 @@ func newDMLWriters(
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
+	columnSelector *columnselector.ColumnSelectors,
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
@@ -64,7 +77,12 @@ func newDMLWriters(
 	spool, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(config.SpoolBaseDir),
+		spool.WithDirectoryNamespace(
+			cloudStorageSpoolDirectory,
+			serverconfig.GetGlobalServerConfig().AdvertiseAddr,
+		),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+		spool.WithMetrics(newSpoolMetrics(changefeedID)),
 	)
 	if err != nil {
 		return nil, err
@@ -76,12 +94,13 @@ func newDMLWriters(
 	}
 
 	return &dmlWriters{
-		changefeedID: changefeedID,
-		statistics:   statistics,
-		msgCh:        messageCh,
-		encodeGroup:  encoderGroup,
-		spool:        spool,
-		writers:      writers,
+		changefeedID:   changefeedID,
+		statistics:     statistics,
+		msgCh:          messageCh,
+		encodeGroup:    encoderGroup,
+		spool:          spool,
+		columnSelector: columnSelector,
+		writers:        writers,
 	}, nil
 }
 
@@ -168,7 +187,7 @@ func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-	d.msgCh.Push(newDMLTask(table, event))
+	d.msgCh.Push(newDMLTask(table, event, d.columnSelector.GetForTableInfo(event.TableInfo)))
 }
 
 func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {

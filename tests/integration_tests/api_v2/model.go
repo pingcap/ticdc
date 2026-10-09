@@ -203,10 +203,11 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
+	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
+	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
+	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
+	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
+	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
 }
 
 // Table represents a qualified table name.
@@ -278,6 +279,7 @@ type ConsistentConfig struct {
 	FlushWorkerNum        int    `json:"flush_worker_num"`
 	Storage               string `json:"storage"`
 	UseFileBackend        bool   `json:"use_file_backend"`
+	SpoolDiskQuota        int64  `json:"spool_disk_quota"`
 }
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.

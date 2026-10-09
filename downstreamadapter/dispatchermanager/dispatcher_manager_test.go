@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
-	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -124,6 +122,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	defaultAtomicity := config.DefaultAtomicityLevel()
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		false,
 		"system",
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
@@ -146,6 +145,51 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCountIgnoreUpdateOnlyColumnsRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		filter *config.FilterConfig
+		count  int
+	}{
+		{
+			name: "nil filter",
+		},
+		{
+			name: "nil event filter rule",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{nil},
+			},
+		},
+		{
+			name: "empty ignore update only columns",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t"}},
+				},
+			},
+		},
+		{
+			name: "configured rules",
+			filter: &config.FilterConfig{
+				EventFilters: []*config.EventFilterRule{
+					{Matcher: []string{"test.t1"}, IgnoreUpdateOnlyColumns: []string{"version"}},
+					{Matcher: []string{"test.t2"}},
+					{Matcher: []string{"test.t3"}, IgnoreUpdateOnlyColumns: []string{"updated_at"}},
+				},
+			},
+			count: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.count, countIgnoreUpdateOnlyColumnsRules(tc.filter))
+		})
+	}
 }
 
 type bootstrapSchemaStoreForTest struct{}
@@ -455,20 +499,9 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	mysqlConfig := mysqlcfg.New()
-	mysqlConfig.EnableDDLTs = false
-	mysqlSink := mysql.NewMySQLSink(
-		context.Background(),
-		changefeedID,
-		mysqlConfig,
-		nil,
-		false,
-		false,
-		time.Minute,
-	)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
-		sink:         mysqlSink,
+		sink:         newDispatcherManagerTestSink(t, common.BlackHoleSinkType),
 	}
 	manager.closed.Store(true)
 
@@ -619,6 +652,7 @@ func TestNewDispatcherManagerReturnsFenceErrorWhenInitializingRegistrationReject
 		nil,
 		1,
 		node.ID("maintainer"),
+		1,
 		true,
 		func(manager *DispatcherManager) bool {
 			hookCalled.Store(true)
@@ -750,7 +784,7 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 	manager := createTestManager(t)
 	manager.writePathClosed.Store(true)
 	dispatcherID := common.NewDispatcherID()
-	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: manager.changefeedID.ToPB(),
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -767,7 +801,7 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 
 	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
 		dispatcherID: {
-			Id: dispatcherID,
+			ID: dispatcherID,
 			TableSpan: &heartbeatpb.TableSpan{
 				TableID: 1,
 			},
@@ -974,6 +1008,143 @@ func TestDoMerge(t *testing.T) {
 	require.False(t, exists)
 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
 	require.False(t, exists)
+}
+
+// TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned covers maintainer failover between merged
+// dispatcher commit and source dispatcher cleanup. The test tracks a merge request, runs doMerge,
+// verifies the journal is still reported while sources are being removed, then marks the merged
+// dispatcher Working and expects heartbeat cleanup to drop the finished journal.
+func TestDoMergeKeepsMergeJournalUntilSourcesAreCleaned(t *testing.T) {
+	manager := createTestManager(t)
+
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
+
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+
+	mergedID := common.NewDispatcherID()
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID:       manager.changefeedID.ToPB(),
+		DispatcherIDs:      []*heartbeatpb.DispatcherID{dispatcher1.GetId().ToPB(), dispatcher2.GetId().ToPB()},
+		MergedDispatcherID: mergedID.ToPB(),
+		Mode:               common.DefaultMode,
+	}
+	manager.TrackMergeOperator(mergeReq)
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
+	require.NotNil(t, task)
+
+	doMerge(task, task.manager.dispatcherMap)
+	require.Len(t, manager.GetMergeOperators(), 1)
+
+	manager.aggregateDispatcherHeartbeats(false)
+	require.Len(t, manager.GetMergeOperators(), 1)
+	_, exists := manager.dispatcherMap.Get(dispatcher1.GetId())
+	require.False(t, exists)
+	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.False(t, exists)
+
+	mergedDispatcher, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Working)
+	manager.aggregateDispatcherHeartbeats(false)
+	require.Empty(t, manager.GetMergeOperators())
+}
+
+func TestMergeDispatcherRequestRecvDoesNotTrackStaleMaintainerEpoch(t *testing.T) {
+	// Scenario: an old maintainer sends a delayed merge request after dispatcher manager
+	// ownership has moved to a newer epoch.
+	// Steps: receive the request through HeartBeatCollector and verify the journal is not
+	// updated before the dynamic stream handler applies its epoch fence.
+	manager := createTestManager(t)
+	require.True(t, manager.TryUpdateMaintainer("current-maintainer", 2))
+
+	collector := &HeartBeatCollector{
+		mergeDispatcherRequestDynamicStream: newMergeDispatcherRequestDynamicStream(),
+	}
+	defer collector.mergeDispatcherRequestDynamicStream.Close()
+	require.NoError(t, collector.mergeDispatcherRequestDynamicStream.AddPath(manager.changefeedID.Id, manager))
+
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{
+			common.NewDispatcherID().ToPB(),
+			common.NewDispatcherID().ToPB(),
+		},
+		MergedDispatcherID: common.NewDispatcherID().ToPB(),
+		Mode:               common.DefaultMode,
+		MaintainerEpoch:    1,
+	}
+	msg := messaging.NewSingleTargetMessage(
+		"receiver",
+		messaging.HeartbeatCollectorTopic,
+		mergeReq,
+	)
+	msg.From = "old-maintainer"
+
+	require.NoError(t, collector.RecvMessages(context.Background(), msg))
+	require.Empty(t, manager.GetMergeOperators())
+}
+
+// TestTrackMergeOperatorClonesRequest verifies that the merge journal owns its request data.
+// It mutates the original request and one returned snapshot, then confirms later reads retain
+// the tracked epoch and nested dispatcher IDs.
+func TestTrackMergeOperatorClonesRequest(t *testing.T) {
+	manager := createTestManager(t)
+	sourceDispatcherID := common.NewDispatcherID()
+	mergeReq := &heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{
+			sourceDispatcherID.ToPB(),
+			common.NewDispatcherID().ToPB(),
+		},
+		MergedDispatcherID: common.NewDispatcherID().ToPB(),
+		Mode:               common.DefaultMode,
+		MaintainerEpoch:    7,
+	}
+
+	manager.TrackMergeOperator(mergeReq)
+	mergeReq.MaintainerEpoch = 8
+	mergeReq.DispatcherIDs[0].Low ^= 1
+
+	operators := manager.GetMergeOperators()
+	require.Len(t, operators, 1)
+	require.Equal(t, uint64(7), operators[0].MaintainerEpoch)
+	require.Equal(t, sourceDispatcherID.ToPB(), operators[0].DispatcherIDs[0])
+
+	operators[0].MaintainerEpoch = 9
+	operators[0].DispatcherIDs[0].Low ^= 1
+	operators = manager.GetMergeOperators()
+	require.Len(t, operators, 1)
+	require.Equal(t, uint64(7), operators[0].MaintainerEpoch)
+	require.Equal(t, sourceDispatcherID.ToPB(), operators[0].DispatcherIDs[0])
+}
+
+// TestTrackMergeOperatorRejectsZeroMergedDispatcherID covers a malformed merge request.
+// The test tracks a request with an all-zero merged ID and verifies it cannot occupy the shared
+// zero-value map key or appear in later bootstrap responses.
+func TestTrackMergeOperatorRejectsZeroMergedDispatcherID(t *testing.T) {
+	manager := createTestManager(t)
+	manager.TrackMergeOperator(&heartbeatpb.MergeDispatcherRequest{
+		ChangefeedID:       manager.changefeedID.ToPB(),
+		DispatcherIDs:      []*heartbeatpb.DispatcherID{common.NewDispatcherID().ToPB(), common.NewDispatcherID().ToPB()},
+		MergedDispatcherID: (&common.DispatcherID{}).ToPB(),
+		Mode:               common.DefaultMode,
+	})
+	require.Empty(t, manager.GetMergeOperators())
 }
 
 func TestDoMergeWithThreeDispatchers(t *testing.T) {

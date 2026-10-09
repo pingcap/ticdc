@@ -15,13 +15,16 @@ package topicmanager
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 const kafkaTopicManagerTestTopic = "mock_topic"
@@ -29,150 +32,275 @@ const kafkaTopicManagerTestTopic = "mock_topic"
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	cfg := &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
-		ReplicationFactor: 1,
-	}
-
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	ctx := context.Background()
-	var gotNewTopicDetail *kafka.TopicDetail
-	var gotNewTopicValidateOnly bool
-	var gotFailedTopicDetail *kafka.TopicDetail
-	var gotFailedTopicValidateOnly bool
-	gomock.InOrder(
-		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
+
+	t.Run("existing topic", func(t *testing.T) {
+		t.Parallel()
+
+		ctrl := gomock.NewController(t)
+		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{kafkaTopicManagerTestTopic}, false).Return(
 			map[string]kafka.TopicDetail{
-				kafkaTopicManagerTestTopic: {
-					Name:          kafkaTopicManagerTestTopic,
-					NumPartitions: 2,
-				},
-			}, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				gotNewTopicDetail = detail
-				gotNewTopicValidateOnly = validateOnly
+				kafkaTopicManagerTestTopic: {Name: kafkaTopicManagerTestTopic, NumPartitions: 2},
+			}, nil)
+		manager := newKafkaTopicManager(
+			kafkaTopicManagerTestTopic,
+			changefeedID,
+			adminClient,
+			&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+		)
+
+		partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), kafkaTopicManagerTestTopic)
+
+		require.NoError(t, err)
+		require.Equal(t, int32(2), partitionNum)
+	})
+
+	t.Run("create missing topic", func(t *testing.T) {
+		t.Parallel()
+
+		ctrl := gomock.NewController(t)
+		adminClient := kafka.NewMockAdminClient(ctrl)
+		var createdTopic *kafka.TopicDetail
+		postCreateDescribeCount := 0
+		var manager *kafkaTopicManager
+		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).DoAndReturn(
+			func(context.Context, []string, bool) (map[string]kafka.TopicDetail, error) {
+				if createdTopic == nil {
+					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, sarama.ErrUnknownTopicOrPartition, "describe-topic", "new-topic")
+				}
+				postCreateDescribeCount++
+				_, cached := manager.topics.Load("new-topic")
+				require.False(t, cached)
+				if postCreateDescribeCount == 1 {
+					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, io.EOF, "describe-topic", "new-topic")
+				}
+				return map[string]kafka.TopicDetail{
+					createdTopic.Name: {Name: createdTopic.Name, NumPartitions: createdTopic.NumPartitions},
+				}, nil
+			}).Times(3)
+		adminClient.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, detail *kafka.TopicDetail) error {
+				copy := *detail
+				createdTopic = &copy
 				return nil
-			}),
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
-			map[string]kafka.TopicDetail{
-				"new-topic": {
-					Name:          "new-topic",
-					NumPartitions: 2,
-				},
-			}, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic2"}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic-failed"}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				gotFailedTopicDetail = detail
-				gotFailedTopicValidateOnly = validateOnly
-				return sarama.ErrInvalidReplicationFactor
-			}),
-	)
+			})
+		manager = newKafkaTopicManager(
+			kafkaTopicManagerTestTopic,
+			changefeedID,
+			adminClient,
+			&kafka.AutoCreateTopicConfig{
+				AutoCreate:        true,
+				PartitionNum:      2,
+				ReplicationFactor: 1,
+				RequiredAcks:      kafka.WaitForLocal,
+			},
+		)
 
-	manager := newKafkaTopicManager(ctx, kafkaTopicManagerTestTopic, changefeedID, adminClient, cfg)
-	defer manager.Close()
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, kafkaTopicManagerTestTopic)
-	require.NoError(t, err)
-	require.Equal(t, int32(2), partitionNum)
+		partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "new-topic")
 
-	partitionNum, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic")
-	require.NoError(t, err)
-	require.Equal(t, int32(2), partitionNum)
-	require.Equal(t, &kafka.TopicDetail{
-		Name:              "new-topic",
-		NumPartitions:     2,
-		ReplicationFactor: 1,
-	}, gotNewTopicDetail)
-	require.False(t, gotNewTopicValidateOnly)
-	partitionsNum, err := manager.GetPartitionNum(ctx, "new-topic")
-	require.NoError(t, err)
-	require.Equal(t, int32(2), partitionsNum)
+		require.NoError(t, err)
+		require.Equal(t, int32(2), partitionNum)
+		require.Equal(t, &kafka.TopicDetail{
+			Name:              "new-topic",
+			NumPartitions:     2,
+			ReplicationFactor: 1,
+		}, createdTopic)
+		require.Equal(t, 2, postCreateDescribeCount)
+		partitionsNum, err := manager.GetPartitionNum(context.Background(), "new-topic")
+		require.NoError(t, err)
+		require.Equal(t, int32(2), partitionsNum)
+	})
 
-	// Try to create a topic without auto create.
-	cfg.AutoCreate = false
-	manager = newKafkaTopicManager(ctx, "new-topic2", changefeedID, adminClient, cfg)
-	defer manager.Close()
-	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic2")
-	require.Regexp(
-		t,
-		"`auto-create-topic` is false, and new-topic2 not found",
-		err,
-	)
+	t.Run("auto create disabled", func(t *testing.T) {
+		t.Parallel()
 
-	topic := "new-topic-failed"
-	// Invalid replication factor.
-	// It happens when replication-factor is greater than the number of brokers.
-	cfg = &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
-		ReplicationFactor: 4,
-	}
-	manager = newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
-	defer manager.Close()
-	_, err = manager.CreateTopicAndWaitUntilVisible(ctx, topic)
-	require.Regexp(
-		t,
-		"kafka create topic failed: kafka server: Replication-factor is invalid",
-		err,
-	)
-	require.NotNil(t, gotFailedTopicDetail)
-	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
-	require.False(t, gotFailedTopicValidateOnly)
+		ctrl := gomock.NewController(t)
+		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+		manager := newKafkaTopicManager(
+			"new-topic",
+			changefeedID,
+			adminClient,
+			&kafka.AutoCreateTopicConfig{
+				AutoCreate:        false,
+				PartitionNum:      2,
+				ReplicationFactor: 1,
+				RequiredAcks:      kafka.WaitForAll,
+			},
+		)
+
+		_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "new-topic")
+
+		require.ErrorContains(t, err, "`auto-create-topic` is false, and new-topic not found")
+	})
+
+	t.Run("create error", func(t *testing.T) {
+		t.Parallel()
+
+		ctrl := gomock.NewController(t)
+		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+		var createdTopic *kafka.TopicDetail
+		adminClient.EXPECT().CreateTopic(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, detail *kafka.TopicDetail) error {
+				copy := *detail
+				createdTopic = &copy
+				return errors.ErrKafkaAdminAPI.GenWithStackByArgs("create-topic", detail.Name)
+			})
+		manager := newKafkaTopicManager(
+			"new-topic",
+			changefeedID,
+			adminClient,
+			&kafka.AutoCreateTopicConfig{
+				AutoCreate:        true,
+				PartitionNum:      2,
+				ReplicationFactor: 4,
+			},
+		)
+
+		_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "new-topic")
+
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.Equal(t, "new-topic", createdTopic.Name)
+	})
 }
 
-func TestCreateTopicWaitsUntilVisible(t *testing.T) {
+func TestCreateTopicValidatesReplicationFactor(t *testing.T) {
 	t.Parallel()
 
 	ctrl := gomock.NewController(t)
-	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	cfg := &kafka.AutoCreateTopicConfig{
-		AutoCreate:        true,
-		PartitionNum:      2,
-		ReplicationFactor: 1,
-	}
-
-	topic := "delayed-topic"
-	gomock.InOrder(
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, true).Return(
-			map[string]kafka.TopicDetail{}, nil),
-		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
-			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				require.Equal(t, &kafka.TopicDetail{
-					Name:              topic,
-					NumPartitions:     2,
-					ReplicationFactor: 1,
-				}, detail)
-				require.False(t, validateOnly)
-				return nil
-			}),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, sarama.ErrUnknownTopicOrPartition),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			nil, sarama.ErrUnknownTopicOrPartition),
-		adminClient.EXPECT().GetTopicsMeta([]string{topic}, false).Return(
-			map[string]kafka.TopicDetail{
-				topic: {
-					Name:          topic,
-					NumPartitions: 2,
-				},
-			}, nil),
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"new-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+	adminClient.EXPECT().GetBrokerConfig(gomock.Any(), kafka.MinInsyncReplicasConfigName).Return("2", true, nil)
+	manager := newKafkaTopicManager(
+		"new-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+			RequiredAcks:      kafka.WaitForAll,
+		},
 	)
 
-	ctx := context.Background()
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	manager := newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
-	defer manager.Close()
+	_, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "new-topic")
 
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, topic)
+	require.ErrorContains(t, err, "`replication-factor` 1 is smaller than the `min.insync.replicas` 2 of broker")
+}
+
+func TestWaitUntilTopicVisibleUnretryableError(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{name: "sarama", cause: sarama.ErrInvalidTopic},
+		{name: "franz-go", cause: kerr.InvalidTopicException},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := gomock.NewController(t)
+			adminClient := kafka.NewMockAdminClient(ctrl)
+			adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"invalid-topic"}, false).Return(
+				nil,
+				errors.WrapError(errors.ErrKafkaAdminAPI, test.cause, "describe-topic", "invalid-topic"),
+			).Times(1)
+			manager := newKafkaTopicManager(
+				"invalid-topic",
+				common.NewChangefeedID4Test("test", "test"),
+				adminClient,
+				&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+			)
+
+			err := manager.waitUntilTopicVisible(context.Background(), "invalid-topic")
+
+			require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+			require.ErrorIs(t, err, test.cause)
+		})
+	}
+}
+
+func TestGetTopicManagerStartsBackgroundRefreshAfterTopicReady(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"existing-topic"}, false).Return(
+		map[string]kafka.TopicDetail{
+			"existing-topic": {Name: "existing-topic", NumPartitions: 2},
+		}, nil)
+
+	manager, err := GetTopicManagerAndTryCreateTopic(
+		t.Context(),
+		common.NewChangefeedID4Test("test", "test"),
+		"existing-topic",
+		&kafka.AutoCreateTopicConfig{PartitionNum: 2},
+		adminClient,
+	)
+
+	require.NoError(t, err)
+	defer manager.Close()
+	require.NotNil(t, manager.(*kafkaTopicManager).cancel)
+}
+
+func TestCreateTopicWithTopicDescribeDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"default-topic"}, false).Return(
+		nil, errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "default-topic"))
+	manager := newKafkaTopicManager(
+		"default-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+		},
+	)
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "default-topic")
+
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
+	partitions, ok := manager.topics.Load("default-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
+}
+
+func TestCreateTopicWithCreateDenied(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{"default-topic"}, false).Return(map[string]kafka.TopicDetail{}, nil)
+	adminClient.EXPECT().CreateTopic(gomock.Any(), &kafka.TopicDetail{
+		Name:              "default-topic",
+		NumPartitions:     2,
+		ReplicationFactor: 1,
+	}).Return(errors.ErrKafkaAuthorizationFailed.GenWithStackByArgs("create-topic", "default-topic"))
+	manager := newKafkaTopicManager(
+		"default-topic",
+		common.NewChangefeedID4Test("test", "test"),
+		adminClient,
+		&kafka.AutoCreateTopicConfig{
+			AutoCreate:        true,
+			PartitionNum:      2,
+			ReplicationFactor: 1,
+		},
+	)
+
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(context.Background(), "default-topic")
+
+	require.NoError(t, err)
+	require.Equal(t, int32(2), partitionNum)
+	partitions, ok := manager.topics.Load("default-topic")
+	require.True(t, ok)
+	require.Equal(t, int32(2), partitions)
 }

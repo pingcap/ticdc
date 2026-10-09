@@ -41,8 +41,9 @@ type option struct {
 	maxMessageBytes int
 	maxBatchSize    int
 
-	codecConfig *common.Config
-	sinkConfig  *config.SinkConfig
+	codecConfig   *common.Config
+	sinkConfig    *config.SinkConfig
+	caseSensitive bool
 
 	timezone string
 
@@ -69,17 +70,14 @@ func newOption() *option {
 func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Panic("invalid upstream-uri", zap.Error(err))
+		log.Panic("invalid upstream-uri", zap.Error(putil.MaskSensitiveDataInURLError(err)))
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if scheme != "kafka" {
-		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
-			zap.String("upstreamURI", upstreamURIStr))
+		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`")
 	}
 
-	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
-		return r == '/'
-	})
+	o.topic = strings.Trim(upstreamURI.Path, "/")
 	if len(o.topic) == 0 {
 		log.Panic("no topic provided for the consumer")
 	}
@@ -122,11 +120,11 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		}
 		o.partitionNum = int32(c)
 	}
-	partitionNum, err := getPartitionNum(o)
-	if err != nil {
-		log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
-	}
 	if o.partitionNum == 0 {
+		partitionNum, err := getPartitionNum(o)
+		if err != nil {
+			log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
+		}
 		o.partitionNum = partitionNum
 	}
 
@@ -144,6 +142,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	replicaConfig.Sink.TiDBSourceID = 1
 	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 	o.sinkConfig = replicaConfig.Sink
+	o.caseSensitive = putil.GetOrZero(replicaConfig.CaseSensitive)
 
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
@@ -167,11 +166,8 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		zap.String("topic", o.topic),
 		zap.Int32("partitionNum", o.partitionNum),
 		zap.String("protocol", protocol.String()),
-		zap.String("schemaRegistryURL", o.schemaRegistryURI),
 		zap.String("groupID", o.groupID),
 		zap.Int("maxMessageBytes", o.maxMessageBytes),
 		zap.Int("maxBatchSize", o.maxBatchSize),
-		zap.String("configFile", configFile),
-		zap.String("upstreamURI", upstreamURI.String()),
-		zap.String("downstreamURI", o.downstreamURI))
+		zap.String("configFile", configFile))
 }

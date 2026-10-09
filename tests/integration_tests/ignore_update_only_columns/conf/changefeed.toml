@@ -1,0 +1,12 @@
+[filter]
+rules = ["ignore_update_only_columns.*"]
+
+[[filter.event-filters]]
+matcher = [
+    "ignore_update_only_columns.user_a",
+    "ignore_update_only_columns.user_b",
+]
+ignore-update-only-columns = ["id", "email", "version", "updated_at"]
+
+[sink.kafka-config]
+output-raw-change-event = true
