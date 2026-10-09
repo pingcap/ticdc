@@ -196,10 +196,7 @@ func (w *Writer) multiStmtExecute(
 	var multiStmtArgs []driver.NamedValue
 	for _, values := range dmls.values {
 		for _, value := range values {
-			multiStmtArgs = append(multiStmtArgs, driver.NamedValue{
-				Ordinal: len(multiStmtArgs) + 1,
-				Value:   value,
-			})
+			multiStmtArgs = append(multiStmtArgs, driver.NamedValue{Ordinal: len(multiStmtArgs) + 1, Value: value})
 		}
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
@@ -210,13 +207,12 @@ func (w *Writer) multiStmtExecute(
 	defer cancel()
 
 	// Execute the batch in one RTT and retain the driver's per-statement results.
-	err := conn.Raw(func(raw any) error {
-		// Raw bypasses database/sql's argument conversion. Use the driver's checker
-		// to preserve MySQL's support for unsigned integers, including uint64's high bit.
+	return conn.Raw(func(raw any) error {
+		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
 		checker := raw.(driver.NamedValueChecker)
 		for i := range multiStmtArgs {
 			if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
-				return err
+				return errors.WrapError(errors.ErrMySQLTxnError, err)
 			}
 		}
 		execer := raw.(driver.ExecerContext)
@@ -232,7 +228,11 @@ func (w *Writer) multiStmtExecute(
 					zap.Int("writerID", w.id),
 					zap.Error(rbErr))
 			}
-			return err
+			args := make([]any, len(multiStmtArgs))
+			for i, arg := range multiStmtArgs {
+				args[i] = arg.Value
+			}
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
 		}
 		var rowsAffected int64
 		if result, ok := res.(dmysql.Result); ok {
@@ -249,14 +249,6 @@ func (w *Writer) multiStmtExecute(
 		w.recordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
 		return nil
 	})
-	if err != nil {
-		args := make([]any, len(multiStmtArgs))
-		for i, arg := range multiStmtArgs {
-			args[i] = arg.Value
-		}
-		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
-	}
-	return nil
 }
 
 // logDMLTxnErr prints retryable/irretryable errors with contextual information.

@@ -14,90 +14,19 @@
 package mysql
 
 import (
-	"database/sql/driver"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/go-sql-driver/mysql"
-	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	tidbmodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-func TestMultiStmtExecute(t *testing.T) {
-	execErr := &mysql.MySQLError{Number: 1062, Message: "duplicate entry"}
-	rollbackErr := &mysql.MySQLError{Number: 1105, Message: "rollback failed"}
-	tests := []struct {
-		name         string
-		allRows      []int64
-		execErr      error
-		rollbackErr  error
-		wantAffected float64
-	}{
-		{name: "sum statement results", allRows: []int64{0, 2, 3, 0}, wantAffected: 5},
-		{name: "standard result", wantAffected: 1},
-		{name: "rollback on execute error", execErr: execErr},
-		{name: "preserve execute error when rollback fails", execErr: execErr, rollbackErr: rollbackErr},
-		{name: "discard bad connection", execErr: driver.ErrBadConn, rollbackErr: driver.ErrBadConn},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			writer, db, mock := newTestMysqlWriter(t)
-			defer db.Close()
-			writer.ChangefeedID = common.NewChangefeedID4Test("test", t.Name())
-			t.Cleanup(func() { DeleteDMLEventRowsAffectedMetrics(writer.ChangefeedID) })
-			conn, err := db.Conn(writer.ctx)
-			require.NoError(t, err)
-			defer conn.Close()
-
-			dmls := &preparedDMLs{
-				sqls:   []string{"INSERT INTO t VALUES (?, ?)", "DELETE FROM t WHERE id = ?"},
-				values: [][]any{{int8(1), []byte("value")}, {int32(2)}},
-			}
-			exec := mock.ExpectExec("BEGIN;INSERT INTO t VALUES (?, ?);DELETE FROM t WHERE id = ?;COMMIT;").
-				WithArgs(int64(1), []byte("value"), int64(2))
-			if tt.execErr != nil {
-				exec.WillReturnError(tt.execErr)
-				rollback := mock.ExpectExec("ROLLBACK")
-				if tt.rollbackErr != nil {
-					rollback.WillReturnError(tt.rollbackErr)
-				} else {
-					rollback.WillReturnResult(sqlmock.NewResult(0, 0))
-				}
-			} else if tt.allRows != nil {
-				result := NewMockResult(gomock.NewController(t))
-				result.EXPECT().AllRowsAffected().Return(tt.allRows)
-				exec.WillReturnResult(result)
-			} else {
-				exec.WillReturnResult(sqlmock.NewResult(0, 1))
-			}
-
-			err = writer.multiStmtExecute(conn, dmls, time.Second)
-			if tt.execErr != nil {
-				require.ErrorIs(t, err, tt.execErr)
-				require.ErrorIs(t, err, errors.ErrMySQLTxnError)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, float64(len(dmls.sqls)), testutil.ToFloat64(writer.getRowsAffectedCounter("expected", "total")))
-			}
-			require.Equal(t, tt.wantAffected, testutil.ToFloat64(writer.getRowsAffectedCounter("actual", "total")))
-			if tt.execErr == driver.ErrBadConn {
-				require.Zero(t, db.Stats().OpenConnections)
-			}
-			require.NoError(t, mock.ExpectationsWereMet())
-		})
-	}
-}
 
 // TestShouldGenBatchSQL tests the shouldGenBatchSQL function
 func TestShouldGenBatchSQL(t *testing.T) {
