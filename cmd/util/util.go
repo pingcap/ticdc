@@ -38,7 +38,7 @@ func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems 
 }
 
 // StrictDecodeFileWithMeta also returns which TOML fields were explicitly supplied.
-func StrictDecodeFileWithMeta(path, component string, cfg interface{}, ignoreCheckItems ...string) (toml.MetaData, error) {
+func StrictDecodeFileWithMeta(path, component string, cfg any, ignoreCheckItems ...string) (toml.MetaData, error) {
 	metaData, err := toml.DecodeFile(path, cfg)
 	if err != nil {
 		return metaData, errors.Trace(err)

@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -90,7 +91,7 @@ func main() {
 	defer cancel()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /seen/{marker}", func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +107,7 @@ func main() {
 	})
 	// OAuth failures may echo credentials. Exercise both OAuth client adapters
 	// through the API without requiring an OAuth-capable Kafka deployment.
-	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		tokenCalls++
 		mu.Unlock()
@@ -114,12 +115,16 @@ func main() {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"oauth-credential-sentinel","error_uri":"http://localhost/?client_secret=oauth-credential-sentinel"}`))
 	})
-	mux.HandleFunc("GET /token-count", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /token-count", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		_, _ = fmt.Fprint(w, tokenCalls)
 	})
-	server := &http.Server{Addr: *apiAddr, Handler: mux}
+	server := &http.Server{
+		Addr:              *apiAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
 	defer stop()
 	if err := server.ListenAndServe(); err != nil && ctx.Err() == nil {
