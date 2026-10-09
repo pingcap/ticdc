@@ -17,9 +17,8 @@ package main
 import (
 	"cmp"
 	"context"
+	"net/url"
 	"slices"
-	"sync"
-	"sync/atomic"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -38,11 +37,19 @@ type reader interface {
 	Close() error
 }
 
-// Reader-owned decoding references stay outstanding until every derived effect has
-// been registered. Each effect is released only after its downstream write.
-type inputRecord struct {
-	pending atomic.Int64
-	bytes   atomic.Int64
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (reader, error) {
+	source, err := sourceTypeFromURI(upstreamURI)
+	if err != nil {
+		return nil, err
+	}
+	switch source {
+	case sourceKafka:
+		return newKafkaReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
+	case sourcePulsar:
+		return newPulsarReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
+	default:
+		return newStorageReader(ctx, upstreamURI, timezone, replicaConfig, memory)
+	}
 }
 
 type readResult struct {
@@ -55,70 +62,12 @@ type readResult struct {
 	tableID      int64
 }
 
-type bufferUsage struct {
-	bytes         atomic.Int64
-	readBytes     atomic.Int64
-	records       atomic.Int64
-	effects       atomic.Int64
-	received      atomic.Int64
-	confirmed     atomic.Int64
-	externalBytes func() int64
-	mu            sync.Mutex
-	changed       chan struct{}
-	completed     chan struct{}
-}
-
-func (m *bufferUsage) reserve(ctx context.Context, bytes int64) error {
-	if bytes < 0 || bytes > maxBufferedBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer allocation exceeds its memory budget")
-	}
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		m.mu.Lock()
-		used := m.bytes.Load()
-		external := int64(0)
-		if m.externalBytes != nil {
-			external = m.externalBytes()
-		}
-		if used+bytes+external <= maxBufferedBytes {
-			m.bytes.Add(bytes)
-			m.mu.Unlock()
-			return nil
-		}
-		if m.changed == nil {
-			m.changed = make(chan struct{})
-		}
-		changed := m.changed
-		m.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
-}
-
-func (m *bufferUsage) release(bytes int64) {
-	if bytes == 0 {
-		return
-	}
-	m.mu.Lock()
-	m.bytes.Add(-bytes)
-	if m.changed != nil {
-		close(m.changed)
-		m.changed = nil
-	}
-	m.mu.Unlock()
-}
-
 type partition struct {
 	decoder          codecCommon.Decoder
 	watermark        uint64
 	hasWatermark     bool
-	records          []*inputRecord
-	cachedRecords    []*inputRecord
+	records          []*ack
+	cachedRecords    []*ack
 	cachedUnreleased int
 	paused           bool
 	readSequence     uint64
@@ -134,7 +83,7 @@ type schemaKey struct {
 
 type readDDL struct {
 	event  *event.DDLEvent
-	record *inputRecord
+	record *ack
 	bytes  int64
 }
 
@@ -145,7 +94,7 @@ type readDML struct {
 
 // Shared read-side storage contains decoded input, never a downstream sink.
 type readBuffer struct {
-	memory      *bufferUsage
+	memory      *memoryUsage
 	protocol    config.Protocol
 	partitions  map[int32]*partition
 	pendingDML  []*readDML
@@ -155,8 +104,8 @@ type readBuffer struct {
 	dmlBoundary uint64
 }
 
-func (b *readBuffer) newRecord(ctx context.Context, bytes int64) (*inputRecord, error) {
-	if bytes < 0 || bytes > maxBufferedBytes-2*maxInFlightBytes {
+func (b *readBuffer) newAck(ctx context.Context, bytes int64) (*ack, error) {
+	if bytes < 0 || bytes > maxMemoryBytes-2*maxInFlightBytes {
 		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its memory budget")
 	}
 	// Admit new input only when decoding and filtering can also make progress.
@@ -164,9 +113,9 @@ func (b *readBuffer) newRecord(ctx context.Context, bytes int64) (*inputRecord, 
 		return nil, err
 	}
 	b.memory.release(2 * maxInFlightBytes)
-	record := &inputRecord{}
-	record.bytes.Store(bytes)
-	record.pending.Store(1)
+	record := &ack{}
+	record.memory.Store(bytes)
+	record.refs.Store(1)
 	b.memory.readBytes.Add(bytes)
 	b.memory.records.Add(1)
 	b.memory.received.Add(1)
@@ -174,7 +123,7 @@ func (b *readBuffer) newRecord(ctx context.Context, bytes int64) (*inputRecord, 
 	return record, nil
 }
 
-func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records []*inputRecord, p *partition) error {
+func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, p *partition) error {
 	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
 	}
@@ -192,11 +141,11 @@ func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records 
 	}
 	b.memory.effects.Add(int64(len(records)))
 	for _, record := range records {
-		record.pending.Add(1)
+		record.refs.Add(1)
 	}
 	dml.AddPostFlushFunc(func() {
 		for _, record := range records {
-			record.pending.Add(-1)
+			record.refs.Add(-1)
 			b.memory.effects.Add(-1)
 		}
 	})
@@ -236,13 +185,13 @@ func (b *readBuffer) trackSchema(ctx context.Context, p *partition, table *commo
 	return nil
 }
 
-func (b *readBuffer) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *inputRecord) error {
+func (b *readBuffer) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *ack) error {
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
 	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
 	b.memory.effects.Add(1)
-	record.pending.Add(1)
+	record.refs.Add(1)
 	b.memory.readBytes.Add(bytes)
 	b.pendingDDL = append(b.pendingDDL, &readDDL{event: ddl, record: record, bytes: bytes})
 	return nil
@@ -296,7 +245,7 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	}
 	record := ddl.record
 	result := &readResult{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() {
-		record.pending.Add(-1)
+		record.refs.Add(-1)
 		b.memory.effects.Add(-1)
 	}}
 	b.memory.readBytes.Add(-result.bytes)

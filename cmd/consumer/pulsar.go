@@ -41,14 +41,20 @@ type pulsarReader struct {
 	buffer            *readBuffer
 	mu                sync.Mutex
 	partitionIDs      map[string]int32
-	messageIDs        map[*inputRecord]pulsar.MessageID
+	messageIDs        map[*ack]pulsar.MessageID
 	pendingWatermarks []*readResult
 	watermark         uint64
 	hasWatermark      bool
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *bufferUsage) (*pulsarReader, error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
+	if upstreamURI.Host == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("pulsar upstream-uri must include an endpoint")
+	}
 	topic := strings.Trim(upstreamURI.Path, "/")
+	if topic == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("pulsar upstream-uri must include a topic")
+	}
 	if strings.Contains(topic, ",") {
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("cdc_consumer accepts one Pulsar topic")
 	}
@@ -183,7 +189,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 	}
 
 	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, orderedDML: true, dmlBoundary: ^uint64(0)}
-	c := &pulsarReader{client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs, messageIDs: make(map[*inputRecord]pulsar.MessageID)}
+	c := &pulsarReader{client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs, messageIDs: make(map[*ack]pulsar.MessageID)}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c, nil
 }
@@ -219,7 +225,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 			if size > maxRecordBytes {
 				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
 			}
-			record, err := c.buffer.newRecord(ctx, size)
+			record, err := c.buffer.newAck(ctx, size)
 			if err != nil {
 				return nil, err
 			}
@@ -240,7 +246,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 					if message == nil {
 						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DML message")
 					}
-					if err := c.buffer.queueDML(ctx, message.ToDMLEvent(), []*inputRecord{record}, p); err != nil {
+					if err := c.buffer.queueDML(ctx, message.ToDMLEvent(), []*ack{record}, p); err != nil {
 						return nil, err
 					}
 				case codecCommon.MessageTypeDDL:
@@ -262,21 +268,21 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 				case codecCommon.MessageTypeResolved:
 					watermark := p.decoder.NextResolvedEvent()
 					c.buffer.memory.effects.Add(1)
-					record.pending.Add(1)
+					record.refs.Add(1)
 					c.watermark = max(c.watermark, watermark)
 					c.hasWatermark = true
 					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
-						record.pending.Add(-1)
+						record.refs.Add(-1)
 						c.buffer.memory.effects.Add(-1)
 					}})
 				default:
 					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
 				}
 			}
-			released := record.bytes.Swap(256) - 256
+			released := record.memory.Swap(256) - 256
 			c.buffer.memory.readBytes.Add(-released)
 			c.buffer.memory.release(released)
-			record.pending.Add(-1)
+			record.refs.Add(-1)
 			c.buffer.memory.effects.Add(-1)
 			select {
 			case c.buffer.memory.completed <- struct{}{}:
@@ -292,11 +298,11 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 	for _, p := range c.buffer.partitions {
 		count := 0
 		for _, record := range p.records {
-			pending := record.pending.Load()
-			if pending < 0 {
+			refs := record.refs.Load()
+			if refs < 0 {
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
 			}
-			if pending != 0 {
+			if refs != 0 {
 				break
 			}
 			count++
@@ -311,7 +317,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
 		for _, record := range p.records[:count] {
-			size := record.bytes.Load()
+			size := record.memory.Load()
 			c.buffer.memory.release(size)
 			c.buffer.memory.readBytes.Add(-size)
 			c.buffer.memory.records.Add(-1)

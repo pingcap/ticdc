@@ -15,8 +15,10 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -35,13 +37,11 @@ type consumer struct {
 	watermarks        map[int64]uint64
 }
 
-func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *bufferUsage) (err error) {
-	readCtx, cancelRead := context.WithCancelCause(parentCtx)
-	defer cancelRead(nil)
-	writeCtx, cancelWrite := context.WithCancelCause(context.WithoutCancel(parentCtx))
-	defer cancelWrite(nil)
+func runConsumer(ctx context.Context, wg *sync.WaitGroup, reader reader, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	defer func() {
-		if closeErr := input.Close(); closeErr != nil {
+		if closeErr := reader.Close(); closeErr != nil {
 			if err == nil {
 				err = closeErr
 			} else {
@@ -51,7 +51,7 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 	}()
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	downstream, err := sink.New(writeCtx, &config.ChangefeedConfig{
+	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
 		ChangefeedID: changefeedID, SinkURI: downstreamURI, SinkConfig: replicaConfig.Sink,
 		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive), EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}, changefeedID, common.DefaultKeyspaceID)
@@ -59,7 +59,7 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 		return err
 	}
 	c := &consumer{
-		reader: input, writer: &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)},
+		reader: reader, writer: &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)},
 		watermarks: make(map[int64]uint64),
 	}
 	c.writer.confirm = c.confirmCompleted
@@ -69,65 +69,45 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 	wg.Go(func() {
 		defer close(readDone)
 		defer close(results)
-		for {
-			result, err := input.Read(readCtx)
+		for ctx.Err() == nil {
+			result, err := reader.Read(ctx)
 			if err != nil {
-				cancelRead(err)
+				cancel(err)
 				return
 			}
 			if result == nil {
-				cancelRead(errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result"))
+				cancel(errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result"))
 				return
 			}
 			select {
 			case results <- result:
-			case <-readCtx.Done():
+			case <-ctx.Done():
 				return
 			}
 		}
 	})
 	wg.Go(func() {
 		defer close(sinkDone)
-		if err := downstream.Run(writeCtx); err != nil {
-			cancelWrite(err)
-			cancelRead(err)
+		if err := downstream.Run(ctx); err != nil {
+			cancel(err)
 			return
 		}
-		if writeCtx.Err() == nil {
-			err := errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
-			cancelWrite(err)
-			cancelRead(err)
-		}
-	})
-	wg.Go(func() {
-		select {
-		case <-parentCtx.Done():
-			log.Info("consumer stopping", zap.Duration("shutdownTimeout", shutdownTimeout))
-		case <-writeCtx.Done():
-			return
-		}
-		timer := time.NewTimer(shutdownTimeout)
-		defer timer.Stop()
-		select {
-		case <-writeCtx.Done():
-		case <-timer.C:
-			cancelWrite(errors.ErrInternalCheckFailed.FastGenByArgs("consumer shutdown drain timed out"))
+		if ctx.Err() == nil {
+			cancel(errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly"))
 		}
 	})
 	defer func() {
-		cancelRead(nil)
-		<-readDone
-		cancelWrite(nil)
+		cancel(err)
 		// Close also wakes sinks whose input channel is blocked while idle.
 		downstream.Close()
+		<-readDone
 		<-sinkDone
 	}()
 	tick := time.Tick(progressLogInterval)
-	var pendingDDL *readResult
 run:
 	for {
 		c.writer.finishBatches()
-		if err = c.confirmCompleted(readCtx); err != nil {
+		if err = c.confirmCompleted(ctx); err != nil {
 			break
 		}
 		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
@@ -136,28 +116,24 @@ run:
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
 				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
 				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int64("uncompletedInputs", memory.records.Load()), zap.Int64("readerBufferedBytes", input.BufferedBytes()),
+				zap.Int64("uncompletedInputs", memory.records.Load()), zap.Int64("readerBufferedBytes", reader.BufferedBytes()),
 				zap.Int64("bufferedBytes", c.writer.bufferedBytes()))
 		}
 		select {
-		case <-readCtx.Done():
-			err = context.Cause(readCtx)
+		case <-ctx.Done():
+			err = context.Cause(ctx)
 			break run
 		case result, ok := <-results:
 			if !ok {
-				err = context.Cause(readCtx)
+				err = context.Cause(ctx)
 				break run
 			}
 			rows, bytes, inputs := int64(0), int64(0), 0
 		drain:
 			for {
-				if result.ddl != nil {
-					pendingDDL = result
-				}
-				if err = c.consume(readCtx, writeCtx, result); err != nil {
+				if err = c.consume(ctx, result); err != nil {
 					break run
 				}
-				pendingDDL = nil
 				inputs++
 				if result.dml != nil {
 					rows += int64(result.dml.Len())
@@ -167,8 +143,8 @@ run:
 					break
 				}
 				select {
-				case <-readCtx.Done():
-					err = context.Cause(readCtx)
+				case <-ctx.Done():
+					err = context.Cause(ctx)
 					break run
 				case result, ok = <-results:
 					if !ok {
@@ -178,57 +154,27 @@ run:
 					break drain
 				}
 			}
-			if err = c.writer.flushDML(readCtx, writeCtx); err != nil {
+			if err = c.writer.flushDML(ctx); err != nil {
 				break run
 			}
 		case <-memory.completed:
 		case <-tick:
 		}
 	}
-	if writeErr := context.Cause(writeCtx); writeErr != nil {
-		return writeErr
-	}
-	if parentCtx.Err() == nil || !errors.Is(err, parentCtx.Err()) {
-		return err
-	}
-	cancelRead(nil)
-	<-readDone
-	drainCtx, cancelDrain := context.WithTimeout(writeCtx, shutdownTimeout)
-	defer cancelDrain()
-	if pendingDDL != nil {
-		if err := c.writer.writeDDL(drainCtx, writeCtx, pendingDDL); err != nil {
-			return err
-		}
-	}
-	// The reader has stopped registering effects. Drain only results it handed
-	// over, leaving incomplete decoding or ordering groups unconfirmed.
-	for result := range results {
-		if err := c.consume(drainCtx, writeCtx, result); err != nil {
-			return err
-		}
-	}
-	if err := c.writer.flushDML(drainCtx, writeCtx); err != nil {
-		return err
-	}
-	for len(c.writer.inFlight) != 0 {
-		if err := c.writer.waitBatch(drainCtx, c.writer.inFlight[0]); err != nil {
-			return err
-		}
-	}
-	if err := c.confirmCompleted(drainCtx); err != nil {
-		return err
-	}
-	return context.Cause(writeCtx)
+	return cmp.Or(context.Cause(ctx), err)
 }
 
-func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) error {
+func (c *consumer) consume(ctx context.Context, result *readResult) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if result.dml != nil {
 		c.writer.pendingDML = append(c.writer.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
 		c.writer.dmlBytes += result.bytes
 		c.writer.decodedRows += int64(result.dml.Len())
 	}
 	if result.ddl != nil {
-		if err := c.writer.writeDDL(ctx, writeCtx, result); err != nil {
+		if err := c.writer.writeDDL(ctx, result); err != nil {
 			return err
 		}
 	}
@@ -241,7 +187,16 @@ func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) er
 	return nil
 }
 
+// An input can be confirmed after decoding and downstream writes release all refs.
+type ack struct {
+	refs   atomic.Int64
+	memory atomic.Int64
+}
+
 func (c *consumer) confirmCompleted(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	remaining := c.pendingWatermarks[:0]
 	for _, control := range c.pendingWatermarks {
 		blocked := false

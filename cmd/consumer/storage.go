@@ -95,18 +95,24 @@ type storageReader struct {
 	tableWatermarks  map[int64]uint64
 	nextTableID      int64
 	mu               sync.Mutex
-	records          []*inputRecord
-	positions        map[*inputRecord]storagePosition
+	records          []*ack
+	positions        map[*ack]storagePosition
 	inputs           []storageInput
 	current          storageInput
 	decoder          codecCommon.Decoder
-	record           *inputRecord
+	record           *ack
 	sortBeforeWrite  bool
 	groupReady       bool
 	scanned          bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, memory *bufferUsage) (*storageReader, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
+	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
+	}
+	if upstreamURI.Scheme != config.FileScheme && upstreamURI.Host == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("object storage upstream-uri must include a bucket")
+	}
 	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
 		return nil, err
 	}
@@ -143,7 +149,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		confirmedIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		positions:        make(map[*inputRecord]storagePosition),
+		positions:        make(map[*ack]storagePosition),
 		ddlWatermarks:    make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
@@ -314,16 +320,16 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				if c.codecConfig.Protocol == config.ProtocolCanalJSON {
 					dml.TableInfo.UpdateTS = c.current.key.TableVersion
 				}
-				if err := c.buffer.queueDML(ctx, dml, []*inputRecord{c.record}, nil); err != nil {
+				if err := c.buffer.queueDML(ctx, dml, []*ack{c.record}, nil); err != nil {
 					return nil, err
 				}
 				continue
 			}
 			// All rows have their own write references before decoding is released.
-			size := c.record.bytes.Swap(256)
+			size := c.record.memory.Swap(256)
 			c.buffer.memory.release(size - 256)
 			c.buffer.memory.readBytes.Add(256 - size)
-			c.record.pending.Add(-1)
+			c.record.refs.Add(-1)
 			c.buffer.memory.effects.Add(-1)
 			select {
 			case c.buffer.memory.completed <- struct{}{}:
@@ -430,7 +436,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			ddl := schema.file.DDLEvent()
 			ddl.TableInfo = schema.tableInfo
 			size := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-			record, err := c.buffer.newRecord(ctx, size)
+			record, err := c.buffer.newAck(ctx, size)
 			if err != nil {
 				return nil, err
 			}
@@ -443,7 +449,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			}
 			// This record's initial reference is the DDL write itself.
 			return &readResult{ddl: ddl, onFlush: func() {
-				record.pending.Add(-1)
+				record.refs.Add(-1)
 				c.buffer.memory.effects.Add(-1)
 			}}, nil
 		}
@@ -486,11 +492,11 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			_ = file.Close()
 			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 		}
-		if size < 0 || size > maxBufferedBytes-2*maxInFlightBytes-256 {
+		if size < 0 || size > maxMemoryBytes-2*maxInFlightBytes-256 {
 			_ = file.Close()
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file exceeds the consumer memory budget")
 		}
-		record, err := c.buffer.newRecord(ctx, size+256)
+		record, err := c.buffer.newAck(ctx, size+256)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
@@ -531,11 +537,11 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 	defer c.mu.Unlock()
 	count := 0
 	for _, record := range c.records {
-		pending := record.pending.Load()
-		if pending < 0 {
+		refs := record.refs.Load()
+		if refs < 0 {
 			return errors.ErrInternalCheckFailed.FastGenByArgs("Storage input completed more than once")
 		}
-		if pending != 0 {
+		if refs != 0 {
 			break
 		}
 		if position, ok := c.positions[record]; ok {
@@ -547,7 +553,7 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 			indices[position.index.FileIndexKey] = position.index.Idx
 			delete(c.positions, record)
 		}
-		size := record.bytes.Load()
+		size := record.memory.Load()
 		c.buffer.memory.release(size)
 		c.buffer.memory.readBytes.Add(-size)
 		c.buffer.memory.records.Add(-1)

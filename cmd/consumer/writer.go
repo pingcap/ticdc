@@ -36,9 +36,7 @@ const (
 	maxInFlightEvents   = 4096
 	maxInFlightBytes    = 32 << 20
 	maxRecordBytes      = 16 << 20
-	maxBufferedBytes    = 1 << 30
 	maxRecords          = 64 << 10
-	shutdownTimeout     = 5 * time.Second
 	progressLogInterval = 5 * time.Second
 )
 
@@ -49,7 +47,7 @@ type pendingDML struct {
 
 type writer struct {
 	downstream      sink.Sink
-	memory          *bufferUsage
+	memory          *memoryUsage
 	pendingDML      []*pendingDML
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
@@ -81,8 +79,8 @@ type mutationKey struct {
 	handle   string
 }
 
-func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) error {
-	if err := c.flushDML(ctx, writeCtx); err != nil {
+func (c *writer) writeDDL(ctx context.Context, result *readResult) error {
+	if err := c.flushDML(ctx); err != nil {
 		return err
 	}
 	for _, batch := range slices.Clone(c.inFlight) {
@@ -108,11 +106,11 @@ func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) err
 	return nil
 }
 
-func (c *writer) flushDML(ctx, writeCtx context.Context) error {
+func (c *writer) flushDML(ctx context.Context) error {
 	var building *writeBatch
 	defer func() {
 		// Cancellation can interrupt filtering while it waits for an earlier
-		// batch. Roll back unsubmitted identities so the shutdown drain can retry.
+		// batch. Roll back identities and allocations for the unsubmitted batch.
 		if building == nil {
 			return
 		}
@@ -151,9 +149,6 @@ func (c *writer) flushDML(ctx, writeCtx context.Context) error {
 		batch := &writeBatch{items: slices.Clone(c.pendingDML[:end]), bytes: bytes, done: make(chan bool)}
 		building = batch
 		for _, item := range batch.items {
-			if item.event.PhysicalTableID != 0 {
-				c.advanceReplay(item.event.CommitTs, item.event.PhysicalTableID)
-			}
 			filtered, err := c.filterRows(ctx, item.event, batch)
 			if err != nil {
 				return err
@@ -192,9 +187,7 @@ func (c *writer) flushDML(ctx, writeCtx context.Context) error {
 			close(batch.done)
 		}
 		for _, dml := range batch.events {
-			// An admitted batch is handed to the sink in full even if reading
-			// stops halfway through submission. Sink failure still cancels it.
-			if err := context.Cause(writeCtx); err != nil {
+			if err := context.Cause(ctx); err != nil {
 				return err
 			}
 			var flushed atomic.Bool

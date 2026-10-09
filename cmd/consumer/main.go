@@ -15,6 +15,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pingcap/log"
 	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -65,8 +67,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	command := newCommand()
-	if err := command.ExecuteContext(ctx); err != nil {
+	err := command.ExecuteContext(ctx)
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		err = nil
+	}
+	if err != nil {
+		log.Error("consumer exited with error", zap.Error(err))
 		_, _ = fmt.Fprintln(os.Stderr, err)
+	} else if ctx.Err() != nil {
+		log.Info("consumer stopped")
+	}
+	_ = log.Sync()
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -78,115 +90,9 @@ func newCommand() *cobra.Command {
 		Short:         "Consume TiCDC events and write them to a downstream sink",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) != 0 {
-				return errors.ErrInvalidReplicaConfig.FastGenByArgs("consumer does not accept positional arguments")
-			}
-			return nil
-		},
-		RunE: func(command *cobra.Command, _ []string) (err error) {
-			parentCtx := command.Context()
-			ctx, cancel := context.WithCancelCause(parentCtx)
-			var wg sync.WaitGroup
-			loggerReady := false
-			defer func() {
-				cancel(err)
-				wg.Wait()
-				if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
-					err = cause
-				}
-				if parentCtx.Err() != nil && errors.Is(err, context.Canceled) {
-					err = nil
-				}
-				if loggerReady {
-					if err != nil {
-						log.Error("consumer exited with error", zap.Error(err))
-					} else {
-						log.Info("consumer stopped")
-					}
-					_ = log.Sync()
-				}
-			}()
-
-			upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
-			if err != nil {
-				return err
-			}
-			source, err := sourceTypeFromURI(upstreamURI)
-			if err != nil {
-				return err
-			}
-			if err := validateSourceAddress(source, upstreamURI); err != nil {
-				return err
-			}
-			if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
-				return err
-			}
-			if err := validateTimezone(options.timezone); err != nil {
-				return err
-			}
-			if source != sourceStorage && strings.TrimSpace(options.consumerID) == "" {
-				return errors.ErrInvalidReplicaConfig.FastGenByArgs("consumer-id is required for " + string(source) + " sources")
-			}
-			replicaConfig := config.GetDefaultReplicaConfig()
-			if options.configFile != "" {
-				if err := cmdutil.StrictDecodeFile(options.configFile, "consumer", replicaConfig); err != nil {
-					return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
-				}
-				if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-					return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
-				}
-			}
-			if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
-				return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
-			}
-			loggerReady = true
-			version.LogVersionInfo("consumer")
-			log.Info("consumer configuration loaded", zap.String("sourceType", string(source)))
-
-			if options.enableProfiling {
-				listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
-				if err != nil {
-					return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
-				}
-				mux := http.NewServeMux()
-				mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-				mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-				mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-				mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-				mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-				server := &http.Server{Addr: profileAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-				wg.Go(func() {
-					if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-						cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
-					}
-				})
-				wg.Go(func() {
-					<-ctx.Done()
-					shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer shutdownCancel()
-					if err := server.Shutdown(shutdownCtx); err != nil {
-						log.Error("consumer profiling server shutdown failed", zap.Error(err))
-						if err := server.Close(); err != nil {
-							log.Error("consumer profiling server close failed", zap.Error(err))
-						}
-					}
-				})
-			}
-			memory := &bufferUsage{}
-			var input reader
-			switch source {
-			case sourceKafka:
-				input, err = newKafkaReader(ctx, upstreamURI, options.consumerID, options.timezone, replicaConfig, memory)
-			case sourcePulsar:
-				input, err = newPulsarReader(ctx, upstreamURI, options.consumerID, options.timezone, replicaConfig, memory)
-			default:
-				input, err = newStorageReader(ctx, upstreamURI, options.timezone, replicaConfig, memory)
-			}
-			if err != nil {
-				return err
-			}
-			return runConsumer(ctx, &wg, input, options.downstreamURI, replicaConfig, memory)
+		Args:          cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return start(command.Context(), options)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -196,12 +102,83 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.upstreamURI, "upstream-uri", "", "Kafka, Pulsar, or Storage source URI")
 	flags.StringVar(&options.downstreamURI, "downstream-uri", "", "downstream sink URI")
 	flags.StringVar(&options.configFile, "config", "", "consumer configuration file")
-	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID or Pulsar subscription name")
+	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID or Pulsar subscription name (randomly generated if omitted)")
 	flags.StringVar(&options.timezone, "tz", "System", "consumer time zone")
 	flags.StringVar(&options.logFile, "log-file", "cdc_consumer.log", "log file path")
 	flags.StringVar(&options.logLevel, "log-level", "info", "log level")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
 	return command
+}
+
+func start(ctx context.Context, options *options) (err error) {
+	if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
+		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	var wg sync.WaitGroup
+	var profileServer *http.Server
+	defer func() {
+		cancel(err)
+		if profileServer != nil {
+			if closeErr := profileServer.Close(); closeErr != nil {
+				log.Error("consumer profiling server close failed", zap.Error(closeErr))
+			}
+		}
+		wg.Wait()
+	}()
+	version.LogVersionInfo("consumer")
+
+	upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
+	if err != nil {
+		return err
+	}
+	source, err := sourceTypeFromURI(upstreamURI)
+	if err != nil {
+		return err
+	}
+	if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
+		return err
+	}
+	consumerID := options.consumerID
+	if source != sourceStorage && strings.TrimSpace(consumerID) == "" {
+		consumerID = "ticdc_consumer_" + uuid.NewString()
+	}
+	replicaConfig := config.GetDefaultReplicaConfig()
+	if options.configFile != "" {
+		if err := cmdutil.StrictDecodeFile(options.configFile, "consumer", replicaConfig); err != nil {
+			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
+		}
+		if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
+			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
+		}
+	}
+	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
+
+	if options.enableProfiling {
+		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
+		if err != nil {
+			return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+		profileServer = &http.Server{Addr: profileAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		wg.Go(func() {
+			if err := profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
+			}
+		})
+	}
+	memory := &memoryUsage{}
+	reader, err := newReader(ctx, upstreamURI, consumerID, options.timezone, replicaConfig, memory)
+	if err != nil {
+		return cmp.Or(context.Cause(ctx), err)
+	}
+	err = runConsumer(ctx, &wg, reader, options.downstreamURI, replicaConfig, memory)
+	return cmp.Or(context.Cause(ctx), err)
 }
 
 func parseRequiredURI(name, rawURI string) (*url.URL, error) {
@@ -230,38 +207,5 @@ func sourceTypeFromURI(uri *url.URL) (sourceType, error) {
 		return sourceStorage, nil
 	default:
 		return "", errors.ErrInvalidReplicaConfig.FastGenByArgs("unsupported upstream-uri scheme " + uri.Scheme)
-	}
-}
-
-func validateSourceAddress(source sourceType, uri *url.URL) error {
-	switch source {
-	case sourceKafka, sourcePulsar:
-		if uri.Host == "" {
-			return errors.ErrInvalidReplicaConfig.FastGenByArgs(string(source) + " upstream-uri must include an endpoint")
-		}
-		if strings.Trim(uri.Path, "/") == "" {
-			return errors.ErrInvalidReplicaConfig.FastGenByArgs(string(source) + " upstream-uri must include a topic")
-		}
-	case sourceStorage:
-		if uri.Scheme == config.FileScheme {
-			if uri.Path == "" {
-				return errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
-			}
-		} else if uri.Host == "" {
-			return errors.ErrInvalidReplicaConfig.FastGenByArgs("object storage upstream-uri must include a bucket")
-		}
-	}
-	return nil
-}
-
-func validateTimezone(name string) error {
-	switch strings.ToLower(name) {
-	case "", "system", "local":
-		return nil
-	default:
-		if _, err := time.LoadLocation(name); err != nil {
-			return errors.WrapError(errors.ErrConfigInvalidTimezone, err, name)
-		}
-		return nil
 	}
 }

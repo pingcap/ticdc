@@ -45,7 +45,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		}
 		dml.PostFlush()
 	}).Times(2)
-	w := &writer{downstream: downstream, memory: &bufferUsage{}, mutations: make(map[mutationKey]*writeBatch)}
+	w := &writer{downstream: downstream, memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
 	for _, ids := range [][]int64{{1, 2, 1, 2}, {1, 2}, {1, 3, 2}} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 99, 100, table)
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), len(ids))
@@ -57,7 +57,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
 		w.pendingDML = append(w.pendingDML, &pendingDML{event: dml})
-		require.NoError(t, w.flushDML(t.Context(), t.Context()))
+		require.NoError(t, w.flushDML(t.Context()))
 		require.Equal(t, 1, callbacks)
 		w.advanceReplay(100, 0)
 	}
@@ -78,11 +78,11 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field}},
 	})
-	memory := &bufferUsage{}
+	memory := &memoryUsage{}
 	buffer := &readBuffer{memory: memory}
-	record, err := buffer.newRecord(t.Context(), 128)
+	record, err := buffer.newAck(t.Context(), 128)
 	require.NoError(t, err)
-	input := &storageReader{buffer: buffer, records: []*inputRecord{record}}
+	input := &storageReader{buffer: buffer, records: []*ack{record}}
 	var retained *event.DMLEvent
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) { retained = dml })
@@ -95,25 +95,75 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes = []common.RowType{common.RowTypeInsert}
 		dml.Length = 1
-		require.NoError(t, buffer.queueDML(t.Context(), dml, []*inputRecord{record}, nil))
+		require.NoError(t, buffer.queueDML(t.Context(), dml, []*ack{record}, nil))
 		result := buffer.nextReady(100)
 		w.pendingDML = append(w.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
 		w.dmlBytes += result.bytes
 	}
-	record.pending.Add(-1)
+	record.refs.Add(-1)
 	memory.effects.Add(-1)
-	require.NoError(t, w.flushDML(t.Context(), t.Context()))
+	require.NoError(t, w.flushDML(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, w.waitBatch(ctx, w.inFlight[0]), context.Canceled)
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Len(t, input.records, 1)
-	require.EqualValues(t, 2, record.pending.Load())
+	require.EqualValues(t, 2, record.refs.Load())
 	retained.PostFlush()
 	w.finishBatches()
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, input.records)
 	require.Zero(t, memory.effects.Load())
+}
+
+func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
+	field := types.NewFieldType(mysql.TypeLonglong)
+	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
+	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field},
+			{ID: 2, Name: ast.NewCIStr("v"), Offset: 1, State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+		},
+	})
+	value := int64(0)
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+		for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
+			value = row.Row.GetInt64(1)
+		}
+		dml.PostFlush()
+	}).Times(2)
+	memory := &memoryUsage{}
+	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
+	c := &consumer{reader: &storageReader{buffer: &readBuffer{memory: memory}}, writer: w, watermarks: map[int64]uint64{0: 90}}
+	w.confirm = c.confirmCompleted
+	// A table move can replay the INSERT after a later UPDATE is durable.
+	for index, commitTs := range []uint64{100, 200, 100, 200} {
+		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, commitTs-1, commitTs, table)
+		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 2)
+		dml.Rows.AppendRow(chunk.MutRowFromValues(int64(1), int64(10)).ToRow())
+		dml.RowTypes = []common.RowType{common.RowTypeInsert}
+		if index%2 == 1 {
+			dml.Rows.AppendRow(chunk.MutRowFromValues(int64(1), int64(20)).ToRow())
+			dml.RowTypes = []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate}
+		}
+		dml.Length = 1
+		callbacks := 0
+		dml.AddPostFlushFunc(func() { callbacks++ })
+		require.NoError(t, c.consume(t.Context(), &readResult{dml: dml}))
+		require.NoError(t, w.flushDML(t.Context()))
+		require.NoError(t, c.confirmCompleted(t.Context()))
+		require.Equal(t, 1, callbacks)
+		if index >= 1 {
+			require.EqualValues(t, 20, value)
+			require.Len(t, w.mutations, 2)
+		}
+	}
+	require.NoError(t, c.consume(t.Context(), &readResult{watermark: 201, hasWatermark: true}))
+	require.NoError(t, c.confirmCompleted(t.Context()))
+	require.Empty(t, w.mutations)
+	require.Zero(t, memory.bytes.Load())
 }
 
 func TestWriterReplayPreservesUpdateRows(t *testing.T) {
@@ -132,7 +182,7 @@ func TestWriterReplayPreservesUpdateRows(t *testing.T) {
 	}
 	dml.Length = 2
 	batch := &writeBatch{}
-	w := &writer{memory: &bufferUsage{}, mutations: map[mutationKey]*writeBatch{
+	w := &writer{memory: &memoryUsage{}, mutations: map[mutationKey]*writeBatch{
 		{tableID: 1, commitTs: 100, rowType: common.RowTypeUpdate, handle: string([]byte{1, '1'})}: nil,
 	}}
 	callbacks := 0
