@@ -67,6 +67,112 @@ query_toml() {
 	curl -sf -X GET -H 'Accept: application/toml' "$API/$1?keyspace=$KEYSPACE_NAME" -o "$2"
 }
 
+check_credential_redaction() {
+	local outputs="$WORK_DIR/credential_outputs"
+	mkdir -p "$outputs"
+	cdc_cli_changefeed create -c cf-credentials \
+		--sink-uri='blackhole://user:uri-credential-sentinel@localhost/?password=query-credential-sentinel&kafka-client=franz' \
+		--config="$CUR/conf/credentials.toml" >"$outputs/create.txt" 2>&1
+	query_json cf-credentials "$outputs/query.json"
+	query_toml cf-credentials "$outputs/query.toml"
+	cdc_cli_changefeed query -c cf-credentials >"$outputs/cli-query.txt" 2>&1
+	curl -fsS "$API?keyspace=$KEYSPACE_NAME" -o "$outputs/list.json"
+	for endpoint in debug/info api/v2/debug/info api/v2/unsafe/metadata; do
+		curl -fsS "http://${CDC_HOST}:${CDC_PORT}/$endpoint?keyspace=$KEYSPACE_NAME" \
+			-o "$outputs/${endpoint//\//-}.txt"
+	done
+
+	# Secrets are absent, while public identifiers and the Kafka driver survive.
+	jq -e '.config.sink.kafka_config.sasl_user == "visible-user" and
+		.config.sink.kafka_config.sasl_oauth_client_id == "visible-client" and
+		.config.sink.kafka_config.glue_schema_registry_config.registry_name == "visible-registry" and
+		.config.sink.pulsar_config["tls-certificate-path"] == "visible-pulsar-key" and
+		.config.sink.pulsar_config["tls-private-key-path"] == "visible-pulsar-cert" and
+		(.sink_uri | contains("kafka-client=franz"))' "$outputs/query.json" >/dev/null
+	python3 - "$outputs/query.json" "$outputs/query.toml" <<'PY'
+import json, sys, tomllib
+
+with open(sys.argv[1]) as f:
+    j = json.load(f)["config"]
+with open(sys.argv[2], "rb") as f:
+    t = tomllib.load(f)["config"]
+paths = [
+    ("consistent", "storage"),
+    ("sink", "kafka_config", "sasl_password"),
+    ("sink", "kafka_config", "sasl_gssapi_password"),
+    ("sink", "kafka_config", "sasl_oauth_client_secret"),
+    ("sink", "kafka_config", "sasl_oauth_token_url"),
+    ("sink", "kafka_config", "key"),
+    ("sink", "kafka_config", "large_message_handle", "claim_check_storage_uri"),
+    ("sink", "kafka_config", "glue_schema_registry_config", "access_key"),
+    ("sink", "kafka_config", "glue_schema_registry_config", "secret_access_key"),
+    ("sink", "kafka_config", "glue_schema_registry_config", "token"),
+    ("sink", "pulsar_config", "authentication-token"),
+    ("sink", "pulsar_config", "basic-password"),
+    ("sink", "pulsar_config", "oauth2", "oauth2-private-key"),
+    ("sink", "pulsar_config", "oauth2", "oauth2-issuer-url"),
+]
+for fmt, cfg in [("JSON", j), ("TOML", t)]:
+    for path in paths:
+        keys = [key.replace("_", "-") if fmt == "TOML" else key for key in path]
+        node = cfg
+        for key in keys[:-1]:
+            node = node[key]
+        if keys[-1] in node:
+            raise SystemExit("credential field was not omitted in %s: %s" % (fmt, ".".join(keys)))
+print("PASS: credential fields omitted in JSON and TOML")
+PY
+	cdc_cli_changefeed pause -c cf-credentials
+	echo 'memory-quota = 2097152' >"$WORK_DIR/credential-update.toml"
+	cdc_cli_changefeed update -c cf-credentials --config="$WORK_DIR/credential-update.toml" --no-confirm \
+		>"$outputs/update.txt" 2>&1
+	query_json cf-credentials "$outputs/updated.json"
+	jq -e '.config.memory_quota == 2097152 and
+		.config.sink.pulsar_config["tls-certificate-path"] == "visible-pulsar-key" and
+		.config.sink.pulsar_config["tls-private-key-path"] == "visible-pulsar-cert"' "$outputs/updated.json" >/dev/null
+	# Invalid redo and sink storage URIs must reject updates and redact errors.
+	for kind in redo sink; do
+		if [ "$kind" = redo ]; then
+			jq -n '{replica_config:{consistent:{level:"eventual",storage:"s3:///missing-bucket?secret-access-key=redo-credential-sentinel"}}}' >"$WORK_DIR/storage-error.json"
+		else
+			jq -n '{sink_uri:"s3:///missing-bucket?protocol=canal-json&secret-access-key=storage-credential-sentinel"}' >"$WORK_DIR/storage-error.json"
+		fi
+		local status
+		status=$(curl -sS -X PUT "$API/cf-credentials?keyspace=$KEYSPACE_NAME" \
+			-H 'Content-Type: application/json' --data-binary "@$WORK_DIR/storage-error.json" \
+			-o "$outputs/$kind-error.json" -w '%{http_code}')
+		[ "$status" = 400 ]
+		query_json cf-credentials "$outputs/$kind-after.json"
+		jq -e --slurp '.[0].config == .[1].config and .[0].sink_uri == .[1].sink_uri' \
+			"$outputs/updated.json" "$outputs/$kind-after.json" >/dev/null
+	done
+	cdc_cli_changefeed resume -c cf-credentials >"$outputs/resume.txt" 2>&1
+	# The diagnostic API must also redact the retained credentials after an update.
+	curl -fsS "http://${CDC_HOST}:${CDC_PORT}/api/v2/unsafe/metadata?keyspace=$KEYSPACE_NAME" -o "$outputs/metadata-after.json"
+	jq -e 'any(.[]; (.value | fromjson? | .config.sink."kafka-config"."sasl-password") == "******")' \
+		"$outputs/metadata-after.json" >/dev/null
+	# Confluent and Glue are mutually exclusive, so cover Confluent separately.
+	cat >"$WORK_DIR/schema-credential.toml" <<EOF
+[sink]
+schema-registry = "https://user:schema-credential-sentinel@registry.example"
+EOF
+	cdc_cli_changefeed create -c cf-schema-credential --sink-uri=blackhole:// \
+		--config="$WORK_DIR/schema-credential.toml" >"$outputs/schema-create.txt" 2>&1
+	query_json cf-schema-credential "$outputs/schema.json"
+	query_toml cf-schema-credential "$outputs/schema.toml"
+	jq -e '.config.sink | has("schema_registry") | not' "$outputs/schema.json" >/dev/null
+	if grep -q 'schema-registry' "$outputs/schema.toml"; then
+		echo "FAIL: sensitive schema registry URI was not omitted in TOML"
+		exit 1
+	fi
+	cdc_cli_changefeed remove -c cf-schema-credential >"$outputs/schema-remove.txt" 2>&1
+	cdc_cli_changefeed remove -c cf-credentials >"$outputs/remove.txt" 2>&1
+	if grep -Eq 'credential-sentinel' "$outputs"/* "$WORK_DIR"/cdc*.log "$WORK_DIR"/stdout*.log; then
+		echo "FAIL: credential leaked in API, CLI or CDC log output"
+		exit 1
+	fi
+}
+
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
@@ -284,6 +390,7 @@ PY
 		--config="$WORK_DIR/reimport.toml"
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "cf-reimport" "normal" "null" ""
 	echo "PASS: Test 10 - exported TOML config re-imports successfully"
+	check_credential_redaction
 
 	# Cleanup changefeeds
 	cdc_cli_changefeed --changefeed-id "cf-default" remove
