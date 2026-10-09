@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -219,6 +220,49 @@ func TestKafkaReaderWatermark(t *testing.T) {
 	c.buffer.partitions[1].cachedUnreleased = 1
 	_, ready = c.globalWatermark()
 	require.False(t, ready)
+}
+
+func TestPulsarWatermarkWaitsForPartitionPositions(t *testing.T) {
+	memory := &memoryUsage{}
+	require.NoError(t, memory.reserve(t.Context(), 128+3*128))
+	record := &ack{}
+	record.refs.Store(1)
+	control := &readResult{watermark: 100, hasWatermark: true, onFlush: func() { record.refs.Add(-1) }}
+	ddl := &event.DDLEvent{FinishedTs: 100}
+	c := &pulsarReader{
+		buffer: &readBuffer{
+			memory: memory, orderedDML: true, partitions: map[int32]*partition{0: {}, 1: {}, 2: {}},
+			pendingDDL: []*readDDL{{event: ddl, record: &ack{}}},
+		},
+		positions: map[int32]pulsar.MessageID{0: pulsar.NewMessageID(1, 10, -1, 0)},
+		checkpoints: []*pulsarCheckpoint{{result: control, positions: map[int32]pulsar.MessageID{
+			0: pulsar.NewMessageID(1, 10, -1, 0), 1: pulsar.NewMessageID(1, 5, -1, 1), 2: pulsar.EarliestMessageID(),
+		}}},
+	}
+	// A checkpoint seen on one partition cannot release DDL while another is unread.
+	c.advanceWatermarks()
+	require.False(t, c.hasWatermark)
+	require.Nil(t, c.buffer.nextReady(c.watermark))
+	c.positions[1] = pulsar.NewMessageID(1, 4, -1, 1)
+	c.advanceWatermarks()
+	require.False(t, c.hasWatermark)
+	// Reaching the broker entry without decoding its entire batch is also insufficient.
+	c.positions[1] = pulsar.NewMessageID(1, 5, 0, 1)
+	c.advanceWatermarks()
+	require.False(t, c.hasWatermark)
+	require.Nil(t, c.buffer.nextReady(c.watermark))
+	c.positions[1] = pulsar.NewMessageID(1, 5, -1, 1)
+	c.advanceWatermarks()
+	require.True(t, c.hasWatermark)
+	require.EqualValues(t, 100, c.watermark)
+	require.Same(t, ddl, c.buffer.nextReady(c.watermark).ddl)
+	require.Empty(t, c.checkpoints)
+	require.Equal(t, []*readResult{control}, c.pendingWatermarks)
+	require.Zero(t, memory.used())
+	// Read progress alone cannot confirm the checkpoint input to Pulsar.
+	require.EqualValues(t, 1, record.refs.Load())
+	control.onFlush()
+	require.Zero(t, record.refs.Load())
 }
 
 func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {

@@ -217,6 +217,7 @@ func (o *createChangefeedOptions) getChangefeedConfig() *v2.ChangefeedConfig {
 	replicaConfig := v2.ToAPIReplicaConfig(o.cfg)
 	upstreamConfig := o.getUpstreamConfig()
 	return &v2.ChangefeedConfig{
+		Pause:         o.cfg.Pause,
 		ID:            o.changefeedID,
 		Keyspace:      o.keyspace,
 		StartTs:       o.startTs,

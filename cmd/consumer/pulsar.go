@@ -42,9 +42,16 @@ type pulsarReader struct {
 	mu                sync.Mutex
 	partitionIDs      map[string]int32
 	messageIDs        map[*ack]pulsar.MessageID
+	positions         map[int32]pulsar.MessageID
+	checkpoints       []*pulsarCheckpoint
 	pendingWatermarks []*readResult
 	watermark         uint64
 	hasWatermark      bool
+}
+
+type pulsarCheckpoint struct {
+	result    *readResult
+	positions map[int32]pulsar.MessageID
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
@@ -189,7 +196,10 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 	}
 
 	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, orderedDML: true, dmlBoundary: ^uint64(0)}
-	c := &pulsarReader{client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs, messageIDs: make(map[*ack]pulsar.MessageID)}
+	c := &pulsarReader{
+		client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs,
+		messageIDs: make(map[*ack]pulsar.MessageID), positions: make(map[int32]pulsar.MessageID),
+	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c, nil
 }
@@ -199,6 +209,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
+		c.advanceWatermarks()
 		if c.hasWatermark || len(c.buffer.pendingDDL) != 0 || c.buffer.orderedDML {
 			if result := c.buffer.nextReady(c.watermark); result != nil {
 				return result, nil
@@ -266,18 +277,75 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 					}
 				case codecCommon.MessageTypeResolved:
 					watermark := p.decoder.NextResolvedEvent()
+					// Pulsar's producer sends one checkpoint message per topic. A
+					// broker tail snapshot proves all partitions have been read past
+					// the data preceding that checkpoint, including idle partitions.
+					positions, err := c.consumer.GetLastMessageIDs()
+					if err != nil {
+						return nil, errors.WrapError(errors.ErrInternalCheckFailed, err, "read Pulsar checkpoint positions")
+					}
+					if len(positions) != len(c.buffer.partitions) {
+						return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint does not cover every subscribed partition")
+					}
+					if err := c.buffer.memory.reserve(ctx, 128+int64(len(positions))*128); err != nil {
+						return nil, err
+					}
+					checkpointPositions := make(map[int32]pulsar.MessageID, len(positions))
+					for _, position := range positions {
+						partitionID, ok := c.partitionIDs[position.Topic()]
+						if !ok {
+							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint belongs to an unknown partition")
+						}
+						checkpointPositions[partitionID] = position
+					}
 					record.refs.Add(1)
-					c.watermark = max(c.watermark, watermark)
-					c.hasWatermark = true
-					c.pendingWatermarks = append(c.pendingWatermarks, &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
-						record.refs.Add(-1)
-					}})
+					c.checkpoints = append(c.checkpoints, &pulsarCheckpoint{
+						positions: checkpointPositions,
+						result: &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
+							record.refs.Add(-1)
+						}},
+					})
 				default:
 					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
 				}
 			}
+			position := message.ID()
+			if position.BatchIdx() >= 0 && position.BatchIdx()+1 == position.BatchSize() {
+				// Broker positions refer to whole entries. A partially decoded
+				// batch cannot satisfy a checkpoint at that entry.
+				position = pulsar.NewMessageID(position.LedgerID(), position.EntryID(), -1, position.PartitionIdx())
+			}
+			c.positions[partitionID] = position
 			c.buffer.memory.decoded(record, 256)
 		}
+	}
+}
+
+func (c *pulsarReader) advanceWatermarks() {
+	for len(c.checkpoints) != 0 {
+		checkpoint := c.checkpoints[0]
+		for partitionID, target := range checkpoint.positions {
+			if target.EntryID() < 0 {
+				continue
+			}
+			position := c.positions[partitionID]
+			if position == nil {
+				return
+			}
+			comparison := cmp.Compare(position.LedgerID(), target.LedgerID())
+			if comparison == 0 {
+				comparison = cmp.Compare(position.EntryID(), target.EntryID())
+			}
+			if comparison < 0 || (comparison == 0 && position.BatchIdx() >= 0) {
+				return
+			}
+		}
+		c.watermark = max(c.watermark, checkpoint.result.watermark)
+		c.hasWatermark = true
+		c.pendingWatermarks = append(c.pendingWatermarks, checkpoint.result)
+		c.buffer.memory.release(128 + int64(len(checkpoint.positions))*128)
+		c.checkpoints[0] = nil
+		c.checkpoints = c.checkpoints[1:]
 	}
 }
 

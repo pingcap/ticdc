@@ -11,7 +11,7 @@ SINK_TYPE=$1
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
-	start_tidb_cluster --workdir $WORK_DIR
+	SKIP_TIFLASH=0 start_tidb_cluster --workdir $WORK_DIR
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})

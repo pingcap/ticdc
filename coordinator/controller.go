@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -359,6 +360,29 @@ func updateChangefeedCheckpointMetrics(
 		metrics.FormatKeyspaceID(keyspaceID),
 	).Set(lag)
 	return true
+}
+
+// updateAllChangefeedCheckpointMetrics publishes checkpoint metrics from the
+// coordinator's in-memory state. It is used after bootstrap so the new owner
+// does not have to wait for the periodic metrics collection tick.
+func (c *Controller) updateAllChangefeedCheckpointMetrics(pdTime time.Time) {
+	c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+		if cf.GetInfo() == nil {
+			return
+		}
+		info, err := cf.GetInfo().Clone()
+		if err != nil {
+			return
+		}
+		updateChangefeedCheckpointMetrics(
+			info.ChangefeedID.Keyspace(),
+			info.ChangefeedID.Name(),
+			info.KeyspaceID,
+			info.State,
+			cf.GetLastSavedCheckPointTs(),
+			pdTime,
+		)
+	})
 }
 
 // HandleEvent implements the event-driven process mode
@@ -688,6 +712,14 @@ func (c *Controller) handleSingleMaintainerStatus(
 	cfID common.ChangeFeedID,
 ) *changefeedChange {
 	cf := c.getChangefeed(cfID)
+	// A paused creation remains new across resume/restart until a current owner
+	// reports successful bootstrap and the acknowledgement is durably stored.
+	if cf != nil && util.GetOrZero(cf.GetInfo().BootstrapPending) &&
+		status.State == heartbeatpb.ComponentState_Working && status.BootstrapDone {
+		if !c.markChangefeedBootstrapped(cf, from, status.MaintainerEpoch) {
+			return nil
+		}
+	}
 	acceptMoveOriginCheckpoint := c.operatorController.AcceptsMoveOriginStopStatus(cfID, from, status)
 	handoffCheckpointAdvanced := false
 	if acceptMoveOriginCheckpoint &&
@@ -699,7 +731,8 @@ func (c *Controller) handleSingleMaintainerStatus(
 		handoffCheckpointAdvanced = cf.AdvanceCheckpointTs(status.CheckpointTs)
 	}
 
-	// Advance the operator after the handoff checkpoint is visible.
+	// Do not finish the add operator before the initial marker is persisted;
+	// advance a move only after its handoff checkpoint is visible.
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
 	if cf == nil {
@@ -735,6 +768,34 @@ func (c *Controller) handleSingleMaintainerStatus(
 
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
+}
+
+// markChangefeedBootstrapped serializes the acknowledgement with API lifecycle
+// operations. Failed persistence is retried by the next maintainer heartbeat.
+func (c *Controller) markChangefeedBootstrapped(cf *changefeed.Changefeed, from node.ID, epoch uint64) bool {
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
+	info := cf.GetInfo()
+	if cf.GetNodeID() != from || info.Epoch != epoch {
+		return false
+	}
+	if !util.GetOrZero(info.BootstrapPending) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	updated, err := c.backend.FinishInit(ctx, cf.ID, epoch)
+	if err != nil {
+		log.Warn("failed to persist initial bootstrap completion, will retry",
+			zap.Stringer("changefeedID", cf.ID), zap.Error(err))
+		return false
+	}
+	if updated == nil {
+		return false
+	}
+	cf.SetInfo(updated)
+	cf.SetIsNew(false)
+	return true
 }
 
 func (c *Controller) handleNonExistentChangefeed(
@@ -912,6 +973,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 		}
 	}
 
+	c.updateAllChangefeedCheckpointMetrics(c.pdClock.CurrentTime())
+
 	// start operator and scheduler
 	c.taskHandlerMutex.Lock()
 	defer c.taskHandlerMutex.Unlock()
@@ -1054,7 +1117,12 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
+	cf := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
+	if info.State == config.StateStopped {
+		c.changefeedDB.AddStoppedChangefeed(cf)
+	} else {
+		c.changefeedDB.AddAbsentChangefeed(cf)
+	}
 	return nil
 }
 
