@@ -389,7 +389,7 @@ func closeDMLAndControlDBAfterFailure(
 func newMysqlConfigAndDB(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
 ) (cfg *Config, db *sql.DB, dsnStr string, err error) {
-	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
+	log.Info("create db connection", zap.String("sinkURI", util.MaskSensitiveDataInURI(sinkURI.String())))
 	// create db connection
 	cfg = New()
 	err = cfg.Apply(sinkURI, changefeedID, config)
