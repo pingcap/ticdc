@@ -25,6 +25,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -64,9 +69,13 @@ type encoderGroup struct {
 
 // NewEncoderGroup creates a new EncoderGroup instance
 func NewEncoderGroup(
-	ctx context.Context,
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
+<<<<<<< HEAD
+=======
+	claimCheck *claimcheck.ClaimCheck,
+	schemaM schemamanager.SchemaManager,
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	changefeedID commonType.ChangeFeedID,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
@@ -78,7 +87,11 @@ func NewEncoderGroup(
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
+<<<<<<< HEAD
 		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
+=======
+		rowEventEncoders[i], err = NewEventEncoder(encoderConfig, claimCheck, schemaM)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -88,7 +101,11 @@ func NewEncoderGroup(
 
 	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
+<<<<<<< HEAD
 		encoder, err := NewEventEncoder(ctx, encoderConfig)
+=======
+		encoder, err := NewEventEncoder(encoderConfig, claimCheck, schemaM)
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)

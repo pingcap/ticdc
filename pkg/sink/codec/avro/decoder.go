@@ -22,12 +22,15 @@ import (
 	"strconv"
 	"strings"
 
+	lru "github.com/hashicorp/golang-lru"
+	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -39,6 +42,10 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+// decoderCodecCacheSize bounds the compiled codecs retained by each partition decoder.
+// It keeps recently active routed-table schemas without retaining every historical version.
+const decoderCodecCacheSize = 128
+
 type decoder struct {
 	idx    int
 	config *common.Config
@@ -46,7 +53,8 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
-	schemaM SchemaManager
+	schemaM schemamanager.SchemaManager
+	codecs  *lru.Cache
 
 	key   []byte
 	value []byte
@@ -56,16 +64,18 @@ type decoder struct {
 func NewDecoder(
 	config *common.Config,
 	idx int,
-	schemaM SchemaManager,
+	schemaM schemamanager.SchemaManager,
 	topic string,
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
+	codecs, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
 		idx:          idx,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
+		codecs:       codecs,
 		upstreamTiDB: db,
 	}
 }
@@ -91,7 +101,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", util.RedactAny(d.value)))
 	}
 	switch d.value[0] {
-	case magicByte:
+	case schemamanager.ConfluentMagicByte:
 		return common.MessageTypeRow, true
 	case ddlByte:
 		return common.MessageTypeDDL, true
@@ -522,11 +532,11 @@ func extractConfluentSchemaIDAndBinaryData(data []byte) (int, []byte, error) {
 		return 0, nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("an avro message using confluent schema registry should have at least 5 bytes")
 	}
-	if data[0] != magicByte {
+	if data[0] != schemamanager.ConfluentMagicByte {
 		return 0, nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("magic byte is not match, it should be 0")
 	}
-	id, err := getConfluentSchemaIDFromHeader(data[0:5])
+	id, err := schemamanager.GetConfluentSchemaIDFromHeader(data[0:5])
 	if err != nil {
 		return 0, nil, errors.Trace(err)
 	}
@@ -538,48 +548,48 @@ func extractGlueSchemaIDAndBinaryData(data []byte) (string, []byte, error) {
 		return "", nil, errors.ErrAvroInvalidMessage.
 			FastGenByArgs("an avro message using glue schema registry should have at least 18 bytes")
 	}
-	if data[0] != headerVersionByte {
+	if data[0] != schemamanager.GlueHeaderVersionByte {
 		return "", nil, errors.ErrAvroInvalidMessage.
-			FastGenByArgs("header version byte is not match, it should be %d", headerVersionByte)
+			FastGenByArgs("header version byte is not match, it should be %d", schemamanager.GlueHeaderVersionByte)
 	}
-	if data[1] != compressionDefaultByte {
+	if data[1] != schemamanager.GlueCompressionDefaultByte {
 		return "", nil, errors.ErrAvroInvalidMessage.
-			FastGenByArgs("compression byte is not match, it should be %d", compressionDefaultByte)
+			FastGenByArgs("compression byte is not match, it should be %d", schemamanager.GlueCompressionDefaultByte)
 	}
-	id, err := getGlueSchemaIDFromHeader(data[0:18])
+	id, err := schemamanager.GetGlueSchemaIDFromHeader(data[0:18])
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
 	return id, data[18:], nil
 }
 
-func decodeRawBytes(
-	ctx context.Context, schemaM SchemaManager, data []byte, topic string,
+func (d *decoder) decodeRawBytes(
+	ctx context.Context, data []byte,
 ) (map[string]any, map[string]any, error) {
-	var schemaID schemaID
+	var schemaID schemamanager.SchemaID
 	var binary []byte
 	var err error
 	var cid int
 	var gid string
 
-	switch schemaM.RegistryType() {
+	switch d.schemaM.RegistryType() {
 	case common.SchemaRegistryTypeConfluent:
 		cid, binary, err = extractConfluentSchemaIDAndBinaryData(data)
 		if err != nil {
 			return nil, nil, err
 		}
-		schemaID.confluentSchemaID = cid
+		schemaID = schemamanager.NewConfluentSchemaID(cid)
 	case common.SchemaRegistryTypeGlue:
 		gid, binary, err = extractGlueSchemaIDAndBinaryData(data)
 		if err != nil {
 			return nil, nil, err
 		}
-		schemaID.glueSchemaID = gid
+		schemaID = schemamanager.NewGlueSchemaID(gid)
 	default:
 		return nil, nil, errors.ErrCodecDecode.GenWithStack("unknown schema registry type")
 	}
 
-	codec, err := schemaM.Lookup(ctx, topic, schemaID)
+	codec, err := d.lookupCodec(ctx, schemaID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -602,16 +612,35 @@ func decodeRawBytes(
 	return result, schema, nil
 }
 
+func (d *decoder) lookupCodec(
+	ctx context.Context, schemaID schemamanager.SchemaID,
+) (*goavro.Codec, error) {
+	if cached, ok := d.codecs.Get(schemaID); ok {
+		return cached.(*goavro.Codec), nil
+	}
+
+	schemaDefinition, err := d.schemaM.Lookup(ctx, d.topic, schemaID)
+	if err != nil {
+		return nil, err
+	}
+	codec, err := GenCodec(schemaDefinition)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	}
+	d.codecs.Add(schemaID, codec)
+	return codec, nil
+}
+
 func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.key
 	d.key = nil
-	return decodeRawBytes(ctx, d.schemaM, data, d.topic)
+	return d.decodeRawBytes(ctx, data)
 }
 
 func (d *decoder) decodeValue(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.value
 	d.value = nil
-	return decodeRawBytes(ctx, d.schemaM, data, d.topic)
+	return d.decodeRawBytes(ctx, data)
 }
 
 func mysqlTypeFromTiDBType(tidbType string) byte {

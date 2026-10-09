@@ -30,6 +30,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -52,7 +53,8 @@ func (a *BatchEncoder) getValueSchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, valueSchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(ctx, subject, tableVersion, schemaGen)
+	avroCodec, header, err := a.codecCache.GetOrRegister(
+		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -72,7 +74,8 @@ func (a *BatchEncoder) getKeySchemaCodec(
 	}
 
 	subject := topicName2SchemaSubjects(topic, keySchemaSuffix)
-	avroCodec, header, err := a.schemaM.GetCachedOrRegister(ctx, subject, tableVersion, schemaGen)
+	avroCodec, header, err := a.codecCache.GetOrRegister(
+		ctx, subject, tableName.String(), tableVersion, schemaGen)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -717,23 +720,24 @@ func SetupEncoderAndSchemaRegistry4Testing(
 	ctx context.Context,
 	config *common.Config,
 ) (*BatchEncoder, error) {
-	startHTTPInterceptForTestingRegistry()
-	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	schemamanager.SetupTestingRegistry()
+	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	return &BatchEncoder{
-		keyspace: commonType.DefaultKeyspaceName,
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   commonType.DefaultKeyspaceName,
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}, nil
 }
 
 // TeardownEncoderAndSchemaRegistry4Testing stop the local schema registry for testing.
 func TeardownEncoderAndSchemaRegistry4Testing() {
-	stopHTTPInterceptForTestingRegistry()
+	schemamanager.TeardownTestingRegistry()
 }
 
 // GenCodec generate avro codec.

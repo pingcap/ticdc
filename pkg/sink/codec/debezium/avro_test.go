@@ -29,12 +29,50 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+<<<<<<< HEAD
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+=======
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+>>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	"github.com/stretchr/testify/require"
 )
+
+func newAvroBatchEncoderForTest(
+	ctx context.Context,
+	cfg *common.Config,
+	clusterID string,
+) (common.EventEncoder, error) {
+	schemaM, err := schemamanager.NewSchemaManager(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewAvroBatchEncoder(cfg, clusterID, schemaM)
+}
+
+func TestDebeziumAvroDecoderSchemaCacheIsBounded(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebeziumAvro)
+	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
+	decoder, err := NewAvroDecoder(t.Context(), cfg, 0, nil)
+	require.NoError(t, err)
+	avroDecoder := decoder.(*avroDecoder)
+	schema := &registeredDebeziumAvroSchema{}
+
+	for schemaID := 1; schemaID <= debeziumAvroDecoderSchemaCacheSize; schemaID++ {
+		avroDecoder.schemas.Add(schemaID, schema)
+	}
+
+	// Keep schema 1 hot, so adding one more schema evicts schema 2.
+	_, ok := avroDecoder.schemas.Get(1)
+	require.True(t, ok)
+	avroDecoder.schemas.Add(debeziumAvroDecoderSchemaCacheSize+1, schema)
+
+	require.Equal(t, debeziumAvroDecoderSchemaCacheSize, avroDecoder.schemas.Len())
+	require.True(t, avroDecoder.schemas.Contains(1))
+	require.False(t, avroDecoder.schemas.Contains(2))
+}
 
 func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	ctx := context.Background()
@@ -67,7 +105,7 @@ func TestDebeziumConfluentAvroEncodeRowEvent(t *testing.T) {
 	cfg.DebeziumDisableSchema = true
 	cfg.TimeZone = time.UTC
 
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "dbserver1.test.foo", &commonEvent.RowEvent{
 		TableInfo:      helper.tableInfo,
@@ -130,7 +168,7 @@ func TestDebeziumConfluentAvroSanitizesFullNameAndUnionBranch(t *testing.T) {
 	cfg.AvroConfluentSchemaRegistry = "http://127.0.0.1:8081"
 	cfg.TimeZone = time.UTC
 
-	eventEncoder, err := NewAvroBatchEncoder(ctx, cfg, "db-server")
+	eventEncoder, err := newAvroBatchEncoderForTest(ctx, cfg, "db-server")
 	require.NoError(t, err)
 	encoder, ok := eventEncoder.(*BatchEncoder)
 	require.True(t, ok)
@@ -216,7 +254,7 @@ func TestDebeziumConfluentAvroDecodeRowEvent(t *testing.T) {
 	cfg.TimeZone = time.UTC
 
 	commitTs := uint64(123)
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "dbserver1.test.foo", &commonEvent.RowEvent{
 		TableInfo:      helper.tableInfo,
@@ -277,7 +315,7 @@ func TestDebeziumConfluentAvroDecodeAccountDMLEvents(t *testing.T) {
 	cfg.EnableTiDBExtension = true
 	cfg.TimeZone = time.UTC
 
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 
 	rows := make([]commonEvent.RowChange, 0, 3)
@@ -545,14 +583,14 @@ func TestDebeziumConfluentAvroEncodeDDLEvent(t *testing.T) {
 
 	ddl := newDebeziumAvroDDLEventForTest()
 
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 	message, err := encoder.EncodeDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Nil(t, message)
 
 	cfg.AvroEnableWatermark = true
-	encoder, err = NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err = newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 	message, err = encoder.EncodeDDLEvent(ddl)
 	require.NoError(t, err)
@@ -631,7 +669,7 @@ func TestDebeziumConfluentAvroEncodeCheckpointEvent(t *testing.T) {
 	cfg.AvroEnableWatermark = true
 	cfg.TimeZone = time.UTC
 
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 
 	message, err := encoder.EncodeCheckpointEvent(100)
@@ -662,7 +700,7 @@ func TestDebeziumConfluentAvroDoesNotEncodeCheckpointEventByDefault(t *testing.T
 	cfg.EnableTiDBExtension = true
 	cfg.TimeZone = time.UTC
 
-	encoder, err := NewAvroBatchEncoder(ctx, cfg, "dbserver1")
+	encoder, err := newAvroBatchEncoderForTest(ctx, cfg, "dbserver1")
 	require.NoError(t, err)
 
 	message, err := encoder.EncodeCheckpointEvent(100)
