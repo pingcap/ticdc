@@ -20,9 +20,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -43,9 +43,24 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+type tableCacheKey struct {
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
+type cachedTable struct {
+	columns    map[string]column
+	info       *commonType.TableInfo
+	projection string
+}
+
 type decoder struct {
-	keyBytes   []byte
-	valueBytes []byte
+	// Keep old intervals available for delayed decoding of buffered messages.
+	tables      map[tableCacheKey]*cachedTable
+	ddlCommitTs map[[2]string][]uint64
+	keyBytes    []byte
+	valueBytes  []byte
 
 	nextKey *messageKey
 
@@ -181,6 +196,17 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
+	// Every partition decoder must record the boundary, even though only
+	// partition zero executes the DDL downstream.
+	schema, table := result.SchemaName, result.TableName
+	switch m.Type {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
+		// These DDLs affect multiple names. Start a new cache interval for all
+		// tables rather than relying on the single name carried by the message.
+		schema, table = "", ""
+	}
+	b.addDDLCommitTs(schema, table, result.FinishedTs)
+
 	// only the DDL comes from the first partition will be processed.
 	if b.idx == 0 {
 		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
@@ -283,12 +309,6 @@ func buildColumns(
 		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
-		// Snapshot query returns enum/set as their string representations, while open protocol uses
-		// integer/bitset values for these types. Downgrade enum/set to varchar to keep the
-		// assembled handle-key-only events decodable.
-		if strings.HasPrefix(dataType, "enum") || strings.HasPrefix(dataType, "set") {
-			dataType = "varchar"
-		}
 		if common.IsUnsignedMySQLType(dataType) {
 			flag |= unsignedFlag
 		}
@@ -304,33 +324,54 @@ func buildColumns(
 	return columns
 }
 
+// snapshotColumns uses protocol metadata so snapshot rows have the same chunk
+// layout as ordinary messages. Cached columns never retain row values.
+func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
+	schema, table := key.Schema, key.Table
+	cacheKey := b.tableCacheKey(key)
+	cached := b.tables[cacheKey]
+	var holder *common.ColumnsHolder
+	if cached == nil {
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
+		columns = buildColumns(holder, columns)
+		b.queryTableInfo(key, &messageRow{Update: columns})
+		cached = b.tables[cacheKey]
+	}
+	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
+	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
+		return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
+	}) {
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions, cached.projection)
+	}
+	result := maps.Clone(cached.columns)
+	for i, typ := range holder.Types {
+		name := typ.Name()
+		col := result[name]
+		col.Value = holder.Values[i]
+		result[name] = col
+	}
+	return result
+}
+
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, key *messageKey, row *messageRow) *commonEvent.DMLEvent {
-	var (
-		schema   = key.Schema
-		table    = key.Table
-		commitTs = key.Ts
-	)
+	commitTs := key.Ts
 	conditions := make(map[string]interface{}, 1)
 	if len(row.Delete) != 0 {
 		for name, col := range row.Delete {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		row.Delete = buildColumns(holder, row.Delete)
+		row.Delete = b.snapshotColumns(ctx, key, commitTs-1, conditions, row.Delete)
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		row.PreColumns = buildColumns(holder, row.PreColumns)
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		row.Update = buildColumns(holder, row.Update)
+		row.PreColumns = b.snapshotColumns(ctx, key, commitTs-1, conditions, row.PreColumns)
+		row.Update = b.snapshotColumns(ctx, key, commitTs, conditions, row.Update)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		row.Update = buildColumns(holder, row.Update)
+		row.Update = b.snapshotColumns(ctx, key, commitTs, conditions, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
@@ -375,9 +416,70 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 	return b.assembleDMLEvent(msgKey, rowMsg)
 }
 
+// DML at the DDL commit timestamp is flushed before that DDL.
+func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
+	var version uint64
+	for _, name := range [][2]string{{"", ""}, {key.Schema, ""}, {key.Schema, key.Table}} {
+		timestamps := b.ddlCommitTs[name]
+		i, _ := slices.BinarySearch(timestamps, key.Ts)
+		if i > 0 {
+			version = max(version, timestamps[i-1])
+		}
+	}
+	return tableCacheKey{schema: key.Schema, table: key.Table, ddlCommitTs: version}
+}
+
+func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
+	if ts == 0 {
+		return
+	}
+	if b.ddlCommitTs == nil {
+		b.ddlCommitTs = make(map[[2]string][]uint64)
+	}
+	name := [2]string{schema, table}
+	timestamps := b.ddlCommitTs[name]
+	i, exists := slices.BinarySearch(timestamps, ts)
+	if !exists {
+		b.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
+	}
+}
+
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	tableInfo := b.newTableInfo(key, value)
-	return tableInfo
+	columns := value.Update
+	if columns == nil {
+		columns = value.Delete
+	}
+	tableKey := b.tableCacheKey(key)
+	if cached := b.tables[tableKey]; cached != nil {
+		id := cached.info.TableName.TableID
+		key.Partition = &id
+		return cached.info
+	}
+	info := b.newTableInfo(key, value)
+	// A delete can contain only handle columns. Use a complete row to seed
+	// the cache; a cold delete must not define the layout of later inserts.
+	if value.Update == nil {
+		return info
+	}
+	metadata := make(map[string]column, len(columns))
+	for name, col := range columns {
+		col.Value = nil
+		col.WhereHandle = nil
+		metadata[name] = col
+	}
+	names := make([]string, 0, len(columns))
+	for _, col := range info.GetColumns() {
+		name := commonType.QuoteName(col.Name.O)
+		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
+			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+		}
+		names = append(names, name)
+	}
+	if b.tables == nil {
+		b.tables = make(map[tableCacheKey]*cachedTable)
+	}
+	b.tables[tableKey] = &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")}
+	return info
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -397,9 +499,7 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	columns := newTiColumns(rawColumns)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns)
-	if len(tableInfo.Indices) != 0 {
-		tableInfo.PKIsHandle = true
-	}
+	commonType.SetHandleKeyFlags(tableInfo)
 	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
 }
 
@@ -428,10 +528,16 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		raw := pair.column
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
+		col.Offset = int(nextColumnID)
 		col.Name = ast.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
-		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
+		// Open protocol omits virtual generated columns and carries no index
+		// membership. A non-primary composite key may therefore be incomplete
+		// (for example, UNIQUE(a, virtual_b) carries only a). Do not promote
+		// its remaining handle columns to a primary key.
+		isComposite := raw.Flag&multipleKeyFlag != 0
+		if isPrimary(raw.Flag) || (isHandle(raw.Flag) && !isComposite) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
@@ -444,7 +550,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.SetCharset("binary")
 			col.SetCollate("binary")
 		}
-		if isNullable(raw.Flag) {
+		if !isNullable(raw.Flag) {
 			col.AddFlag(mysql.NotNullFlag)
 		}
 		if isGenerated(raw.Flag) {
@@ -452,7 +558,9 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.GeneratedExprString = "holder" // just to make it not empty
 			col.GeneratedStored = true
 		}
-		if isUnique(raw.Flag) {
+		// A column belonging to a composite unique index is not individually
+		// unique. Only infer single-column unique indexes from unambiguous flags.
+		if isUnique(raw.Flag) && !isComposite {
 			col.AddFlag(mysql.UniqueKeyFlag)
 		}
 
@@ -478,39 +586,27 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 }
 
 func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
-	indices := make([]*timodel.IndexInfo, 0, 1)
+	indices := make([]*timodel.IndexInfo, 0, 2)
+	primaryColumns := make([]*timodel.IndexColumn, 0, 2)
 	multiColumns := make([]*timodel.IndexColumn, 0, 2)
 
-	// make columns sorted by id, to make indices for different row in table be same
-	sort.Slice(columns, func(i, j int) bool {
-		return columns[i].ID < columns[j].ID
-	})
-
 	for idx, col := range columns {
-		if mysql.HasPriKeyFlag(col.GetFlag()) {
-			indexColumns := make([]*timodel.IndexColumn, 0)
-			indexColumns = append(indexColumns, &timodel.IndexColumn{
+		switch {
+		case mysql.HasPriKeyFlag(col.GetFlag()):
+			primaryColumns = append(primaryColumns, &timodel.IndexColumn{
 				Name:   col.Name,
 				Offset: idx,
 			})
+		case mysql.HasUniKeyFlag(col.GetFlag()):
 			indices = append(indices, &timodel.IndexInfo{
-				ID:      1,
-				Name:    ast.NewCIStr("primary"),
-				Columns: indexColumns,
-				Primary: true,
-				Unique:  true,
-			})
-		} else if mysql.HasUniKeyFlag(col.GetFlag()) {
-			indexColumns := make([]*timodel.IndexColumn, 0)
-			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name:   col.Name,
-				Offset: idx,
-			})
-			indices = append(indices, &timodel.IndexInfo{
-				ID:      1 + int64(len(indices)),
-				Name:    ast.NewCIStr(col.Name.O + "_idx"),
-				Columns: indexColumns,
-				Unique:  true,
+				ID:   2 + int64(len(indices)), // Reserve ID 1 for the primary index.
+				Name: ast.NewCIStr(col.Name.O + "_idx"),
+				Columns: []*timodel.IndexColumn{{
+					Name:   col.Name,
+					Offset: idx,
+				}},
+				Unique: true,
+				State:  timodel.StatePublic,
 			})
 		}
 		if mysql.HasMultipleKeyFlag(col.GetFlag()) {
@@ -520,13 +616,26 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
+	// One primary index over the whole key: one index per primary key column
+	// would make the row locator look like a set of single column keys.
+	if len(primaryColumns) != 0 {
+		indices = append(indices, &timodel.IndexInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("primary"),
+			Columns: primaryColumns,
+			Primary: true,
+			Unique:  true,
+			State:   timodel.StatePublic,
+		})
+	}
 	// if there are multiple multi-column indices, consider as one.
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
-			ID:      1 + int64(len(indices)),
+			ID:      2 + int64(len(indices)),
 			Name:    ast.NewCIStr("multi_idx"),
 			Columns: multiColumns,
 			Unique:  false,
+			State:   timodel.StatePublic,
 		})
 	}
 	return indices
@@ -732,39 +841,28 @@ func formatColumn(c column, ft types.FieldType) column {
 			log.Panic("invalid column value for the bit type", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value = tiTypes.NewBinaryLiteralFromUint(intVal, -1)
-	case mysql.TypeEnum:
-		var enumValue int64
+	case mysql.TypeEnum, mysql.TypeSet:
+		var value uint64
 		switch v := c.Value.(type) {
 		case json.Number:
-			enumValue, err = v.Int64()
+			value, err = strconv.ParseUint(string(v), 10, 64)
 		case []uint8:
-			enumValue, err = strconv.ParseInt(string(v), 10, 64)
+			value, err = strconv.ParseUint(string(v), 10, 64)
+		case uint64:
+			value = v
+		case int64:
+			value = uint64(v)
 		default:
-			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
+			log.Panic("invalid column value for enum/set", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
+			log.Panic("invalid column value for enum/set", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
-		// only enum's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Enum{
-			Value: uint64(enumValue),
-		}
-	case mysql.TypeSet:
-		var setValue int64
-		switch v := c.Value.(type) {
-		case json.Number:
-			setValue, err = v.Int64()
-		case []uint8:
-			setValue, err = strconv.ParseInt(string(v), 10, 64)
-		default:
-			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
-		}
-		// only set's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Set{
-			Value: uint64(setValue),
+		// The MySQL sink accesses only the numeric value; Open carries no elements.
+		if c.Type == mysql.TypeEnum {
+			c.Value = tiTypes.Enum{Value: value}
+		} else {
+			c.Value = tiTypes.Set{Value: value}
 		}
 	case mysql.TypeJSON:
 		var data string

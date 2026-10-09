@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -35,7 +36,7 @@ func TestCSVBatchDecoder(t *testing.T) {
 	defer helper.Close()
 
 	_ = helper.DDL2Job("create database hr")
-	createTableDDL := helper.DDL2Event("create table hr.employee(Id int, LastName varchar(255), FirstName varchar(255), HireDate date, OfficeLocation varchar(255))")
+	createTableDDL := helper.DDL2Event("create table hr.employee(Id int, LastName varchar(255), FirstName varchar(255), HireDate date, OfficeLocation varchar(255), primary key(Id, LastName))")
 
 	codecConfig := &common.Config{
 		Delimiter:       ",",
@@ -47,12 +48,40 @@ func TestCSVBatchDecoder(t *testing.T) {
 	decoder, err := NewDecoder(ctx, codecConfig, createTableDDL.TableInfo, []byte(csvData))
 	require.NoError(t, err)
 
-	for i := 0; i < 5; i++ {
+	for i, commitTs := range []uint64{
+		433305438660591626, 433305438660591627, 433305438660591629,
+		433305438660591630, 433305438660591630,
+	} {
 		tp, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
-		event := decoder.NextDMLMessage().ToDMLEvent()
-		require.NotNil(t, event)
+		message := decoder.NextDMLMessage()
+		require.Equal(t, commitTs, message.GetCommitTs())
+		event := message.ToDMLEvent()
+		require.Equal(t, commitTs, event.CommitTs)
+		if i == 1 || i == 4 {
+			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete, commonType.RowTypeInsert}, event.RowTypes)
+			require.EqualValues(t, 2, event.Len())
+			before, after := event.Rows.GetRow(0), event.Rows.GetRow(1)
+			require.Equal(t, after.GetInt64(0), before.GetInt64(0))
+			require.Equal(t, after.GetBytes(1), before.GetBytes(1))
+			for _, column := range []int{2, 3, 4} {
+				require.True(t, before.IsNull(column))
+			}
+			location := "Los Angeles"
+			if i == 4 {
+				location = "Beijing"
+			}
+			require.Equal(t, location, string(after.GetBytes(4)))
+		} else {
+			rowType := commonType.RowTypeInsert
+			if i == 2 {
+				rowType = commonType.RowTypeDelete
+			}
+			require.Equal(t, []commonType.RowType{rowType}, event.RowTypes)
+			require.EqualValues(t, 1, event.Len())
+		}
+		event.PostFlush()
 	}
 
 	_, hasNext := decoder.HasNext()
