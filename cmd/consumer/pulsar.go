@@ -71,9 +71,6 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 	if err != nil {
 		return nil, err
 	}
-	if err := codecConfig.Validate(); err != nil {
-		return nil, err
-	}
 	// Canal's DDL metadata belongs to the logical topic. Decode its merged
 	// stream serially while retaining each physical partition's ACK position.
 	decoder, err := codec.NewEventDecoder(ctx, 0, codecConfig, topic, nil)

@@ -128,9 +128,6 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string
 	if protocol == config.ProtocolCanalJSON {
 		codecConfig.EnableTiDBExtension = true
 	}
-	if err := codecConfig.Validate(); err != nil {
-		return nil, err
-	}
 	selectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return nil, err

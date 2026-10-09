@@ -133,10 +133,6 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID, timez
 		client.Close()
 		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
 	}
-	if err := codecConfig.Validate(); err != nil {
-		client.Close()
-		return nil, err
-	}
 	var db *sql.DB
 	if dsn := upstreamURI.Query().Get("upstream-tidb-dsn"); dsn != "" {
 		db, err = sql.Open("mysql", dsn)

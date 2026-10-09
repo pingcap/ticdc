@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,8 +36,64 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+func TestKafkaReaderSmallMessageLimit(t *testing.T) {
+	const topic = "small-message-limit"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	t.Cleanup(cluster.Close)
+	for _, query := range []string{
+		"protocol=canal-json&enable-tidb-extension=true",
+		"protocol=open-protocol",
+		"protocol=simple",
+		"protocol=simple&encoding-format=avro",
+		"protocol=debezium&enable-tidb-extension=true",
+	} {
+		t.Run(query, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: query + "&max-message-bytes=262144"}
+			input, err := newKafkaReader(ctx, upstreamURI, "small-message-limit", "UTC", config.GetDefaultReplicaConfig(), &bufferUsage{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, input.Close()) })
+			require.Len(t, input.buffer.partitions, 1)
+			require.NotNil(t, input.buffer.partitions[0].decoder)
+			if !strings.HasPrefix(query, "protocol=canal-json") {
+				return
+			}
+			// The topic limit can grow while this reader keeps the original URI.
+			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
+			require.NoError(t, err)
+			t.Cleanup(producer.Close)
+			payload := strings.Repeat("x", 1<<20)
+			value := []byte(`{"database":"test","table":"t","pkNames":["id"],"isDdl":false,"type":"INSERT","sqlType":{"id":4,"v":12},"mysqlType":{"id":"int","v":"longtext"},"data":[{"id":"1","v":"` + payload + `"}],"_tidb":{"commitTs":10}}`)
+			require.NoError(t, producer.ProduceSync(ctx,
+				&kgo.Record{Topic: topic, Value: value},
+				&kgo.Record{Topic: topic, Value: []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":10}}`)},
+			).FirstErr())
+			result, err := input.Read(ctx)
+			require.NoError(t, err)
+			require.NotNil(t, result.dml)
+			require.EqualValues(t, 10, result.dml.CommitTs)
+			require.Equal(t, payload, result.dml.Rows.GetRow(0).GetString(1))
+		})
+	}
+}
+
+func TestStorageReaderSmallMessageLimit(t *testing.T) {
+	for _, protocol := range []string{"csv", "canal-json"} {
+		t.Run(protocol, func(t *testing.T) {
+			replicaConfig := config.GetDefaultReplicaConfig()
+			replicaConfig.Sink.Protocol = new(protocol)
+			upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir(), RawQuery: "max-message-bytes=262144"}
+			input, err := newStorageReader(t.Context(), upstreamURI, "UTC", replicaConfig, &bufferUsage{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, input.Close()) })
+		})
+	}
+}
 
 func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 	codecConfig := codecCommon.NewConfig(config.ProtocolOpen)
