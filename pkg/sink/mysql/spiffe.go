@@ -27,7 +27,7 @@ import (
 
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
@@ -136,27 +136,27 @@ func (s matchingX509SVIDSource) GetX509SVID() (*x509svid.SVID, error) {
 
 func validateMatchingX509SVID(svid *x509svid.SVID, pattern spiffeIDPattern) error {
 	if svid == nil {
-		return fmt.Errorf("Workload API returned a nil X509-SVID")
+		return fmt.Errorf("workload API returned a nil X509-SVID")
 	}
 	if len(svid.Certificates) == 0 {
-		return fmt.Errorf("Workload API returned an X509-SVID without certificates")
+		return fmt.Errorf("workload API returned an X509-SVID without certificates")
 	}
 	certID, err := x509svid.IDFromCert(svid.Certificates[0])
 	if err != nil {
-		return fmt.Errorf("Workload API returned an invalid X509-SVID: %w", err)
+		return fmt.Errorf("workload API returned an invalid X509-SVID: %w", err)
 	}
 	if certID != svid.ID {
-		return fmt.Errorf("Workload API X509-SVID ID does not match its certificate URI SAN")
+		return fmt.Errorf("workload API X509-SVID ID does not match its certificate URI SAN")
 	}
 	now := time.Now()
 	if now.Before(svid.Certificates[0].NotBefore) {
-		return fmt.Errorf("Workload API X509-SVID is not valid yet")
+		return fmt.Errorf("workload API X509-SVID is not valid yet")
 	}
 	if now.After(svid.Certificates[0].NotAfter) {
-		return fmt.Errorf("Workload API X509-SVID is expired")
+		return fmt.Errorf("workload API X509-SVID is expired")
 	}
 	if !pattern.matches(certID) {
-		return fmt.Errorf("Workload API X509-SVID %q does not match client pattern %q", certID, pattern.raw)
+		return fmt.Errorf("workload API X509-SVID %q does not match client pattern %q", certID, pattern.raw)
 	}
 	return nil
 }
@@ -259,16 +259,16 @@ func (c *Config) configureTLS(
 	}
 	clientPattern, err := parseSPIFFEIDPattern(clientPatternRaw)
 	if err != nil {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("invalid %s: %v", spiffeClientIDPatternKey, err)
+		return errors.ErrMySQLInvalidConfig.GenWithStack("invalid %s: %v", spiffeClientIDPatternKey, err)
 	}
 	serverPattern, err := parseSPIFFEIDPattern(serverPatternRaw)
 	if err != nil {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("invalid %s: %v", spiffeServerIDPatternKey, err)
+		return errors.ErrMySQLInvalidConfig.GenWithStack("invalid %s: %v", spiffeServerIDPatternKey, err)
 	}
 
 	endpoint := os.Getenv("SPIFFE_ENDPOINT_SOCKET")
 	if endpoint == "" {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack(
+		return errors.ErrMySQLInvalidConfig.GenWithStack(
 			"SPIFFE_ENDPOINT_SOCKET must be set when SPIFFE MySQL TLS is configured")
 	}
 
@@ -288,12 +288,12 @@ func (c *Config) configureTLS(
 func (c *Config) rejectMixedSPIFFETLS(values url.Values) error {
 	for _, key := range []string{"ssl-ca", "ssl-cert", "ssl-key", "tls"} {
 		if _, ok := values[key]; ok {
-			return cerror.ErrMySQLInvalidConfig.GenWithStack(
+			return errors.ErrMySQLInvalidConfig.GenWithStack(
 				"%s cannot be combined with SPIFFE MySQL TLS", key)
 		}
 	}
 	if c.SSLCa != "" || c.SSLCert != "" || c.SSLKey != "" {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack(
+		return errors.ErrMySQLInvalidConfig.GenWithStack(
 			"configured ssl-ca, ssl-cert, or ssl-key cannot be combined with SPIFFE MySQL TLS")
 	}
 	return nil
@@ -302,7 +302,7 @@ func (c *Config) rejectMixedSPIFFETLS(values url.Values) error {
 func singleSPIFFEPatternValue(values url.Values, key string) (string, error) {
 	entries, ok := values[key]
 	if !ok || len(entries) != 1 || entries[0] == "" {
-		return "", cerror.ErrMySQLInvalidConfig.GenWithStack(
+		return "", errors.ErrMySQLInvalidConfig.GenWithStack(
 			"%s must be specified exactly once and cannot be empty", key)
 	}
 	return entries[0], nil
@@ -329,19 +329,19 @@ func (c *Config) startSPIFFETLS(
 		matchingX509SVIDPicker(options.clientPattern),
 	)
 	if err != nil {
-		return cerror.ErrMySQLConnectionError.Wrap(err).
+		return errors.ErrMySQLConnectionError.Wrap(err).
 			GenWithStack("connect to the SPIFFE Workload API")
 	}
 
 	tlsCfg, err := newSPIFFEClientTLSConfig(source, options.clientPattern, options.serverPattern)
 	if err != nil {
 		_ = source.Close()
-		return cerror.ErrMySQLConnectionError.Wrap(err).
+		return errors.ErrMySQLConnectionError.Wrap(err).
 			GenWithStack("initialize SPIFFE MySQL TLS")
 	}
 	if err := dmysql.RegisterTLSConfig(registryName, tlsCfg); err != nil {
 		_ = source.Close()
-		return cerror.ErrMySQLConnectionError.Wrap(err).
+		return errors.ErrMySQLConnectionError.Wrap(err).
 			GenWithStack("register SPIFFE MySQL TLS")
 	}
 

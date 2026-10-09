@@ -414,13 +414,13 @@ func TestSPIFFETLSWorkloadAPIConstructorFailure(t *testing.T) {
 		string,
 		func([]*x509svid.SVID) *x509svid.SVID,
 	) (spiffeX509Source, error) {
-		return nil, fmt.Errorf("Workload API unavailable")
+		return nil, fmt.Errorf("workload API unavailable")
 	}
 
 	cfg := New()
 	err := cfg.configureTLS(context.Background(), validSPIFFETLSValues(),
 		common.NewChangefeedID4Test("default", "spiffe-unavailable"))
-	require.ErrorContains(t, err, "Workload API unavailable")
+	require.ErrorContains(t, err, "workload API unavailable")
 	require.Empty(t, cfg.TLS)
 	require.Nil(t, cfg.tlsResource)
 }

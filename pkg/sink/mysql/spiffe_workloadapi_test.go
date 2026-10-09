@@ -317,7 +317,7 @@ func startTestMySQLServer(t *testing.T, tlsConfig *tls.Config) (string, <-chan t
 			gomysql.AUTH_NATIVE_PASSWORD, nil, tlsConfig)
 		provider := gomysqlserver.NewInMemoryProvider()
 		provider.AddUser("replicator", "")
-		conn, err := gomysqlserver.NewCustomizedConn(netConn, server, provider, testMySQLHandler{})
+		conn, err := server.NewCustomizedConn(netConn, provider, testMySQLHandler{})
 		if err != nil {
 			result <- testMySQLHandshakeResult{err: err}
 			return
