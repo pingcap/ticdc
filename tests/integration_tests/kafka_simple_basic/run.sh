@@ -63,9 +63,7 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" -c "simple-basic"
 	sleep 5 # wait for changefeed to start
 
-	# Recompute checksums from decoded rows. The optional upstream snapshot check
-	# can disagree with historical row checksums after this case's schema changes.
-	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false" --config="$CUR/conf/changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer.log 2>&1 &
+	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?enable-ddl-ts=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" --config="$CUR/conf/changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer.log 2>&1 &
 
 	# pre execute some ddls
 	run_sql_file $CUR/data/pre_ddl.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -78,7 +76,7 @@ function run() {
 	cdc_cli_changefeed pause -c "simple-basic"
 	cdc_cli_changefeed update -c "simple-basic" --sink-uri=$SINK_URI --config="$CUR/conf/changefeed.toml" --no-confirm
 	cdc_cli_changefeed resume -c "simple-basic"
-	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false" \
+	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?enable-ddl-ts=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" \
 		--config="$CUR/conf/changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer_resume.log 2>&1 &
 
 	check_sparse_checksums

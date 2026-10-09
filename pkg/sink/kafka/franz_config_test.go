@@ -44,8 +44,6 @@ func testOptions(brokers []string) *options {
 	o.MaxMessageBytes = 1 << 20
 	o.MaxRetry = 1
 	o.DialTimeout = time.Second
-	o.ReadTimeout = time.Second
-	o.WriteTimeout = time.Second
 	return o
 }
 
@@ -73,14 +71,14 @@ func TestFranzRequiredAcks(t *testing.T) {
 func TestClientOptions(t *testing.T) {
 	t.Run("timeouts", func(t *testing.T) {
 		o := testOptions([]string{"127.0.0.1:9092"})
-		o.ReadTimeout = 3 * time.Second
-		o.WriteTimeout = 2 * time.Second
+		o.ReadTimeout = 2 * time.Minute
+		o.WriteTimeout = 3 * time.Minute
 		client, err := kgo.NewClient(append(testClientOptions(t, o), producerOptions(o)...)...)
 		require.NoError(t, err)
 		defer client.Close()
 
-		require.Equal(t, 2*time.Second, client.OptValue(kgo.RequestTimeoutOverhead))
-		require.Equal(t, 3*time.Second, client.OptValue(kgo.ProduceRequestTimeout))
+		require.Equal(t, o.WriteTimeout, client.OptValue(kgo.RequestTimeoutOverhead))
+		require.Equal(t, o.ReadTimeout, client.OptValue(kgo.ProduceRequestTimeout))
 	})
 
 	t.Run("TLS", func(t *testing.T) {

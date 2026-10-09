@@ -255,6 +255,29 @@ func (d *dispatcherConnState) isRemoved() bool {
 	return d.removed
 }
 
+func (d *dispatcherConnState) hasRegistration(serverID, localServerID node.ID) bool {
+	d.RLock()
+	defer d.RUnlock()
+	return !d.removed && !serverID.IsEmpty() && (d.currentEventServiceID == serverID ||
+		d.pendingRemoteEventServiceID == serverID || (d.localReadyPending && serverID == localServerID))
+}
+
+func (d *dispatcherConnState) pendingRegistrations(localServerID node.ID) []node.ID {
+	d.RLock()
+	defer d.RUnlock()
+	if d.removed {
+		return nil
+	}
+	var targets []node.ID
+	if d.localReadyPending {
+		targets = append(targets, localServerID)
+	}
+	if !d.pendingRemoteEventServiceID.IsEmpty() {
+		targets = append(targets, d.pendingRemoteEventServiceID)
+	}
+	return targets
+}
+
 // Remote-probing transitions.
 //
 // beginRemoteProbing starts remote reuse probing using a list of candidates. It
@@ -352,7 +375,7 @@ func (s *dispatcherSession) startLocalRegistration() {
 func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
-	if s.connState.getCurrentEventServiceID() != serverID {
+	if !s.connState.hasRegistration(serverID, s.localServerID) {
 		return false
 	}
 	log.Info("dispatcher removed in current event service, retry registration",

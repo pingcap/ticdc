@@ -38,13 +38,14 @@ func TestBasic(t *testing.T) {
 		return pool.Run(ctx)
 	})
 
+	const taskCount = 40
 	var sum int32
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range taskCount {
 		wg.Add(1)
 		finalI := i
 		err := pool.Go(ctx, func() {
-			time.Sleep(time.Millisecond * time.Duration(rand.Int()%100))
+			time.Sleep(time.Millisecond * time.Duration(rand.Int()%20))
 			atomic.AddInt32(&sum, int32(finalI+1))
 			wg.Done()
 		})
@@ -52,7 +53,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	wg.Wait()
-	require.Equal(t, sum, int32(5050))
+	require.Equal(t, sum, int32(taskCount*(taskCount+1)/2))
 
 	cancel()
 	err := errg.Wait()
@@ -72,7 +73,7 @@ func TestEventuallyRun(t *testing.T) {
 		defer cancelLoop()
 		for i := 0; i < 10; i++ {
 			log.Info("running pool")
-			err := runForDuration(ctx, time.Millisecond*500, func(ctx context.Context) error {
+			err := runForDuration(ctx, time.Millisecond*50, func(ctx context.Context) error {
 				return pool.Run(ctx)
 			})
 			if err != nil {

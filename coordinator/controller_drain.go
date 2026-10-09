@@ -121,7 +121,7 @@ func (c *Controller) observeDrainEpochLocked(from node.ID, epoch uint64) {
 // maintainer manager:
 //   - unknown capability keeps returning non-zero while coordinator waits for
 //     bootstrap to complete for that node
-//   - any legacy capability bypasses the new orchestration and falls back to
+//   - any node without broker reporting bypasses the new orchestration and falls back to
 //     the historical hard-restart behavior used during mixed-version rolling patch
 //
 // Supported targets then use coordinator-driven orchestration: it ensures an active
@@ -171,10 +171,10 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 				zap.Stringer("blockingNodeID", blockingNodeID))
 			return 1, nil
 		}
-		if hasBlocker && blockingVersion == 0 {
-			message := "drain target does not support coordinator driven drain protocol, fall back to legacy hard restart"
+		if hasBlocker && !heartbeatpb.SupportsEventBrokerDrain(blockingVersion) {
+			message := "drain target does not support broker drain reports, fall back to legacy hard restart"
 			if blockingNodeID != target {
-				message = "drain cluster contains legacy peer that cannot participate in coordinator driven drain, fall back to legacy hard restart"
+				message = "drain cluster contains a peer without broker drain reports, fall back to legacy hard restart"
 			}
 			log.Info(message,
 				zap.Stringer("targetNodeID", target),
@@ -225,6 +225,8 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("eventBrokerDispatcherCount", observation.eventBrokerDispatcherCount),
+		zap.Bool("eventBrokerDispatcherCountObserved", observation.eventBrokerDispatcherCountObserved),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
@@ -259,6 +261,8 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
 		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("eventBrokerDispatcherCount", observation.eventBrokerDispatcherCount),
+		zap.Bool("eventBrokerDispatcherCountObserved", observation.eventBrokerDispatcherCountObserved),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining)
 }
@@ -283,21 +287,24 @@ func (c *Controller) blockedByPreviousDrainTarget(target node.ID) (node.ID, uint
 // prevents coordinator-driven drain orchestration from being safe cluster-wide. Unknown
 // capability has higher priority than legacy fallback so bootstrap races never
 // silently degrade to hard-restart behavior.
+// Check every alive capture because the log coordinator may run on any of them.
 func (c *Controller) findDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
 	var legacyBlocker node.ID
+	var legacyVersion uint32
 	for id := range c.nodeManager.GetAliveNodes() {
 		version, observed := c.drainController.GetDrainProtocolVersion(id)
 		if !observed {
 			return id, 0, false, true
 		}
-		if !heartbeatpb.SupportsCoordinatorDrivenDrain(version) && legacyBlocker.IsEmpty() {
+		if !heartbeatpb.SupportsEventBrokerDrain(version) && legacyBlocker.IsEmpty() {
 			legacyBlocker = id
+			legacyVersion = version
 		}
 	}
 	if legacyBlocker.IsEmpty() {
 		return "", 0, false, false
 	}
-	return legacyBlocker, 0, true, true
+	return legacyBlocker, legacyVersion, true, true
 }
 
 type drainNodeObservation struct {
@@ -308,7 +315,9 @@ type drainNodeObservation struct {
 	// move operators still draining work away from the target node.
 	targetInflightDrainMoveCount int
 	// pendingStatusCount is the number of running changefeeds not converged to the active target epoch.
-	pendingStatusCount int
+	pendingStatusCount                 int
+	eventBrokerDispatcherCount         int
+	eventBrokerDispatcherCountObserved bool
 	// remaining is the max of all workload dimensions used by drain completion gating.
 	remaining        int
 	nodeState        drain.State
@@ -317,9 +326,12 @@ type drainNodeObservation struct {
 }
 
 func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObservation {
+	brokerCount, brokerCountObserved := c.drainController.GetEventBrokerDispatcherCount(target)
 	observation := drainNodeObservation{
-		maintainersOnTarget:        len(c.changefeedDB.GetByNodeID(target)),
-		inflightOpsInvolvingTarget: c.operatorController.CountOperatorsInvolvingNode(target),
+		maintainersOnTarget:                len(c.changefeedDB.GetByNodeID(target)),
+		inflightOpsInvolvingTarget:         c.operatorController.CountOperatorsInvolvingNode(target),
+		eventBrokerDispatcherCount:         brokerCount,
+		eventBrokerDispatcherCountObserved: brokerCountObserved,
 	}
 	observation.dispatcherCountOnTarget, observation.targetInflightDrainMoveCount = c.aggregateDrainTargetProgress(target, epoch)
 	observation.pendingStatusCount = c.collectDrainPendingStatus(target, epoch)
@@ -329,11 +341,33 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 		observation.dispatcherCountOnTarget,
 		observation.targetInflightDrainMoveCount,
 		observation.pendingStatusCount,
+		observation.eventBrokerDispatcherCount,
 	)
 
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
+	// Require a broker report after STOPPING, without blocking the transition
+	// into STOPPING that closes registration admission.
+	if observation.stoppingObserved && !observation.eventBrokerDispatcherCountObserved {
+		observation.remaining = ensureDrainRemainingNonZero(observation.remaining)
+	}
 	observation.nodeState = c.drainController.GetState(target)
 	return observation
+}
+
+func (c *Controller) requestEventBrokerDispatcherCount() {
+	target, _, ok := c.getDispatcherDrainTarget()
+	if !ok {
+		return
+	}
+	req := c.drainController.NewEventBrokerDispatcherCountRequest(target)
+	if req == nil {
+		return
+	}
+	// Like resolved-ts queries, send to all nodes; only the log coordinator
+	// has a handler for this topic. Missing replies are retried by the drain controller.
+	for _, id := range c.nodeManager.GetAliveNodeIDs() {
+		_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, req))
+	}
 }
 
 // advanceActiveDrainLiveness retries liveness progression only for the current
@@ -1096,6 +1130,7 @@ func drainRemainingEstimate(
 	dispatcherCountOnTarget int,
 	targetInflightDrainMoveCount int,
 	pendingStatusCount int,
+	eventBrokerDispatcherCount int,
 ) int {
 	return max(
 		maintainersOnTarget,
@@ -1103,6 +1138,7 @@ func drainRemainingEstimate(
 		dispatcherCountOnTarget,
 		targetInflightDrainMoveCount,
 		pendingStatusCount,
+		eventBrokerDispatcherCount,
 	)
 }
 
