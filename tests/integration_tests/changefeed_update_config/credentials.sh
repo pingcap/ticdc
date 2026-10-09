@@ -97,12 +97,17 @@ function check_invalid_credential_create() {
 	status=$(curl -sS -X POST -H 'Content-Type: application/json' --data-binary "@$WORK_DIR/create-rejected.json" \
 		"$CREDENTIAL_API" -o "$CREDENTIAL_OUTPUTS/create-rejected.json" -w '%{http_code}')
 	[ "$status" = 400 ]
-	credential_request GET "" create-not-found.json 404
+	credential_request GET "" create-not-found.json 400
+	jq -e '.error_code == "CDC:ErrChangeFeedNotExists"' "$CREDENTIAL_OUTPUTS/create-not-found.json" >/dev/null
 }
 
 function check_credential_updates() {
 	if [ "$SINK_TYPE" != mysql ] && [ "$SINK_TYPE" != kafka ]; then
 		return
+	fi
+	if [ "$SINK_TYPE" = kafka ]; then
+		# CI restores prebuilt CDC binaries without this case's fixture.
+		make -C "$CUR/../../.." kafka_auth_server
 	fi
 	mkdir -p "$CREDENTIAL_OUTPUTS"
 	cdc_cli_changefeed remove -c test >"$CREDENTIAL_OUTPUTS/remove-original.txt" 2>&1

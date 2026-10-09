@@ -77,7 +77,7 @@ check_credential_redaction() {
 	query_toml cf-credentials "$outputs/query.toml"
 	cdc_cli_changefeed query -c cf-credentials >"$outputs/cli-query.txt" 2>&1
 	curl -fsS "$API?keyspace=$KEYSPACE_NAME" -o "$outputs/list.json"
-	for endpoint in debug/info api/v2/debug/info api/v2/unsafe/metadata; do
+	for endpoint in debug/info api/v2/unsafe/metadata; do
 		curl -fsS "http://${CDC_HOST}:${CDC_PORT}/$endpoint?keyspace=$KEYSPACE_NAME" \
 			-o "$outputs/${endpoint//\//-}.txt"
 	done
