@@ -27,6 +27,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -594,4 +597,69 @@ func (m fakePulsarMessage) Index() *uint64 {
 
 func (m fakePulsarMessage) BrokerPublishTime() *time.Time {
 	return nil
+}
+
+func newReplayTableForTest(t *testing.T) *common.TableInfo {
+	t.Helper()
+	field := types.NewFieldType(mysql.TypeLonglong)
+	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
+	table := &timodel.TableInfo{
+		ID: 1, Name: ast.NewCIStr("table_3"),
+		Columns: []*timodel.ColumnInfo{{
+			ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field,
+		}},
+		Indices: []*timodel.IndexInfo{{
+			Name: ast.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic,
+			Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}},
+		}},
+	}
+	return common.NewTableInfo4Decoder("test", table)
+}
+
+func newReplayEventForTest(table *common.TableInfo, ts uint64, ids ...int64) *commonEvent.DMLEvent {
+	e := commonEvent.NewDMLEvent(common.DispatcherID{}, table.TableName.TableID, ts-1, ts, table)
+	e.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), len(ids))
+	for _, id := range ids {
+		e.Rows.AppendInt64(0, id)
+		e.RowTypes = append(e.RowTypes, common.RowTypeInsert)
+	}
+	e.Length = int32(len(ids))
+	return e
+}
+
+func TestFlushDMLBatchDropsReplayedRows(t *testing.T) {
+	// A dispatcher merge replays the same mutations with the same commit-ts, and the
+	// consumer merges both copies into one event. Keeping both copies makes the sink
+	// reject the batch with duplicate insert rows of the same key, so the replayed rows
+	// have to be dropped before the events are handed to the sink.
+	table := newReplayTableForTest(t)
+	s := sinkmock.NewMockSink(gomock.NewController(t))
+	flushedRows := make([][]int64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(e *commonEvent.DMLEvent) {
+		rows := make([]int64, 0, e.Len())
+		for row, ok := e.GetNextRow(); ok; row, ok = e.GetNextRow() {
+			rows = append(rows, row.Row.GetInt64(0))
+		}
+		flushedRows = append(flushedRows, rows)
+		e.PostFlush()
+	}).Times(2)
+
+	progress := &partitionProgress{partition: 0, eventsGroup: map[int64]*util.EventsGroup{}, watermark: 100}
+	w := &writer{progresses: []*partitionProgress{progress}, mysqlSink: s, protocol: config.ProtocolCanalJSON}
+
+	replayed := newReplayEventForTest(table, 100, 1714, 1715, 1714, 1715)
+	replayedCallbacks := 0
+	replayed.AddPostFlushFunc(func() { replayedCallbacks++ })
+	// A second event of another commit-ts keeps the batch on the cross-event merge path
+	// of the sink, which is the path that rejects duplicate insert rows.
+	other := newReplayEventForTest(table, 101, 42)
+	require.NoError(t, w.flushDMLBatch(t.Context(), []*commonEvent.DMLEvent{replayed, other}))
+	require.Equal(t, [][]int64{{1714, 1715}, {42}}, flushedRows)
+	// The retained copy owns the callbacks of the replayed event, so its decoder chunk and
+	// flush barrier are still released.
+	require.Equal(t, 1, replayedCallbacks)
+
+	// A copy buffered before the watermark advanced is dropped by the replay boundary.
+	require.NoError(t, w.flushDMLBatch(t.Context(), []*commonEvent.DMLEvent{newReplayEventForTest(table, 100, 1714, 1715)}))
+	require.Equal(t, [][]int64{{1714, 1715}, {42}}, flushedRows)
 }

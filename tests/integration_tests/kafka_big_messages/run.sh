@@ -60,7 +60,7 @@ function start_kafka_consumer() {
 	local sink_uri=$2
 	local schema_registry_uri=$3
 	local protocol_case=$4
-	local downstream_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false"
+	local downstream_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?enable-ddl-ts=false"
 	local args=(
 		--log-file "$work_dir/cdc_kafka_consumer.log"
 		--log-level debug

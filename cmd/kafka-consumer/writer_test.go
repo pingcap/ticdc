@@ -61,6 +61,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
 		},
@@ -100,6 +101,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -153,6 +155,7 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -197,6 +200,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -290,6 +294,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		watermark:   0,
 	}
 	w := &writer{
+		spillStore:  util.NewSpillStore(),
 		progresses:  []*partitionProgress{p},
 		mysqlSink:   s,
 		eventRouter: eventRouter,
@@ -300,9 +305,9 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		message *codeccommon.DMLMessage
 		offset  int64
 	}{
-		{newDMLMessageForWriterTest(20), 1},
-		{newDMLMessageForWriterTest(10), 2},
-		{newDMLMessageForWriterTest(20), 3},
+		{newDMLMessageForWriterTest(20, 1), 1},
+		{newDMLMessageForWriterTest(10, 2), 2},
+		{newDMLMessageForWriterTest(20, 3), 3},
 	} {
 		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(item.message), p, item.offset))
 	}
@@ -336,15 +341,10 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 
 	newMessage := func(tableID int64, table string) *codeccommon.DMLMessage {
 		message := codeccommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
-			return &commonEvent.DMLEvent{
-				PhysicalTableID: tableID,
-				CommitTs:        10,
-				RowTypes:        []common.RowType{common.RowTypeInsert},
-				Rows:            chunk.NewChunkWithCapacity(nil, 0),
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "test", Table: table, TableID: tableID},
-				},
-			}
+			e := newReplayTestEvent(10, 1)
+			e.PhysicalTableID = tableID
+			e.TableInfo.TableName = common.TableName{Schema: "test", Table: table, TableID: tableID}
+			return e
 		})
 		data := codeccommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codeccommon.DMLMessage, error) {
 			return []*codeccommon.DMLMessage{message}, nil
@@ -359,6 +359,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	require.NoError(t, unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other")))
 
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{
 				partition: 0,
@@ -411,9 +412,10 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
-		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
+		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10, 1)}),
 	}
 	w := &writer{
+		spillStore:      util.NewSpillStore(),
 		progresses:      []*partitionProgress{progress},
 		mysqlSink:       s,
 		protocol:        config.ProtocolOpen,
@@ -442,6 +444,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		watermark:   20,
 	}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			progress,
 			{partition: 1, watermark: 5},
@@ -450,7 +453,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol:    config.ProtocolOpen,
 	}
 
-	message := newDMLMessageForWriterTest(10)
+	message := newDMLMessageForWriterTest(10, 1)
 	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, 10))
 
 	require.NotNil(t, progress.eventsGroup[1])
@@ -466,6 +469,7 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	require.NoError(t, err)
 
 	w := &writer{
+		spillStore:             util.NewSpillStore(),
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
@@ -525,6 +529,7 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			require.NoError(t, err)
 
 			w := &writer{
+				spillStore:             util.NewSpillStore(),
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,
@@ -567,18 +572,9 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	}
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			PhysicalTableID: 1,
-			StartTs:         commitTs - 1,
-			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
-			},
-		}
+func newDMLMessageForWriterTest(commitTs uint64, id int64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return newReplayTestEvent(commitTs, id)
 	})
 }
 
