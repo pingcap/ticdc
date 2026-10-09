@@ -275,7 +275,16 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		// node to campaign immediately after the log coordinator exits.
 		if !errors.ErrNotOwner.Equal(err) {
 			if resignErr := e.resignLogCoordinator(); resignErr != nil {
-				return resignErr
+				log.Warn("log coordinator resign failed",
+					zap.String("nodeID", nodeID),
+					zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+					zap.Error(resignErr))
+				// Preserve the log coordinator error, especially context cancellation
+				// during shutdown or draining. If it exited without an error, the
+				// resignation failure is the primary error and should be returned.
+				if err == nil {
+					return resignErr
+				}
 			}
 		}
 
@@ -359,8 +368,6 @@ func (e *elector) resignLogCoordinator() error {
 				zap.String("nodeID", nodeID), zap.Error(resignErr))
 			return nil
 		}
-		log.Info("log coordinator resign failed",
-			zap.String("nodeID", nodeID), zap.Error(resignErr))
 		return errors.Trace(resignErr)
 	}
 	return nil
