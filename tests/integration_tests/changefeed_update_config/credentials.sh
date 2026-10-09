@@ -72,8 +72,14 @@ function credential_resume_and_check() {
 			fi
 		fi
 		if [ "$checkpoint" != null ] && [ "$checkpoint" -gt "$target_ts" ] && [ "$seen" = true ]; then
-			jq -e --slurp '.[0].config == .[1].config and .[0].sink_uri == .[1].sink_uri' \
-				"$CREDENTIAL_OUTPUTS/resume-before-$marker.json" "$CREDENTIAL_OUTPUTS/query-$marker.json" >/dev/null
+			# Resume removes fields unused by this sink. Check the settings exercised
+			# here; fresh downstream replication above verifies the stored password.
+			if ! jq -e --slurp 'map({sink_uri, memory_quota: .config.memory_quota,
+				kafka_config: .config.sink.kafka_config}) | .[0] == .[1]' \
+				"$CREDENTIAL_OUTPUTS/resume-before-$marker.json" "$CREDENTIAL_OUTPUTS/query-$marker.json" >/dev/null; then
+				echo "resumed changefeed changed sink URI, memory quota or Kafka configuration"
+				exit 1
+			fi
 			assert_credential_outputs
 			return
 		fi

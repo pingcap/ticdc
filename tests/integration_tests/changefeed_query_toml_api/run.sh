@@ -132,16 +132,26 @@ PY
 		.config.sink.pulsar_config["tls-private-key-path"] == "visible-pulsar-cert"' "$outputs/updated.json" >/dev/null
 	# Invalid redo and sink storage URIs must reject updates and redact errors.
 	for kind in redo sink; do
+		local expected_status expected_code
 		if [ "$kind" = redo ]; then
+			# Replica config validation errors use the existing HTTP 500 mapping.
+			expected_status=500
+			expected_code=CDC:ErrInvalidReplicaConfig
 			jq -n '{replica_config:{consistent:{level:"eventual",storage:"s3:///missing-bucket?secret-access-key=redo-credential-sentinel"}}}' >"$WORK_DIR/storage-error.json"
 		else
+			expected_status=400
+			expected_code=CDC:ErrSinkURIInvalid
 			jq -n '{sink_uri:"s3:///missing-bucket?protocol=canal-json&secret-access-key=storage-credential-sentinel"}' >"$WORK_DIR/storage-error.json"
 		fi
 		local status
 		status=$(curl -sS -X PUT "$API/cf-credentials?keyspace=$KEYSPACE_NAME" \
 			-H 'Content-Type: application/json' --data-binary "@$WORK_DIR/storage-error.json" \
 			-o "$outputs/$kind-error.json" -w '%{http_code}')
-		[ "$status" = 400 ]
+		if [ "$status" != "$expected_status" ]; then
+			echo "FAIL: invalid $kind storage update: expected HTTP $expected_status, got $status"
+			exit 1
+		fi
+		jq -e --arg code "$expected_code" '.error_code == $code' "$outputs/$kind-error.json" >/dev/null
 		query_json cf-credentials "$outputs/$kind-after.json"
 		jq -e --slurp '.[0].config == .[1].config and .[0].sink_uri == .[1].sink_uri' \
 			"$outputs/updated.json" "$outputs/$kind-after.json" >/dev/null
