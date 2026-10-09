@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fatih/color"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
@@ -86,14 +87,19 @@ func (o *changefeedCommonOptions) addFlags(cmd *cobra.Command) {
 
 // strictDecodeConfig do strictDecodeFile check and only verify the rules for now.
 func (o *changefeedCommonOptions) strictDecodeConfig(component string, cfg *config.ReplicaConfig) error {
-	err := util.StrictDecodeFile(o.configFile, component, cfg)
+	_, err := o.strictDecodeConfigWithMeta(component, cfg)
+	return err
+}
+
+func (o *changefeedCommonOptions) strictDecodeConfigWithMeta(component string, cfg *config.ReplicaConfig) (toml.MetaData, error) {
+	metaData, err := util.StrictDecodeFileWithMeta(o.configFile, component, cfg)
 	if err != nil {
-		return err
+		return metaData, err
 	}
 
 	_, err = filter.VerifyTableRules(cfg.Filter)
 
-	return err
+	return metaData, err
 }
 
 // createChangefeedOptions defines common flags for the `cli changefeed create` command.

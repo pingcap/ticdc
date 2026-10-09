@@ -33,9 +33,15 @@ import (
 // StrictDecodeFile decodes the toml file strictly. If any item in confFile file is not mapped
 // into the Config struct, issue an error and stop the server from starting.
 func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems ...string) error {
+	_, err := StrictDecodeFileWithMeta(path, component, cfg, ignoreCheckItems...)
+	return err
+}
+
+// StrictDecodeFileWithMeta also returns which TOML fields were explicitly supplied.
+func StrictDecodeFileWithMeta(path, component string, cfg interface{}, ignoreCheckItems ...string) (toml.MetaData, error) {
 	metaData, err := toml.DecodeFile(path, cfg)
 	if err != nil {
-		return errors.Trace(err)
+		return metaData, errors.Trace(err)
 	}
 
 	// check if item is a ignoreCheckItem
@@ -67,7 +73,7 @@ func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems 
 				component, path, b.String())
 		}
 	}
-	return errors.Trace(err)
+	return metaData, errors.Trace(err)
 }
 
 // LogHTTPProxies logs HTTP proxy relative environment variables.

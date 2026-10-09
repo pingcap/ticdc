@@ -720,6 +720,7 @@ func (c *PulsarConfig) MaskSensitiveData() {
 	}
 	if c.OAuth2 != nil {
 		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
+		c.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(c.OAuth2.OAuth2IssuerURL)
 	}
 }
 
