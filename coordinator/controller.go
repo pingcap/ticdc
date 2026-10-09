@@ -357,6 +357,29 @@ func updateChangefeedCheckpointMetrics(
 	return true
 }
 
+// updateAllChangefeedCheckpointMetrics publishes checkpoint metrics from the
+// coordinator's in-memory state. It is used after bootstrap so the new owner
+// does not have to wait for the periodic metrics collection tick.
+func (c *Controller) updateAllChangefeedCheckpointMetrics(pdTime time.Time) {
+	c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+		if cf.GetInfo() == nil {
+			return
+		}
+		info, err := cf.GetInfo().Clone()
+		if err != nil {
+			return
+		}
+		updateChangefeedCheckpointMetrics(
+			info.ChangefeedID.Keyspace(),
+			info.ChangefeedID.Name(),
+			info.KeyspaceID,
+			info.State,
+			cf.GetLastSavedCheckPointTs(),
+			pdTime,
+		)
+	})
+}
+
 // HandleEvent implements the event-driven process mode
 func (c *Controller) HandleEvent(ctx context.Context, event *Event) {
 	if event == nil {
@@ -907,6 +930,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			))
 		}
 	}
+
+	c.updateAllChangefeedCheckpointMetrics(c.pdClock.CurrentTime())
 
 	// start operator and scheduler
 	c.taskHandlerMutex.Lock()
