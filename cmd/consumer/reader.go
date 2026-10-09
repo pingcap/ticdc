@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -52,7 +53,6 @@ type readResult struct {
 	watermark    uint64
 	hasWatermark bool
 	tableID      int64
-	force        bool
 }
 
 type bufferUsage struct {
@@ -63,22 +63,54 @@ type bufferUsage struct {
 	received      atomic.Int64
 	confirmed     atomic.Int64
 	externalBytes func() int64
+	mu            sync.Mutex
+	changed       chan struct{}
+	completed     chan struct{}
 }
 
-func (m *bufferUsage) reserve(bytes int64) error {
+func (m *bufferUsage) reserve(ctx context.Context, bytes int64) error {
+	if bytes < 0 || bytes > maxBufferedBytes {
+		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer allocation exceeds its memory budget")
+	}
 	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		m.mu.Lock()
 		used := m.bytes.Load()
 		external := int64(0)
 		if m.externalBytes != nil {
 			external = m.externalBytes()
 		}
-		if bytes < 0 || bytes > maxBufferedBytes || used+bytes+external > maxBufferedBytes {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("consumer buffer limit exceeded; input remains unconfirmed")
-		}
-		if m.bytes.CompareAndSwap(used, used+bytes) {
+		if used+bytes+external <= maxBufferedBytes {
+			m.bytes.Add(bytes)
+			m.mu.Unlock()
 			return nil
 		}
+		if m.changed == nil {
+			m.changed = make(chan struct{})
+		}
+		changed := m.changed
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-changed:
+		}
 	}
+}
+
+func (m *bufferUsage) release(bytes int64) {
+	if bytes == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.bytes.Add(-bytes)
+	if m.changed != nil {
+		close(m.changed)
+		m.changed = nil
+	}
+	m.mu.Unlock()
 }
 
 type partition struct {
@@ -89,6 +121,7 @@ type partition struct {
 	cachedRecords    []*inputRecord
 	cachedUnreleased int
 	paused           bool
+	readSequence     uint64
 	schemas          map[schemaKey]bool
 	schemaPointers   map[*common.TableInfo]bool
 }
@@ -117,19 +150,20 @@ type readBuffer struct {
 	partitions  map[int32]*partition
 	pendingDML  []*readDML
 	pendingDDL  []*readDDL
-	schemaBytes int64
-	schemaCount int
 	dmlDirty    bool
-	ddlDirty    bool
+	orderedDML  bool
+	dmlBoundary uint64
 }
 
-func (b *readBuffer) newRecord(bytes int64) (*inputRecord, error) {
-	if b.memory.records.Load() >= maxRecords {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its resource limit; input remains unconfirmed")
+func (b *readBuffer) newRecord(ctx context.Context, bytes int64) (*inputRecord, error) {
+	if bytes < 0 || bytes > maxBufferedBytes-2*maxInFlightBytes {
+		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its memory budget")
 	}
-	if err := b.memory.reserve(bytes); err != nil {
+	// Admit new input only when decoding and filtering can also make progress.
+	if err := b.memory.reserve(ctx, bytes+2*maxInFlightBytes); err != nil {
 		return nil, err
 	}
+	b.memory.release(2 * maxInFlightBytes)
 	record := &inputRecord{}
 	record.bytes.Store(bytes)
 	record.pending.Store(1)
@@ -140,12 +174,12 @@ func (b *readBuffer) newRecord(bytes int64) (*inputRecord, error) {
 	return record, nil
 }
 
-func (b *readBuffer) queueDML(dml *event.DMLEvent, records []*inputRecord, p *partition) error {
+func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records []*inputRecord, p *partition) error {
 	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
 	}
 	if p != nil {
-		if err := b.trackSchema(p, dml.TableInfo); err != nil {
+		if err := b.trackSchema(ctx, p, dml.TableInfo); err != nil {
 			return err
 		}
 	}
@@ -153,12 +187,10 @@ func (b *readBuffer) queueDML(dml *event.DMLEvent, records []*inputRecord, p *pa
 	if bytes > maxInFlightBytes {
 		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DML exceeds its in-flight byte limit")
 	}
-	if err := b.memory.reserve(bytes); err != nil {
+	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
-	if b.memory.effects.Add(int64(len(records))) > maxEffects {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer decoded input exceeds its effect limit")
-	}
+	b.memory.effects.Add(int64(len(records)))
 	for _, record := range records {
 		record.pending.Add(1)
 	}
@@ -174,7 +206,7 @@ func (b *readBuffer) queueDML(dml *event.DMLEvent, records []*inputRecord, p *pa
 	return nil
 }
 
-func (b *readBuffer) trackSchema(p *partition, table *common.TableInfo) error {
+func (b *readBuffer) trackSchema(ctx context.Context, p *partition, table *common.TableInfo) error {
 	if table == nil {
 		return nil
 	}
@@ -187,18 +219,12 @@ func (b *readBuffer) trackSchema(p *partition, table *common.TableInfo) error {
 	} else if p.schemas[key] {
 		return nil
 	}
-	if b.schemaCount >= maxSchemas {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its count limit")
-	}
 	data, err := table.Marshal()
 	if err != nil {
 		return errors.WrapError(errors.ErrCodecDecode, err, "measure consumer table metadata")
 	}
 	bytes := int64(len(data))*4 + 1024
-	if b.schemaBytes+bytes > maxSchemaBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its byte limit")
-	}
-	if err := b.memory.reserve(bytes); err != nil {
+	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
 	if unversioned {
@@ -206,47 +232,52 @@ func (b *readBuffer) trackSchema(p *partition, table *common.TableInfo) error {
 	} else {
 		p.schemas[key] = true
 	}
-	b.schemaBytes += bytes
-	b.schemaCount++
 	b.memory.readBytes.Add(bytes)
 	return nil
 }
 
-func (b *readBuffer) queueDDL(ddl *event.DDLEvent, record *inputRecord) error {
+func (b *readBuffer) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *inputRecord) error {
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-	if err := b.memory.reserve(bytes); err != nil {
+	if err := b.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
-	if b.memory.effects.Add(1) > maxEffects {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DDL exceeds its effect limit")
-	}
+	b.memory.effects.Add(1)
 	record.pending.Add(1)
 	b.memory.readBytes.Add(bytes)
 	b.pendingDDL = append(b.pendingDDL, &readDDL{event: ddl, record: record, bytes: bytes})
-	b.ddlDirty = true
 	return nil
 }
 
 func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	if b.dmlDirty {
-		slices.SortStableFunc(b.pendingDML, func(a, b *readDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
+		if !b.orderedDML {
+			slices.SortStableFunc(b.pendingDML, func(a, b *readDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
+		}
 		b.dmlDirty = false
-	}
-	if b.ddlDirty {
-		slices.SortStableFunc(b.pendingDDL, func(a, b *readDDL) int { return cmp.Compare(a.event.GetCommitTs(), b.event.GetCommitTs()) })
-		b.ddlDirty = false
 	}
 	var ddl *readDDL
 	if len(b.pendingDDL) != 0 {
 		ddl = b.pendingDDL[0]
 	}
-	if len(b.pendingDML) != 0 {
-		dml := b.pendingDML[0]
-		if dml.event.CommitTs <= watermark && (ddl == nil || dml.event.CommitTs <= ddl.event.GetCommitTs()) {
-			b.pendingDML[0] = nil
-			b.pendingDML = b.pendingDML[1:]
+	dmlBoundary := watermark
+	if b.orderedDML {
+		dmlBoundary = b.dmlBoundary
+	}
+	for index, dml := range b.pendingDML {
+		if dml.event.CommitTs <= dmlBoundary && (ddl == nil || dml.event.CommitTs <= ddl.event.GetCommitTs()) {
+			if index == 0 {
+				b.pendingDML[0] = nil
+				b.pendingDML = b.pendingDML[1:]
+			} else {
+				copy(b.pendingDML[index:], b.pendingDML[index+1:])
+				b.pendingDML[len(b.pendingDML)-1] = nil
+				b.pendingDML = b.pendingDML[:len(b.pendingDML)-1]
+			}
 			b.memory.readBytes.Add(-dml.bytes)
 			return &readResult{dml: dml.event, bytes: dml.bytes}
+		}
+		if !b.orderedDML {
+			break
 		}
 	}
 	if ddl == nil {
@@ -260,7 +291,7 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 		blocked := ddl.event.GetBlockedTables()
 		early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID && len(ddl.event.GetBlockedTableNames()) == 0
 	}
-	if ddl.event.GetCommitTs() > watermark && !early {
+	if ddl.event.GetCommitTs() > watermark && !early && (!b.orderedDML || len(b.partitions) != 1) {
 		return nil
 	}
 	record := ddl.record

@@ -45,8 +45,8 @@ type kafkaReader struct {
 	buffer                *readBuffer
 	mu                    sync.Mutex
 	offsets               map[*inputRecord]int64
-	polled                []*kgo.Record
-	polledIndex           int
+	polled                map[int32][]*kgo.Record
+	readSequence          uint64
 	ddlCopies             map[uint64][]*inputRecord
 	deliveredWatermark    uint64
 	hasDeliveredWatermark bool
@@ -166,9 +166,10 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID, timez
 	}
 
 	memory.externalBytes = client.BufferedFetchBytes
-	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions}
+	// The producer preserves the required input order for every supported protocol.
+	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, orderedDML: true}
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
-	return &kafkaReader{client: client, upstreamDB: db, topic: topic, buffer: buffer, offsets: make(map[*inputRecord]int64), ddlCopies: make(map[uint64][]*inputRecord)}, nil
+	return &kafkaReader{client: client, upstreamDB: db, topic: topic, buffer: buffer, offsets: make(map[*inputRecord]int64), ddlCopies: make(map[uint64][]*inputRecord), polled: make(map[int32][]*kgo.Record)}, nil
 }
 
 func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
@@ -178,7 +179,13 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 		}
 		c.limitReads()
 		watermark, ready := c.globalWatermark()
-		if ready || len(c.buffer.pendingDDL) != 0 {
+		if c.buffer.orderedDML {
+			c.buffer.dmlBoundary = math.MaxUint64
+			for commitTs := range c.ddlCopies {
+				c.buffer.dmlBoundary = min(c.buffer.dmlBoundary, commitTs)
+			}
+		}
+		if ready || len(c.buffer.pendingDDL) != 0 || c.buffer.orderedDML {
 			if result := c.buffer.nextReady(watermark); result != nil {
 				return result, nil
 			}
@@ -203,15 +210,13 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 						record.pending.Add(-1)
 						c.buffer.memory.effects.Add(-1)
 					}
-					c.buffer.memory.bytes.Add(-int64(len(completed)) * 128)
+					c.buffer.memory.release(int64(len(completed)) * 128)
 				}
 			}
 			return result, nil
 		}
-		if c.polledIndex == len(c.polled) {
-			clear(c.polled)
-			c.polled = nil
-			c.polledIndex = 0
+		partitionID := c.nextPartition()
+		if partitionID < 0 {
 			fetches := c.client.PollRecords(ctx, 128)
 			if err := context.Cause(ctx); err != nil {
 				return nil, err
@@ -223,32 +228,43 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 				return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
 			}
 			bytes := int64(0)
+			if c.polled == nil {
+				c.polled = make(map[int32][]*kgo.Record)
+			}
 			for iterator := fetches.RecordIter(); !iterator.Done(); {
 				record := iterator.Next()
-				c.polled = append(c.polled, record)
+				if _, ok := c.buffer.partitions[record.Partition]; !ok {
+					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
+				}
+				c.polled[record.Partition] = append(c.polled[record.Partition], record)
 				bytes += int64(len(record.Key) + len(record.Value) + 128)
 			}
-			if err := c.buffer.memory.reserve(bytes); err != nil {
+			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return nil, err
 			}
 			c.buffer.memory.readBytes.Add(bytes)
-			if len(c.polled) == 0 {
-				continue
-			}
+			continue
 		}
-		record := c.polled[c.polledIndex]
-		c.polled[c.polledIndex] = nil
-		c.polledIndex++
+		queue := c.polled[partitionID]
+		record := queue[0]
+		queue[0] = nil
+		if len(queue) == 1 {
+			delete(c.polled, partitionID)
+		} else {
+			c.polled[partitionID] = queue[1:]
+		}
+		c.readSequence++
+		c.buffer.partitions[partitionID].readSequence = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
-		c.buffer.memory.bytes.Add(-bytes)
+		c.buffer.memory.release(bytes)
 		c.buffer.memory.readBytes.Add(-bytes)
-		if err := c.processRecord(record); err != nil {
+		if err := c.processRecord(ctx, record); err != nil {
 			return nil, err
 		}
 	}
 }
 
-func (c *kafkaReader) processRecord(record *kgo.Record) error {
+func (c *kafkaReader) processRecord(ctx context.Context, record *kgo.Record) error {
 	p, ok := c.buffer.partitions[record.Partition]
 	if !ok {
 		return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
@@ -257,7 +273,7 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 	if bytes > maxRecordBytes {
 		return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record exceeds its size limit")
 	}
-	state, err := c.buffer.newRecord(bytes)
+	state, err := c.buffer.newRecord(ctx, bytes)
 	if err != nil {
 		return err
 	}
@@ -279,14 +295,12 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 				}
 				state.pending.Add(1)
-				if c.buffer.memory.effects.Add(1) > maxEffects {
-					return errors.ErrInternalCheckFailed.FastGenByArgs("consumer cached DML exceeds its count limit")
-				}
+				c.buffer.memory.effects.Add(1)
 				p.cachedUnreleased++
 				p.cachedRecords = append(p.cachedRecords, state)
 				continue
 			}
-			if err := c.buffer.queueDML(message.ToDMLEvent(), []*inputRecord{state}, p); err != nil {
+			if err := c.buffer.queueDML(ctx, message.ToDMLEvent(), []*inputRecord{state}, p); err != nil {
 				return err
 			}
 		case codecCommon.MessageTypeDDL:
@@ -297,26 +311,21 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 			if ddl == nil {
 				return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DDL event")
 			}
-			if err := c.buffer.trackSchema(p, ddl.TableInfo); err != nil {
+			if err := c.buffer.trackSchema(ctx, p, ddl.TableInfo); err != nil {
 				return err
 			}
 			for _, info := range ddl.MultipleTableInfos {
-				if err := c.buffer.trackSchema(p, info); err != nil {
+				if err := c.buffer.trackSchema(ctx, p, info); err != nil {
 					return err
 				}
 			}
 			if c.buffer.protocol == config.ProtocolCanalJSON {
 				key := schemaKey{schema: ddl.SchemaName, table: ddl.TableName, version: ddl.FinishedTs}
 				if !p.schemas[key] {
-					if c.buffer.schemaCount >= maxSchemas || c.buffer.schemaBytes+128 > maxSchemaBytes {
-						return errors.ErrInternalCheckFailed.FastGenByArgs("consumer schema cache exceeds its resource limit")
-					}
-					if err := c.buffer.memory.reserve(128); err != nil {
+					if err := c.buffer.memory.reserve(ctx, 128); err != nil {
 						return err
 					}
 					p.schemas[key] = true
-					c.buffer.schemaBytes += 128
-					c.buffer.schemaCount++
 					c.buffer.memory.readBytes.Add(128)
 				}
 			}
@@ -327,12 +336,15 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its Kafka record")
 					}
 					p.cachedUnreleased--
-					if err := c.buffer.queueDML(message.ToDMLEvent(), records, p); err != nil {
+					if err := c.buffer.queueDML(ctx, message.ToDMLEvent(), records, p); err != nil {
 						return err
 					}
 				}
 				if p.cachedUnreleased == 0 {
 					for _, cached := range p.cachedRecords {
+						released := cached.bytes.Swap(128) - 128
+						c.buffer.memory.readBytes.Add(-released)
+						c.buffer.memory.release(released)
 						cached.pending.Add(-1)
 						c.buffer.memory.effects.Add(-1)
 					}
@@ -349,18 +361,16 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 			if record.Partition != 0 {
 				// Only partition zero supplies executable DDLs. Other copies wait
 				// for downstream progress without matching individual statements.
-				if err := c.buffer.memory.reserve(128); err != nil {
+				if err := c.buffer.memory.reserve(ctx, 128); err != nil {
 					return err
 				}
-				if c.buffer.memory.effects.Add(1) > maxEffects {
-					return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DDL copies exceed the effect limit")
-				}
+				c.buffer.memory.effects.Add(1)
 				state.pending.Add(1)
 				c.buffer.memory.readBytes.Add(128)
 				c.ddlCopies[ddl.GetCommitTs()] = append(c.ddlCopies[ddl.GetCommitTs()], state)
 				continue
 			}
-			if err := c.buffer.queueDDL(ddl, state); err != nil {
+			if err := c.buffer.queueDDL(ctx, ddl, state); err != nil {
 				return err
 			}
 		case codecCommon.MessageTypeResolved:
@@ -373,8 +383,17 @@ func (c *kafkaReader) processRecord(record *kgo.Record) error {
 			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type")
 		}
 	}
+	if !slices.Contains(p.cachedRecords, state) {
+		released := state.bytes.Swap(128) - 128
+		c.buffer.memory.readBytes.Add(-released)
+		c.buffer.memory.release(released)
+	}
 	state.pending.Add(-1)
 	c.buffer.memory.effects.Add(-1)
+	select {
+	case c.buffer.memory.completed <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -419,7 +438,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 		p := c.buffer.partitions[partitionID]
 		for _, record := range p.records[:count] {
 			bytes := record.bytes.Load()
-			c.buffer.memory.bytes.Add(-bytes)
+			c.buffer.memory.release(bytes)
 			c.buffer.memory.readBytes.Add(-bytes)
 			c.buffer.memory.records.Add(-1)
 			delete(c.offsets, record)
@@ -442,9 +461,9 @@ func (c *kafkaReader) limitReads() {
 		slowest = min(slowest, partition.watermark)
 	}
 	for partitionID, partition := range c.buffer.partitions {
-		// Leave the remaining 32 MiB available for the partitions that can
-		// advance the boundary, including Simple schema bootstrap messages.
-		pause := c.buffer.memory.bytes.Load()+c.client.BufferedFetchBytes() >= memoryHighWater && partition.hasWatermark && partition.watermark > slowest && partition.cachedUnreleased == 0
+		// Fetch the partitions holding back progress first. Missing schema
+		// bootstrap messages must remain readable regardless of their watermark.
+		pause := partition.hasWatermark && partition.watermark > slowest && partition.cachedUnreleased == 0
 		if pause == partition.paused {
 			continue
 		}
@@ -456,6 +475,25 @@ func (c *kafkaReader) limitReads() {
 		}
 		partition.paused = pause
 	}
+}
+
+func (c *kafkaReader) nextPartition() int32 {
+	selected := int32(-1)
+	var progress, sequence uint64
+	for partitionID, records := range c.polled {
+		p := c.buffer.partitions[partitionID]
+		if len(records) == 0 || p.paused {
+			continue
+		}
+		watermark := p.watermark
+		if !p.hasWatermark || p.cachedUnreleased != 0 {
+			watermark = 0
+		}
+		if selected < 0 || watermark < progress || (watermark == progress && (p.readSequence < sequence || (p.readSequence == sequence && partitionID < selected))) {
+			selected, progress, sequence = partitionID, watermark, p.readSequence
+		}
+	}
+	return selected
 }
 
 func (c *kafkaReader) BufferedBytes() int64 {

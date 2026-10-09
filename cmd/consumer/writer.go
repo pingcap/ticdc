@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/binary"
 	"slices"
@@ -26,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -35,16 +33,11 @@ import (
 const (
 	batchRows           = 1024
 	batchBytes          = 2 << 20
-	batchLinger         = 10 * time.Millisecond
-	maxInFlight         = 4
+	maxInFlightEvents   = 4096
 	maxInFlightBytes    = 32 << 20
 	maxRecordBytes      = 16 << 20
-	maxBufferedBytes    = 128 << 20
-	memoryHighWater     = 96 << 20
+	maxBufferedBytes    = 1 << 30
 	maxRecords          = 64 << 10
-	maxEffects          = 256 << 10
-	maxSchemaBytes      = 32 << 20
-	maxSchemas          = 4096
 	shutdownTimeout     = 5 * time.Second
 	progressLogInterval = 5 * time.Second
 )
@@ -60,25 +53,25 @@ type writer struct {
 	pendingDML      []*pendingDML
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
-	readySince      time.Time
-	dmlDirty        bool
 	writtenBefore   uint64
 	dmlBytes        int64
 	mutationBytes   int64
 	inFlightBytes   int64
+	inFlightEvents  int
 	confirm         func(context.Context) error
 	decodedRows     int64
 	writtenRows     int64
 	lastProgressLog time.Time
 }
 type writeBatch struct {
-	items   []*pendingDML
-	events  []*event.DMLEvent
-	dropped []*event.DMLEvent
-	keys    []mutationKey
-	bytes   int64
-	done    chan bool
-	flushed atomic.Int64
+	items    []*pendingDML
+	events   []*event.DMLEvent
+	dropped  []*event.DMLEvent
+	keys     []mutationKey
+	bytes    int64
+	done     chan bool
+	flushed  atomic.Int64
+	released atomic.Bool
 }
 
 type mutationKey struct {
@@ -89,7 +82,7 @@ type mutationKey struct {
 }
 
 func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) error {
-	if err := c.flushDML(ctx, writeCtx, ^uint64(0), true, true); err != nil {
+	if err := c.flushDML(ctx, writeCtx); err != nil {
 		return err
 	}
 	for _, batch := range slices.Clone(c.inFlight) {
@@ -111,11 +104,11 @@ func (c *writer) writeDDL(ctx, writeCtx context.Context, result *readResult) err
 	if result.onFlush != nil {
 		result.onFlush()
 	}
-	c.memory.bytes.Add(-result.bytes)
+	c.memory.release(result.bytes)
 	return nil
 }
 
-func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclusive, force bool) error {
+func (c *writer) flushDML(ctx, writeCtx context.Context) error {
 	var building *writeBatch
 	defer func() {
 		// Cancellation can interrupt filtering while it waits for an earlier
@@ -127,28 +120,21 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 			delete(c.mutations, key)
 			bytes := int64(len(key.handle) + 192)
 			c.mutationBytes -= bytes
-			c.memory.bytes.Add(-bytes)
+			c.memory.release(bytes)
 		}
 		originalBytes := int64(0)
 		for _, item := range building.items {
 			originalBytes += item.bytes
 		}
 		c.dmlBytes -= building.bytes - originalBytes
-		c.memory.bytes.Add(-(building.bytes - originalBytes))
+		c.memory.release(building.bytes - originalBytes)
 	}()
-	if c.dmlDirty {
-		slices.SortStableFunc(c.pendingDML, func(a, b *pendingDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
-		c.dmlDirty = false
-	}
 	for len(c.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
 		rows, bytes, end := 0, int64(0), 0
 		for _, item := range c.pendingDML {
-			if item.event.CommitTs > commitTs || (!inclusive && item.event.CommitTs == commitTs) {
-				break
-			}
 			rows += int(item.event.Len())
 			bytes += item.bytes
 			end++
@@ -156,17 +142,8 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 				break
 			}
 		}
-		if end == 0 {
-			c.readySince = time.Time{}
-			return nil
-		}
-		if c.readySince.IsZero() {
-			c.readySince = time.Now()
-		}
-		if !force && rows < batchRows && bytes < batchBytes && time.Since(c.readySince) < batchLinger {
-			return nil
-		}
-		for len(c.inFlight) >= maxInFlight || c.inFlightBytes+bytes > maxInFlightBytes {
+		c.finishBatches()
+		for len(c.inFlight) != 0 && (c.inFlightEvents+end > maxInFlightEvents || c.inFlightBytes+bytes > maxInFlightBytes) {
 			if err := c.waitBatch(ctx, c.inFlight[0]); err != nil {
 				return err
 			}
@@ -174,6 +151,9 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 		batch := &writeBatch{items: slices.Clone(c.pendingDML[:end]), bytes: bytes, done: make(chan bool)}
 		building = batch
 		for _, item := range batch.items {
+			if item.event.PhysicalTableID != 0 {
+				c.advanceReplay(item.event.CommitTs, item.event.PhysicalTableID)
+			}
 			filtered, err := c.filterRows(ctx, item.event, batch)
 			if err != nil {
 				return err
@@ -185,7 +165,7 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 			if filtered != item.event {
 				// The original chunk stays alive through its decoder callbacks.
 				copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
-				if err := c.memory.reserve(copyBytes); err != nil {
+				if err := c.memory.reserve(ctx, copyBytes); err != nil {
 					return err
 				}
 				batch.bytes += copyBytes
@@ -193,10 +173,7 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 			}
 			batch.events = append(batch.events, filtered)
 		}
-		if batch.bytes > maxInFlightBytes {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("consumer batch exceeds its in-flight byte limit; source record remains unconfirmed")
-		}
-		for c.inFlightBytes+batch.bytes > maxInFlightBytes {
+		for len(c.inFlight) != 0 && c.inFlightBytes+batch.bytes > maxInFlightBytes {
 			if err := c.waitBatch(ctx, c.inFlight[0]); err != nil {
 				return err
 			}
@@ -207,10 +184,10 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 		c.inFlight = append(c.inFlight, batch)
 		building = nil
 		c.inFlightBytes += batch.bytes
+		c.inFlightEvents += len(batch.items)
 		copy(c.pendingDML, c.pendingDML[end:])
 		clear(c.pendingDML[len(c.pendingDML)-end:])
 		c.pendingDML = c.pendingDML[:len(c.pendingDML)-end]
-		c.readySince = time.Time{}
 		if len(batch.events) == 0 {
 			close(batch.done)
 		}
@@ -223,14 +200,20 @@ func (c *writer) flushDML(ctx, writeCtx context.Context, commitTs uint64, inclus
 			var flushed atomic.Bool
 			dml.AddPostFlushFunc(func() {
 				if flushed.CompareAndSwap(false, true) && batch.flushed.Add(1) == int64(len(batch.events)) {
+					if batch.released.CompareAndSwap(false, true) {
+						c.memory.release(batch.bytes)
+					}
 					close(batch.done)
+					select {
+					case c.memory.completed <- struct{}{}:
+					default:
+					}
 				}
 			})
 			c.downstream.AddDMLEvent(dml)
 		}
 		c.finishBatches()
 	}
-	c.readySince = time.Time{}
 	return nil
 }
 
@@ -276,8 +259,11 @@ func (c *writer) finishBatches() {
 			c.mutations[key] = nil
 		}
 		c.dmlBytes -= batch.bytes
-		c.memory.bytes.Add(-batch.bytes)
+		if batch.released.CompareAndSwap(false, true) {
+			c.memory.release(batch.bytes)
+		}
 		c.inFlightBytes -= batch.bytes
+		c.inFlightEvents -= len(batch.items)
 	}
 	clear(c.inFlight[len(remaining):])
 	c.inFlight = remaining
@@ -309,7 +295,7 @@ func (c *writer) advanceReplay(watermark uint64, tableID int64) {
 		if (tableID == 0 || key.tableID == tableID) && key.commitTs < before {
 			bytes := int64(len(key.handle) + 192)
 			c.mutationBytes -= bytes
-			c.memory.bytes.Add(-bytes)
+			c.memory.release(bytes)
 			delete(c.mutations, key)
 		}
 	}
@@ -355,10 +341,7 @@ func (c *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 				retain = false
 			} else {
 				bytes := int64(len(key.handle) + 192)
-				if len(c.mutations) >= maxEffects {
-					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer replay state exceeds its buffer limit; source record remains unconfirmed")
-				}
-				if err := c.memory.reserve(bytes); err != nil {
+				if err := c.memory.reserve(ctx, bytes); err != nil {
 					return nil, err
 				}
 				c.mutations[key] = batch

@@ -57,7 +57,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
 		w.pendingDML = append(w.pendingDML, &pendingDML{event: dml})
-		require.NoError(t, w.flushDML(t.Context(), t.Context(), 100, true, true))
+		require.NoError(t, w.flushDML(t.Context(), t.Context()))
 		require.Equal(t, 1, callbacks)
 		w.advanceReplay(100, 0)
 	}
@@ -80,7 +80,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 	})
 	memory := &bufferUsage{}
 	buffer := &readBuffer{memory: memory}
-	record, err := buffer.newRecord(128)
+	record, err := buffer.newRecord(t.Context(), 128)
 	require.NoError(t, err)
 	input := &storageReader{buffer: buffer, records: []*inputRecord{record}}
 	var retained *event.DMLEvent
@@ -95,14 +95,14 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes = []common.RowType{common.RowTypeInsert}
 		dml.Length = 1
-		require.NoError(t, buffer.queueDML(dml, []*inputRecord{record}, nil))
+		require.NoError(t, buffer.queueDML(t.Context(), dml, []*inputRecord{record}, nil))
 		result := buffer.nextReady(100)
 		w.pendingDML = append(w.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
 		w.dmlBytes += result.bytes
 	}
 	record.pending.Add(-1)
 	memory.effects.Add(-1)
-	require.NoError(t, w.flushDML(t.Context(), t.Context(), 100, true, true))
+	require.NoError(t, w.flushDML(t.Context(), t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, w.waitBatch(ctx, w.inFlight[0]), context.Canceled)

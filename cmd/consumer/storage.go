@@ -212,7 +212,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
 			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
-			if err := c.buffer.memory.reserve(bytes); err != nil {
+			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
 			c.buffer.memory.readBytes.Add(bytes)
@@ -223,7 +223,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			}
 			indices[index.FileIndexKey] = 0
 			bytes := int64(len(index.DispatcherID) + 128)
-			if err := c.buffer.memory.reserve(bytes); err != nil {
+			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
 			c.buffer.memory.readBytes.Add(bytes)
@@ -250,10 +250,7 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || c.schemas[key] != nil {
 		return key, false, nil
 	}
-	if len(c.schemas) >= maxSchemas {
-		return key, false, errors.ErrInternalCheckFailed.FastGenByArgs("Storage schema cache exceeds its count limit")
-	}
-	data, err := c.readFile(ctx, path, min(maxRecordBytes, maxSchemaBytes-c.buffer.schemaBytes))
+	data, err := c.readFile(ctx, path, maxRecordBytes)
 	if err != nil {
 		return key, false, err
 	}
@@ -270,17 +267,13 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
 	}
 	bytes := int64(len(data))*4 + 1024
-	if c.buffer.schemaBytes+bytes > maxSchemaBytes {
-		return key, false, errors.ErrInternalCheckFailed.FastGenByArgs("Storage schema cache exceeds its byte limit")
-	}
-	if err := c.buffer.memory.reserve(bytes); err != nil {
+	if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
 		return key, false, err
 	}
 	c.buffer.memory.readBytes.Add(bytes)
 	table := file.TableInfo()
 	table.UpdateTS = file.TableVersion
 	c.schemas[key] = &storageSchema{file: file, tableInfo: table}
-	c.buffer.schemaBytes += bytes
 	return key, true, nil
 }
 
@@ -296,7 +289,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		}
 		if c.groupReady {
 			c.groupReady = false
-			return &readResult{force: true, tableID: c.current.tableID, watermark: c.tableWatermarks[c.current.tableID], hasWatermark: true}, nil
+			return &readResult{tableID: c.current.tableID, watermark: c.tableWatermarks[c.current.tableID], hasWatermark: true}, nil
 		}
 		if c.decoder != nil {
 			messageType, hasNext := c.decoder.HasNext()
@@ -321,17 +314,21 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				if c.codecConfig.Protocol == config.ProtocolCanalJSON {
 					dml.TableInfo.UpdateTS = c.current.key.TableVersion
 				}
-				if err := c.buffer.queueDML(dml, []*inputRecord{c.record}, nil); err != nil {
+				if err := c.buffer.queueDML(ctx, dml, []*inputRecord{c.record}, nil); err != nil {
 					return nil, err
 				}
 				continue
 			}
 			// All rows have their own write references before decoding is released.
 			size := c.record.bytes.Swap(256)
-			c.buffer.memory.bytes.Add(256 - size)
+			c.buffer.memory.release(size - 256)
 			c.buffer.memory.readBytes.Add(256 - size)
 			c.record.pending.Add(-1)
 			c.buffer.memory.effects.Add(-1)
+			select {
+			case c.buffer.memory.completed <- struct{}{}:
+			default:
+			}
 			c.fileIndices[c.current.key][c.current.index.FileIndexKey] = c.current.index.Idx
 			c.decoder = nil
 			c.record = nil
@@ -368,7 +365,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
 			for _, key := range keys {
 				if key.IsSchemaFileDMLPathKey() {
-					if err := c.buffer.memory.reserve(256); err != nil {
+					if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 						return nil, err
 					}
 					c.buffer.memory.readBytes.Add(256)
@@ -381,7 +378,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				}
 				for indexKey, span := range files[key] {
 					for index := span.start; ; index++ {
-						if err := c.buffer.memory.reserve(256); err != nil {
+						if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 							return nil, err
 						}
 						c.buffer.memory.readBytes.Add(256)
@@ -394,7 +391,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 						}
 					}
 				}
-				if err := c.buffer.memory.reserve(256); err != nil {
+				if err := c.buffer.memory.reserve(ctx, 256); err != nil {
 					return nil, err
 				}
 				c.buffer.memory.readBytes.Add(256)
@@ -405,7 +402,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		input := c.inputs[0]
 		c.inputs[0] = storageInput{}
 		c.inputs = c.inputs[1:]
-		c.buffer.memory.bytes.Add(-256)
+		c.buffer.memory.release(256)
 		c.buffer.memory.readBytes.Add(-256)
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
@@ -433,7 +430,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			ddl := schema.file.DDLEvent()
 			ddl.TableInfo = schema.tableInfo
 			size := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-			record, err := c.buffer.newRecord(size)
+			record, err := c.buffer.newRecord(ctx, size)
 			if err != nil {
 				return nil, err
 			}
@@ -463,7 +460,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
 			}
 			size := int64(len(key.Schema) + len(key.Table) + 128)
-			if err := c.buffer.memory.reserve(size); err != nil {
+			if err := c.buffer.memory.reserve(ctx, size); err != nil {
 				return nil, err
 			}
 			c.buffer.memory.readBytes.Add(size)
@@ -480,13 +477,34 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		// Cross-node groups must be decoded completely before sorting their rows.
 		c.sortBeforeWrite = input.sort
 		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
-		data, err := c.readFile(ctx, path, maxBufferedBytes-c.buffer.memory.bytes.Load()-maxInFlightBytes)
+		file, err := c.storage.Open(ctx, path, nil)
 		if err != nil {
+			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
+		}
+		size, err := file.GetFileSize()
+		if err != nil {
+			_ = file.Close()
+			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
+		}
+		if size < 0 || size > maxBufferedBytes-2*maxInFlightBytes-256 {
+			_ = file.Close()
+			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file exceeds the consumer memory budget")
+		}
+		record, err := c.buffer.newRecord(ctx, size+256)
+		if err != nil {
+			_ = file.Close()
 			return nil, err
 		}
-		record, err := c.buffer.newRecord(int64(len(data)) + 256)
-		if err != nil {
-			return nil, err
+		data, readErr := io.ReadAll(io.LimitReader(file, size+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return nil, errors.WrapError(errors.ErrExternalStorageAPI, readErr, "read Storage DML file")
+		}
+		if closeErr != nil {
+			return nil, errors.WrapError(errors.ErrExternalStorageAPI, closeErr, "close Storage DML file")
+		}
+		if int64(len(data)) != size {
+			return nil, errors.ErrExternalStorageAPI.FastGenByArgs("Storage DML file size changed while reading")
 		}
 		c.mu.Lock()
 		c.records = append(c.records, record)
@@ -530,7 +548,7 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 			delete(c.positions, record)
 		}
 		size := record.bytes.Load()
-		c.buffer.memory.bytes.Add(-size)
+		c.buffer.memory.release(size)
 		c.buffer.memory.readBytes.Add(-size)
 		c.buffer.memory.records.Add(-1)
 		count++

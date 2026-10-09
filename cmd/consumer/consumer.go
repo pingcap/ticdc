@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"math"
 	"sync"
 	"time"
 
@@ -64,7 +63,8 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 		watermarks: make(map[int64]uint64),
 	}
 	c.writer.confirm = c.confirmCompleted
-	results := make(chan *readResult, 1)
+	memory.completed = make(chan struct{}, 1)
+	results := make(chan *readResult, 64)
 	readDone, sinkDone := make(chan bool), make(chan bool)
 	wg.Go(func() {
 		defer close(readDone)
@@ -122,7 +122,7 @@ func runConsumer(parentCtx context.Context, wg *sync.WaitGroup, input reader, do
 		downstream.Close()
 		<-sinkDone
 	}()
-	tick := time.Tick(batchLinger)
+	tick := time.Tick(progressLogInterval)
 	var pendingDDL *readResult
 run:
 	for {
@@ -148,17 +148,41 @@ run:
 				err = context.Cause(readCtx)
 				break run
 			}
-			if result.ddl != nil {
-				pendingDDL = result
+			rows, bytes, inputs := int64(0), int64(0), 0
+		drain:
+			for {
+				if result.ddl != nil {
+					pendingDDL = result
+				}
+				if err = c.consume(readCtx, writeCtx, result); err != nil {
+					break run
+				}
+				pendingDDL = nil
+				inputs++
+				if result.dml != nil {
+					rows += int64(result.dml.Len())
+					bytes += result.bytes
+				}
+				if rows >= batchRows || bytes >= batchBytes || inputs >= cap(results) {
+					break
+				}
+				select {
+				case <-readCtx.Done():
+					err = context.Cause(readCtx)
+					break run
+				case result, ok = <-results:
+					if !ok {
+						break drain
+					}
+				default:
+					break drain
+				}
 			}
-			if err = c.consume(readCtx, writeCtx, result); err != nil {
+			if err = c.writer.flushDML(readCtx, writeCtx); err != nil {
 				break run
 			}
-			pendingDDL = nil
+		case <-memory.completed:
 		case <-tick:
-			if err = c.writer.flushDML(readCtx, writeCtx, math.MaxUint64, true, false); err != nil {
-				break run
-			}
 		}
 	}
 	if writeErr := context.Cause(writeCtx); writeErr != nil {
@@ -183,7 +207,7 @@ run:
 			return err
 		}
 	}
-	if err := c.writer.flushDML(drainCtx, writeCtx, math.MaxUint64, true, true); err != nil {
+	if err := c.writer.flushDML(drainCtx, writeCtx); err != nil {
 		return err
 	}
 	for len(c.writer.inFlight) != 0 {
@@ -201,7 +225,6 @@ func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) er
 	if result.dml != nil {
 		c.writer.pendingDML = append(c.writer.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
 		c.writer.dmlBytes += result.bytes
-		c.writer.dmlDirty = true
 		c.writer.decodedRows += int64(result.dml.Len())
 	}
 	if result.ddl != nil {
@@ -215,7 +238,7 @@ func (c *consumer) consume(ctx, writeCtx context.Context, result *readResult) er
 			c.pendingWatermarks = append(c.pendingWatermarks, result)
 		}
 	}
-	return c.writer.flushDML(ctx, writeCtx, math.MaxUint64, true, result.force || c.writer.bufferedBytes() >= memoryHighWater)
+	return nil
 }
 
 func (c *consumer) confirmCompleted(ctx context.Context) error {
