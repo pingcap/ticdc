@@ -34,13 +34,18 @@ import (
 	"go.uber.org/zap"
 )
 
-func getChangeFeed(host, keyspaceName, cfName string) (ChangeFeedInfo, error) {
+func (h *OpenAPIV2) getChangeFeed(ctx context.Context, keyspaceName, cfName string) (ChangeFeedInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	coordinator, err := h.server.GetCoordinatorInfo(ctx)
+	if err != nil {
+		return ChangeFeedInfo{}, err
+	}
+	host := coordinator.AdvertiseAddr
 	security := config.GetGlobalServerConfig().Security
 
 	uri := fmt.Sprintf("/api/v2/changefeeds/%s?keyspace=%s", cfName, url.QueryEscape(keyspaceName))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	req, err := http.NewRequestWithContext(
 		ctx, "GET", uri, nil)
 	if err != nil {

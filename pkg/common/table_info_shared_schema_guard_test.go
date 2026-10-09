@@ -85,9 +85,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
 				"Revision", "DBID",
 				// Materialized-view metadata is table-level and does not affect the shared column schema.
-				"MaterializedViewBase", "MaterializedView", "MaterializedViewLog",
-				// Shadow-table metadata only identifies the source materialized view.
-				"MaterializedViewShadow",
+				"MaterializedViewBase", "MaterializedView", "MaterializedViewShadow", "MaterializedViewLog",
 				// These table-level storage settings do not affect the shared column schema.
 				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
 				"MaterializedView", "MaterializedViewBase", "MaterializedViewLog",
