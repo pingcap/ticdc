@@ -271,10 +271,8 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		co := logcoordinator.New()
 		err = e.runLogCoordinator(ctx, co.Run)
 
-		// Release the election key on every graceful exit as well. In particular,
-		// context cancellation used to leave the key behind until the shared etcd
-		// session lease expired, creating a gap before another node could publish
-		// log-coordinator metrics.
+		// Release the election key if this node still owns it, allowing another
+		// node to campaign immediately after the log coordinator exits.
 		if !errors.ErrNotOwner.Equal(err) {
 			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				return resignErr
