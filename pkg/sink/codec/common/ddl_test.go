@@ -32,6 +32,19 @@ func init() {
 	}
 }
 
+func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
+	allocator := NewTableIDAllocator()
+	ddl := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRecoverSchema),
+		SchemaName: "test",
+		Query:      "flashback database test",
+	}
+
+	blockedTables := GetBlockedTables(allocator, ddl)
+	require.Equal(t, commonEvent.InfluenceTypeNormal, blockedTables.InfluenceType)
+	require.Empty(t, blockedTables.TableIDs)
+}
+
 func TestGetDDLActionType(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -54,6 +67,9 @@ func TestGetDDLActionType(t *testing.T) {
 	dropSchemaSQL := `drop schema aaa`
 	ddl = helper.DDL2Event(dropSchemaSQL)
 	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropSchemaSQL))
+
+	flashbackDatabaseSQL := `flashback database abc`
+	require.Equal(t, timodel.ActionRecoverSchema, GetDDLActionType(flashbackDatabaseSQL))
 
 	helper.Tk().MustExec("use test")
 

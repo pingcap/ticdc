@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -26,9 +27,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -213,6 +216,94 @@ func TestApplyDDLJobs(t *testing.T) {
 				303: {1020, 1030},
 			},
 			[]uint64{1000, 1010, 1020, 1030},
+			nil,
+			nil,
+			nil,
+		},
+		// test recover schema restores database and table metadata
+		{
+			"recover_schema",
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),
+					buildCreateTableJobForTest(100, 200, "t1", 1010),
+					buildCreatePartitionTableJobForTest(100, 300, "pt", []int64{301, 302}, 1020),
+					buildDropSchemaJobForTest(100, 1030),
+					buildRecoverSchemaJobForTest(100, "test", []*model.TableInfo{
+						newEligibleTableInfoForTest(200, "t1"),
+						newEligiblePartitionTableInfoForTest(300, "pt", []model.PartitionDefinition{{ID: 301}, {ID: 302}}),
+					}, 1040),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				200: {SchemaID: 100, Name: "t1"},
+				300: {SchemaID: 100, Name: "pt"},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {301: nil, 302: nil},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{200: true, 300: true},
+				},
+			},
+			map[int64][]uint64{
+				200: {1010, 1030, 1040},
+				301: {1020, 1030, 1040},
+				302: {1020, 1030, 1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
+			nil,
+			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1039,
+					limit:       1,
+					result: []commonEvent.DDLEvent{
+						{
+							SchemaID:   100,
+							Type:       byte(model.ActionRecoverSchema),
+							FinishedTs: 1040,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{common.DDLSpanTableID},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{SchemaID: 100, TableID: 200, Splitable: true},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t1"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		// test a recovered schema can be dropped again
+		{
+			"recover_schema_then_drop_schema",
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),
+					buildCreateTableJobForTest(100, 200, "t1", 1010),
+					buildDropSchemaJobForTest(100, 1020),
+					buildRecoverSchemaJobForTest(100, "test", []*model.TableInfo{
+						newEligibleTableInfoForTest(200, "t1"),
+					}, 1030),
+					buildDropSchemaJobForTest(100, 1040),
+				}
+			}(),
+			nil,
+			nil,
+			nil,
+			map[int64][]uint64{
+				200: {1010, 1020, 1030, 1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
 			nil,
 			nil,
 			nil,
@@ -2641,6 +2732,60 @@ func TestApplyDDLJobs(t *testing.T) {
 	}
 }
 
+func TestPrepareRecoverSchemaJob(t *testing.T) {
+	tikvStore, err := mockstore.NewMockStore()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tikvStore.Close()) })
+
+	dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	txn, err := tikvStore.Begin()
+	require.NoError(t, err)
+	metaMutator := meta.NewMutator(txn)
+	require.NoError(t, metaMutator.CreateDatabase(dbInfo))
+	require.NoError(t, metaMutator.CreateTableOrView(dbInfo.ID, tableInfo))
+	require.NoError(t, txn.Commit(context.Background()))
+
+	job := buildRecoverSchemaJobForTest(100, "test", nil, math.MaxUint64)
+	args, err := model.GetRecoverArgs(job)
+	require.NoError(t, err)
+	args.RecoverInfo.LoadTablesOnExecute = true
+
+	storage := &persistentStorage{
+		ctx:       context.Background(),
+		kvStorage: tikvStore,
+	}
+	require.NoError(t, prepareRecoverSchemaJob(storage, job))
+	require.Len(t, args.RecoverInfo.RecoverTableInfos, 1)
+	require.Equal(t, tableInfo.ID, args.RecoverInfo.RecoverTableInfos[0].TableInfo.ID)
+
+	jobV1 := &model.Job{
+		Version:  model.JobVersion1,
+		Type:     model.ActionRecoverSchema,
+		SchemaID: dbInfo.ID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: math.MaxUint64,
+		},
+	}
+	jobV1.FillArgs(&model.RecoverArgs{
+		RecoverInfo: &model.RecoverSchemaInfo{
+			DBInfo:              dbInfo,
+			LoadTablesOnExecute: true,
+			SnapshotTS:          math.MaxUint64,
+			OldSchemaName:       dbInfo.Name,
+		},
+	})
+	rawJob, err := jobV1.Encode(true)
+	require.NoError(t, err)
+	decodedJobV1 := &model.Job{}
+	require.NoError(t, decodedJobV1.Decode(rawJob))
+	require.NoError(t, prepareRecoverSchemaJob(storage, decodedJobV1))
+	argsV1, err := model.GetRecoverArgs(decodedJobV1)
+	require.NoError(t, err)
+	require.Len(t, argsV1.RecoverInfo.RecoverTableInfos, 1)
+	require.Equal(t, tableInfo.ID, argsV1.RecoverInfo.RecoverTableInfos[0].TableInfo.ID)
+}
+
 func TestReadWriteMeta(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	err := os.RemoveAll(dbPath)
@@ -3076,7 +3221,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t3",
 	})
 	job.Query = "RENAME TABLE t3 TO test.t1"
-	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3097,7 +3242,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3118,7 +3263,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "ALTER TABLE t1 RENAME TO t2"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{101: true, 102: true}},
@@ -3145,7 +3290,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3163,7 +3308,7 @@ func TestRenameTable(t *testing.T) {
 		Table:    "t1",
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3184,7 +3329,7 @@ func TestRenameTable(t *testing.T) {
 		NewTableName:  ast.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+	ddl, _ = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
@@ -3209,7 +3354,7 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T)
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3243,7 +3388,7 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRename(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `test`.`a` TO `test`.`c`, `test`.`b` TO `test`.`a`, `test`.`c` TO `test`.`b`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
@@ -3274,7 +3419,7 @@ func TestBuildPersistedDDLEventForRenameTablesPreferQueryNames(t *testing.T) {
 	)
 	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`, `source_db`.`source_t2_from_query` TO `target_db`.`target_t2`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+	ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
 			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3307,7 +3452,7 @@ func TestBuildPersistedDDLEventForRenameTablesKeepArgsWhenQueryUnavailable(t *te
 	job.Query = "RENAME TABLE"
 
 	require.NotPanics(t, func() {
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3341,7 +3486,7 @@ func TestBuildPersistedDDLEventForRenameTablesPanicOnQueryInfoLengthMismatch(t *
 	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`, `source_db`.`source_t3` TO `target_db`.`target_t3`"
 
 	require.Panics(t, func() {
-		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		_, _ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3367,7 +3512,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 			1010,
 		)
 
-		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "source`db", Tables: map[int64]bool{200: true, 201: true}},
@@ -3393,7 +3538,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		// Keep empty to force using InvolvingSchemaInfo as source name.
 		job.Query = ""
 
-		ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "target`db", Tables: map[int64]bool{101: true}},
@@ -3408,7 +3553,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("drop table", func(t *testing.T) {
 		job := buildDropTableJobForTest(100, 200, 1000)
-		ddl := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{200: true}},
@@ -3423,7 +3568,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 	t.Run("drop view", func(t *testing.T) {
 		job := buildDropViewJobForTest(100, 1000)
 		job.TableName = "view`x"
-		ddl := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "schema`x", Tables: map[int64]bool{}},
@@ -3436,7 +3581,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
 		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
-		ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
@@ -3648,24 +3793,164 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 	}
 }
 
-func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: ast.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `source_db`.`users`",
+		},
+	}
+
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
+func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelect(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: ast.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `target_db`.`users`",
+		},
+	}
+
+	ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
+func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *testing.T) {
 	cases := []struct {
-		name     string
-		query    string
-		expected []commonEvent.SchemaTableName
+		name       string
+		query      string
+		selectStmt string
+		expected   string
 	}{
 		{
-			name:  "default schema",
-			query: "CREATE TABLE `b` LIKE `a`",
+			name:       "cross schema unaliased table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` FROM `orders`",
+			selectStmt: "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`",
+		},
+		{
+			name:       "same schema unaliased table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `users`.`id` FROM `users`",
+			selectStmt: "SELECT `users`.`id` AS `id` FROM `target_db`.`users`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `target_db`.`users`.`id` AS `id` FROM `target_db`.`users`",
+		},
+		{
+			name:       "alias is preserved",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` FROM `orders` AS `orders`",
+			selectStmt: "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
+		},
+		{
+			name:       "ambiguous table qualifier is preserved",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` FROM `t`",
+			selectStmt: "SELECT `t`.`id` AS `id` FROM `db1`.`t`, `db2`.`t`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` AS `id` FROM (`db1`.`t`) JOIN `db2`.`t`",
+		},
+		{
+			name:       "subquery scopes are independent",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` FROM (SELECT `t`.`id` FROM `t`) AS `q`",
+			selectStmt: "SELECT `q`.`id` AS `id` FROM (SELECT `t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` AS `id` FROM (SELECT `source_db`.`t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+		},
+		{
+			name:       "join table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id`, `customers`.`name` FROM `orders` JOIN `customers` ON `orders`.`customer_id` = `customers`.`id`",
+			selectStmt: "SELECT `orders`.`id` AS `id`, `customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `orders`.`customer_id` = `customers`.`id`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id`,`crm_db`.`customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `source_db`.`orders`.`customer_id`=`crm_db`.`customers`.`id`",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := buildCreateViewJobForTest(101, 100)
+			job.TableName = "v"
+			job.Query = tc.query
+			job.BinlogInfo.TableInfo = &model.TableInfo{
+				Name: ast.NewCIStr("v"),
+				View: &model.ViewInfo{
+					SelectStmt: tc.selectStmt,
+				},
+			}
+
+			ddl, _ := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+				job: job,
+				databaseMap: map[int64]*BasicDatabaseInfo{
+					101: {Name: "target_db", Tables: map[int64]bool{}},
+				},
+			})
+
+			require.Equal(t, tc.expected, ddl.Query)
+			require.Equal(t, "target_db", ddl.SchemaName)
+			require.Equal(t, "v", ddl.TableName)
+		})
+	}
+}
+
+func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		schemaName string
+		expected   []commonEvent.SchemaTableName
+	}{
+		{
+			name:       "default schema",
+			query:      "CREATE TABLE `b` LIKE `a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "test", TableName: "a"},
 			},
 		},
 		{
-			name:  "explicit schema",
-			query: "CREATE TABLE `b` LIKE `other`.`a`",
+			name:       "explicit schema",
+			query:      "CREATE TABLE `b` LIKE `other`.`a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "other", TableName: "a"},
+			},
+		},
+		{
+			name:       "explicit target schema with persisted refer table",
+			query:      "CREATE TABLE `extra`.`b` LIKE `test`.`a`",
+			schemaName: "extra",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "a"},
+			},
+		},
+		{
+			name:       "explicit target schema in same schema",
+			query:      "CREATE TABLE `test`.`b` LIKE `a`",
+			schemaName: "test",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "a"},
 			},
 		},
 	}
@@ -3675,7 +3960,7 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing
 			Type:       byte(model.ActionCreateTable),
 			SchemaID:   1,
 			TableID:    2,
-			SchemaName: "test",
+			SchemaName: tc.schemaName,
 			TableName:  "b",
 			Query:      tc.query,
 			TableInfo:  &model.TableInfo{},
@@ -3694,6 +3979,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		query           string
 		partitionIDs    []int64
 		expectedReferID int64
+		expectedQuery   string
 	}{
 		{
 			name:            "non partition refer table",
@@ -3718,6 +4004,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			query:           "CREATE TABLE `b` LIKE `TeSt`.`A`",
 			partitionIDs:    nil,
 			expectedReferID: 101,
+			expectedQuery:   "CREATE TABLE `b` LIKE `TeSt`.`A`",
 		},
 	}
 
@@ -3732,7 +4019,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			}
 			partitionMap[tc.expectedReferID] = partitionInfo
 		}
-		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
@@ -3744,11 +4031,96 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			partitionMap: partitionMap,
 		})
 		require.Equal(t, tc.expectedReferID, ddl.ExtraTableID, tc.name)
+		if tc.expectedQuery != "" {
+			require.Equal(t, tc.expectedQuery, ddl.Query, tc.name)
+		}
 		if len(tc.partitionIDs) > 0 {
 			require.ElementsMatch(t, tc.partitionIDs, ddl.ReferTablePartitionIDs, tc.name)
 		} else {
 			require.Empty(t, ddl.ReferTablePartitionIDs, tc.name)
 		}
+	}
+
+	job := buildCreateTableJobForTest(200, 300, "b", 1010)
+	job.Query = "CREATE TABLE `extra`.`b` LIKE `a`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "extra", Table: "b"},
+		{Database: "test", Table: "a", Mode: model.SharedInvolving},
+	}
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true}},
+			200: {Name: "extra", Tables: map[int64]bool{300: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "a"},
+			300: {SchemaID: 200, Name: "b"},
+		},
+	})
+	require.Equal(t, int64(101), ddl.ExtraTableID)
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
+	job := buildCreateTableJobForTest(100, 200, "t", 1010)
+	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "dst_db", Table: "t"},
+		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
+	}
+
+	ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "dst_db", Tables: map[int64]bool{200: true}},
+			101: {Name: "src_db", Tables: map[int64]bool{201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "t"},
+			201: {SchemaID: 101, Name: "t"},
+		},
+	})
+
+	require.Equal(t, int64(201), ddl.ExtraTableID)
+	require.Equal(t, "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "unqualified target table",
+			query: "CREATE TABLE `dst` LIKE `src`",
+		},
+		{
+			name:  "explicit target schema",
+			query: "CREATE TABLE `test`.`dst` LIKE `src`",
+		},
+	}
+
+	for _, tc := range cases {
+		job := buildCreateTableJobForTest(100, 200, "dst", 1010)
+		job.Query = tc.query
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{Database: "test", Table: "dst"},
+			{Database: "test", Table: "src", Mode: model.SharedInvolving},
+		}
+
+		ddl, _ := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "src"},
+				200: {SchemaID: 100, Name: "dst"},
+			},
+		})
+
+		require.Equal(t, int64(101), ddl.ExtraTableID, tc.name)
+		require.Equal(t, tc.query, ddl.Query, tc.name)
 	}
 }
 
@@ -3826,4 +4198,44 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 		require.Nil(t, tableInfo)
 		require.False(t, deleted)
 	})
+}
+
+func TestExchangeTableInfo(t *testing.T) {
+	for _, partitionSchema := range []string{"normal_db", "partition_db"} {
+		t.Run(partitionSchema, func(t *testing.T) {
+			normal := common.WrapTableInfo("normal_db", newEligibleTableInfoForTest(200, "nt"))
+			partition := newEligiblePartitionTableInfoForTest(100, "pt", []model.PartitionDefinition{{ID: 200}, {ID: 102}})
+			raw := &PersistedDDLEvent{
+				Type: byte(model.ActionExchangeTablePartition), SchemaName: "normal_db", TableName: "nt", TableID: 200,
+				ExtraSchemaName: partitionSchema, ExtraTableName: "pt", ExtraTableID: 100,
+				TableInfo: partition, ExtraTableInfo: normal, PrevPartitions: []int64{101, 102},
+			}
+			for _, tc := range []struct {
+				physical, logical int64
+				schema, table     string
+				partition         bool
+			}{
+				{0, 100, partitionSchema, "pt", true},
+				{200, 100, partitionSchema, "pt", true},
+				{101, 101, "normal_db", "nt", false},
+			} {
+				ddl, ok, err := buildDDLEventForExchangeTablePartition(raw, nil, tc.physical)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, tc.schema, ddl.TableInfo.GetSchemaName())
+				require.Equal(t, tc.table, ddl.TableInfo.GetTableName())
+				require.Equal(t, tc.logical, ddl.TableInfo.TableName.TableID)
+				require.Equal(t, tc.partition, ddl.TableInfo.TableName.IsPartition)
+				require.Equal(t, partitionSchema, ddl.MultipleTableInfos[0].GetSchemaName())
+				require.Same(t, normal, ddl.MultipleTableInfos[1])
+				if tc.physical != 0 {
+					stored, deleted := extractTableInfoFuncForExchangeTablePartition(raw, tc.physical)
+					require.False(t, deleted)
+					require.Equal(t, stored.TableName, ddl.TableInfo.TableName)
+					require.Equal(t, stored.GetColumns(), ddl.TableInfo.GetColumns())
+				}
+			}
+			require.Equal(t, int64(200), normal.TableName.TableID)
+		})
+	}
 }

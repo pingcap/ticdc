@@ -88,6 +88,11 @@ SELECT *
 FROM t1
 WHERE c1 > 2;
 
+CREATE TABLE users
+(
+    id INT PRIMARY KEY
+);
+
 -- uk without pk
 -- https://internal.pingcap.net/jira/browse/TOOL-714
 -- CDC don't support UK is null

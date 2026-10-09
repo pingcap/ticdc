@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -218,4 +219,74 @@ func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.NoError(t, config.ValidateAndAdjust(sinkURI))
+}
+
+func TestReplicaConfig_AllowSameCluster(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	require.Nil(t, cfg.AllowSameCluster)
+
+	// `allow-same-cluster` is a top-level option of the changefeed config file.
+	metaData, err := toml.Decode("allow-same-cluster = true\n", cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.True(t, util.GetOrZero(cfg.AllowSameCluster))
+
+	// Clone must keep the option, the config is cloned when it is converted to the API model.
+	require.True(t, util.GetOrZero(cfg.Clone().AllowSameCluster))
+
+	// The same upstream/downstream check runs on the ChangefeedConfig derived from the persisted
+	// replica config, so the option must survive the conversion to skip the check.
+	info := &ChangeFeedInfo{Config: cfg}
+	require.True(t, info.ToChangefeedConfig().AllowSameCluster)
+}
+
+func TestReplicaConfigTableRouteSupport(t *testing.T) {
+	cases := []struct {
+		name         string
+		uri          string
+		routed       bool
+		redoEnabled  bool
+		activeActive bool
+		wantError    string
+	}{
+		{name: "mysql routing", uri: "mysql://localhost:3306", routed: true},
+		{name: "tidb routing", uri: "tidb://localhost:4000", routed: true},
+		{name: "kafka routing", uri: "kafka://localhost:9092/topic?protocol=open-protocol", routed: true, wantError: "table routing only supports MySQL-compatible sinks"},
+		{name: "storage routing", uri: "file:///tmp/table-route", routed: true, wantError: "table routing only supports MySQL-compatible sinks"},
+		{name: "blackhole routing", uri: "blackhole://", routed: true, wantError: "table routing only supports MySQL-compatible sinks"},
+		{name: "redo with routing", uri: "mysql://localhost:3306", routed: true, redoEnabled: true, wantError: "table routing is incompatible with redo"},
+		{name: "redo without routing", uri: "mysql://localhost:3306", redoEnabled: true},
+		{name: "active active with routing", uri: "tidb://localhost:4000", routed: true, activeActive: true},
+		{name: "active active without routing", uri: "tidb://localhost:4000", activeActive: true},
+		{name: "kafka dispatch without routing", uri: "kafka://localhost:9092/topic?protocol=open-protocol"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.EnableRedoIOCheck = util.AddressOf(false)
+			cfg.EnableActiveActive = util.AddressOf(tc.activeActive)
+			cfg.BDRMode = util.AddressOf(tc.activeActive)
+			if tc.redoEnabled {
+				cfg.Consistent.Level = util.AddressOf("eventual")
+				cfg.Consistent.Storage = util.AddressOf("file:///tmp/table-route-redo")
+			}
+			rule := &DispatchRule{Matcher: []string{"db.*"}, PartitionRule: "table", TopicRule: "topic"}
+			if tc.routed {
+				rule.TargetSchema = "archive"
+			}
+			cfg.Sink.DispatchRules = []*DispatchRule{rule}
+			sinkURI, err := url.Parse(tc.uri)
+			require.NoError(t, err)
+			err = cfg.ValidateAndAdjust(sinkURI)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "table", rule.PartitionRule)
+				require.Equal(t, "topic", rule.TopicRule)
+			}
+		})
+	}
 }

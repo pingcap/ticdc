@@ -29,7 +29,7 @@ import (
 func TestNewColumnSelector(t *testing.T) {
 	// the column selector is not set
 	replicaConfig := config.GetDefaultReplicaConfig()
-	selectors, err := New(replicaConfig.Sink)
+	selectors, err := New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 	require.NotNil(t, selectors)
 	require.Len(t, selectors.selectors, 0)
@@ -52,7 +52,7 @@ func TestNewColumnSelector(t *testing.T) {
 			Columns: []string{"co?1"},
 		},
 	}
-	selectors, err = New(replicaConfig.Sink)
+	selectors, err = New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 	require.Len(t, selectors.selectors, 4)
 }
@@ -77,7 +77,7 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 			Columns: []string{"co?1"},
 		},
 	}
-	selectors, err := New(replicaConfig.Sink)
+	selectors, err := New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	{
@@ -197,7 +197,7 @@ func TestVerifyTablesRequiresFullUniqueKey(t *testing.T) {
 			Columns: []string{"a"},
 		},
 	}
-	selectors, err := New(replicaConfig.Sink)
+	selectors, err := New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
@@ -224,7 +224,7 @@ func TestVerifyTablesRequiresFullUniqueKey(t *testing.T) {
 	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
 
 	replicaConfig.Sink.ColumnSelectors[0].Columns = []string{"a", "b"}
-	selectors, err = New(replicaConfig.Sink)
+	selectors, err = New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 	require.NoError(t, selectors.VerifyTables([]*commonType.TableInfo{tableInfo}, nil))
 }
@@ -237,5 +237,26 @@ func newColumnInfoForSelectorTest(id int64, name string, flag uint) *model.Colum
 		Name:      ast.NewCIStr(name),
 		FieldType: *ft,
 		State:     model.StatePublic,
+	}
+}
+
+func TestColumnSelectorCaseSensitive(t *testing.T) {
+	sinkConfig := &config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{{
+			Matcher: []string{"Sales.Orders"},
+			Columns: []string{"*", "!payload"},
+		}},
+	}
+	payload := &model.ColumnInfo{Name: ast.NewCIStr("payload")}
+	id := &model.ColumnInfo{Name: ast.NewCIStr("id")}
+	for _, caseSensitive := range []bool{false, true} {
+		selectors, err := New(sinkConfig, caseSensitive)
+		require.NoError(t, err)
+		require.False(t, selectors.Get("Sales", "Orders").Select(payload))
+		for _, table := range [][2]string{{"sales", "Orders"}, {"Sales", "orders"}} {
+			selector := selectors.Get(table[0], table[1])
+			require.Equal(t, caseSensitive, selector.Select(payload))
+			require.True(t, selector.Select(id))
+		}
 	}
 }

@@ -715,13 +715,26 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
 
-	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+	if handler.prepareJobFunc != nil {
+		if err := handler.prepareJobFunc(p, job); err != nil {
+			return err
+		}
+	}
+
+	p.mu.Lock()
+
+	ddlEvent, err := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
 
 	p.mu.Unlock()
 
@@ -733,7 +746,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-	writePersistedDDLEvent(p.db, &ddlEvent)
+	err = writePersistedDDLEvent(p.db, &ddlEvent)
+	if err != nil {
+		return errors.Trace(err)
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -835,7 +851,6 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionAlterCacheTable,
 		model.ActionAlterNoCacheTable,
 		model.ActionFlashbackCluster,
-		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:

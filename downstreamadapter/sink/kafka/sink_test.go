@@ -51,7 +51,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		return nil, errors.Trace(err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "sink")
-	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig, false)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

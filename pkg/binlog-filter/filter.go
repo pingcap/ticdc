@@ -57,18 +57,19 @@ const (
 	UpdateEvent EventType = "update"
 	DeleteEvent EventType = "delete"
 
-	CreateDatabase EventType = "create database"
-	DropDatabase   EventType = "drop database"
-	AlterDatabase  EventType = "alter database"
-	CreateTable    EventType = "create table"
-	DropTable      EventType = "drop table"
-	TruncateTable  EventType = "truncate table"
-	RenameTable    EventType = "rename table"
-	CreateIndex    EventType = "create index"
-	DropIndex      EventType = "drop index"
-	CreateView     EventType = "create view"
-	DropView       EventType = "drop view"
-	AlterTable     EventType = "alter table"
+	CreateDatabase  EventType = "create database"
+	DropDatabase    EventType = "drop database"
+	AlterDatabase   EventType = "alter database"
+	RecoverDatabase EventType = "recover database"
+	CreateTable     EventType = "create table"
+	DropTable       EventType = "drop table"
+	TruncateTable   EventType = "truncate table"
+	RenameTable     EventType = "rename table"
+	CreateIndex     EventType = "create index"
+	DropIndex       EventType = "drop index"
+	CreateView      EventType = "create view"
+	DropView        EventType = "drop view"
+	AlterTable      EventType = "alter table"
 
 	CreateSchema EventType = "create schema" // alias of CreateDatabase
 	DropSchema   EventType = "drop schema"   // alias of DropDatabase
@@ -178,6 +179,7 @@ func ClassifyEvent(event EventType) (EventType, error) {
 		ModifySchemaCharsetAndCollate,
 		ModifyTableCharsetAndCollate,
 		ModifyTableComment,
+		RecoverDatabase,
 		RecoverTable,
 		AlterTablePartitioning,
 		RemovePartitioning,

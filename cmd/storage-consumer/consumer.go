@@ -124,7 +124,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
-	columnSelectors, err := columnselector.New(replicaConfig.Sink)
+	columnSelectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +141,9 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	stdCtx := ctx
 
 	cfg := &config.ChangefeedConfig{
-		SinkURI:    downstreamURIStr,
-		SinkConfig: replicaConfig.Sink,
+		SinkURI:       downstreamURIStr,
+		SinkConfig:    replicaConfig.Sink,
+		CaseSensitive: putil.GetOrZero(replicaConfig.CaseSensitive),
 	}
 	sink, err := sink.New(
 		stdCtx,

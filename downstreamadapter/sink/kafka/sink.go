@@ -25,13 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-=======
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
->>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -73,15 +69,6 @@ func (s *sink) SinkType() commonType.SinkType {
 	return commonType.KafkaSinkType
 }
 
-<<<<<<< HEAD
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	defer comp.close()
-	return err
-=======
-var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
-	return createSaramaFactory()
-}
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
@@ -154,13 +141,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 	return nil
->>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

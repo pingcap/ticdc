@@ -201,6 +201,7 @@ type ChangefeedConfig struct {
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch                         uint64        `json:"epoch"`
 	BDRMode                       bool          `json:"bdr_mode" default:"false"`
+	AllowSameCluster              bool          `json:"allow_same_cluster" default:"false"`
 	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
 	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
 	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
@@ -280,6 +281,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		AllowSameCluster:              util.GetOrZero(info.Config.AllowSameCluster),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
 		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
 		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
@@ -498,10 +500,18 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 }
 
 func (info *ChangeFeedInfo) rmMQOnlyFields() {
-	log.Info("since the downstream is not a MQ, remove MQ only fields",
-		zap.String("keyspace", info.ChangefeedID.Keyspace()),
-		zap.String("changefeed", info.ChangefeedID.Name()))
-	info.Config.Sink.DispatchRules = nil
+	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
+	// Remove only MQ-specific fields from each rule.
+	for _, rule := range info.Config.Sink.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		rule.DispatcherRule = ""
+		rule.PartitionRule = ""
+		rule.IndexName = ""
+		rule.Columns = nil
+		rule.TopicRule = ""
+	}
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil

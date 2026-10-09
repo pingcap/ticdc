@@ -161,7 +161,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 	} else {
 		buf.WriteString("INSERT INTO ")
 	}
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" (")
 	columnNum := 0
 	var skipColIdx []int
@@ -273,7 +273,7 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 	var buf strings.Builder
 	buf.Grow(1024)
 	buf.WriteString("DELETE FROM ")
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" WHERE (")
 
 	// v2 uses the first row to define the tuple shape of the trailing IN list.
@@ -327,7 +327,7 @@ func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 	// Generate UPDATE `db`.`table` SET
 	first := changes[0]
 	buf.WriteString("UPDATE ")
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" SET ")
 
 	// Pre-generate essential sub statements used after WHEN, WHERE.

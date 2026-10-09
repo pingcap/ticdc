@@ -1,0 +1,9 @@
+allow-same-cluster = true
+
+[filter]
+rules = ['*.t1']
+
+[[sink.dispatchers]]
+matcher = ['*.t1']
+target-schema = '{schema}_backup'
+target-table = 't1_copy'

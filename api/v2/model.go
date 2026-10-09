@@ -206,6 +206,9 @@ type ReplicaConfig struct {
 	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
 	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
 	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops.
+	AllowSameCluster *bool `json:"allow_same_cluster,omitempty"`
 	// EnableActiveActive enables active-active replication mode on top of BDR.
 	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
 	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
@@ -268,6 +271,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.BDRMode != nil {
 		res.BDRMode = c.BDRMode
+	}
+	if c.AllowSameCluster != nil {
+		res.AllowSameCluster = c.AllowSameCluster
 	}
 	if c.EnableActiveActive != nil {
 		res.EnableActiveActive = c.EnableActiveActive
@@ -342,6 +348,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				IndexName:      rule.IndexName,
 				Columns:        rule.Columns,
 				TopicRule:      rule.TopicRule,
+				TargetSchema:   rule.TargetSchema,
+				TargetTable:    rule.TargetTable,
 			})
 		}
 		var columnSelectors []*config.ColumnSelector
@@ -515,6 +523,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			debeziumConfig = &config.DebeziumConfig{
 				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
 			}
+			if c.Sink.DebeziumConfig.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.DecimalHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BigintUnsignedHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BinaryHandlingMode)
+			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
 		if c.Sink.OpenProtocolConfig != nil {
@@ -664,6 +681,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:       cloned.EnableSyncPoint,
 		EnableTableMonitor:    cloned.EnableTableMonitor,
 		BDRMode:               cloned.BDRMode,
+		AllowSameCluster:      cloned.AllowSameCluster,
 		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 
@@ -702,6 +720,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				IndexName:     rule.IndexName,
 				Columns:       rule.Columns,
 				TopicRule:     rule.TopicRule,
+				TargetSchema:  rule.TargetSchema,
+				TargetTable:   rule.TargetTable,
 			})
 		}
 		var columnSelectors []*ColumnSelector
@@ -873,6 +893,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
 				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+			}
+			if cloned.Sink.Debezium.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*cloned.Sink.Debezium.DecimalHandlingMode)
+			}
+			if cloned.Sink.Debezium.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BigintUnsignedHandlingMode)
+			}
+			if cloned.Sink.Debezium.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
@@ -1194,6 +1223,21 @@ type DispatchRule struct {
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// the target schema becomes `sales_bak`.
+	TargetSchema string `json:"target-schema,omitempty"`
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -1535,7 +1579,10 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue             bool    `json:"output_old_value"`
+	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
+	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
+	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
 }
 
 type DispatcherCount struct {

@@ -147,6 +147,11 @@ type replicaConfig struct {
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
 	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops. Set it to true
+	// only when the changefeed cannot capture its own writes, for example when the downstream
+	// tables are not matched by the changefeed's filter.
+	AllowSameCluster *bool `toml:"allow-same-cluster" json:"allow-same-cluster,omitempty"`
 	// EnableRedoIOCheck controls whether consistency storage validation should
 	// perform an I/O accessibility check. This field is internal only.
 	EnableRedoIOCheck *bool `toml:"-" json:"-"`
@@ -274,6 +279,12 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	if c.Sink.TableRouteEnabled() {
+		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
+			return cerror.ErrInvalidReplicaConfig.FastGenByArgs("table routing is incompatible with redo log/consistency feature")
+		}
+	}
+
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck

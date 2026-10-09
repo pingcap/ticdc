@@ -41,6 +41,8 @@ var (
 // because it can easily lead to self-replication loops.
 //
 // Compatibility and trade-offs:
+//   - If the changefeed config sets `allow-same-cluster = true`, the check is skipped and this
+//     returns false, so that creating/updating/resuming the changefeed is not blocked.
 //   - If the sink is not TiDB, or the downstream `cluster_id` is unavailable, this returns false (keep legacy behavior).
 //   - In TiDB Next-Gen, multiple keyspaces share the same physical `cluster_id`. When the downstream keyspace
 //     can be determined, we treat (cluster_id, keyspace) as the cluster identity to allow cross-keyspace replication.
@@ -49,11 +51,23 @@ var (
 func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
-	if upPD == nil {
-		return false, cerrors.New("pd client is nil")
-	}
 	if changefeedCfg == nil {
-		return false, cerrors.New("changefeed config is nil")
+		return false, cerrors.ErrInternalCheckFailed.GenWithStackByArgs("changefeed config is nil")
+	}
+	// The user explicitly opted out of this verification, report "not same" so that the callers
+	// proceed. The flag only makes the changefeed safe when its routing rules keep every replicated
+	// table outside the filter, so the validation runs here, on the configuration in use.
+	if changefeedCfg.AllowSameCluster {
+		if err := ValidateSameClusterRouting(changefeedCfg); err != nil {
+			return false, err
+		}
+		log.Warn("skip the upstream/downstream cluster verification because allow-same-cluster is enabled",
+			zap.String("changefeedID", changefeedCfg.ChangefeedID.Name()),
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
+		return false, nil
+	}
+	if upPD == nil {
+		return false, cerrors.ErrInternalCheckFailed.GenWithStackByArgs("pd client is nil")
 	}
 
 	upID := upPD.GetClusterID(ctx)
@@ -172,7 +186,7 @@ func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
 			continue
 		}
 		if value != keyspace {
-			return "", cerrors.New("downstream TiDB reports inconsistent keyspace-name across instances")
+			return "", cerrors.ErrInternalCheckFailed.GenWithStack("downstream TiDB reports inconsistent keyspace-name across instances, got %s and %s", keyspace, value)
 		}
 	}
 	if err := rows.Err(); err != nil {

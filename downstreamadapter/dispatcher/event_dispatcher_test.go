@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -82,6 +83,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		}, // syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -1003,6 +1005,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		},
 		&defaultAtomicity,
 		true, // enableSplittableCheck = true
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -1113,6 +1116,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -1193,6 +1197,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),

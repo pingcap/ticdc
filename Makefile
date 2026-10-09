@@ -2,7 +2,7 @@
 # Add new phony targets here to make them available in the `make` command.
 .PHONY: clean fmt check tidy \
 	generate-protobuf generate_mock \
-	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	cdc kafka_consumer kafka_dump storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 	generate-next-gen-grafana
@@ -161,6 +161,9 @@ cdc:
 kafka_consumer:
 	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
 
+kafka_dump:
+	$(CONSUMER_GOBUILD) -o bin/kafka_dump ./tests/utils/kafka_dump
+
 storage_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer
 
@@ -203,7 +206,7 @@ check_third_party_binary:
 	@which bin/minio
 	@which bin/bin/schema-registry-start
 
-integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
+integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer kafka_dump pulsar_consumer oauth2_server
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
