@@ -54,8 +54,7 @@ func TestRunLogCoordinatorStopsWhenNodeStartsDraining(t *testing.T) {
 		liveness: liveness.CaptureAlive,
 	}}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- e.runLogCoordinator(ctx, func(ctx context.Context) error {
