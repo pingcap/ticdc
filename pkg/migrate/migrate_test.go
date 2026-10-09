@@ -601,7 +601,7 @@ func TestRemoveOldGcServiceSafePointFailed(t *testing.T) {
 
 func TestListServiceSafePointTimeout(t *testing.T) {
 	// An invalid response keeps the PD API client retrying until the caller's deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
 	defer cancel()
 	mockClient := newMockPDClient(true)
 

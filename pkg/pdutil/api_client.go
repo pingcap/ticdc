@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -284,7 +283,7 @@ func (pc *pdAPIClient) scanRegions(
 				// Because start key is less than end key, there must be some regions.
 				log.Error("fail to scan region, missing region",
 					zap.String("endpoint", endpoint))
-				return nil, cerror.WrapError(cerror.ErrInternalServerError,
+				return nil, errors.WrapError(errors.ErrInternalServerError,
 					fmt.Errorf("fail to scan region, missing region"))
 			}
 			if r[0].StartKey != startKeyHex {
@@ -360,17 +359,8 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 			return err
 		}
 		return nil
-<<<<<<< HEAD
-	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
-=======
 	}, retry.WithMaxTries(pc.maxRetries), retry.WithIsRetryableErr(func(err error) bool {
 		return !errors.Is(errors.Cause(err), context.Canceled)
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 	}))
 	return resp, err
 }

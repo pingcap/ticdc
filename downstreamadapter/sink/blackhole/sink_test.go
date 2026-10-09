@@ -22,7 +22,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parserModel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -39,11 +39,11 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
 		ID:       20,
-		Name:     ast.NewCIStr("t"),
+		Name:     parserModel.NewCIStr("t"),
 		UpdateTS: 100,
 		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("id"), FieldType: *idFieldType, State: model.StatePublic, Offset: 0},
-			{ID: 2, Name: ast.NewCIStr("name"), FieldType: *nameFieldType, State: model.StatePublic, Offset: 1},
+			{ID: 1, Name: parserModel.NewCIStr("id"), FieldType: *idFieldType, State: model.StatePublic, Offset: 0},
+			{ID: 2, Name: parserModel.NewCIStr("name"), FieldType: *nameFieldType, State: model.StatePublic, Offset: 1},
 		},
 	})
 	require.NotNil(t, tableInfo)
@@ -67,13 +67,8 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
-<<<<<<< HEAD
-func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
-=======
 func TestBlackHoleSinkFlushEvents(t *testing.T) {
-	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
+	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -132,11 +127,7 @@ func TestBlackHoleSinkFlushEvents(t *testing.T) {
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
-<<<<<<< HEAD
-	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
-=======
-	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
+	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName))
 	require.NoError(t, err)
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())

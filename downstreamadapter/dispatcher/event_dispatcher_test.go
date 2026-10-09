@@ -647,7 +647,6 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	require.Equal(t, int32(1), flushCalls.Load())
 }
 
-<<<<<<< HEAD
 func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 	tableSpan.KeyspaceID = getTestingKeyspaceID()
@@ -699,12 +698,8 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	}
 }
 
-// test uncompelete table span can correctly handle the ddl events
-func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
-=======
 // Test that an incomplete table span handles DDL events correctly.
 func TestIncompleteSpanDispatcher(t *testing.T) {
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

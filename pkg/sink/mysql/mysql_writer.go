@@ -41,13 +41,8 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
-<<<<<<< HEAD
-=======
 	// defaultDDLPollInterval is how often a running downstream DDL is re-checked.
 	defaultDDLPollInterval = 5 * time.Second
-
-	dmlConnIdleTimeout = 5 * time.Minute
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
@@ -79,15 +74,10 @@ type Writer struct {
 
 	// for dry-run mode
 	blockerTicker *time.Ticker
-<<<<<<< HEAD
-=======
 
 	// ddlPollInterval is how often a running downstream DDL is re-checked.
 	// Tests lower it to avoid paying the production poll interval.
 	ddlPollInterval time.Duration
-
-	writeGate *writelease.Gate
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 }
 
 func NewWriter(
@@ -99,7 +89,6 @@ func NewWriter(
 	statistics *metrics.Statistics,
 ) *Writer {
 	res := &Writer{
-<<<<<<< HEAD
 		ctx:                    ctx,
 		id:                     id,
 		db:                     db,
@@ -113,26 +102,7 @@ func NewWriter(
 
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
-=======
-		ctx:                            writerCtx,
-		cancel:                         cancel,
-		id:                             id,
-		db:                             db,
-		cfg:                            cfg,
-		syncPointTableInit:             false,
-		ChangefeedID:                   changefeedID,
-		lastCleanSyncPointTime:         time.Now(),
-		ddlTsTableInit:                 false,
-		stmtCache:                      cfg.stmtCache,
-		statistics:                     statistics,
-		maxDDLTsBatch:                  cfg.MaxTxnRow,
-		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
-		isInErrorCausedSafeMode:        false,
-		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
-		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
-		activeActiveSyncStatsInterval:  cfg.ActiveActiveSyncStatsInterval,
-		ddlPollInterval:                defaultDDLPollInterval,
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
+		ddlPollInterval:             defaultDDLPollInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {

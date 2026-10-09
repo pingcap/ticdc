@@ -60,9 +60,6 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: tools/bin
-<<<<<<< HEAD
-          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
-=======
           key: check-tools-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('tools/check/go.mod', 'tools/check/go.sum', 'tools/Makefile') }}
 
       - name: Mark cached tools up to date
@@ -77,7 +74,6 @@ jobs:
           key: golangci-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', '.golangci.yml', 'tools/check/go.mod', 'tools/check/go.sum') }}-${{ github.sha }}
           restore-keys: |
             golangci-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', '.golangci.yml', 'tools/check/go.mod', 'tools/check/go.sum') }}-
->>>>>>> c10f79f87 (ci,tests: speed up PR unit tests and checks (#6344))
 
       - name: Check
         run: make check
