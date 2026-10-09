@@ -40,8 +40,7 @@ function run() {
 
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/changefeed1.toml" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/changefeed1.toml" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI "$CUR/conf/changefeed1.toml" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" "$CUR/conf/changefeed1.toml" ;;
 	esac
 
 	# Create databases and tables for each changefeed

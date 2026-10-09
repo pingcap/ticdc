@@ -40,8 +40,7 @@ EOF
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml ;;
-	storage) run_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI $WORK_DIR/pulsar_test.toml ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" $WORK_DIR/pulsar_test.toml ;;
 	esac
 }
 

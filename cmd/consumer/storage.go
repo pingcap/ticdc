@@ -74,36 +74,30 @@ type storageInput struct {
 	tableID  int64
 	sort     bool
 }
-type storagePosition struct {
-	key   cloudstorage.DMLPathKey
-	index cloudstorage.FileIndex
-}
 type storageReader struct {
-	storage          storeapi.Storage
-	buffer           *readBuffer
-	codecConfig      *codecCommon.Config
-	columnSelectors  *columnselector.ColumnSelectors
-	dateSeparator    config.DateSeparator
-	fileExtension    string
-	fileIndexWidth   int
-	checkpoint       uint64
-	schemas          map[cloudstorage.SchemaPathKey]*storageSchema
-	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	confirmedIndices map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks    map[string]uint64
-	tableIDs         map[storageTableKey]int64
-	tableWatermarks  map[int64]uint64
-	nextTableID      int64
-	mu               sync.Mutex
-	records          []*ack
-	positions        map[*ack]storagePosition
-	inputs           []storageInput
-	current          storageInput
-	decoder          codecCommon.Decoder
-	record           *ack
-	sortBeforeWrite  bool
-	groupReady       bool
-	scanned          bool
+	storage         storeapi.Storage
+	buffer          *readBuffer
+	codecConfig     *codecCommon.Config
+	columnSelectors *columnselector.ColumnSelectors
+	dateSeparator   config.DateSeparator
+	fileExtension   string
+	fileIndexWidth  int
+	checkpoint      uint64
+	schemas         map[cloudstorage.SchemaPathKey]*storageSchema
+	fileIndices     map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks   map[string]uint64
+	tableIDs        map[storageTableKey]int64
+	tableWatermarks map[int64]uint64
+	nextTableID     int64
+	mu              sync.Mutex
+	records         []*ack
+	inputs          []storageInput
+	current         storageInput
+	decoder         codecCommon.Decoder
+	record          *ack
+	sortBeforeWrite bool
+	groupReady      bool
+	scanned         bool
 }
 
 func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
@@ -148,9 +142,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string
 		dateSeparator: putil.GetOrZero(replicaConfig.Sink.DateSeparator), fileExtension: helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		confirmedIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		positions:        make(map[*ack]storagePosition),
-		ddlWatermarks:    make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
+		ddlWatermarks: make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
@@ -497,7 +489,6 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		}
 		c.mu.Lock()
 		c.records = append(c.records, record)
-		c.positions[record] = storagePosition{key: key, index: input.index}
 		c.mu.Unlock()
 		c.record = record
 		if c.codecConfig.Protocol == config.ProtocolCsv {
@@ -527,21 +518,10 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 		if refs != 0 {
 			break
 		}
-		if position, ok := c.positions[record]; ok {
-			indices := c.confirmedIndices[position.key]
-			if indices == nil {
-				indices = make(map[cloudstorage.FileIndexKey]uint64)
-				c.confirmedIndices[position.key] = indices
-			}
-			indices[position.index.FileIndexKey] = position.index.Idx
-			delete(c.positions, record)
-		}
 		c.buffer.memory.confirm(record)
 		count++
 	}
-	copy(c.records, c.records[count:])
-	clear(c.records[len(c.records)-count:])
-	c.records = c.records[:len(c.records)-count]
+	c.records = slices.Delete(c.records, 0, count)
 	return nil
 }
 

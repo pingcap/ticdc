@@ -31,8 +31,7 @@ function run() {
 
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/cf.toml" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/cf.toml" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI "$CUR/conf/cf.toml" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" "$CUR/conf/cf.toml" ;;
 	esac
 
 	# CDC forwards CREATE TABLE ... LIKE ... as-is, so the downstream must have the

@@ -518,8 +518,7 @@ function run() {
 	fi
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" ;;
 	esac
 
 	# check tables are created and data is synchronized

@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +47,6 @@ type pulsarReader struct {
 	checkpoints       []*pulsarCheckpoint
 	pendingWatermarks []*readResult
 	watermark         uint64
-	hasWatermark      bool
 }
 
 type pulsarCheckpoint struct {
@@ -210,10 +210,8 @@ func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
 			return nil, err
 		}
 		c.advanceWatermarks()
-		if c.hasWatermark || len(c.buffer.pendingDDL) != 0 || c.buffer.orderedDML {
-			if result := c.buffer.nextReady(c.watermark); result != nil {
-				return result, nil
-			}
+		if result := c.buffer.nextReady(c.watermark); result != nil {
+			return result, nil
 		}
 		if len(c.pendingWatermarks) != 0 && len(c.buffer.pendingDDL) == 0 {
 			result := c.pendingWatermarks[0]
@@ -341,7 +339,6 @@ func (c *pulsarReader) advanceWatermarks() {
 			}
 		}
 		c.watermark = max(c.watermark, checkpoint.result.watermark)
-		c.hasWatermark = true
 		c.pendingWatermarks = append(c.pendingWatermarks, checkpoint.result)
 		c.buffer.memory.release(128 + int64(len(checkpoint.positions))*128)
 		c.checkpoints[0] = nil
@@ -377,9 +374,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			c.buffer.memory.confirm(record)
 			delete(c.messageIDs, record)
 		}
-		copy(p.records, p.records[count:])
-		clear(p.records[len(p.records)-count:])
-		p.records = p.records[:len(p.records)-count]
+		p.records = slices.Delete(p.records, 0, count)
 	}
 	return nil
 }

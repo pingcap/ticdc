@@ -184,7 +184,7 @@ func TestReaderDDLNormalization(t *testing.T) {
 	first.refs.Add(-1)
 	beforeDDL := &event.DMLEvent{CommitTs: 10}
 	afterDDL := &event.DMLEvent{CommitTs: 11}
-	buffer.pendingDML = []*readDML{{event: beforeDDL}, {event: afterDDL}}
+	buffer.pendingDML = []*readResult{{dml: beforeDDL}, {dml: afterDDL}}
 	result = buffer.nextReady(10)
 	require.Same(t, beforeDDL, result.dml)
 	result = buffer.nextReady(10)
@@ -241,19 +241,18 @@ func TestPulsarWatermarkWaitsForPartitionPositions(t *testing.T) {
 	}
 	// A checkpoint seen on one partition cannot release DDL while another is unread.
 	c.advanceWatermarks()
-	require.False(t, c.hasWatermark)
+	require.Empty(t, c.pendingWatermarks)
 	require.Nil(t, c.buffer.nextReady(c.watermark))
 	c.positions[1] = pulsar.NewMessageID(1, 4, -1, 1)
 	c.advanceWatermarks()
-	require.False(t, c.hasWatermark)
+	require.Empty(t, c.pendingWatermarks)
 	// Reaching the broker entry without decoding its entire batch is also insufficient.
 	c.positions[1] = pulsar.NewMessageID(1, 5, 0, 1)
 	c.advanceWatermarks()
-	require.False(t, c.hasWatermark)
+	require.Empty(t, c.pendingWatermarks)
 	require.Nil(t, c.buffer.nextReady(c.watermark))
 	c.positions[1] = pulsar.NewMessageID(1, 5, -1, 1)
 	c.advanceWatermarks()
-	require.True(t, c.hasWatermark)
 	require.EqualValues(t, 100, c.watermark)
 	require.Same(t, ddl, c.buffer.nextReady(c.watermark).ddl)
 	require.Empty(t, c.checkpoints)
@@ -279,7 +278,7 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 				0: {watermark: 40, hasWatermark: true},
 				1: {watermark: 40, hasWatermark: true},
 			},
-			pendingDML: []*readDML{{event: dml}},
+			pendingDML: []*readResult{{dml: dml}},
 			pendingDDL: []*readDDL{{event: ddl, record: &ack{}}},
 		},
 		// An already delivered CREATE TABLE still has an unconfirmed copy.
@@ -350,7 +349,7 @@ func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	input := &storageReader{buffer: buffer, records: []*ack{record}}
-	batch := &writeBatch{items: []*pendingDML{{event: &event.DMLEvent{CommitTs: 10}}}, done: make(chan bool)}
+	batch := &writeBatch{items: []*readResult{{dml: &event.DMLEvent{CommitTs: 10}}}, done: make(chan bool)}
 	w := &writer{memory: memory, inFlight: []*writeBatch{batch}}
 	c := &consumer{
 		reader: input, writer: w,
@@ -463,12 +462,12 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	second := &event.DMLEvent{CommitTs: 10}
 	buffer := &readBuffer{
 		memory: &memoryUsage{}, orderedDML: true, dmlBoundary: ^uint64(0), dmlDirty: true,
-		pendingDML: []*readDML{{event: first}, {event: second}},
+		pendingDML: []*readResult{{dml: first}, {dml: second}},
 	}
 	require.Same(t, first, buffer.nextReady(0).dml)
 	require.Same(t, second, buffer.nextReady(0).dml)
 	ddl := &event.DDLEvent{FinishedTs: 15}
-	buffer.pendingDML = []*readDML{{event: first}, {event: second}}
+	buffer.pendingDML = []*readResult{{dml: first}, {dml: second}}
 	buffer.pendingDDL = []*readDDL{{event: ddl}}
 	require.Same(t, second, buffer.nextReady(0).dml)
 	require.Nil(t, buffer.nextReady(0))
@@ -490,7 +489,7 @@ func TestReaderDDLArrivalOrder(t *testing.T) {
 	beforeB, afterB := &event.DMLEvent{CommitTs: 180, TableInfo: tableB}, &event.DMLEvent{CommitTs: 220, TableInfo: tableB}
 	buffer := &readBuffer{
 		memory: &memoryUsage{}, orderedDML: true, dmlBoundary: ^uint64(0),
-		pendingDML: []*readDML{{event: beforeB}, {event: afterB}, {event: beforeA}, {event: afterA}},
+		pendingDML: []*readResult{{dml: beforeB}, {dml: afterB}, {dml: beforeA}, {dml: afterA}},
 	}
 	ddlA := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 300}
 	ddlB := &event.DDLEvent{SchemaName: "test", TableName: "b", FinishedTs: 200}
@@ -544,7 +543,7 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	require.NoError(t, err)
 	input := &storageReader{buffer: buffer, records: []*ack{record}}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
-	batch := &writeBatch{items: []*pendingDML{{event: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan bool)}
+	batch := &writeBatch{items: []*readResult{{dml: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan bool)}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
 	result := &readResult{ddl: ddl, onFlush: func() {
 		record.refs.Add(-1)

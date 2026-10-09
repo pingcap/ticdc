@@ -45,8 +45,7 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "$CFID"
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" ;;
 	esac
 
 	default=$(

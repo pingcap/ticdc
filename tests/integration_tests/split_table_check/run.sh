@@ -54,8 +54,7 @@ build_sink_and_create_changefeed() {
 
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$cfg_path" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "$cfg_path" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI "$cfg_path" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" "$cfg_path" ;;
 	esac
 }
 

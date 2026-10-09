@@ -185,20 +185,16 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 		}
 		c.limitReads()
 		watermark, ready := c.globalWatermark()
-		if c.buffer.orderedDML {
-			c.buffer.dmlBoundary = math.MaxUint64
-			for commitTs := range c.ddlCopies {
-				// Covered copies only await confirmation. Their executable DDLs
-				// have already been read and remain ordered by pendingDDL.
-				if !ready || commitTs > watermark {
-					c.buffer.dmlBoundary = min(c.buffer.dmlBoundary, commitTs)
-				}
+		c.buffer.dmlBoundary = math.MaxUint64
+		for commitTs := range c.ddlCopies {
+			// Covered copies only await confirmation. Their executable DDLs
+			// have already been read and remain ordered by pendingDDL.
+			if !ready || commitTs > watermark {
+				c.buffer.dmlBoundary = min(c.buffer.dmlBoundary, commitTs)
 			}
 		}
-		if ready || len(c.buffer.pendingDDL) != 0 || c.buffer.orderedDML {
-			if result := c.buffer.nextReady(watermark); result != nil {
-				return result, nil
-			}
+		if result := c.buffer.nextReady(watermark); result != nil {
+			return result, nil
 		}
 		if ready && len(c.buffer.pendingDDL) == 0 && (!c.hasDeliveredWatermark || watermark > c.deliveredWatermark) {
 			completed := make([]*ack, 0)
@@ -236,9 +232,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readResult, error) {
 				return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
 			}
 			bytes := int64(0)
-			if c.polled == nil {
-				c.polled = make(map[int32][]*kgo.Record)
-			}
 			for iterator := fetches.RecordIter(); !iterator.Done(); {
 				record := iterator.Next()
 				if _, ok := c.buffer.partitions[record.Partition]; !ok {
@@ -432,9 +425,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 			c.buffer.memory.confirm(record)
 			delete(c.offsets, record)
 		}
-		copy(p.records, p.records[count:])
-		clear(p.records[len(p.records)-count:])
-		p.records = p.records[:len(p.records)-count]
+		p.records = slices.Delete(p.records, 0, count)
 	}
 	return nil
 }

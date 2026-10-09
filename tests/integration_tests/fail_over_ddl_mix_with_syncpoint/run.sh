@@ -46,8 +46,7 @@ function prepare() {
 	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI "$CUR/conf/$1.toml" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" "$CUR/conf/$1.toml" ;;
 	esac
 }
 

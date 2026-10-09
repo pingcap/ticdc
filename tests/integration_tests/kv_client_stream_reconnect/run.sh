@@ -94,8 +94,7 @@ EOF
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml | grep '^ID:' | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
-	storage) run_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI $WORK_DIR/pulsar_test.toml ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" $WORK_DIR/pulsar_test.toml ;;
 	esac
 
 	run_sql "CREATE DATABASE kv_client_stream_reconnect;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

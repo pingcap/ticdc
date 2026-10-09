@@ -41,21 +41,14 @@ const (
 	progressLogInterval = 5 * time.Second
 )
 
-type pendingDML struct {
-	event *event.DMLEvent
-	bytes int64
-}
-
 type writer struct {
 	downstream      sink.Sink
 	memory          *memoryUsage
-	pendingDML      []*pendingDML
+	pendingDML      []*readResult
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
 	serialDML       bool                        // CSV metadata omits secondary unique indexes; preserve per-table batch order.
 	writtenBefore   uint64
-	dmlBytes        int64
-	mutationBytes   int64
 	inFlightBytes   int64
 	inFlightEvents  int
 	decodedRows     int64
@@ -63,14 +56,13 @@ type writer struct {
 	lastProgressLog time.Time
 }
 type writeBatch struct {
-	items    []*pendingDML
-	events   []*event.DMLEvent
-	dropped  []*event.DMLEvent
-	keys     []mutationKey
-	bytes    int64
-	done     chan bool
-	flushed  atomic.Int64
-	released atomic.Bool
+	items   []*readResult
+	events  []*event.DMLEvent
+	dropped []*event.DMLEvent
+	keys    []mutationKey
+	bytes   int64
+	done    chan bool
+	flushed atomic.Int64
 }
 
 type mutationKey struct {
@@ -87,7 +79,7 @@ func (c *consumer) writeDDL(ctx context.Context, result *readResult) error {
 	}
 	for _, batch := range slices.Clone(w.inFlight) {
 		for _, item := range batch.items {
-			if ddlBlocksTable(result.ddl, item.event) {
+			if ddlBlocksTable(result.ddl, item.dml) {
 				if err := c.waitBatch(ctx, batch); err != nil {
 					return err
 				}
@@ -123,14 +115,12 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		for _, key := range building.keys {
 			delete(w.mutations, key)
 			bytes := int64(len(key.handle) + 192)
-			w.mutationBytes -= bytes
 			w.memory.release(bytes)
 		}
 		originalBytes := int64(0)
 		for _, item := range building.items {
 			originalBytes += item.bytes
 		}
-		w.dmlBytes -= building.bytes - originalBytes
 		w.memory.release(building.bytes - originalBytes)
 	}()
 	for len(w.pendingDML) != 0 {
@@ -138,18 +128,18 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			return err
 		}
 		rows, bytes := 0, int64(0)
-		items := make([]*pendingDML, 0, len(w.pendingDML))
+		items := make([]*readResult, 0, len(w.pendingDML))
 		tables := make(map[int64]*event.DMLEvent)
 		for _, item := range w.pendingDML {
-			if ddl != nil && !ddlBlocksTable(ddl, item.event) {
+			if ddl != nil && !ddlBlocksTable(ddl, item.dml) {
 				continue
 			}
-			if previous := tables[item.event.PhysicalTableID]; previous != nil &&
-				(!sameTableSchema(previous.TableInfo, item.event.TableInfo) || (w.serialDML && previous.CommitTs != item.event.CommitTs)) {
+			if previous := tables[item.dml.PhysicalTableID]; previous != nil &&
+				(!sameTableSchema(previous.TableInfo, item.dml.TableInfo) || (w.serialDML && previous.CommitTs != item.dml.CommitTs)) {
 				break
 			}
-			tables[item.event.PhysicalTableID] = item.event
-			rows += int(item.event.Len())
+			tables[item.dml.PhysicalTableID] = item.dml
+			rows += int(item.dml.Len())
 			bytes += item.bytes
 			items = append(items, item)
 			if rows >= batchRows || bytes >= batchBytes {
@@ -162,7 +152,7 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		w.finishBatches()
 		for _, earlier := range slices.Clone(w.inFlight) {
 			for _, item := range earlier.items {
-				if next := tables[item.event.PhysicalTableID]; next != nil && (w.serialDML || !sameTableSchema(item.event.TableInfo, next.TableInfo)) {
+				if next := tables[item.dml.PhysicalTableID]; next != nil && (w.serialDML || !sameTableSchema(item.dml.TableInfo, next.TableInfo)) {
 					if err := c.waitBatch(ctx, earlier); err != nil {
 						return err
 					}
@@ -178,22 +168,21 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		batch := &writeBatch{items: items, bytes: bytes, done: make(chan bool)}
 		building = batch
 		for _, item := range batch.items {
-			filtered, err := c.filterRows(ctx, item.event, batch)
+			filtered, err := c.filterRows(ctx, item.dml, batch)
 			if err != nil {
 				return err
 			}
 			if filtered == nil {
-				batch.dropped = append(batch.dropped, item.event)
+				batch.dropped = append(batch.dropped, item.dml)
 				continue
 			}
-			if filtered != item.event {
+			if filtered != item.dml {
 				// The original chunk stays alive through its decoder callbacks.
 				copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
 				if err := w.memory.reserve(ctx, copyBytes); err != nil {
 					return err
 				}
 				batch.bytes += copyBytes
-				w.dmlBytes += copyBytes
 			}
 			batch.events = append(batch.events, filtered)
 		}
@@ -234,9 +223,7 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			var flushed atomic.Bool
 			dml.AddPostFlushFunc(func() {
 				if flushed.CAS(false, true) && batch.flushed.Add(1) == int64(len(batch.events)) {
-					if batch.released.CAS(false, true) {
-						w.memory.release(batch.bytes)
-					}
+					w.memory.release(batch.bytes)
 					close(batch.done)
 					select {
 					case w.memory.completed <- struct{}{}:
@@ -287,7 +274,6 @@ func (c *writer) mergeTransactions(ctx context.Context, batch *writeBatch) error
 			return err
 		}
 		batch.bytes += bytes
-		c.dmlBytes += bytes
 		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
 		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
 		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
@@ -369,8 +355,8 @@ func (c *writer) finishBatches() {
 		for _, key := range batch.keys {
 			c.mutations[key] = nil
 		}
-		c.dmlBytes -= batch.bytes
-		if batch.released.CAS(false, true) {
+		// Nonempty batches release memory in their final flush callback.
+		if len(batch.events) == 0 {
 			c.memory.release(batch.bytes)
 		}
 		c.inFlightBytes -= batch.bytes
@@ -383,14 +369,14 @@ func (c *writer) finishBatches() {
 func (c *writer) advanceReplay(watermark uint64, tableID int64) {
 	before := watermark
 	for _, item := range c.pendingDML {
-		if tableID == 0 || item.event.PhysicalTableID == tableID {
-			before = min(before, item.event.CommitTs)
+		if tableID == 0 || item.dml.PhysicalTableID == tableID {
+			before = min(before, item.dml.CommitTs)
 		}
 	}
 	for _, batch := range c.inFlight {
 		for _, item := range batch.items {
-			if tableID == 0 || item.event.PhysicalTableID == tableID {
-				before = min(before, item.event.CommitTs)
+			if tableID == 0 || item.dml.PhysicalTableID == tableID {
+				before = min(before, item.dml.CommitTs)
 			}
 		}
 	}
@@ -405,7 +391,6 @@ func (c *writer) advanceReplay(watermark uint64, tableID int64) {
 	for key := range c.mutations {
 		if (tableID == 0 || key.tableID == tableID) && key.commitTs < before {
 			bytes := int64(len(key.handle) + 192)
-			c.mutationBytes -= bytes
 			c.memory.release(bytes)
 			delete(c.mutations, key)
 		}
@@ -457,7 +442,6 @@ func (c *consumer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *w
 					return nil, err
 				}
 				w.mutations[key] = batch
-				w.mutationBytes += bytes
 				batch.keys = append(batch.keys, key)
 			}
 		}

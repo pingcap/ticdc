@@ -37,8 +37,7 @@ function prepare() {
 
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI "$CUR/conf/$1.toml" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" "$CUR/conf/$1.toml" ;;
 	esac
 }
 

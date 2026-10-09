@@ -86,17 +86,12 @@ type readDDL struct {
 	bytes  int64
 }
 
-type readDML struct {
-	event *event.DMLEvent
-	bytes int64
-}
-
 // Shared read-side storage contains decoded input, never a downstream sink.
 type readBuffer struct {
 	memory      *memoryUsage
 	protocol    config.Protocol
 	partitions  map[int32]*partition
-	pendingDML  []*readDML
+	pendingDML  []*readResult
 	pendingDDL  []*readDDL
 	dmlDirty    bool
 	orderedDML  bool
@@ -127,7 +122,7 @@ func (b *readBuffer) queueDML(ctx context.Context, dml *event.DMLEvent, records 
 			record.refs.Add(-1)
 		}
 	})
-	b.pendingDML = append(b.pendingDML, &readDML{event: dml, bytes: bytes})
+	b.pendingDML = append(b.pendingDML, &readResult{dml: dml, bytes: bytes})
 	b.dmlDirty = true
 	return nil
 }
@@ -174,7 +169,7 @@ func (b *readBuffer) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *
 func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	if b.dmlDirty {
 		if !b.orderedDML {
-			slices.SortStableFunc(b.pendingDML, func(a, b *readDML) int { return cmp.Compare(a.event.CommitTs, b.event.CommitTs) })
+			slices.SortStableFunc(b.pendingDML, func(a, b *readResult) int { return cmp.Compare(a.dml.CommitTs, b.dml.CommitTs) })
 		}
 		b.dmlDirty = false
 	}
@@ -186,22 +181,20 @@ func (b *readBuffer) nextReady(watermark uint64) *readResult {
 	if b.orderedDML {
 		dmlBoundary = b.dmlBoundary
 	}
-	for index, dml := range b.pendingDML {
+	for index, result := range b.pendingDML {
 		// The head DDL is a scoped barrier. Independent tables' DDLs need not
 		// arrive in commit order, so only release DML belonging to this barrier.
-		if dml.event.CommitTs <= dmlBoundary && (ddl == nil ||
-			(dml.event.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, dml.event))) {
+		if result.dml.CommitTs <= dmlBoundary && (ddl == nil ||
+			(result.dml.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, result.dml))) {
 			if index == 0 {
 				b.pendingDML[0] = nil
 				b.pendingDML = b.pendingDML[1:]
 			} else {
-				copy(b.pendingDML[index:], b.pendingDML[index+1:])
-				b.pendingDML[len(b.pendingDML)-1] = nil
-				b.pendingDML = b.pendingDML[:len(b.pendingDML)-1]
+				b.pendingDML = slices.Delete(b.pendingDML, index, index+1)
 			}
-			return &readResult{dml: dml.event, bytes: dml.bytes}
+			return result
 		}
-		if !b.orderedDML && dml.event.CommitTs > dmlBoundary {
+		if !b.orderedDML && result.dml.CommitTs > dmlBoundary {
 			break
 		}
 	}

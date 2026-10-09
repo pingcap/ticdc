@@ -57,7 +57,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		dml.Length = int32(len(ids))
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
-		w.pendingDML = append(w.pendingDML, &pendingDML{event: dml})
+		w.pendingDML = append(w.pendingDML, &readResult{dml: dml})
 		require.NoError(t, c.flushDML(t.Context(), nil))
 		require.Equal(t, 1, callbacks)
 		w.advanceReplay(100, 0)
@@ -97,8 +97,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		dml.Length = 1
 		require.NoError(t, buffer.queueDML(t.Context(), dml, []*ack{record}, nil))
 		result := buffer.nextReady(100)
-		w.pendingDML = append(w.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
-		w.dmlBytes += result.bytes
+		w.pendingDML = append(w.pendingDML, result)
 	}
 	record.refs.Add(-1)
 	require.NoError(t, c.flushDML(t.Context(), nil))
@@ -222,15 +221,15 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 		downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil),
 		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil),
 	)
-	other := &writeBatch{items: []*pendingDML{{event: b}}, done: make(chan bool)}
+	other := &writeBatch{items: []*readResult{{dml: b}}, done: make(chan bool)}
 	w := &writer{
-		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*pendingDML{{event: b}, {event: a}},
+		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*readResult{{dml: b}, {dml: a}},
 		inFlight: []*writeBatch{other}, inFlightEvents: 1,
 	}
 	c := &consumer{writer: w}
 	require.NoError(t, c.writeDDL(t.Context(), &readResult{ddl: ddl}))
 	require.Len(t, w.pendingDML, 1)
-	require.Same(t, b, w.pendingDML[0].event)
+	require.Same(t, b, w.pendingDML[0].dml)
 	require.Equal(t, []*writeBatch{other}, w.inFlight)
 }
 
@@ -263,7 +262,7 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 		downstream.EXPECT().AddDMLEvent(first).Do(func(*event.DMLEvent) { cancel() }),
 		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
 	)
-	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*pendingDML{{event: first}, {event: second}}}
+	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*readResult{{dml: first}, {dml: second}}}
 	c := &consumer{writer: w}
 	require.ErrorIs(t, c.flushDML(ctx, nil), context.Canceled)
 	require.Len(t, w.inFlight, 1)
@@ -300,7 +299,7 @@ func TestWriterCSVTransactionBatches(t *testing.T) {
 				dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete, common.RowTypeInsert}, 2
 			}
 			dml.AddPostFlushFunc(func() { callbacks++ })
-			w.pendingDML = append(w.pendingDML, &pendingDML{event: dml})
+			w.pendingDML = append(w.pendingDML, &readResult{dml: dml})
 		}
 	}
 	ctx, cancel := context.WithCancel(t.Context())

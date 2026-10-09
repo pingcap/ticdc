@@ -70,8 +70,7 @@ function run() {
 
 	case $SINK_TYPE in
 	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_consumer "$WORK_DIR" $SINK_URI ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" ;;
 	esac
 
 	capture_key=$(ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/capture --prefix | head -n 1)

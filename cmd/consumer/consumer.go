@@ -146,17 +146,13 @@ func (c *consumer) write(ctx context.Context, results <-chan *readResult) error 
 }
 
 func (c *consumer) consumeBatch(ctx context.Context, results <-chan *readResult, result *readResult) error {
-	rows, bytes, inputs := int64(0), int64(0), 0
+	inputs := 0
 	for {
 		if err := c.consume(ctx, result); err != nil {
 			return err
 		}
 		inputs++
-		if result.dml != nil {
-			rows += int64(result.dml.Len())
-			bytes += result.bytes
-		}
-		if rows >= batchRows || bytes >= batchBytes || inputs >= cap(results) {
+		if inputs >= cap(results) {
 			return c.flushDML(ctx, nil)
 		}
 		select {
@@ -178,8 +174,7 @@ func (c *consumer) consume(ctx context.Context, result *readResult) error {
 		return err
 	}
 	if result.dml != nil {
-		c.writer.pendingDML = append(c.writer.pendingDML, &pendingDML{event: result.dml, bytes: result.bytes})
-		c.writer.dmlBytes += result.bytes
+		c.writer.pendingDML = append(c.writer.pendingDML, result)
 		c.writer.decodedRows += int64(result.dml.Len())
 	}
 	if result.ddl != nil {
@@ -204,14 +199,14 @@ func (c *consumer) confirmCompleted(ctx context.Context) error {
 	for _, control := range c.pendingWatermarks {
 		blocked := false
 		for _, item := range c.writer.pendingDML {
-			if (control.tableID == 0 || item.event.PhysicalTableID == control.tableID) && item.event.CommitTs <= control.watermark {
+			if (control.tableID == 0 || item.dml.PhysicalTableID == control.tableID) && item.dml.CommitTs <= control.watermark {
 				blocked = true
 				break
 			}
 		}
 		for _, batch := range c.writer.inFlight {
 			for _, item := range batch.items {
-				if (control.tableID == 0 || item.event.PhysicalTableID == control.tableID) && item.event.CommitTs <= control.watermark {
+				if (control.tableID == 0 || item.dml.PhysicalTableID == control.tableID) && item.dml.CommitTs <= control.watermark {
 					blocked = true
 					break
 				}
