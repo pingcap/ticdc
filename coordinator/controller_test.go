@@ -54,37 +54,47 @@ func (noopScheduler) Name() string {
 	return pkgscheduler.BasicScheduler
 }
 
-func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
+func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
 	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
 
 	keyspace := common.DefaultKeyspaceName
-	name := "finished-metrics"
 	keyspaceID := uint32(123)
 	pdTime := time.UnixMilli(2000)
 	checkpointTs := oracle.ComposeTS(1000, 0)
 
-	require.True(t, updateChangefeedCheckpointMetrics(
-		keyspace,
-		name,
-		keyspaceID,
-		config.StateNormal,
-		checkpointTs,
-		pdTime,
-	))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
-
-	require.False(t, updateChangefeedCheckpointMetrics(
-		keyspace,
-		name,
-		keyspaceID,
+	for _, state := range []config.FeedState{
+		config.StateFailed,
+		config.StateStopped,
 		config.StateFinished,
-		checkpointTs,
-		pdTime,
-	))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+		config.StateRemoved,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			metrics.ResetOwnerChangefeedMetrics()
+			name := string(state) + "-metrics"
+
+			updateChangefeedCheckpointMetrics(
+				keyspace,
+				name,
+				keyspaceID,
+				config.StateNormal,
+				checkpointTs,
+				pdTime,
+			)
+			require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+
+			updateChangefeedCheckpointMetrics(
+				keyspace,
+				name,
+				keyspaceID,
+				state,
+				checkpointTs,
+				pdTime,
+			)
+			require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+		})
+	}
 }
 
 func TestUpdateAllChangefeedCheckpointMetrics(t *testing.T) {
