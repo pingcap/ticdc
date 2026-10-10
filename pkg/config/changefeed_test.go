@@ -69,6 +69,7 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"}}
 	cfg.Sink.KafkaConfig = &KafkaConfig{
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),

@@ -141,7 +141,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
+			fmt.Sprintf("invalid storage uri: %s", util.MaskSensitiveDataInURIForError(util.GetOrZero(c.Storage))))
 	}
 	return redo.ValidateStorageWithOptions(uri, redo.StorageValidationOptions{EnableIOCheck: enableIOCheck})
 }

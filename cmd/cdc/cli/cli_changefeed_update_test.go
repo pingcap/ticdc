@@ -286,3 +286,78 @@ func TestChangefeedUpdateExplicitSinkURI(t *testing.T) {
 		})
 	}
 }
+
+func TestChangefeedUpdateReplicaCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		config   string
+		password *string
+	}{
+		{name: "memory quota", config: "memory-quota = 2097152\n"},
+		{name: "password", config: "[sink.kafka-config]\nsasl-password = \"new-password-sentinel\"\n", password: util.AddressOf("new-password-sentinel")},
+		{name: "empty password", config: "[sink.kafka-config]\nsasl-password = \"\"\n", password: util.AddressOf("")},
+		{name: "literal masked password", config: "[sink.kafka-config]\nsasl-password = \"******\"\n", password: util.AddressOf("******")},
+		{name: "pulsar TLS", config: "[sink.pulsar-config]\ntls-key-file-path = \"client.key\"\ntls-certificate-file = \"client.crt\"\n"},
+		{name: "clear glue token", config: "[sink.kafka-config.glue-schema-registry-config]\ntoken = \"\"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			f := newMockFactory(ctrl)
+			oldInfo := &v2.ChangeFeedInfo{
+				ID:      "abc",
+				SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol&sasl-password=xxxxx",
+				Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
+			}
+			oldInfo.Config.Sink.KafkaConfig = &v2.KafkaConfig{
+				SASLUser:                 util.AddressOf("alice"),
+				LargeMessageHandle:       &v2.LargeMessageHandleConfig{},
+				GlueSchemaRegistryConfig: &v2.GlueSchemaRegistryConfig{RegistryName: "registry"},
+			}
+			oldInfo.Config.Sink.PulsarConfig = &v2.PulsarConfig{OAuth2: &v2.PulsarOAuth2{OAuth2ClientID: "client"}}
+			oldInfo.Config.Consistent.Storage = nil
+			f.changefeeds.EXPECT().Get(gomock.Any(), "default", "abc").Return(oldInfo, nil)
+			f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "default").Return(&v2.Tables{}, nil)
+			f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "default", "abc").
+				DoAndReturn(func(_ context.Context, cfg *v2.ChangefeedConfig, _, _ string) (*v2.ChangeFeedInfo, error) {
+					require.Empty(t, cfg.SinkURI)
+					require.Equal(t, tc.password, cfg.ReplicaConfig.Sink.KafkaConfig.SASLPassword)
+					require.Nil(t, cfg.ReplicaConfig.Consistent.Storage)
+					require.Nil(t, cfg.ReplicaConfig.Sink.KafkaConfig.LargeMessageHandle.ClaimCheckStorageURI)
+					glue := cfg.ReplicaConfig.Sink.KafkaConfig.GlueSchemaRegistryConfig
+					require.Nil(t, glue.AccessKey)
+					require.Nil(t, glue.SecretAccessKey)
+					if tc.name == "clear glue token" {
+						require.Equal(t, util.AddressOf(""), glue.Token)
+					} else {
+						require.Nil(t, glue.Token)
+					}
+					require.Nil(t, cfg.ReplicaConfig.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey)
+					require.Nil(t, cfg.ReplicaConfig.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL)
+					require.Equal(t, "alice", *cfg.ReplicaConfig.Sink.KafkaConfig.SASLUser)
+					if tc.name == "memory quota" {
+						require.Equal(t, uint64(2097152), *cfg.ReplicaConfig.MemoryQuota)
+					}
+					if tc.name == "pulsar TLS" {
+						require.Equal(t, "client.key", *cfg.ReplicaConfig.Sink.PulsarConfig.TLSKeyFilePath)
+						require.Equal(t, "client.crt", *cfg.ReplicaConfig.Sink.PulsarConfig.TLSCertificateFile)
+					}
+					return &v2.ChangeFeedInfo{ID: "abc", SinkURI: oldInfo.SinkURI, Config: cfg.ReplicaConfig}, nil
+				})
+
+			configPath := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tc.config), 0o644))
+			cmd := newCmdUpdateChangefeed(f)
+			cmd.SetContext(t.Context())
+			cmd.SetArgs([]string{"--changefeed-id=abc", "--no-confirm=true", "--config=" + configPath})
+			output := new(bytes.Buffer)
+			cmd.SetOut(output)
+
+			require.NoError(t, cmd.Execute())
+			require.Nil(t, oldInfo.Config.Sink.KafkaConfig.SASLPassword)
+			require.NotContains(t, output.String(), "sentinel")
+			if tc.password != nil && *tc.password != "" {
+				require.Contains(t, output.String(), "******")
+			}
+		})
+	}
+}

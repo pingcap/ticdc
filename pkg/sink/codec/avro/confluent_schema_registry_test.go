@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jarcoal/httpmock"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -113,6 +114,11 @@ func TestSchemaRegistryBad(t *testing.T) {
 
 	_, err = NewConfluentSchemaManager(ctx, "https://127.0.0.1:8080", nil)
 	require.Error(t, err)
+
+	httpmock.RegisterResponder(http.MethodGet, "http://127.0.0.1:8082", httpmock.NewStringResponder(http.StatusUnauthorized, "{}"))
+	_, err = NewConfluentSchemaManager(t.Context(), "http://127.0.0.1:8082", nil)
+	require.ErrorIs(t, err, errors.ErrAvroSchemaAPIError)
+	require.ErrorContains(t, err, "401")
 }
 
 func TestRegisterReturnsServerError(t *testing.T) {

@@ -19,14 +19,15 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fatih/color"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
@@ -86,14 +87,19 @@ func (o *changefeedCommonOptions) addFlags(cmd *cobra.Command) {
 
 // strictDecodeConfig do strictDecodeFile check and only verify the rules for now.
 func (o *changefeedCommonOptions) strictDecodeConfig(component string, cfg *config.ReplicaConfig) error {
-	err := util.StrictDecodeFile(o.configFile, component, cfg)
+	_, err := o.strictDecodeConfigWithMeta(component, cfg)
+	return err
+}
+
+func (o *changefeedCommonOptions) strictDecodeConfigWithMeta(component string, cfg *config.ReplicaConfig) (toml.MetaData, error) {
+	metaData, err := util.StrictDecodeFileWithMeta(o.configFile, component, cfg)
 	if err != nil {
-		return err
+		return metaData, err
 	}
 
 	_, err = filter.VerifyTableRules(cfg.Filter)
 
-	return err
+	return metaData, err
 }
 
 // createChangefeedOptions defines common flags for the `cli changefeed create` command.

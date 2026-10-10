@@ -572,17 +572,14 @@ func CfInfoToAPIModel(
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-	}
-	sinkURI, err := util.MaskSinkURI(info.SinkURI)
-	if err != nil {
-		log.Error("failed to mask sink URI", zap.Error(util.MaskSensitiveDataInURLError(err)))
+		replicaConfig.omitSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
 		UpstreamID:     info.UpstreamID,
 		ID:             info.ChangefeedID.Name(),
 		Keyspace:       info.ChangefeedID.Keyspace(),
-		SinkURI:        sinkURI,
+		SinkURI:        util.MaskSensitiveDataInURI(info.SinkURI),
 		CreateTime:     info.CreateTime,
 		StartTs:        info.StartTs,
 		TargetTs:       info.TargetTs,
@@ -966,7 +963,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	updateCfConfig := &ChangefeedConfig{}
+	updateCfConfig := &struct {
+		ChangefeedConfig
+		ReplicaConfig json.RawMessage `json:"replica_config"`
+	}{}
 	if err = c.BindJSON(updateCfConfig); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
@@ -982,9 +982,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 		targetTsUpdated = true
 	}
-	if updateCfConfig.ReplicaConfig != nil {
+	if len(updateCfConfig.ReplicaConfig) != 0 && string(updateCfConfig.ReplicaConfig) != "null" {
 		configUpdated = true
-		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		// Apply supplied fields to the stored configuration, retaining omitted credentials.
+		replicaConfig := ToAPIReplicaConfig(oldCfInfo.Config)
+		if err := json.Unmarshal(updateCfConfig.ReplicaConfig, replicaConfig); err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
+		oldCfInfo.Config = replicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true

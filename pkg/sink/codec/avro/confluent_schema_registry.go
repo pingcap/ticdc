@@ -95,6 +95,10 @@ func NewConfluentSchemaManager(
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+			"Schema Registry connection check failed with HTTP status %d", resp.StatusCode)
+	}
 
 	text, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -103,7 +107,7 @@ func NewConfluentSchemaManager(
 	}
 
 	if string(text[:]) != "{}" {
-		log.Error("Unexpected response from Schema Registry", zap.ByteString("response", text))
+		log.Error("Unexpected response from Schema Registry", zap.Int("status", resp.StatusCode))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Unexpected response from Schema Registry",
 		)

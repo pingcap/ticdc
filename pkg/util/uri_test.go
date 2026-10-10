@@ -96,6 +96,10 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		masked string
 	}{
 		{
+			"kafka://127.0.0.1:9092/topic?kafka-client=franz&sasl-password=secret",
+			"kafka://127.0.0.1:9092/topic?kafka-client=franz&sasl-password=xxxxx",
+		},
+		{
 			"mysql://root:123456@127.0.0.1:3306/?time-zone=c",
 			"mysql://root:xxxxx@127.0.0.1:3306/?time-zone=c",
 		},
@@ -133,6 +137,22 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 	for _, tt := range tests {
 		maskedURI := MaskSensitiveDataInURI(tt.uri)
 		require.Equal(t, tt.masked, maskedURI)
+	}
+}
+
+func TestContainsSensitiveDataInURI(t *testing.T) {
+	for _, tc := range []struct {
+		uri  string
+		want bool
+	}{
+		{uri: "https://user@registry.example.com", want: false},
+		{uri: "s3://bucket/prefix?region=us-west-1", want: false},
+		{uri: "https://user:password@registry.example.com", want: true},
+		{uri: "s3://bucket/prefix?Secret-Access-Key=password", want: true},
+		{uri: "https://user:password@registry.example.com/%zz", want: true},
+		{uri: "s3://bucket?secret-access-key=secret%zz", want: true},
+	} {
+		require.Equal(t, tc.want, ContainsSensitiveDataInURI(tc.uri), tc.uri)
 	}
 }
 
