@@ -344,7 +344,12 @@ func (b *BatchDMLEvent) GetStartTs() common.Ts {
 	return b.DMLEvents[0].GetStartTs()
 }
 
+// GetSize returns the in-memory size of the row payload.
+// Remote events keep their encoded rows in RawRows until AssembleRows decodes them.
 func (b *BatchDMLEvent) GetSize() int64 {
+	if b.Rows == nil {
+		return int64(len(b.RawRows))
+	}
 	return b.Rows.MemoryUsage()
 }
 
