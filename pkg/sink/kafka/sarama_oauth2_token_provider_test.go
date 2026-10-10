@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,33 +107,59 @@ func TestTokenProviderRequestsToken(t *testing.T) {
 func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		if _, err := io.WriteString(w, `{"error":"invalid_client","error_description":"bad credentials client-secret-sentinel"}`); err != nil {
-			t.Errorf("write token error response: %v", err)
-		}
-	}))
-	t.Cleanup(server.Close)
+	for _, tc := range []struct {
+		name          string
+		errorCode     string
+		wantErrorCode string
+	}{
+		{name: "invalid request", errorCode: "invalid_request", wantErrorCode: "invalid_request"},
+		{name: "invalid client", errorCode: "invalid_client", wantErrorCode: "invalid_client"},
+		{name: "invalid grant", errorCode: "invalid_grant", wantErrorCode: "invalid_grant"},
+		{name: "unauthorized client", errorCode: "unauthorized_client", wantErrorCode: "unauthorized_client"},
+		{name: "unsupported grant type", errorCode: "unsupported_grant_type", wantErrorCode: "unsupported_grant_type"},
+		{name: "invalid scope", errorCode: "invalid_scope", wantErrorCode: "invalid_scope"},
+		{name: "echoed credential", errorCode: "client-secret-sentinel"},
+		{name: "credential appended to code", errorCode: "invalid_client client-secret-sentinel"},
+		{name: "missing code"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	options := &options{
-		SASL: &security.SASL{
-			OAuth2: security.OAuth2{
-				ClientID:     "client-id",
-				ClientSecret: "client-secret-sentinel",
-				TokenURL:     server.URL,
-			},
-		},
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				if err := json.NewEncoder(w).Encode(map[string]string{
+					"error":             tc.errorCode,
+					"error_description": "bad credentials client-secret-sentinel",
+					"error_uri":         "https://example.com/client-secret-sentinel",
+				}); err != nil {
+					t.Errorf("write token error response: %v", err)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			options := &options{
+				SASL: &security.SASL{
+					OAuth2: security.OAuth2{
+						ClientID:     "client-id",
+						ClientSecret: "client-secret-sentinel",
+						TokenURL:     server.URL,
+					},
+				},
+			}
+
+			provider, err := newTokenProvider(t.Context(), options)
+			require.NoError(t, err)
+			_, err = provider.Token()
+			require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+			var retrieveErr *oauth2.RetrieveError
+			require.ErrorAs(t, err, &retrieveErr)
+			require.Equal(t, http.StatusUnauthorized, retrieveErr.Response.StatusCode)
+			require.Equal(t, tc.wantErrorCode, retrieveErr.ErrorCode)
+			require.Empty(t, retrieveErr.ErrorDescription)
+			require.Empty(t, retrieveErr.ErrorURI)
+			require.Empty(t, retrieveErr.Body)
+			require.NotContains(t, err.Error(), "client-secret-sentinel")
+		})
 	}
-
-	provider, err := newTokenProvider(t.Context(), options)
-	require.NoError(t, err)
-	_, err = provider.Token()
-	var retrieveErr *oauth2.RetrieveError
-	require.ErrorAs(t, err, &retrieveErr)
-	require.Equal(t, http.StatusUnauthorized, retrieveErr.Response.StatusCode)
-	require.Equal(t, "invalid_client", retrieveErr.ErrorCode)
-	require.Empty(t, retrieveErr.ErrorDescription)
-	require.Empty(t, retrieveErr.Body)
-	require.NotContains(t, err.Error(), "client-secret-sentinel")
 }

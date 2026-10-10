@@ -24,7 +24,7 @@ import (
 )
 
 // OAuth2 servers can echo credentials in error bodies, descriptions and URLs.
-// Keep the status and protocol error code for diagnostics without exposing them.
+// Keep only the status and recognized protocol error codes for diagnostics.
 type redactedOAuthTokenSource struct {
 	oauth2.TokenSource
 }
@@ -37,12 +37,20 @@ func (s *redactedOAuthTokenSource) Token() (*oauth2.Token, error) {
 	var retrieveErr *oauth2.RetrieveError
 	if errors.As(err, &retrieveErr) {
 		status := retrieveErr.Response.StatusCode
+		var errorCode string
+		// Only retain the token endpoint error codes defined by RFC 6749 section 5.2.
+		// Arbitrary endpoint responses can contain credentials even in the error code.
+		switch retrieveErr.ErrorCode {
+		case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+			"unsupported_grant_type", "invalid_scope":
+			errorCode = retrieveErr.ErrorCode
+		}
 		err = &oauth2.RetrieveError{
 			Response: &http.Response{
 				StatusCode: status,
 				Status:     strconv.Itoa(status) + " " + http.StatusText(status),
 			},
-			ErrorCode: retrieveErr.ErrorCode,
+			ErrorCode: errorCode,
 		}
 	} else {
 		err = util.MaskSensitiveDataInURLError(err)
