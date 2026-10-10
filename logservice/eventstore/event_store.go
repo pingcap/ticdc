@@ -86,14 +86,15 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
+		lowLatencyMode bool,
 	) bool
 
 	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator returns an iterator which scans data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd].
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
+	// GetIterator returns an iterator for the requested range and resume cursor.
+	GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
 }
@@ -112,6 +113,14 @@ type EventIterator interface {
 	// It returns the number of events that are read from the iterator and any
 	// accumulated iterator error.
 	Close() (eventCnt int64, err error)
+}
+
+type EventIteratorWithScanPosition interface {
+	EventIterator
+
+	// NextWithScanPosition returns the next event, the opaque position of the
+	// returned event, and whether this event is from a new txn.
+	NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool)
 }
 
 type dispatcherStat struct {
@@ -155,7 +164,8 @@ type subscribersWithIdleTime struct {
 }
 
 type subscriptionStat struct {
-	subID logpuller.SubscriptionID
+	subID          logpuller.SubscriptionID
+	lowLatencyMode bool
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
@@ -458,6 +468,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
+	lowLatencyMode bool,
 ) (success bool) {
 	if e.closed.Load() {
 		return false
@@ -518,6 +529,9 @@ func (e *eventStore) RegisterDispatcher(
 		var bestMatch *subscriptionStat
 		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 			for _, subStat := range subStats {
+				if subStat.lowLatencyMode != lowLatencyMode {
+					continue
+				}
 				// Check if this subStat's span contains the dispatcherSpan
 				if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 					bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
@@ -590,10 +604,11 @@ func (e *eventStore) RegisterDispatcher(
 	// cannot find an existing subscription with the same span, create a new subscription
 	chIndex := common.HashTableSpan(dispatcherSpan, len(e.chs))
 	subStat := &subscriptionStat{
-		subID:     e.subClient.AllocSubscriptionID(),
-		tableSpan: dispatcherSpan,
-		dbIndex:   chIndex,
-		eventCh:   e.chs[chIndex],
+		subID:          e.subClient.AllocSubscriptionID(),
+		lowLatencyMode: lowLatencyMode,
+		tableSpan:      dispatcherSpan,
+		dbIndex:        chIndex,
+		eventCh:        e.chs[chIndex],
 	}
 	subStat.subscribers.Store(&subscribersWithIdleTime{
 		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
@@ -666,6 +681,9 @@ func (e *eventStore) RegisterDispatcher(
 
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
+	if lowLatencyMode {
+		resolvedTsAdvanceInterval = 0
+	}
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	log.Info("new subscription created",
@@ -798,10 +816,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanRequest) (EventIterator, error) {
 	if e.closed.Load() {
 		return nil, nil
 	}
+	dataRange := request.Range
 
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
@@ -819,7 +838,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs))
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs))
 			}
 			return nil
 		}
@@ -830,7 +849,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
 				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+				zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 				zap.Uint64("subStatCheckpointTs", checkpointTs),
 				zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 		}
@@ -841,7 +860,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 					zap.Int64("tableID", dataRange.Span.GetTableID()),
 					zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 					zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
-					zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
+					zap.Uint64("lastScannedTxnStartTs", request.Cursor.TxnStartTs),
 					zap.Uint64("subStatCheckpointTs", checkpointTs),
 					zap.Uint64("subStatResolvedTs", subStat.resolvedTs.Load()))
 			}
@@ -898,29 +917,38 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.Unlock()
 	}
 
-	// dataRange fields:
-	// CommitTsStart and CommitTsEnd define the commit-ts scan window.
-	// LastScannedTxnStartTs records how far the previous scan progressed inside
+	// request fields:
+	// Range defines the commit-ts scan window. Cursor.TxnStartTs records how far
+	// the previous scan progressed inside
 	// CommitTsStart. It is zero if there is no unfinished scan at CommitTsStart.
 	//
 	// Iterator key bounds:
 	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
 	// CommitTsEnd+1.
 	//
-	// If LastScannedTxnStartTs is zero, scan commit ts in
+	// If Cursor.Position is present, continue scanning from the next
+	// eventstore key after that opaque position.
+	//
+	// If Cursor.TxnStartTs is zero, scan commit ts in
 	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
 	//
-	// If LastScannedTxnStartTs is non-zero, continue scanning commit ts
-	// CommitTsStart with start ts greater than LastScannedTxnStartTs, then scan
+	// If Cursor.TxnStartTs is non-zero, continue scanning commit ts
+	// CommitTsStart with start ts greater than Cursor.TxnStartTs, then scan
 	// later commit ts up to CommitTsEnd.
 	//
 	var start []byte
-	if dataRange.LastScannedTxnStartTs != 0 {
+	if len(request.Cursor.Position) != 0 {
+		start = encodeRowLevelScanPositionLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			request.Cursor.Position,
+		)
+	} else if request.Cursor.TxnStartTs != 0 {
 		start = encodeScanLowerBound(
 			uint64(subStat.subID),
 			stat.tableSpan.TableID,
 			dataRange.CommitTsStart,
-			dataRange.LastScannedTxnStartTs+1,
+			request.Cursor.TxnStartTs+1,
 		)
 	} else {
 		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
@@ -1492,10 +1520,16 @@ type eventStoreIter struct {
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
+	rawKV, _, isNewTxn := iter.NextWithScanPosition()
+	return rawKV, isNewTxn
+}
+
+func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosition, bool) {
 	rawKV := &common.RawKVEntry{}
+	var scanPosition ScanPosition
 	for {
 		if !iter.innerIter.Valid() {
-			return nil, false
+			return nil, nil, false
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
@@ -1523,11 +1557,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		scannedBytesMetrics.Add(float64(len(value)))
 		if !iter.needCheckSpan {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		comparableKey := common.ToComparableKey(rawKV.Key)
 		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) < 0 {
+			scanPosition = encodeRowLevelScanPosition(key)
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
@@ -1555,7 +1591,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	startTime := time.Now()
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return rawKV, isNewTxn
+	return rawKV, scanPosition, isNewTxn
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {

@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -87,12 +88,18 @@ func TestMetaLabelFail(t *testing.T) {
 	pc, err := NewPDAPIClient(mockClient, nil)
 	require.NoError(t, err)
 	defer pc.Close()
+	// Exhausting the production retry budget costs ~190s of backoff sleeps. The
+	// assertions below only need the budget to be exhausted, not its exact size.
+	pc.(*pdAPIClient).maxRetries = 2
 	mockClient.url = "http://127.0.1.1:2345"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// test url error
-	err = pc.(*pdAPIClient).patchMetaLabel(ctx)
+	// test url error. The http client carries no request timeout, so bound the
+	// probe here: the assertion only needs the request to fail.
+	unreachableCtx, cancelUnreachable := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelUnreachable()
+	err = pc.(*pdAPIClient).patchMetaLabel(unreachableCtx)
 	require.Error(t, err)
 
 	// test 404
@@ -119,6 +126,26 @@ func TestListGcServiceSafePoint(t *testing.T) {
 	_, err = pc.ListGcServiceSafePoint(ctx)
 	require.NoError(t, err)
 	mockClient.testServer.Close()
+}
+
+func TestListGcServiceSafePointInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("xxx"))
+	}))
+	defer server.Close()
+
+	mockClient := &mockPDClient{url: server.URL}
+	pc, err := NewPDAPIClient(mockClient, nil)
+	require.NoError(t, err)
+	defer pc.Close()
+	pc.(*pdAPIClient).maxRetries = 1
+
+	_, err = pc.ListGcServiceSafePoint(t.Context())
+	require.ErrorIs(t, err, cerror.ErrReachMaxTry)
+	var syntaxErr *json.SyntaxError
+	require.ErrorAs(t, err, &syntaxErr)
 }
 
 // LabelRulePatch is the patch to update the label rules.

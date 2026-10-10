@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -333,6 +334,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, st
 // 3. Finally: Forward valid events to target with wake callback
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
 	var validEvents []dispatcher.DispatcherEvent
+	hasDML := false
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
@@ -354,6 +356,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			validEvents = append(validEvents, event)
 		case commonEvent.TypeDMLEvent:
 			if d.shouldForwardEventByCommitTs(event) {
+				hasDML = true
 				validEvents = append(validEvents, event)
 			}
 		case commonEvent.TypeBatchDMLEvent:
@@ -374,6 +377,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.shouldForwardEventByCommitTs(dmlEvent) {
+					hasDML = true
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
@@ -388,7 +392,17 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 		return false
 	}
 	d.updateCommitTsStateByEvents(state, validEvents)
-	return d.target.HandleEvents(validEvents, func() { d.wake() })
+	handled := d.target.HandleEvents(validEvents, func() { d.wake() })
+	if hasDML {
+		failpoint.Inject("InjectResetDispatcherAfterBatchDataEvents", func() {
+			log.Info("inject dispatcher reset after batch data events",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
+				zap.Uint64("checkpointTs", d.target.GetCheckpointTs()))
+			d.session.resetCurrentEventService()
+		})
+	}
+	return handled
 }
 
 // handleSingleDataEvents processes a single DDL or SyncPoint event with the following algorithm:

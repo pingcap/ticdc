@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -58,6 +59,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	// cfg is retained so remove cleanup can reopen a short-lived DB connection after Close.
 	cfg        *mysql.Config
+	writeGate  *writelease.Gate
 	maxTxnRows int
 	bdrMode    bool
 }
@@ -260,6 +262,16 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
+// SetWriteGate delegates admission to the transport writers, where each
+// downstream write is checked immediately before it is executed.
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	for _, writer := range s.dmlWriter {
+		writer.SetWriteGate(gate)
+	}
+	s.ddlWriter.SetWriteGate(gate)
+}
+
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
 }
@@ -410,6 +422,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 
 	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil)
 	defer cleanupWriter.Close()
+	cleanupWriter.SetWriteGate(s.writeGate)
 	return cleanupWriter.RemoveDDLTsItem()
 }
 

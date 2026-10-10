@@ -26,7 +26,7 @@ function run() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	# this test contains `recover table`, which requires super privilege, so we
 	# can't use the normal user
@@ -69,8 +69,11 @@ EOF
 	check_table_exists common.v ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.recover_and_insert ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

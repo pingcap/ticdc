@@ -25,6 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestServerConfigLargeTxnThresholdDefault(t *testing.T) {
+	t.Parallel()
+	conf := GetDefaultServerConfig()
+	require.Equal(t, int64(1024*1024), conf.Debug.EventService.LargeTxnThresholdInBytes)
+}
+
 func TestServerConfigExposeEncryptionAtRoot(t *testing.T) {
 	t.Parallel()
 

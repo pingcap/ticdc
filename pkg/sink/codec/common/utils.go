@@ -15,6 +15,7 @@ package common
 
 import (
 	"database/sql/driver"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -30,6 +31,36 @@ import (
 
 // NewLargeEvent4Test creates large events for test
 func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEvent, *commonEvent.RowEvent, *commonEvent.RowEvent) {
+	largeEventMu.Lock()
+	defer largeEventMu.Unlock()
+	if largeEvent == nil {
+		largeEvent = buildLargeEvent4Test(t)
+	}
+	// Return copies, so that a test assigning to the events cannot affect the
+	// other tests of the package.
+	ddlEvent := *largeEvent.ddlEvent
+	insertEvent := *largeEvent.insertEvent
+	updateEvent := *largeEvent.updateEvent
+	deleteEvent := *largeEvent.deleteEvent
+	return &ddlEvent, &insertEvent, &updateEvent, &deleteEvent
+}
+
+// largeEvent holds the events returned by buildLargeEvent4Test. Building them
+// bootstraps a TiDB mock store, which is expensive, and every codec test needs
+// the same events, so they are built once per test binary.
+var (
+	largeEventMu sync.Mutex
+	largeEvent   *largeEvent4Test
+)
+
+type largeEvent4Test struct {
+	ddlEvent    *commonEvent.DDLEvent
+	insertEvent *commonEvent.RowEvent
+	updateEvent *commonEvent.RowEvent
+	deleteEvent *commonEvent.RowEvent
+}
+
+func buildLargeEvent4Test(t *testing.T) *largeEvent4Test {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -200,7 +231,12 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 	}
-	return ddlEvent, insertEvent, updateEvent, deleteEvent
+	return &largeEvent4Test{
+		ddlEvent:    ddlEvent,
+		insertEvent: insertEvent,
+		updateEvent: updateEvent,
+		deleteEvent: deleteEvent,
+	}
 }
 
 // NewRoutedTableInfo4Test creates a small routed table info shared by codec tests.
