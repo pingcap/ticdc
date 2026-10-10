@@ -1,1 +1,10 @@
 # Changefeed configuration for log_redaction integration test
+
+[sink.kafka-config]
+sasl-password = "kafka-credential-sentinel"
+sasl-oauth-client-secret = "oauth-credential-sentinel"
+sasl-oauth-token-url = "https://oauth.example/token?client_secret=token-credential-sentinel"
+
+[sink.pulsar-config]
+authentication-token = "pulsar-token-credential-sentinel"
+basic-password = "pulsar-password-credential-sentinel"

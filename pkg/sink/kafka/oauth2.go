@@ -21,8 +21,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -38,7 +40,7 @@ func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSou
 
 	tokenURL, err := url.Parse(cfg.tokenURL)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, util.MaskSensitiveDataInURLError(err))
 	}
 	if cfg.caPath != "" {
 		httpClient, err := oauthHTTPClient(cfg.caPath)
@@ -55,7 +57,34 @@ func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSou
 		EndpointParams: endpointParams,
 		Scopes:         cfg.scopes,
 	}
-	return config.TokenSource(ctx), nil
+	return &redactedOAuthTokenSource{TokenSource: config.TokenSource(ctx)}, nil
+}
+
+// OAuth2 servers can echo credentials in error bodies, descriptions and URLs.
+// Keep the status and protocol error code for diagnostics without exposing them.
+type redactedOAuthTokenSource struct {
+	oauth2.TokenSource
+}
+
+func (s *redactedOAuthTokenSource) Token() (*oauth2.Token, error) {
+	token, err := s.TokenSource.Token()
+	if err == nil {
+		return token, nil
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		status := retrieveErr.Response.StatusCode
+		err = &oauth2.RetrieveError{
+			Response: &http.Response{
+				StatusCode: status,
+				Status:     strconv.Itoa(status) + " " + http.StatusText(status),
+			},
+			ErrorCode: retrieveErr.ErrorCode,
+		}
+	} else {
+		err = util.MaskSensitiveDataInURLError(err)
+	}
+	return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 }
 
 func oauthHTTPClient(caPath string) (*http.Client, error) {
