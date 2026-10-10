@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/binary"
 	"reflect"
@@ -26,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
@@ -45,11 +43,9 @@ const (
 type writer struct {
 	downstream      sink.Sink
 	memory          *memoryUsage
-	pendingDML      []*readResult
+	pendingDML      []*writeEvent
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
-	serialDML       bool                        // CSV metadata omits secondary unique indexes; preserve per-table batch order.
-	sortCSVRows     bool                        // CSV with old values and commit timestamps orders deletes before inserts.
 	writtenBefore   uint64
 	inFlightBytes   int64
 	inFlightEvents  int
@@ -58,7 +54,7 @@ type writer struct {
 	lastProgressLog time.Time
 }
 type writeBatch struct {
-	items   []*readResult
+	items   []*writeEvent
 	events  []*event.DMLEvent
 	dropped []*event.DMLEvent
 	keys    []mutationKey
@@ -74,7 +70,7 @@ type mutationKey struct {
 	handle   string
 }
 
-func (c *consumer) writeDDL(ctx context.Context, result *readResult) error {
+func (c *consumer) writeDDL(ctx context.Context, result *writeEvent) error {
 	w := c.writer
 	if err := c.flushDML(ctx, result.ddl); err != nil {
 		return err
@@ -107,13 +103,6 @@ func (c *consumer) writeDDL(ctx context.Context, result *readResult) error {
 
 func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 	w := c.writer
-	if w.sortCSVRows {
-		// Sort available rows before splitting write batches, preserving order
-		// within each transaction and row type without waiting for more input.
-		slices.SortStableFunc(w.pendingDML, func(a, b *readResult) int {
-			return cmp.Or(cmp.Compare(a.dml.CommitTs, b.dml.CommitTs), cmp.Compare(a.dml.RowTypes[0], b.dml.RowTypes[0]))
-		})
-	}
 	var building *writeBatch
 	defer func() {
 		// Cancellation can interrupt filtering while it waits for an earlier
@@ -137,17 +126,17 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			return err
 		}
 		rows, bytes := 0, int64(0)
-		items := make([]*readResult, 0, len(w.pendingDML))
-		tables := make(map[int64]*event.DMLEvent)
+		items := make([]*writeEvent, 0, len(w.pendingDML))
+		tables := make(map[int64]*writeEvent)
 		for _, item := range w.pendingDML {
 			if ddl != nil && !ddlBlocksTable(ddl, item.dml) {
 				continue
 			}
 			if previous := tables[item.dml.PhysicalTableID]; previous != nil &&
-				(!sameTableSchema(previous.TableInfo, item.dml.TableInfo) || (w.serialDML && previous.CommitTs != item.dml.CommitTs)) {
+				(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
 				break
 			}
-			tables[item.dml.PhysicalTableID] = item.dml
+			tables[item.dml.PhysicalTableID] = item
 			rows += int(item.dml.Len())
 			bytes += item.bytes
 			items = append(items, item)
@@ -161,7 +150,7 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		w.finishBatches()
 		for _, earlier := range slices.Clone(w.inFlight) {
 			for _, item := range earlier.items {
-				if next := tables[item.dml.PhysicalTableID]; next != nil && (w.serialDML || !sameTableSchema(item.dml.TableInfo, next.TableInfo)) {
+				if next := tables[item.dml.PhysicalTableID]; next != nil && (item.sequential || next.sequential || !sameTableSchema(item.dml.TableInfo, next.dml.TableInfo)) {
 					if err := c.waitBatch(ctx, earlier); err != nil {
 						return err
 					}
@@ -194,11 +183,6 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 				batch.bytes += copyBytes
 			}
 			batch.events = append(batch.events, filtered)
-		}
-		if w.serialDML {
-			if err := w.mergeTransactions(ctx, batch); err != nil {
-				return err
-			}
 		}
 		for len(w.inFlight) != 0 && w.inFlightBytes+batch.bytes > maxInFlightBytes {
 			if err := c.waitBatch(ctx, w.inFlight[0]); err != nil {
@@ -251,75 +235,6 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 	return a == b || (a != nil && b != nil && a.GetUpdateTS() == b.GetUpdateTS() &&
 		a.GetSchemaName() == b.GetSchemaName() && a.GetTableName() == b.GetTableName() &&
 		reflect.DeepEqual(a.GetColumns(), b.GetColumns()) && reflect.DeepEqual(a.GetIndices(), b.GetIndices()))
-}
-
-func (c *writer) mergeTransactions(ctx context.Context, batch *writeBatch) error {
-	// Merge only the bounded batch already available. Waiting for an entire
-	// transaction could retain arbitrarily large input in memory.
-	merged := make([]*event.DMLEvent, 0, len(batch.events))
-	for start := 0; start < len(batch.events); {
-		first := batch.events[start]
-		end := start + 1
-		for end < len(batch.events) {
-			next := batch.events[end]
-			if next.PhysicalTableID != first.PhysicalTableID || next.CommitTs != first.CommitTs || !sameTableSchema(first.TableInfo, next.TableInfo) {
-				break
-			}
-			end++
-		}
-		if end == start+1 {
-			merged = append(merged, first)
-			start = end
-			continue
-		}
-		rows, bytes := 0, int64(256)
-		for _, dml := range batch.events[start:end] {
-			rows += len(dml.RowTypes)
-			bytes += dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
-		}
-		// Original chunks remain live through their flush callbacks. Account for
-		// the merged copy separately before allocating it.
-		if err := c.memory.reserve(ctx, bytes); err != nil {
-			return err
-		}
-		batch.bytes += bytes
-		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
-		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
-		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
-		dml.Rows = chunk.NewChunkWithCapacity(first.TableInfo.GetFieldSlice(), rows)
-		for _, part := range batch.events[start:end] {
-			dml.Rows.Append(part.Rows, part.PreviousTotalOffset, part.PreviousTotalOffset+len(part.RowTypes))
-			dml.RowTypes = append(dml.RowTypes, part.RowTypes...)
-			if len(dml.RowKeys) != 0 || len(part.RowKeys) != 0 {
-				if len(dml.RowKeys) == 0 {
-					dml.RowKeys = make([][]byte, dml.Rows.NumRows()-len(part.RowTypes))
-				}
-				if len(part.RowKeys) == 0 {
-					dml.RowKeys = append(dml.RowKeys, make([][]byte, len(part.RowTypes))...)
-				} else {
-					dml.RowKeys = append(dml.RowKeys, part.RowKeys...)
-				}
-			}
-			if len(dml.Checksum) != 0 || len(part.Checksum) != 0 {
-				if len(dml.Checksum) == 0 {
-					dml.Checksum = make([]*integrity.Checksum, dml.Length)
-				}
-				if len(part.Checksum) == 0 {
-					dml.Checksum = append(dml.Checksum, make([]*integrity.Checksum, part.Length)...)
-				} else {
-					dml.Checksum = append(dml.Checksum, part.Checksum...)
-				}
-			}
-			dml.Length += part.Length
-			dml.ApproximateSize += part.ApproximateSize
-			dml.AddPostEnqueueFunc(part.PostEnqueue)
-			dml.AddPostFlushFunc(part.PostFlush)
-		}
-		merged = append(merged, dml)
-		start = end
-	}
-	batch.events = merged
-	return nil
 }
 
 func (c *consumer) waitBatch(ctx context.Context, batch *writeBatch) error {

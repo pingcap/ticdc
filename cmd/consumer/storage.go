@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -28,20 +27,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -56,51 +47,29 @@ type storageIndexRange struct {
 	end   uint64
 }
 
-type storageSchema struct {
-	file      cloudstorage.SchemaFile
-	tableInfo *common.TableInfo
-}
-
-type storageTableKey struct {
-	schema    string
-	table     string
-	partition int64
-}
-
 type storageInput struct {
 	key      cloudstorage.DMLPathKey
 	index    cloudstorage.FileIndex
 	groupEnd bool
-	tableID  int64
 	sort     bool
 }
 type storageReader struct {
-	storage         storeapi.Storage
-	buffer          *readBuffer
-	codecConfig     *codecCommon.Config
-	columnSelectors *columnselector.ColumnSelectors
-	dateSeparator   config.DateSeparator
-	fileExtension   string
-	fileIndexWidth  int
-	checkpoint      uint64
-	schemas         map[cloudstorage.SchemaPathKey]*storageSchema
-	fileIndices     map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks   map[string]uint64
-	tableIDs        map[storageTableKey]int64
-	tableWatermarks map[int64]uint64
-	nextTableID     int64
-	mu              sync.Mutex
-	records         []*ack
-	inputs          []storageInput
-	current         storageInput
-	decoder         codecCommon.Decoder
-	record          *ack
-	sortBeforeWrite bool
-	groupReady      bool
-	scanned         bool
+	storage        storeapi.Storage
+	memory         *memoryUsage
+	dateSeparator  config.DateSeparator
+	fileExtension  string
+	fileIndexWidth int
+	checkpoint     uint64
+	schemas        map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
+	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks  map[string]uint64
+	mu             sync.Mutex
+	records        []*ack
+	inputs         []storageInput
+	scanned        bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
 	}
@@ -117,32 +86,17 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, timezone string
 	if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
 		return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
 	}
-	codecConfig := codecCommon.NewConfig(protocol)
-	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		return nil, err
-	}
-	if protocol == config.ProtocolCanalJSON {
-		codecConfig.EnableTiDBExtension = true
-	}
-	selectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
-	if err != nil {
-		return nil, err
-	}
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {
 		return nil, err
 	}
 
 	c := &storageReader{
-		storage: storage, buffer: &readBuffer{memory: memory}, codecConfig: codecConfig, columnSelectors: selectors,
+		storage: storage, memory: memory,
 		dateSeparator: putil.GetOrZero(replicaConfig.Sink.DateSeparator), fileExtension: helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
-		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		ddlWatermarks: make(map[string]uint64), tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
+		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
+		ddlWatermarks: make(map[string]uint64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
@@ -210,7 +164,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
 			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
-			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
+			if err := c.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
 		}
@@ -220,7 +174,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			}
 			indices[index.FileIndexKey] = 0
 			bytes := int64(len(index.DispatcherID) + 128)
-			if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
+			if err := c.memory.reserve(ctx, bytes); err != nil {
 				return err
 			}
 		}
@@ -263,63 +217,17 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
 	}
 	bytes := int64(len(data))*4 + 1024
-	if err := c.buffer.memory.reserve(ctx, bytes); err != nil {
+	if err := c.memory.reserve(ctx, bytes); err != nil {
 		return key, false, err
 	}
-	table := file.TableInfo()
-	table.UpdateTS = file.TableVersion
-	c.schemas[key] = &storageSchema{file: file, tableInfo: table}
+	c.schemas[key] = &file
 	return key, true, nil
 }
 
-func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
+func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
-		}
-		if !c.sortBeforeWrite || c.groupReady {
-			if result := c.buffer.nextReady(^uint64(0)); result != nil {
-				return result, nil
-			}
-		}
-		if c.groupReady {
-			c.groupReady = false
-			return &readResult{tableID: c.current.tableID, watermark: c.tableWatermarks[c.current.tableID], hasWatermark: true}, nil
-		}
-		if c.decoder != nil {
-			messageType, hasNext := c.decoder.HasNext()
-			if hasNext {
-				if messageType != codecCommon.MessageTypeRow {
-					continue
-				}
-				message := c.decoder.NextDMLMessage()
-				if message == nil {
-					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage decoder returned an empty DML message")
-				}
-				tableID := c.current.tableID
-				if !c.current.index.EnableTableAcrossNodes && message.GetCommitTs() < c.tableWatermarks[tableID] {
-					continue
-				}
-				c.tableWatermarks[tableID] = max(c.tableWatermarks[tableID], message.GetCommitTs())
-				dml := message.ToDMLEvent()
-				if dml == nil || dml.TableInfo == nil {
-					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML message has no table metadata")
-				}
-				dml.PhysicalTableID = tableID
-				if c.codecConfig.Protocol == config.ProtocolCanalJSON {
-					dml.TableInfo.UpdateTS = c.current.key.TableVersion
-				}
-				if err := c.buffer.queueDML(ctx, dml, []*ack{c.record}, nil); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			// All rows have their own write references before decoding is released.
-			c.buffer.memory.decoded(c.record, 256)
-			c.fileIndices[c.current.key][c.current.index.FileIndexKey] = c.current.index.Idx
-			c.decoder = nil
-			c.record = nil
-			continue
 		}
 		if len(c.inputs) == 0 {
 			if c.scanned {
@@ -352,7 +260,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
 			for _, key := range keys {
 				if key.IsSchemaFileDMLPathKey() {
-					if err := c.buffer.memory.reserve(ctx, 256); err != nil {
+					if err := c.memory.reserve(ctx, 256); err != nil {
 						return nil, err
 					}
 					c.inputs = append(c.inputs, storageInput{key: key})
@@ -364,7 +272,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 				}
 				for indexKey, span := range files[key] {
 					for index := span.start; ; index++ {
-						if err := c.buffer.memory.reserve(ctx, 256); err != nil {
+						if err := c.memory.reserve(ctx, 256); err != nil {
 							return nil, err
 						}
 						c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: index}, sort: sortBeforeWrite})
@@ -376,7 +284,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 						}
 					}
 				}
-				if err := c.buffer.memory.reserve(ctx, 256); err != nil {
+				if err := c.memory.reserve(ctx, 256); err != nil {
 					return nil, err
 				}
 				c.inputs = append(c.inputs, storageInput{key: key, groupEnd: true})
@@ -386,7 +294,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		input := c.inputs[0]
 		c.inputs[0] = storageInput{}
 		c.inputs = c.inputs[1:]
-		c.buffer.memory.release(256)
+		c.memory.release(256)
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
 			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
@@ -394,40 +302,18 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		key := input.key
 		tableKey := key.GetKey()
 		if key.IsSchemaFileDMLPathKey() {
-			if schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
+			if schema.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
 				continue
 			}
-			oldKey := ""
-			if schema.file.Type == byte(timodel.ActionRenameTable) {
-				statement, err := parser.New().ParseOneStmt(schema.file.Query, "", "")
-				if err != nil {
-					return nil, errors.WrapError(errors.ErrCodecDecode, err, "parse Storage rename DDL")
-				}
-				rename, ok := statement.(*ast.RenameTableStmt)
-				if !ok || len(rename.TableToTables) == 0 {
-					return nil, errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
-				}
-				old := rename.TableToTables[0].OldTable
-				oldKey = common.QuoteSchema(cmp.Or(old.Schema.O, schema.file.Schema), old.Name.O)
-			}
-			ddl := schema.file.DDLEvent()
-			ddl.TableInfo = schema.tableInfo
-			size := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-			record, err := c.buffer.memory.newAck(ctx, size)
+			size := int64(len(schema.Query) + len(key.Schema) + len(key.Table) + 1024)
+			record, err := c.memory.newAck(ctx, size)
 			if err != nil {
 				return nil, err
 			}
 			c.mu.Lock()
 			c.records = append(c.records, record)
 			c.mu.Unlock()
-			c.ddlWatermarks[tableKey] = max(c.ddlWatermarks[tableKey], key.TableVersion)
-			if oldKey != "" {
-				c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], key.TableVersion)
-			}
-			// This record's initial reference is the DDL write itself.
-			return &readResult{ddl: ddl, onFlush: func() {
-				record.refs.Add(-1)
-			}}, nil
+			return &readData{storage: &input, schema: schema, record: record}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
 			if !input.groupEnd {
@@ -435,28 +321,9 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			}
 			continue
 		}
-		idKey := storageTableKey{schema: key.Schema, table: key.Table, partition: key.PartitionNum}
-		tableID := c.tableIDs[idKey]
-		if tableID == 0 {
-			if len(c.tableIDs) >= maxRecords {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
-			}
-			size := int64(len(key.Schema) + len(key.Table) + 128)
-			if err := c.buffer.memory.reserve(ctx, size); err != nil {
-				return nil, err
-			}
-			c.nextTableID++
-			tableID = c.nextTableID
-			c.tableIDs[idKey] = tableID
-		}
-		input.tableID = tableID
-		c.current = input
 		if input.groupEnd {
-			c.groupReady = true
-			continue
+			return &readData{storage: &input, schema: schema}, nil
 		}
-		// Cross-node groups must be decoded completely before sorting their rows.
-		c.sortBeforeWrite = input.sort
 		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 		file, err := c.storage.Open(ctx, path, nil)
 		if err != nil {
@@ -471,7 +338,7 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 			_ = file.Close()
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file exceeds the consumer memory budget")
 		}
-		record, err := c.buffer.memory.newAck(ctx, size+256)
+		record, err := c.memory.newAck(ctx, size+256)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
@@ -490,16 +357,8 @@ func (c *storageReader) Read(ctx context.Context) (*readResult, error) {
 		c.mu.Lock()
 		c.records = append(c.records, record)
 		c.mu.Unlock()
-		c.record = record
-		if c.codecConfig.Protocol == config.ProtocolCsv {
-			c.decoder, err = csv.NewDecoderWithColumnSelector(ctx, c.codecConfig, schema.tableInfo, data, c.columnSelectors.GetForTableInfo(schema.tableInfo))
-			if err != nil {
-				return nil, errors.WrapError(errors.ErrCodecDecode, err, "create Storage CSV decoder")
-			}
-		} else {
-			c.decoder = canal.NewTxnDecoder(c.codecConfig)
-			c.decoder.AddKeyValue(nil, data)
-		}
+		c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
+		return &readData{value: data, storage: &input, schema: schema, record: record}, nil
 	}
 }
 
@@ -518,7 +377,7 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 		if refs != 0 {
 			break
 		}
-		c.buffer.memory.confirm(record)
+		c.memory.confirm(record)
 		count++
 	}
 	c.records = slices.Delete(c.records, 0, count)

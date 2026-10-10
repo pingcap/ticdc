@@ -32,15 +32,23 @@ import (
 
 type consumer struct {
 	reader            reader
+	assembler         *assembler
 	writer            *writer
-	pendingWatermarks []*readResult
+	pendingWatermarks []*writeEvent
 	watermarks        map[int64]uint64
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
 	memory := &memoryUsage{completed: make(chan struct{}, 1)}
-	reader, err := newReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
+	reader, err := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory)
 	if err != nil {
+		return nil, err
+	}
+	assembler, err := newAssembler(ctx, upstreamURI, timezone, replicaConfig, reader, memory)
+	if err != nil {
+		if closeErr := reader.Close(); closeErr != nil {
+			log.Error("consumer reader close failed", zap.Error(closeErr))
+		}
 		return nil, err
 	}
 	replicaConfig.Sink.TiDBSourceID = 1
@@ -53,13 +61,16 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 		if closeErr := reader.Close(); closeErr != nil {
 			log.Error("consumer reader close failed", zap.Error(closeErr))
 		}
+		if assembler.upstreamDB != nil {
+			if closeErr := assembler.upstreamDB.Close(); closeErr != nil {
+				log.Error("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
+			}
+		}
 		return nil, err
 	}
-	serialDML := putil.GetOrZero(replicaConfig.Sink.Protocol) == "csv"
 	return &consumer{
-		reader: reader, writer: &writer{
-			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch), serialDML: serialDML,
-			sortCSVRows: serialDML && replicaConfig.Sink.CSVConfig != nil && replicaConfig.Sink.CSVConfig.OutputOldValue && replicaConfig.Sink.CSVConfig.IncludeCommitTs,
+		reader: reader, assembler: assembler, writer: &writer{
+			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch),
 		},
 		watermarks: make(map[int64]uint64),
 	}, nil
@@ -80,8 +91,18 @@ func (c *consumer) start(ctx context.Context) (err error) {
 				log.Error("consumer reader close failed", zap.Error(closeErr))
 			}
 		}
+		if c.assembler.upstreamDB != nil {
+			if closeErr := c.assembler.upstreamDB.Close(); closeErr != nil {
+				closeErr = errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")
+				if err == nil {
+					err = closeErr
+				} else {
+					log.Error("consumer upstream database close failed", zap.Error(closeErr))
+				}
+			}
+		}
 	}()
-	results := make(chan *readResult, 64)
+	results := make(chan *writeEvent, 64)
 	wg.Go(func() {
 		defer close(results)
 		cancel(c.read(ctx, results))
@@ -99,9 +120,9 @@ func (c *consumer) start(ctx context.Context) (err error) {
 	return cmp.Or(context.Cause(ctx), err)
 }
 
-func (c *consumer) read(ctx context.Context, results chan<- *readResult) error {
+func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
 	for ctx.Err() == nil {
-		result, err := c.reader.Read(ctx)
+		result, err := c.assembler.next(ctx, c.reader)
 		if err != nil {
 			return err
 		}
@@ -117,7 +138,7 @@ func (c *consumer) read(ctx context.Context, results chan<- *readResult) error {
 	return context.Cause(ctx)
 }
 
-func (c *consumer) write(ctx context.Context, results <-chan *readResult) error {
+func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error {
 	memory := c.writer.memory
 	tick := time.Tick(progressLogInterval)
 	for {
@@ -149,31 +170,41 @@ func (c *consumer) write(ctx context.Context, results <-chan *readResult) error 
 	}
 }
 
-func (c *consumer) consumeBatch(ctx context.Context, results <-chan *readResult, result *readResult) error {
-	inputs := 0
-	for {
-		if err := c.consume(ctx, result); err != nil {
-			return err
-		}
-		inputs++
-		if inputs >= cap(results) {
-			return c.flushDML(ctx, nil)
-		}
+func (c *consumer) consumeBatch(ctx context.Context, results <-chan *writeEvent, result *writeEvent) error {
+	items := []*writeEvent{result}
+collect:
+	for len(items) < cap(results) {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case next, ok := <-results:
 			if !ok {
-				return c.flushDML(ctx, nil)
+				break collect
 			}
-			result = next
+			items = append(items, next)
 		default:
-			return c.flushDML(ctx, nil)
+			break collect
 		}
 	}
+	for len(items) != 0 {
+		item, remaining, err := c.assembler.prepare(ctx, items)
+		if err != nil {
+			return err
+		}
+		if err := c.consume(ctx, item); err != nil {
+			return err
+		}
+		if item.sequential {
+			if err := c.flushDML(ctx, nil); err != nil {
+				return err
+			}
+		}
+		items = remaining
+	}
+	return c.flushDML(ctx, nil)
 }
 
-func (c *consumer) consume(ctx context.Context, result *readResult) error {
+func (c *consumer) consume(ctx context.Context, result *writeEvent) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}

@@ -57,7 +57,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		dml.Length = int32(len(ids))
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
-		w.pendingDML = append(w.pendingDML, &readResult{dml: dml})
+		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
 		require.NoError(t, c.flushDML(t.Context(), nil))
 		require.Equal(t, 1, callbacks)
 		w.advanceReplay(100, 0)
@@ -80,10 +80,10 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field}},
 	})
 	memory := &memoryUsage{}
-	buffer := &readBuffer{memory: memory}
+	buffer := &assembler{memory: memory}
 	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
-	input := &storageReader{buffer: buffer, records: []*ack{record}}
+	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) { retained = dml })
@@ -133,7 +133,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 	}).Times(2)
 	memory := &memoryUsage{}
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
-	c := &consumer{reader: &storageReader{buffer: &readBuffer{memory: memory}}, writer: w, watermarks: map[int64]uint64{0: 90}}
+	c := &consumer{reader: &storageReader{memory: memory}, writer: w, watermarks: map[int64]uint64{0: 90}}
 	// A table move can replay the INSERT after a later UPDATE is durable.
 	for index, commitTs := range []uint64{100, 200, 100, 200} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, commitTs-1, commitTs, table)
@@ -147,7 +147,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		dml.Length = 1
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
-		require.NoError(t, c.consume(t.Context(), &readResult{dml: dml}))
+		require.NoError(t, c.consume(t.Context(), &writeEvent{dml: dml}))
 		require.NoError(t, c.flushDML(t.Context(), nil))
 		require.NoError(t, c.confirmCompleted(t.Context()))
 		require.Equal(t, 1, callbacks)
@@ -156,7 +156,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 			require.Len(t, w.mutations, 2)
 		}
 	}
-	require.NoError(t, c.consume(t.Context(), &readResult{watermark: 201, hasWatermark: true}))
+	require.NoError(t, c.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
 	require.NoError(t, c.confirmCompleted(t.Context()))
 	require.Empty(t, w.mutations)
 	require.Zero(t, memory.bytes.Load())
@@ -221,13 +221,13 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 		downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil),
 		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil),
 	)
-	other := &writeBatch{items: []*readResult{{dml: b}}, done: make(chan bool)}
+	other := &writeBatch{items: []*writeEvent{{dml: b}}, done: make(chan bool)}
 	w := &writer{
-		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*readResult{{dml: b}, {dml: a}},
+		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: b}, {dml: a}},
 		inFlight: []*writeBatch{other}, inFlightEvents: 1,
 	}
 	c := &consumer{writer: w}
-	require.NoError(t, c.writeDDL(t.Context(), &readResult{ddl: ddl}))
+	require.NoError(t, c.writeDDL(t.Context(), &writeEvent{ddl: ddl}))
 	require.Len(t, w.pendingDML, 1)
 	require.Same(t, b, w.pendingDML[0].dml)
 	require.Equal(t, []*writeBatch{other}, w.inFlight)
@@ -262,7 +262,7 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 		downstream.EXPECT().AddDMLEvent(first).Do(func(*event.DMLEvent) { cancel() }),
 		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
 	)
-	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*readResult{{dml: first}, {dml: second}}}
+	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
 	c := &consumer{writer: w}
 	require.ErrorIs(t, c.flushDML(ctx, nil), context.Canceled)
 	require.Len(t, w.inFlight, 1)
@@ -272,111 +272,4 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 	require.NoError(t, c.flushDML(t.Context(), nil))
 	require.Empty(t, w.inFlight)
 	require.Empty(t, w.pendingDML)
-}
-
-func TestWriterCSVTransactionBatches(t *testing.T) {
-	field := types.NewFieldType(mysql.TypeLonglong)
-	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
-	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
-		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *field},
-			{ID: 2, Name: ast.NewCIStr("uk"), Offset: 1, State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
-		},
-	})
-	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch), serialDML: true}
-	callbacks := 0
-	for _, commitTs := range []uint64{100, 200} {
-		for id := int64(1); id <= 2; id++ {
-			dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, commitTs, table)
-			dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 2)
-			if commitTs == 100 {
-				dml.Rows.AppendRow(chunk.MutRowFromValues(id, id).ToRow())
-				dml.RowTypes, dml.Length = []common.RowType{common.RowTypeInsert}, 1
-			} else {
-				dml.Rows.AppendRow(chunk.MutRowFromValues(id, nil).ToRow())
-				dml.Rows.AppendRow(chunk.MutRowFromValues(id, 3-id).ToRow())
-				dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete, common.RowTypeInsert}, 2
-			}
-			dml.AddPostFlushFunc(func() { callbacks++ })
-			w.pendingDML = append(w.pendingDML, &readResult{dml: dml})
-		}
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	var first *event.DMLEvent
-	downstream := mock.NewMockSink(gomock.NewController(t))
-	gomock.InOrder(
-		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
-			first = dml
-			require.EqualValues(t, 100, dml.CommitTs)
-			require.EqualValues(t, 2, dml.Len())
-			cancel()
-		}),
-		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
-			require.Equal(t, 2, callbacks)
-			require.EqualValues(t, 200, dml.CommitTs)
-			require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert}, dml.RowTypes)
-			dml.PostFlush()
-		}),
-	)
-	w.downstream = downstream
-	c := &consumer{writer: w}
-	require.ErrorIs(t, c.flushDML(ctx, nil), context.Canceled)
-	require.Len(t, w.inFlight[0].items, 2)
-	require.Len(t, w.pendingDML, 2)
-	require.Zero(t, callbacks)
-	first.PostFlush()
-	require.NoError(t, c.flushDML(t.Context(), nil))
-	require.Equal(t, 4, callbacks)
-	w.advanceReplay(201, 0)
-	require.Zero(t, w.memory.used())
-}
-
-func TestWriterCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
-	field := types.NewFieldType(mysql.TypeLonglong)
-	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
-	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
-		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *field}},
-	})
-	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch), serialDML: true, sortCSVRows: true}
-	require.NoError(t, w.memory.reserve(t.Context(), 2*batchBytes))
-	callbacks := 0
-	for index, rowType := range []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert} {
-		id := int64(index/2 + 1)
-		if rowType == common.RowTypeInsert {
-			id = 3 - id
-		}
-		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 100, table)
-		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
-		dml.Rows.AppendInt64(0, id)
-		dml.RowTypes, dml.Length = []common.RowType{rowType}, 1
-		dml.AddPostFlushFunc(func() { callbacks++ })
-		w.pendingDML = append(w.pendingDML, &readResult{dml: dml, bytes: batchBytes / 2})
-	}
-	downstream := mock.NewMockSink(gomock.NewController(t))
-	gomock.InOrder(
-		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
-			require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeDelete}, dml.RowTypes)
-			require.EqualValues(t, 1, dml.Rows.GetRow(0).GetInt64(0))
-			require.EqualValues(t, 2, dml.Rows.GetRow(1).GetInt64(0))
-			dml.PostFlush()
-		}),
-		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
-			require.Equal(t, 2, callbacks)
-			require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeInsert}, dml.RowTypes)
-			require.EqualValues(t, 2, dml.Rows.GetRow(0).GetInt64(0))
-			require.EqualValues(t, 1, dml.Rows.GetRow(1).GetInt64(0))
-			dml.PostFlush()
-		}),
-	)
-	w.downstream = downstream
-	c := &consumer{writer: w}
-	require.NoError(t, c.flushDML(t.Context(), nil))
-	require.Equal(t, 4, callbacks)
-	require.Empty(t, w.pendingDML)
-	require.Empty(t, w.inFlight)
-	w.advanceReplay(101, 0)
-	require.Zero(t, w.memory.used())
 }

@@ -26,35 +26,36 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
 type pulsarReader struct {
-	client            pulsar.Client
-	consumer          pulsar.Consumer
-	buffer            *readBuffer
-	mu                sync.Mutex
-	partitionIDs      map[string]int32
-	messageIDs        map[*ack]pulsar.MessageID
-	positions         map[int32]pulsar.MessageID
-	checkpoints       []*pulsarCheckpoint
-	pendingWatermarks []*readResult
-	watermark         uint64
+	client       pulsar.Client
+	consumer     pulsar.Consumer
+	memory       *memoryUsage
+	records      map[int32][]*ack
+	mu           sync.Mutex
+	partitionIDs map[string]int32
+	messageIDs   map[*ack]pulsar.MessageID
+	positions    map[int32]pulsar.MessageID
+	checkpoints  []*pulsarCheckpoint
+	watermark    uint64
 }
 
 type pulsarCheckpoint struct {
-	result    *readResult
+	watermark uint64
+	record    *ack
 	positions map[int32]pulsar.MessageID
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if upstreamURI.Host == "" {
 		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("pulsar upstream-uri must include an endpoint")
 	}
@@ -66,30 +67,6 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("cdc_consumer accepts one Pulsar topic")
 	}
 	query := upstreamURI.Query()
-	protocol, err := config.ParseSinkProtocolFromString(cmp.Or(query.Get(config.ProtocolKey), putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json"))
-	if err != nil {
-		return nil, err
-	}
-	if protocol != config.ProtocolCanalJSON {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar consumer requires canal-json")
-	}
-	codecConfig := codecCommon.NewConfig(protocol)
-	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
-	}
-	if !codecConfig.EnableTiDBExtension {
-		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		return nil, err
-	}
-	// Canal's DDL metadata belongs to the logical topic. Decode its merged
-	// stream serially while retaining each physical partition's ACK position.
-	decoder, err := codec.NewEventDecoder(ctx, 0, codecConfig, topic, nil)
-	if err != nil {
-		return nil, err
-	}
 	pulsarConfig := config.PulsarConfig{}
 	if replicaConfig.Sink.PulsarConfig != nil {
 		pulsarConfig = *replicaConfig.Sink.PulsarConfig
@@ -134,6 +111,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar authentication certificate and key must be configured together")
 	}
 	useOAuth2 := oauth2.OAuth2IssuerURL != "" || oauth2.OAuth2ClientID != "" || oauth2.OAuth2PrivateKey != "" || oauth2.OAuth2Audience != "" || oauth2.OAuth2Scope != ""
+	var err error
 	authCount := 0
 	for _, enabled := range []bool{token != "", tokenFile != "", certificate != "", useOAuth2} {
 		if enabled {
@@ -186,140 +164,80 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID, time
 		client.Close()
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "subscribe to Pulsar topic")
 	}
-	partitions := make(map[int32]*partition, len(topics))
 	partitionIDs := make(map[string]int32, len(topics))
-	schemas := make(map[schemaKey]bool)
-	schemaPointers := make(map[*common.TableInfo]bool)
 	for index, partitionTopic := range topics {
 		partitionIDs[partitionTopic] = int32(index)
-		partitions[int32(index)] = &partition{decoder: decoder, schemas: schemas, schemaPointers: schemaPointers}
 	}
-
-	buffer := &readBuffer{memory: memory, protocol: protocol, partitions: partitions, orderedDML: true, dmlBoundary: ^uint64(0)}
 	c := &pulsarReader{
-		client: client, consumer: consumer, buffer: buffer, partitionIDs: partitionIDs,
-		messageIDs: make(map[*ack]pulsar.MessageID), positions: make(map[int32]pulsar.MessageID),
+		client: client, consumer: consumer, memory: memory, partitionIDs: partitionIDs,
+		records: make(map[int32][]*ack), messageIDs: make(map[*ack]pulsar.MessageID),
+		positions: make(map[int32]pulsar.MessageID),
 	}
-	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
+	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitionIDs)))
 	return c, nil
 }
 
-func (c *pulsarReader) Read(ctx context.Context) (*readResult, error) {
-	for {
-		if err := context.Cause(ctx); err != nil {
+func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	case message, ok := <-c.consumer.Chan():
+		if !ok {
+			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar reader stopped unexpectedly")
+		}
+		partitionID, ok := c.partitionIDs[message.Topic()]
+		if !ok {
+			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
+		}
+		size := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
+		if size > maxRecordBytes {
+			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
+		}
+		record, err := c.memory.newAck(ctx, size)
+		if err != nil {
 			return nil, err
 		}
-		c.advanceWatermarks()
-		if result := c.buffer.nextReady(c.watermark); result != nil {
-			return result, nil
+		c.mu.Lock()
+		c.messageIDs[record] = message.ID()
+		c.records[partitionID] = append(c.records[partitionID], record)
+		c.mu.Unlock()
+		position := message.ID()
+		if position.BatchIdx() >= 0 && position.BatchIdx()+1 == position.BatchSize() {
+			// Broker boundaries cover whole entries, including every batch message.
+			position = pulsar.NewMessageID(position.LedgerID(), position.EntryID(), -1, position.PartitionIdx())
 		}
-		if len(c.pendingWatermarks) != 0 && len(c.buffer.pendingDDL) == 0 {
-			result := c.pendingWatermarks[0]
-			c.pendingWatermarks[0] = nil
-			c.pendingWatermarks = c.pendingWatermarks[1:]
-			return result, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		case message, ok := <-c.consumer.Chan():
-			if !ok {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar reader stopped unexpectedly")
-			}
-			partitionID, ok := c.partitionIDs[message.Topic()]
-			if !ok {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
-			}
-			size := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
-			if size > maxRecordBytes {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
-			}
-			record, err := c.buffer.memory.newAck(ctx, size)
-			if err != nil {
-				return nil, err
-			}
-			p := c.buffer.partitions[partitionID]
-			c.mu.Lock()
-			c.messageIDs[record] = message.ID()
-			p.records = append(p.records, record)
-			c.mu.Unlock()
-			p.decoder.AddKeyValue([]byte(message.Key()), message.Payload())
-			for {
-				messageType, hasNext := p.decoder.HasNext()
-				if !hasNext {
-					break
-				}
-				switch messageType {
-				case codecCommon.MessageTypeRow:
-					message := p.decoder.NextDMLMessage()
-					if message == nil {
-						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DML message")
-					}
-					if err := c.buffer.queueDML(ctx, message.ToDMLEvent(), []*ack{record}, p); err != nil {
-						return nil, err
-					}
-				case codecCommon.MessageTypeDDL:
-					ddl := p.decoder.NextDDLEvent()
-					if ddl == nil || ddl.Query == "" {
-						return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an empty DDL event")
-					}
-					key := schemaKey{schema: ddl.SchemaName, table: ddl.TableName, version: ddl.FinishedTs}
-					if !p.schemas[key] {
-						if err := c.buffer.memory.reserve(ctx, 128); err != nil {
-							return nil, err
-						}
-						p.schemas[key] = true
-					}
-					if err := c.buffer.queueDDL(ctx, ddl, record); err != nil {
-						return nil, err
-					}
-				case codecCommon.MessageTypeResolved:
-					watermark := p.decoder.NextResolvedEvent()
-					// Pulsar's producer sends one checkpoint message per topic. A
-					// broker tail snapshot proves all partitions have been read past
-					// the data preceding that checkpoint, including idle partitions.
-					positions, err := c.consumer.GetLastMessageIDs()
-					if err != nil {
-						return nil, errors.WrapError(errors.ErrInternalCheckFailed, err, "read Pulsar checkpoint positions")
-					}
-					if len(positions) != len(c.buffer.partitions) {
-						return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint does not cover every subscribed partition")
-					}
-					if err := c.buffer.memory.reserve(ctx, 128+int64(len(positions))*128); err != nil {
-						return nil, err
-					}
-					checkpointPositions := make(map[int32]pulsar.MessageID, len(positions))
-					for _, position := range positions {
-						partitionID, ok := c.partitionIDs[position.Topic()]
-						if !ok {
-							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint belongs to an unknown partition")
-						}
-						checkpointPositions[partitionID] = position
-					}
-					record.refs.Add(1)
-					c.checkpoints = append(c.checkpoints, &pulsarCheckpoint{
-						positions: checkpointPositions,
-						result: &readResult{watermark: watermark, hasWatermark: true, onFlush: func() {
-							record.refs.Add(-1)
-						}},
-					})
-				default:
-					return nil, errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
-				}
-			}
-			position := message.ID()
-			if position.BatchIdx() >= 0 && position.BatchIdx()+1 == position.BatchSize() {
-				// Broker positions refer to whole entries. A partially decoded
-				// batch cannot satisfy a checkpoint at that entry.
-				position = pulsar.NewMessageID(position.LedgerID(), position.EntryID(), -1, position.PartitionIdx())
-			}
-			c.positions[partitionID] = position
-			c.buffer.memory.decoded(record, 256)
-		}
+		c.positions[partitionID] = position
+		return &readData{key: []byte(message.Key()), value: message.Payload(), partition: partitionID, record: record}, nil
 	}
 }
 
-func (c *pulsarReader) advanceWatermarks() {
+// Checkpoint payloads need a broker snapshot to cover idle partitions as well.
+func (c *pulsarReader) readCheckpoint(ctx context.Context, watermark uint64, record *ack) error {
+	positions, err := c.consumer.GetLastMessageIDs()
+	if err != nil {
+		return errors.WrapError(errors.ErrInternalCheckFailed, err, "read Pulsar checkpoint positions")
+	}
+	if len(positions) != len(c.partitionIDs) {
+		return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint does not cover every subscribed partition")
+	}
+	if err := c.memory.reserve(ctx, 128+int64(len(positions))*128); err != nil {
+		return err
+	}
+	checkpointPositions := make(map[int32]pulsar.MessageID, len(positions))
+	for _, position := range positions {
+		partitionID, ok := c.partitionIDs[position.Topic()]
+		if !ok {
+			return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint belongs to an unknown partition")
+		}
+		checkpointPositions[partitionID] = position
+	}
+	record.refs.Add(1)
+	c.checkpoints = append(c.checkpoints, &pulsarCheckpoint{watermark: watermark, record: record, positions: checkpointPositions})
+	return nil
+}
+
+func (c *pulsarReader) advanceWatermarks() []*pulsarCheckpoint {
+	var completed []*pulsarCheckpoint
 	for len(c.checkpoints) != 0 {
 		checkpoint := c.checkpoints[0]
 		for partitionID, target := range checkpoint.positions {
@@ -328,30 +246,31 @@ func (c *pulsarReader) advanceWatermarks() {
 			}
 			position := c.positions[partitionID]
 			if position == nil {
-				return
+				return completed
 			}
 			comparison := cmp.Compare(position.LedgerID(), target.LedgerID())
 			if comparison == 0 {
 				comparison = cmp.Compare(position.EntryID(), target.EntryID())
 			}
 			if comparison < 0 || (comparison == 0 && position.BatchIdx() >= 0) {
-				return
+				return completed
 			}
 		}
-		c.watermark = max(c.watermark, checkpoint.result.watermark)
-		c.pendingWatermarks = append(c.pendingWatermarks, checkpoint.result)
-		c.buffer.memory.release(128 + int64(len(checkpoint.positions))*128)
+		c.watermark = max(c.watermark, checkpoint.watermark)
+		completed = append(completed, checkpoint)
+		c.memory.release(128 + int64(len(checkpoint.positions))*128)
 		c.checkpoints[0] = nil
 		c.checkpoints = c.checkpoints[1:]
 	}
+	return completed
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, p := range c.buffer.partitions {
+	for partitionID, records := range c.records {
 		count := 0
-		for _, record := range p.records {
+		for _, record := range records {
 			refs := record.refs.Load()
 			if refs < 0 {
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
@@ -367,14 +286,14 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		if err := c.consumer.AckIDCumulative(c.messageIDs[p.records[count-1]]); err != nil {
+		if err := c.consumer.AckIDCumulative(c.messageIDs[records[count-1]]); err != nil {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
-		for _, record := range p.records[:count] {
-			c.buffer.memory.confirm(record)
+		for _, record := range records[:count] {
+			c.memory.confirm(record)
 			delete(c.messageIDs, record)
 		}
-		p.records = slices.Delete(p.records, 0, count)
+		c.records[partitionID] = slices.Delete(records, 0, count)
 	}
 	return nil
 }
