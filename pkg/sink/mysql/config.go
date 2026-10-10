@@ -65,6 +65,7 @@ const (
 	// The upper limit of max multi update row size(8KB).
 	maxMaxMultiUpdateRowSize = 8192
 
+<<<<<<< HEAD
 	defaultTiDBTxnMode    = txnModeOptimistic
 	defaultReadTimeout    = "2m"
 	defaultWriteTimeout   = "2m"
@@ -72,6 +73,16 @@ const (
 	defaultSafeMode       = false
 	defaultTxnIsolationRC = "READ-COMMITTED"
 	defaultCharacterSet   = "utf8mb4"
+=======
+	defaultTiDBTxnMode     = txnModeOptimistic
+	defaultReadTimeout     = "2m"
+	defaultWriteTimeout    = "2m"
+	defaultDialTimeout     = "2m"
+	defaultAsyncDDLTimeout = "2m"
+	defaultSafeMode        = false
+	defaultTxnIsolationRC  = "READ-COMMITTED"
+	defaultCharacterSet    = "utf8mb4"
+>>>>>>> 61f2a0f58 (sink: Increase defaultAsyncDDLTimeout to 2 minutes (#5968))
 
 	// BackoffBaseDelay indicates the base delay time for retrying.
 	BackoffBaseDelay = 100 * time.Millisecond
