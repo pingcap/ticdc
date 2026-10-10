@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	routing "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -52,6 +54,7 @@ type writeEvent struct {
 	hasWatermark bool
 	tableID      int64
 	sequential   bool // Preserve table batch order when metadata cannot describe every conflict key.
+	boundary     *readBoundary
 }
 
 func (a *assembler) prepare(ctx context.Context, items []*writeEvent) (*writeEvent, []*writeEvent, error) {
@@ -152,9 +155,10 @@ type schemaKey struct {
 }
 
 type readDDL struct {
-	event  *event.DDLEvent
-	record *ack
-	bytes  int64
+	event    *event.DDLEvent
+	record   *ack
+	bytes    int64
+	boundary *readBoundary
 }
 
 // assembler decodes inputs and arranges events for downstream writes.
@@ -163,19 +167,21 @@ type assembler struct {
 	codecConfig           *codecCommon.Config
 	upstreamDB            *sql.DB
 	storage               *storageAssembly
-	ddlCopies             map[uint64][]*ack
+	ddlCopies             map[uint64]map[int32][]*ack
 	pendingWatermarks     []*writeEvent
 	deliveredWatermark    uint64
 	hasDeliveredWatermark bool
 	mergeRows             bool
 	sortCSVRows           bool
 	protocol              config.Protocol
+	source                sourceType
 	partitions            map[int32]*partition
 	pendingDML            []*writeEvent
 	pendingDDL            []*readDDL
 	dmlDirty              bool
 	orderedDML            bool
-	dmlBoundary           uint64
+	boundary              *readBoundary
+	router                *eventrouter.EventRouter
 }
 
 func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, p *partition) error {
@@ -199,7 +205,27 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 			record.refs.Add(-1)
 		}
 	})
-	a.pendingDML = append(a.pendingDML, &writeEvent{dml: dml, bytes: bytes, sequential: a.mergeRows})
+	item := &writeEvent{dml: dml, bytes: bytes, sequential: a.mergeRows}
+	if p != nil && (a.source == sourcePulsar || (p.progress != nil && p == a.partitions[0])) {
+		// Pulsar keeps its existing input-order contract. Kafka partition zero
+		// already exposes every preceding executable DDL.
+		item.boundary = &readBoundary{reached: true}
+	}
+	if item.boundary == nil {
+		for _, ddl := range a.pendingDDL {
+			if dml.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, dml) {
+				if p != nil && p.progress != nil {
+					// Kafka's canonical DDL stream already contains the preceding
+					// controls for these rows. Flush them while reading its scope.
+					item.boundary = &readBoundary{reached: true}
+				} else {
+					item.boundary = ddl.boundary
+				}
+				break
+			}
+		}
+	}
+	a.pendingDML = append(a.pendingDML, item)
 	a.dmlDirty = true
 	return nil
 }
@@ -234,6 +260,36 @@ func (a *assembler) trackSchema(ctx context.Context, p *partition, table *common
 }
 
 func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *ack) error {
+	// Decoder table IDs describe metadata already observed, not the complete
+	// scope of rename, exchange, or CREATE TABLE LIKE. Extract their logical names.
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition, timodel.ActionCreateTable:
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			return errors.WrapError(errors.ErrCodecDecode, err, "read consumer DDL scope")
+		}
+		switch stmt := stmt.(type) {
+		case *ast.CreateTableStmt:
+			if stmt.ReferTable != nil {
+				for _, table := range []*ast.TableName{stmt.Table, stmt.ReferTable} {
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName), TableName: table.Name.O})
+				}
+			}
+		case *ast.RenameTableStmt:
+			for _, pair := range stmt.TableToTables {
+				for _, table := range []*ast.TableName{pair.OldTable, pair.NewTable} {
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName), TableName: table.Name.O})
+				}
+			}
+		case *ast.AlterTableStmt:
+			ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(stmt.Table.Schema.O, ddl.SchemaName), TableName: stmt.Table.Name.O})
+			for _, spec := range stmt.Specs {
+				if spec.Tp == ast.AlterTableExchangePartition && spec.NewTable != nil {
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(spec.NewTable.Schema.O, ddl.SchemaName), TableName: spec.NewTable.Name.O})
+				}
+			}
+		}
+	}
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
@@ -254,51 +310,203 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	if len(a.pendingDDL) != 0 {
 		ddl = a.pendingDDL[0]
 	}
-	dmlBoundary := watermark
-	if a.orderedDML {
-		dmlBoundary = a.dmlBoundary
-	}
+	readyIndex := -1
 	for index, result := range a.pendingDML {
-		// The head DDL is a scoped barrier. Independent tables' DDLs need not
-		// arrive in commit order, so only release DML belonging to this barrier.
-		if result.dml.CommitTs <= dmlBoundary && (ddl == nil ||
-			(result.dml.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, result.dml))) {
-			if index == 0 {
-				a.pendingDML[0] = nil
-				a.pendingDML = a.pendingDML[1:]
-			} else {
-				a.pendingDML = slices.Delete(a.pendingDML, index, index+1)
+		ready := result.dml.CommitTs <= watermark || (a.orderedDML && (len(a.partitions) <= 1 || (result.boundary != nil && result.boundary.reached)))
+		// Every queued DDL fences its own post-DDL rows. Independent tables can
+		// keep writing while the head waits for its input boundary.
+		for _, pending := range a.pendingDDL {
+			if result.dml.CommitTs > pending.event.GetCommitTs() && ddlBlocksTable(pending.event, result.dml) {
+				ready = false
+				break
 			}
-			return result
 		}
-		if !a.orderedDML && result.dml.CommitTs > dmlBoundary {
+		if ready {
+			if readyIndex < 0 {
+				readyIndex = index
+			}
+			if ddl == nil {
+				break
+			}
+			if result.dml.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, result.dml) {
+				// Drain the head's scope first so an independent backlog cannot
+				// delay an executable DDL.
+				readyIndex = index
+				break
+			}
+		}
+		if !a.orderedDML && result.dml.CommitTs > watermark {
 			break
 		}
 	}
-	if ddl == nil {
-		return nil
+	if ddl != nil {
+		early := false
+		switch timodel.ActionType(ddl.event.Type) {
+		case timodel.ActionCreateSchema:
+			early = true
+		case timodel.ActionCreateTable:
+			blocked := ddl.event.GetBlockedTables()
+			early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && (len(blocked.TableIDs) == 0 || (len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID)) && len(ddl.event.GetBlockedTableNames()) == 0
+		}
+		ready := ddl.event.GetCommitTs() <= watermark || early || (a.source != sourcePulsar && a.orderedDML && (len(a.partitions) <= 1 || (ddl.boundary != nil && ddl.boundary.reached)))
+		if ready {
+			for _, pending := range a.pendingDML {
+				if pending.dml.CommitTs <= ddl.event.GetCommitTs() && ddlBlocksTable(ddl.event, pending.dml) {
+					ready = false
+					break
+				}
+			}
+		}
+		if ready {
+			record := ddl.record
+			result := &writeEvent{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() { record.refs.Add(-1) }}
+			a.pendingDDL[0] = nil
+			a.pendingDDL = a.pendingDDL[1:]
+			return result
+		}
 	}
-	early := false
-	switch timodel.ActionType(ddl.event.Type) {
-	case timodel.ActionCreateSchema:
-		early = true
-	case timodel.ActionCreateTable:
-		blocked := ddl.event.GetBlockedTables()
-		early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID && len(ddl.event.GetBlockedTableNames()) == 0
+	if readyIndex >= 0 {
+		result := a.pendingDML[readyIndex]
+		if readyIndex == 0 {
+			a.pendingDML[0] = nil
+			a.pendingDML = a.pendingDML[1:]
+		} else {
+			a.pendingDML = slices.Delete(a.pendingDML, readyIndex, readyIndex+1)
+		}
+		return result
 	}
-	if ddl.event.GetCommitTs() > watermark && !early && (!a.orderedDML || len(a.partitions) != 1) {
-		return nil
+	return nil
+}
+
+func (a *assembler) hasPendingThrough(watermark uint64) bool {
+	for _, pending := range a.pendingDML {
+		if pending.dml.CommitTs <= watermark {
+			return true
+		}
 	}
-	record := ddl.record
-	result := &writeEvent{ddl: ddl.event, bytes: ddl.bytes, onFlush: func() {
-		record.refs.Add(-1)
-	}}
-	a.pendingDDL[0] = nil
-	a.pendingDDL = a.pendingDDL[1:]
-	return result
+	for _, pending := range a.pendingDDL {
+		if pending.event.GetCommitTs() <= watermark {
+			return true
+		}
+	}
+	return false
+}
+
+// Only events already decoded before the offset snapshot share its control proof.
+func (a *assembler) captureBoundary(ctx context.Context, reader reader, watermark uint64) (bool, error) {
+	r, ok := reader.(*kafkaReader)
+	if !ok || !a.orderedDML || len(a.partitions) <= 1 {
+		return false, nil
+	}
+	if a.boundary != nil && !a.boundary.reached {
+		return true, nil
+	}
+	a.boundary = nil
+	var (
+		needed bool
+		ddl    *readDDL
+		err    error
+	)
+	for _, pending := range a.pendingDDL {
+		if pending.boundary == nil && pending.event.GetCommitTs() > watermark {
+			needed, ddl = true, pending
+			break
+		}
+	}
+	for _, pending := range a.pendingDML {
+		needed = needed || (pending.boundary == nil && pending.dml.CommitTs > watermark)
+	}
+	if !needed {
+		return false, nil
+	}
+	// Drain already available input into a bounded candidate batch without
+	// waiting for another message or starting a new over-budget read window.
+	if ddl == nil && len(a.pendingDML) < 128 && a.memory.used() < maxMemoryBytes {
+		r.limitReads()
+		if r.nextPartition() >= 0 {
+			return true, nil
+		}
+	}
+	partitions := []int32{0}
+	var commitTs uint64
+	if ddl != nil {
+		partitions, err = a.ddlPartitions(ddl.event)
+		if err != nil {
+			return false, err
+		}
+		if partitions != nil && !slices.Contains(partitions, int32(0)) {
+			partitions = append(partitions, 0)
+		}
+		commitTs = ddl.event.GetCommitTs()
+	}
+	a.boundary, err = r.capture(ctx, partitions, commitTs)
+	if err != nil {
+		return false, err
+	}
+	if commitTs != 0 {
+		r.receivedDDL(0, commitTs)
+		for partitionID := range a.ddlCopies[commitTs] {
+			r.receivedDDL(partitionID, commitTs)
+		}
+		r.advanceBoundary()
+	}
+	if ddl != nil {
+		ddl.boundary = a.boundary
+	}
+	for _, pending := range a.pendingDML {
+		if pending.boundary == nil {
+			pending.boundary = a.boundary
+		}
+	}
+	return true, nil
+}
+
+// A nil selection conservatively covers every partition. Table dispatch uses
+// logical names, including both sides of rename/exchange and physical partitions.
+func (a *assembler) ddlPartitions(ddl *event.DDLEvent) ([]int32, error) {
+	if a.router == nil || ddl.SchemaName == "" || ddl.TableName == "" ||
+		(ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType != event.InfluenceTypeNormal) {
+		return nil, nil
+	}
+	names := []event.SchemaTableName{{SchemaName: ddl.SchemaName, TableName: ddl.TableName}}
+	if ddl.ExtraTableName != "" {
+		names = append(names, event.SchemaTableName{SchemaName: ddl.ExtraSchemaName, TableName: ddl.ExtraTableName})
+	}
+	names = append(names, ddl.BlockedTableNames...)
+	for _, info := range ddl.MultipleTableInfos {
+		if info != nil {
+			names = append(names, event.SchemaTableName{SchemaName: info.GetSchemaName(), TableName: info.GetTableName()})
+		}
+	}
+	var partitions []int32
+	for _, name := range names {
+		if name.SchemaName == "" || name.TableName == "" {
+			return nil, nil
+		}
+		generator := a.router.GetPartitionGenerator(name.SchemaName, name.TableName)
+		switch generator.(type) {
+		case *routing.TablePartitionGenerator:
+		default:
+			// Index/column values can place a table's rows in any partition.
+			return nil, nil
+		}
+		table := common.NewTableInfo4Decoder(name.SchemaName, &timodel.TableInfo{Name: ast.NewCIStr(name.TableName)})
+		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(a.partitions)), table, ddl.GetCommitTs())
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(partitions, partitionID) {
+			partitions = append(partitions, partitionID)
+		}
+	}
+	return partitions, nil
 }
 
 func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
+	if dml.TableInfo == nil {
+		return true
+	}
+	schema, table := dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName()
 	// Incomplete multi-table metadata must retain a global barrier.
 	if ddl.SchemaName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeAll) {
 		return true
@@ -306,28 +514,24 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	if (ddl.Type == byte(timodel.ActionRenameTables) || ddl.Type == byte(timodel.ActionExchangeTablePartition)) && len(ddl.BlockedTableNames) == 0 && len(ddl.MultipleTableInfos) == 0 {
 		return true
 	}
-	table := dml.TableInfo
-	if table == nil {
-		return true
-	}
-	if (table.GetSchemaName() == ddl.SchemaName && table.GetTableName() == ddl.TableName) ||
-		(table.GetSchemaName() == ddl.ExtraSchemaName && table.GetTableName() == ddl.ExtraTableName) {
+	if (schema == ddl.SchemaName && table == ddl.TableName) ||
+		(schema == ddl.ExtraSchemaName && table == ddl.ExtraTableName) {
 		return true
 	}
 	for _, name := range ddl.BlockedTableNames {
-		if table.GetSchemaName() == name.SchemaName && table.GetTableName() == name.TableName {
+		if schema == name.SchemaName && table == name.TableName {
 			return true
 		}
 	}
 	for _, info := range ddl.MultipleTableInfos {
-		if info != nil && table.GetSchemaName() == info.GetSchemaName() && table.GetTableName() == info.GetTableName() {
+		if info != nil && schema == info.GetSchemaName() && table == info.GetTableName() {
 			return true
 		}
 	}
 	if ddl.BlockedTables != nil && slices.Contains(ddl.BlockedTables.TableIDs, dml.PhysicalTableID) {
 		return true
 	}
-	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && table.GetSchemaName() == ddl.SchemaName
+	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
 type storageTableKey struct {
@@ -433,6 +637,13 @@ func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, re
 	partitions := make(map[int32]*partition)
 	var storage *storageAssembly
 	topic := strings.Trim(upstreamURI.Path, "/")
+	var router *eventrouter.EventRouter
+	if source == sourceKafka {
+		router, err = eventrouter.NewEventRouter(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive), topic, false, protocol == config.ProtocolAvro)
+		if err != nil {
+			return nil, err
+		}
+	}
 	switch reader := reader.(type) {
 	case *kafkaReader:
 		for partitionID, progress := range reader.progress {
@@ -464,9 +675,9 @@ func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, re
 		}
 	}
 	return &assembler{
-		memory: memory, codecConfig: codecConfig, protocol: protocol, upstreamDB: db, storage: storage,
-		partitions: partitions, orderedDML: source != sourceStorage, dmlBoundary: math.MaxUint64,
-		ddlCopies: make(map[uint64][]*ack), mergeRows: protocol == config.ProtocolCsv,
+		memory: memory, codecConfig: codecConfig, protocol: protocol, source: source, router: router, upstreamDB: db, storage: storage,
+		partitions: partitions, orderedDML: source != sourceStorage,
+		ddlCopies: make(map[uint64]map[int32][]*ack), mergeRows: protocol == config.ProtocolCsv,
 		sortCSVRows: protocol == config.ProtocolCsv && codecConfig.OutputOldValue && codecConfig.IncludeCommitTs,
 	}, nil
 }
@@ -477,31 +688,42 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 			return nil, err
 		}
 		needsMoreInput := false
+		var inputWatermark uint64
 		switch reader := reader.(type) {
 		case *kafkaReader:
+			reader.advanceBoundary()
 			watermark, ready := a.globalWatermark()
-			a.dmlBoundary = math.MaxUint64
-			for commitTs := range a.ddlCopies {
-				if !ready || commitTs > watermark {
-					a.dmlBoundary = min(a.dmlBoundary, commitTs)
-				}
-			}
+			inputWatermark = watermark
 			if result := a.nextReady(watermark); result != nil {
 				return result, nil
 			}
-			if ready && len(a.pendingDDL) == 0 && (!a.hasDeliveredWatermark || watermark > a.deliveredWatermark) {
+			hasControls := slices.ContainsFunc(a.pendingWatermarks, func(control *writeEvent) bool { return control.watermark <= watermark })
+			if ready && !a.hasPendingThrough(watermark) && (!a.hasDeliveredWatermark || watermark > a.deliveredWatermark || hasControls) {
 				var completed []*ack
 				for commitTs, records := range a.ddlCopies {
 					if commitTs <= watermark {
-						completed = append(completed, records...)
+						for _, copies := range records {
+							completed = append(completed, copies...)
+						}
 						delete(a.ddlCopies, commitTs)
 					}
 				}
 				a.deliveredWatermark = watermark
 				a.hasDeliveredWatermark = true
 				result := &writeEvent{watermark: watermark, hasWatermark: true}
-				if len(completed) != 0 {
+				var controls []*writeEvent
+				a.pendingWatermarks = slices.DeleteFunc(a.pendingWatermarks, func(control *writeEvent) bool {
+					if control.watermark <= watermark {
+						controls = append(controls, control)
+						return true
+					}
+					return false
+				})
+				if len(completed) != 0 || len(controls) != 0 {
 					result.onFlush = func() {
+						for _, control := range controls {
+							control.onFlush()
+						}
 						for _, record := range completed {
 							record.refs.Add(-1)
 						}
@@ -511,22 +733,16 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 				return result, nil
 			}
 		case *pulsarReader:
-			for _, checkpoint := range reader.advanceWatermarks() {
-				a.pendingWatermarks = append(a.pendingWatermarks, &writeEvent{
-					watermark: checkpoint.watermark, hasWatermark: true,
-					onFlush: func() { checkpoint.record.refs.Add(-1) },
-				})
-			}
 			if result := a.nextReady(reader.watermark); result != nil {
 				return result, nil
 			}
-			if len(a.pendingWatermarks) != 0 && len(a.pendingDDL) == 0 {
+			inputWatermark = reader.watermark
+			if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
 				result := a.pendingWatermarks[0]
 				a.pendingWatermarks[0] = nil
 				a.pendingWatermarks = a.pendingWatermarks[1:]
 				return result, nil
 			}
-			needsMoreInput = len(reader.checkpoints) != 0
 		case *storageReader:
 			state := a.storage
 			if !state.sortBeforeWrite || state.groupReady {
@@ -572,7 +788,14 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 				continue
 			}
 		}
-		needsMoreInput = needsMoreInput || len(a.pendingDML) != 0 || len(a.pendingDDL) != 0 || len(a.ddlCopies) != 0
+		boundaryPending, err := a.captureBoundary(ctx, reader, inputWatermark)
+		if err != nil {
+			return nil, err
+		}
+		if boundaryPending && a.boundary != nil && a.boundary.reached {
+			continue
+		}
+		needsMoreInput = needsMoreInput || boundaryPending || len(a.pendingDDL) != 0 || len(a.ddlCopies) != 0 || len(a.pendingWatermarks) != 0 || (a.storage != nil && len(a.pendingDML) != 0)
 		for _, partition := range a.partitions {
 			needsMoreInput = needsMoreInput || partition.cachedUnreleased != 0
 		}
@@ -650,10 +873,22 @@ func (a *assembler) decodePulsar(ctx context.Context, data *readData, reader *pu
 			if err := a.queueDDL(ctx, ddl, record); err != nil {
 				return err
 			}
+			// Match the previous Pulsar consumer: equal timestamps retain input
+			// order, including every statement of a split rename job.
+			slices.SortStableFunc(a.pendingDDL, func(first, second *readDDL) int {
+				return cmp.Compare(first.event.GetCommitTs(), second.event.GetCommitTs())
+			})
 		case codecCommon.MessageTypeResolved:
-			if err := reader.readCheckpoint(ctx, p.decoder.NextResolvedEvent(), record); err != nil {
+			watermark := p.decoder.NextResolvedEvent()
+			reader.watermark = max(reader.watermark, watermark)
+			if err := a.memory.reserve(ctx, 128); err != nil {
 				return err
 			}
+			record.refs.Add(1)
+			a.pendingWatermarks = append(a.pendingWatermarks, &writeEvent{watermark: watermark, hasWatermark: true, onFlush: func() {
+				record.refs.Add(-1)
+				a.memory.release(128)
+			}})
 		default:
 			return errors.ErrCodecDecode.FastGenByArgs("Pulsar decoder returned an unknown message type")
 		}
@@ -808,6 +1043,7 @@ func (a *assembler) decodeKafka(ctx context.Context, record *readData) error {
 				}
 				continue
 			}
+			p.progress.ddlTs = ddl.GetCommitTs()
 			if record.partition != 0 {
 				// Only partition zero supplies executable DDLs. Other copies wait
 				// for downstream progress without matching individual statements.
@@ -815,7 +1051,12 @@ func (a *assembler) decodeKafka(ctx context.Context, record *readData) error {
 					return err
 				}
 				state.refs.Add(1)
-				a.ddlCopies[ddl.GetCommitTs()] = append(a.ddlCopies[ddl.GetCommitTs()], state)
+				copies := a.ddlCopies[ddl.GetCommitTs()]
+				if copies == nil {
+					copies = make(map[int32][]*ack)
+					a.ddlCopies[ddl.GetCommitTs()] = copies
+				}
+				copies[record.partition] = append(copies[record.partition], state)
 				continue
 			}
 			if err := a.queueDDL(ctx, ddl, state); err != nil {
@@ -827,6 +1068,14 @@ func (a *assembler) decodeKafka(ctx context.Context, record *readData) error {
 				p.progress.watermark = watermark
 				p.progress.hasWatermark = true
 			}
+			if err := a.memory.reserve(ctx, 128); err != nil {
+				return err
+			}
+			state.refs.Add(1)
+			a.pendingWatermarks = append(a.pendingWatermarks, &writeEvent{watermark: watermark, hasWatermark: true, onFlush: func() {
+				state.refs.Add(-1)
+				a.memory.release(128)
+			}})
 		default:
 			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type")
 		}

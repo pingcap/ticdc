@@ -45,6 +45,14 @@ type readProgress struct {
 	watermark      uint64
 	hasWatermark   bool
 	needsMoreInput bool
+	ddlTs          uint64
+}
+
+// A fixed broker boundary proves that earlier controls or related DML have
+// been read. Readers own its positions and mark it reached after decoding input.
+type readBoundary struct {
+	reached  bool
+	commitTs uint64 // A broadcast DDL can close its partition before the broker tail.
 }
 
 func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (reader, error) {

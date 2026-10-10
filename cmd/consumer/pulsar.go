@@ -41,15 +41,7 @@ type pulsarReader struct {
 	mu           sync.Mutex
 	partitionIDs map[string]int32
 	messageIDs   map[*ack]pulsar.MessageID
-	positions    map[int32]pulsar.MessageID
-	checkpoints  []*pulsarCheckpoint
 	watermark    uint64
-}
-
-type pulsarCheckpoint struct {
-	watermark uint64
-	record    *ack
-	positions map[int32]pulsar.MessageID
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
@@ -155,7 +147,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar topic has an invalid partition count")
 	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
-		Topics: topics, SubscriptionName: consumerID, Type: pulsar.Exclusive,
+		Topic: topic, SubscriptionName: consumerID, Type: pulsar.Exclusive,
 		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
 		ReceiverQueueSize:           1, MessageChannel: make(chan pulsar.ConsumerMessage, 1),
 		AckWithResponse: true, MaxPendingChunkedMessage: 1,
@@ -171,7 +163,6 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	c := &pulsarReader{
 		client: client, consumer: consumer, memory: memory, partitionIDs: partitionIDs,
 		records: make(map[int32][]*ack), messageIDs: make(map[*ack]pulsar.MessageID),
-		positions: make(map[int32]pulsar.MessageID),
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitionIDs)))
 	return c, nil
@@ -198,68 +189,8 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		c.messageIDs[record] = message.ID()
 		c.records[partitionID] = append(c.records[partitionID], record)
 		c.mu.Unlock()
-		position := message.ID()
-		if position.BatchIdx() >= 0 && position.BatchIdx()+1 == position.BatchSize() {
-			// Broker boundaries cover whole entries, including every batch message.
-			position = pulsar.NewMessageID(position.LedgerID(), position.EntryID(), -1, position.PartitionIdx())
-		}
-		c.positions[partitionID] = position
 		return &readData{key: []byte(message.Key()), value: message.Payload(), partition: partitionID, record: record}, nil
 	}
-}
-
-// Checkpoint payloads need a broker snapshot to cover idle partitions as well.
-func (c *pulsarReader) readCheckpoint(ctx context.Context, watermark uint64, record *ack) error {
-	positions, err := c.consumer.GetLastMessageIDs()
-	if err != nil {
-		return errors.WrapError(errors.ErrInternalCheckFailed, err, "read Pulsar checkpoint positions")
-	}
-	if len(positions) != len(c.partitionIDs) {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint does not cover every subscribed partition")
-	}
-	if err := c.memory.reserve(ctx, 128+int64(len(positions))*128); err != nil {
-		return err
-	}
-	checkpointPositions := make(map[int32]pulsar.MessageID, len(positions))
-	for _, position := range positions {
-		partitionID, ok := c.partitionIDs[position.Topic()]
-		if !ok {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar checkpoint belongs to an unknown partition")
-		}
-		checkpointPositions[partitionID] = position
-	}
-	record.refs.Add(1)
-	c.checkpoints = append(c.checkpoints, &pulsarCheckpoint{watermark: watermark, record: record, positions: checkpointPositions})
-	return nil
-}
-
-func (c *pulsarReader) advanceWatermarks() []*pulsarCheckpoint {
-	var completed []*pulsarCheckpoint
-	for len(c.checkpoints) != 0 {
-		checkpoint := c.checkpoints[0]
-		for partitionID, target := range checkpoint.positions {
-			if target.EntryID() < 0 {
-				continue
-			}
-			position := c.positions[partitionID]
-			if position == nil {
-				return completed
-			}
-			comparison := cmp.Compare(position.LedgerID(), target.LedgerID())
-			if comparison == 0 {
-				comparison = cmp.Compare(position.EntryID(), target.EntryID())
-			}
-			if comparison < 0 || (comparison == 0 && position.BatchIdx() >= 0) {
-				return completed
-			}
-		}
-		c.watermark = max(c.watermark, checkpoint.watermark)
-		completed = append(completed, checkpoint)
-		c.memory.release(128 + int64(len(checkpoint.positions))*128)
-		c.checkpoints[0] = nil
-		c.checkpoints = c.checkpoints[1:]
-	}
-	return completed
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {
