@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,10 +24,70 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
+
+func TestBigintSchemaDefaultPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		value      string
+		unsigned   bool
+		stringMode bool
+		expected   string
+	}{
+		{value: "9007199254740993", expected: "9007199254740993"},
+		{value: "9223372036854775807", expected: "9223372036854775807"},
+		{value: "-9223372036854775808", expected: "-9223372036854775808"},
+		{value: "9007199254740993", unsigned: true, expected: "9007199254740993"},
+		{value: "18446744073709551615", unsigned: true, expected: "-1"},
+		{value: "18446744073709551615", unsigned: true, stringMode: true, expected: "18446744073709551615"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			col := &timodel.ColumnInfo{FieldType: *types.NewFieldType(mysql.TypeLonglong)}
+			if tc.unsigned {
+				col.AddFlag(mysql.UnsignedFlag)
+			}
+			require.NoError(t, col.SetDefaultValue(tc.value))
+			codec := &dbzCodec{config: common.NewConfig(config.ProtocolDebezium)}
+			var expected any = json.Number(tc.expected)
+			if tc.stringMode {
+				codec.config.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+				expected = tc.expected
+			}
+			buf := new(bytes.Buffer)
+			writer := util.BorrowJSONWriter(buf)
+			codec.writeDebeziumFieldSchema(writer, col)
+			util.ReturnJSONWriter(writer)
+
+			dec := json.NewDecoder(buf)
+			dec.UseNumber()
+			var schema map[string]any
+			require.NoError(t, dec.Decode(&schema))
+			require.Equal(t, expected, schema["default"])
+
+			// Missing row values use the column default and must preserve it too.
+			rows := chunk.NewChunkWithCapacity([]*types.FieldType{&col.FieldType}, 1)
+			rows.AppendNull(0)
+			row := rows.GetRow(0)
+			buf.Reset()
+			writer = util.BorrowJSONWriter(buf)
+			writer.WriteObject(func() {
+				require.NoError(t, codec.writeDebeziumFieldValue(writer, &row, 0, col))
+			})
+			util.ReturnJSONWriter(writer)
+			dec = json.NewDecoder(buf)
+			dec.UseNumber()
+			var payload map[string]any
+			require.NoError(t, dec.Decode(&payload))
+			require.Equal(t, expected, payload[col.Name.O])
+		})
+	}
+}
 
 func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 	codec := &dbzCodec{
