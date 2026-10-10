@@ -14,7 +14,9 @@
 package dynstream
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -63,6 +65,51 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 	require.Equal(t, mockEvent{value: 1}, *events[0])
 	require.Equal(t, path, popPath)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
+func TestPeriodicSignalReplacementDoesNotAddSignal(t *testing.T) {
+	for _, enableMemoryControl := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory-control-%t", enableMemoryControl), func(t *testing.T) {
+			handler := mockHandler{}
+			eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+			b := newDefaultBatcher[*mockEvent]()
+			path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
+
+			if enableMemoryControl {
+				mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+				mc.addPathToArea(path, AreaSettings{
+					maxPendingSize:   1024,
+					feedbackInterval: time.Second,
+					algorithm:        MemoryControlForEventCollector,
+				}, make(chan Feedback[int, string, any], 1))
+			}
+			eq.initPath(path)
+
+			appendPeriodicSignal := func(value int) {
+				eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+					pathInfo:  path,
+					event:     &mockEvent{value: value},
+					eventSize: 1,
+					eventType: EventType{DataGroup: 1, Property: PeriodicSignal},
+				})
+			}
+
+			appendPeriodicSignal(1)
+			appendPeriodicSignal(2)
+
+			require.Equal(t, 1, path.pendingQueue.Length())
+			require.Equal(t, 1, eq.signalQueue.Length())
+			require.Equal(t, int64(1), eq.totalPendingLength.Load())
+
+			events, popPath, _, _ := eq.popEvents(b)
+			require.Equal(t, path, popPath)
+			require.Equal(t, []*mockEvent{{value: 2}}, events)
+			require.Equal(t, int64(0), eq.totalPendingLength.Load())
+
+			events, _, _, _ = eq.popEvents(b)
+			require.Empty(t, events)
+		})
+	}
 }
 
 func TestBlockAndWakePath(t *testing.T) {

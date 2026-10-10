@@ -89,22 +89,28 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 
 // var testCounter atomic.Int64
 
-// appendEvent try to append an event to the path's pending queue.
-// It returns true if the event is appended successfully.
+// appendEvent adds an event to the path's pending queue or merges it into the
+// last periodic signal. accepted reports whether the event was accepted, while
+// appended reports whether the pending queue grew by one event.
 // This method is called by streams' handleLoop concurrently, but it is thread safe.
 // We use atomic operations to update the totalPendingSize and the path's pendingSize.
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
-) bool {
+) (accepted bool, appended bool) {
 	// The removed flag can flip between handleLoop's removed check and appendEvent call.
 	// Guard here to avoid accounting events for a removed path.
 	if path.removed.Load() {
-		return false
+		return false, false
 	}
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
+	appendToPendingQueue := func() {
+		path.pendingQueue.PushBack(event)
+		path.updatePendingSize(int64(event.eventSize))
+		as.totalPendingSize.Add(int64(event.eventSize))
+	}
 
 	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
 		if failpointAPITestLogged.CompareAndSwap(false, true) {
@@ -119,7 +125,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			// If the last event is a periodic signal, we only need to keep the latest one.
 			// And we don't need to add a new signal.
 			*back = event
-			return true
+			return true, false
 		}
 	}
 
@@ -135,8 +141,8 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
-				return true
+				appendToPendingQueue()
+				return true, true
 			}
 		}
 	}
@@ -147,18 +153,14 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
-				failpoint.Return(true)
+				appendToPendingQueue()
+				failpoint.Return(true, true)
 			}
 		}
 	})
 
-	// Add the event to the pending queue.
-	path.pendingQueue.PushBack(event)
-	// Update the pending size.
-	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(int64(event.eventSize))
-	return true
+	appendToPendingQueue()
+	return true, true
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
