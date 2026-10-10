@@ -108,8 +108,6 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 		pulsarConfig.SendTimeout = c.SendTimeout
 	}
 
-	log.Debug("new pulsar config success", zap.Any("config", pulsarConfig))
-
 	return pulsarConfig, nil
 }
 

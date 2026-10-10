@@ -91,6 +91,43 @@ var sensitiveQueryParameterNames = []string{
 	"client",
 }
 
+func isSensitiveQueryParameter(name string) bool {
+	name = strings.ToLower(name)
+	if name == "kafka-client" {
+		return false // Selects the Kafka client implementation, not a credential.
+	}
+	for _, sensitive := range sensitiveQueryParameterNames {
+		if strings.Contains(name, sensitive) {
+			return true
+		}
+	}
+	return false
+}
+
+// ContainsSensitiveDataInURI reports whether a URI includes credential fields.
+// Invalid URIs are treated as sensitive because they cannot be safely inspected.
+func ContainsSensitiveDataInURI(uri string) bool {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return true
+	}
+	if parsed.User != nil {
+		if _, present := parsed.User.Password(); present {
+			return true
+		}
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return true
+	}
+	for name := range query {
+		if isSensitiveQueryParameter(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // MaskSensitiveDataInURI returns an uri that sensitive infos has been masked.
 func MaskSensitiveDataInURI(uri string) string {
 	uriParsed, err := url.Parse(uri)
@@ -99,11 +136,8 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	queries := uriParsed.Query()
 	for key := range queries {
-		lower := strings.ToLower(key)
-		for _, secretKey := range sensitiveQueryParameterNames {
-			if strings.Contains(lower, secretKey) {
-				queries.Set(key, "xxxxx")
-			}
+		if isSensitiveQueryParameter(key) {
+			queries.Set(key, "xxxxx")
 		}
 	}
 	uriParsed.RawQuery = queries.Encode()
