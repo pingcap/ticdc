@@ -18,6 +18,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCompareEventKey(t *testing.T) {
+	testCases := []struct {
+		name     string
+		a        eventKey
+		b        eventKey
+		expected int
+	}{
+		{name: "lower block ts", a: getEventKey(1, false), b: getEventKey(2, false), expected: -1},
+		{name: "higher block ts", a: getEventKey(2, false), b: getEventKey(1, false), expected: 1},
+		{name: "ddl before sync point", a: getEventKey(1, false), b: getEventKey(1, true), expected: -1},
+		{name: "sync point after ddl", a: getEventKey(1, true), b: getEventKey(1, false), expected: 1},
+		{name: "equal ddl", a: getEventKey(1, false), b: getEventKey(1, false), expected: 0},
+		{name: "equal sync point", a: getEventKey(1, true), b: getEventKey(1, true), expected: 0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, compareEventKey(tc.a, tc.b))
+		})
+	}
+}
+
 func TestPendingScheduleEventMapDeduplicate(t *testing.T) {
 	m := newPendingScheduleEventMap()
 	event1 := &BarrierEvent{commitTs: 10, isSyncPoint: false}
