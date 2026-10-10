@@ -32,6 +32,7 @@ import (
 
 var (
 	newMySQLConfigAndDBFn   = mysql.NewMysqlConfigAndDB
+	closeMySQLConfigTLSFn   = (*mysql.Config).CloseTLS
 	getClusterIDBySinkURIFn = getClusterIDBySinkURI
 )
 
@@ -114,11 +115,18 @@ func getClusterIDBySinkURI(
 		return 0, "", false, nil
 	}
 
-	_, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, uri, changefeedCfg)
+	mysqlCfg, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, uri, changefeedCfg)
 	if err != nil {
 		return 0, "", true, cerrors.Trace(err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Warn("failed to close downstream database after cluster ID check", zap.Error(closeErr))
+		}
+		if closeErr := closeMySQLConfigTLSFn(mysqlCfg); closeErr != nil {
+			log.Warn("failed to close downstream TLS after cluster ID check", zap.Error(closeErr))
+		}
+	}()
 
 	// NOTE: Do not rely on `Config.IsTiDB` only. `IsTiDB` is determined by
 	// `SELECT tidb_version()`, which may return false if the query fails (for example,
