@@ -31,6 +31,10 @@ import (
 )
 
 const (
+	// MaskedSensitiveValue is the placeholder used when exposing sensitive
+	// configuration values.
+	MaskedSensitiveValue = "******"
+
 	// DefaultMaxMessageBytes sets the default value for max-message-bytes.
 	DefaultMaxMessageBytes = 10 * 1024 * 1024 // 10M
 	// DefaultAdvanceTimeoutInSec sets the default value for advance-timeout-in-sec.
@@ -509,17 +513,23 @@ func (k *KafkaConfig) GetOutputRawChangeEvent() bool {
 
 // MaskSensitiveData masks sensitive data in KafkaConfig
 func (k *KafkaConfig) MaskSensitiveData() {
-	k.SASLPassword = aws.String("******")
-	k.SASLGssAPIPassword = aws.String("******")
-	k.SASLOAuthClientSecret = aws.String("******")
-	k.Key = aws.String("******")
+	sensitiveFields := []*string{k.SASLPassword, k.SASLGssAPIPassword, k.SASLOAuthClientSecret, k.Key}
 	if k.GlueSchemaRegistryConfig != nil {
-		k.GlueSchemaRegistryConfig.AccessKey = "******"
-		k.GlueSchemaRegistryConfig.Token = "******"
-		k.GlueSchemaRegistryConfig.SecretAccessKey = "******"
+		sensitiveFields = append(sensitiveFields,
+			&k.GlueSchemaRegistryConfig.AccessKey,
+			&k.GlueSchemaRegistryConfig.Token,
+			&k.GlueSchemaRegistryConfig.SecretAccessKey)
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = MaskedSensitiveValue
+		}
 	}
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
+	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 
@@ -680,13 +690,14 @@ func (c *PulsarConfig) GetOutputRawChangeEvent() bool {
 // MaskSensitiveData masks sensitive data in PulsarConfig
 func (c *PulsarConfig) MaskSensitiveData() {
 	if c.AuthenticationToken != nil {
-		c.AuthenticationToken = aws.String("******")
+		c.AuthenticationToken = aws.String(MaskedSensitiveValue)
 	}
 	if c.BasicPassword != nil {
-		c.BasicPassword = aws.String("******")
+		c.BasicPassword = aws.String(MaskedSensitiveValue)
 	}
 	if c.OAuth2 != nil {
-		c.OAuth2.OAuth2PrivateKey = "******"
+		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
+		c.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(c.OAuth2.OAuth2IssuerURL)
 	}
 }
 

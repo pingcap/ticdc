@@ -3,7 +3,7 @@
 .PHONY: clean fmt check tidy \
 	check-go-version \
 	generate-protobuf generate_mock \
-	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper kafka_auth_server \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 	generate-next-gen-grafana check-next-gen-grafana
@@ -220,7 +220,10 @@ check_third_party_binary:
 	@which bin/minio
 	@which bin/bin/schema-registry-start
 
-integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
+kafka_auth_server:
+	$(GOBUILD) -o bin/kafka_auth_server ./tests/integration_tests/changefeed_update_config/kafka_auth_server
+
+integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server kafka_auth_server
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
@@ -230,7 +233,7 @@ integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer puls
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	$(FAILPOINT_DISABLE)
 
-integration_test_build_fast:
+integration_test_build_fast: kafka_auth_server
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
