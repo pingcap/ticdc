@@ -655,31 +655,26 @@ func TestCleanOldData(t *testing.T) {
 			}
 			if tc.invalidMetadata {
 				kvs = append(kvs, &mvccpb.KeyValue{
-					Key: []byte(oldChangefeedPrefix + "/invalid"), Value: []byte(`{"sink-uri":`),
+					Key:   []byte(oldChangefeedPrefix + "/invalid"),
+					Value: []byte(`{"sink-uri":"mysql://user:password-sentinel@host/","config":`),
 				})
-			} else {
-				for _, kv := range kvs {
-					// Backups must retain the original credentials.
-					gomock.InOrder(
-						client.EXPECT().Put(ctx, etcd.MigrateBackupKey(0, string(kv.Key)), string(kv.Value)).
-							Return(&clientv3.PutResponse{}, nil),
-						client.EXPECT().Delete(ctx, string(kv.Key)).Return(&clientv3.DeleteResponse{}, nil),
-					)
-				}
+			}
+			for _, kv := range kvs {
+				// Backups must retain the original credentials, including malformed metadata.
+				gomock.InOrder(
+					client.EXPECT().Put(ctx, etcd.MigrateBackupKey(0, string(kv.Key)), string(kv.Value)).
+						Return(&clientv3.PutResponse{}, nil),
+					client.EXPECT().Delete(ctx, string(kv.Key)).Return(&clientv3.DeleteResponse{}, nil),
+				)
 			}
 			client.EXPECT().Get(ctx, "/tidb/cdc", gomock.Any()).Return(&clientv3.GetResponse{Kvs: kvs}, nil)
 
-			err := cleanOldData(ctx, client)
-			if tc.invalidMetadata {
-				require.ErrorIs(t, err, errors.ErrUnmarshalFailed)
-			} else {
-				require.NoError(t, err)
-			}
+			require.NoError(t, cleanOldData(ctx, client))
 		})
 	}
 }
 
-func TestMigrationCleanupError(t *testing.T) {
+func TestMigrationCleanupBestEffort(t *testing.T) {
 	s := &etcd.Tester{}
 	s.SetUpTest(t)
 	defer s.TearDownTest(t)
@@ -716,14 +711,18 @@ func TestMigrationCleanupError(t *testing.T) {
 			}, nil)
 			versionWritten := client.EXPECT().Put(gomock.Any(), m.metaVersionKey, "1").Return(&clientv3.PutResponse{}, nil)
 			client.EXPECT().Put(gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.PutResponse{}, nil)
-			client.EXPECT().Get(gomock.Any(), "/tidb/cdc", gomock.Any()).Return(tc.resp, tc.err).After(versionWritten)
-
-			err := m.migrate(t.Context(), false, 0)
-			if tc.err != nil {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, errors.ErrUnmarshalFailed)
+			cleanupQueried := client.EXPECT().Get(gomock.Any(), "/tidb/cdc", gomock.Any()).Return(tc.resp, tc.err).After(versionWritten)
+			if tc.resp != nil {
+				for _, kv := range tc.resp.Kvs {
+					gomock.InOrder(
+						client.EXPECT().Put(gomock.Any(), etcd.MigrateBackupKey(0, string(kv.Key)), string(kv.Value)).
+							Return(&clientv3.PutResponse{}, nil).After(cleanupQueried),
+						client.EXPECT().Delete(gomock.Any(), string(kv.Key)).Return(&clientv3.DeleteResponse{}, nil),
+					)
+				}
 			}
+
+			require.NoError(t, m.migrate(t.Context(), false, 0))
 		})
 	}
 }
