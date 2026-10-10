@@ -665,9 +665,9 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
 	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
 	boundary := &readBoundary{}
-	before := &event.DMLEvent{CommitTs: 9, TableInfo: tableA}
-	after := &event.DMLEvent{CommitTs: 11, TableInfo: tableA}
-	independent := &event.DMLEvent{CommitTs: 12, TableInfo: tableB}
+	before := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 9, TableInfo: tableA}
+	after := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 11, TableInfo: tableA}
+	independent := &event.DMLEvent{PhysicalTableID: 2, CommitTs: 12, TableInfo: tableB}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 10}
 	a := &assembler{
 		pendingDML: []*writeEvent{
@@ -732,8 +732,8 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 func TestReaderDDLArrivalOrder(t *testing.T) {
 	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
 	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
-	beforeA, afterA := &event.DMLEvent{CommitTs: 280, TableInfo: tableA}, &event.DMLEvent{CommitTs: 310, TableInfo: tableA}
-	beforeB, afterB := &event.DMLEvent{CommitTs: 180, TableInfo: tableB}, &event.DMLEvent{CommitTs: 220, TableInfo: tableB}
+	beforeA, afterA := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 280, TableInfo: tableA}, &event.DMLEvent{PhysicalTableID: 1, CommitTs: 310, TableInfo: tableA}
+	beforeB, afterB := &event.DMLEvent{PhysicalTableID: 2, CommitTs: 180, TableInfo: tableB}, &event.DMLEvent{PhysicalTableID: 2, CommitTs: 220, TableInfo: tableB}
 	buffer := &assembler{
 		memory: &memoryUsage{},
 		pendingDML: []*writeEvent{

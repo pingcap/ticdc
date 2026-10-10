@@ -288,14 +288,10 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 			for index, pending := range a.pendingDML {
 				if pending.dml.CommitTs <= head.ddl.GetCommitTs() && ddlBlocksTable(head.ddl, pending.dml) {
 					ready = false
-					if pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached) {
+					if (pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+						return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending.dml)
+					}) {
 						readyIndex = index
-						for _, ddl := range a.pendingDDL {
-							if pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending.dml) {
-								readyIndex = -1
-								break
-							}
-						}
 					}
 					break
 				}
@@ -311,20 +307,13 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 		var blocked map[int64]uint64
 		for index, result := range a.pendingDML {
 			tableID := result.dml.PhysicalTableID
-			if tableID == 0 && result.dml.TableInfo != nil {
-				tableID = result.dml.TableInfo.TableName.TableID
-			}
 			if ts, ok := blocked[tableID]; ok && ts <= result.dml.CommitTs {
 				continue
 			}
-			ready := result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)
 			// Every queued DDL fences its own post-DDL rows.
-			for _, ddl := range a.pendingDDL {
-				if result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result.dml) {
-					ready = false
-					break
-				}
-			}
+			ready := (result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+				return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result.dml)
+			})
 			if ready {
 				readyIndex = index
 				break
@@ -521,16 +510,8 @@ func (a *assembler) applyProgress(progress readProgress) {
 }
 
 func (a *assembler) decode(ctx context.Context, data *readData, reader reader) error {
-	if data.control != nil {
-		progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true})
-		if err != nil {
-			return err
-		}
-		a.applyProgress(progress)
-		return nil
-	}
-	if data.groupEnd {
-		if data.group.order == commitOrder {
+	if data.control != nil || data.groupEnd {
+		if data.control == nil && data.group.order == commitOrder {
 			start := slices.IndexFunc(a.pendingDML, func(item *writeEvent) bool { return item.boundary == data.group.boundary })
 			if start >= 0 {
 				end := start
