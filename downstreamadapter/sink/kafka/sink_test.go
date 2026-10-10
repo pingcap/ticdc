@@ -110,6 +110,27 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
 
+<<<<<<< HEAD
+=======
+	ctrl := gomock.NewController(t)
+	adminClient := kafka.NewMockAdminClient(ctrl)
+	factory := kafka.NewMockFactory(ctrl)
+	gomock.InOrder(
+		factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
+		adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
+			map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic}}, nil),
+		adminClient.EXPECT().Close(),
+	)
+
+	originalCreateKafkaFactory := createKafkaFactory
+	createKafkaFactory = func(_ func() (kafka.Factory, error)) (kafka.Factory, error) {
+		return factory, nil
+	}
+	t.Cleanup(func() {
+		createKafkaFactory = originalCreateKafkaFactory
+	})
+
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
 	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig, false)
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
@@ -288,7 +309,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		gomock.InOrder(
 			adminClient.EXPECT().Close(),
 			topicManager.EXPECT().Close(),
+<<<<<<< HEAD
 			factory.EXPECT().Close(),
+=======
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -317,7 +341,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			asyncProducer.EXPECT().Close(),
 			adminClient.EXPECT().Close(),
 			topicManager.EXPECT().Close(),
+<<<<<<< HEAD
 			factory.EXPECT().Close(),
+=======
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -349,7 +376,10 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
 			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+<<<<<<< HEAD
 			factory.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+=======
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		)
 
 		kafkaSink, err := newWithComponents(
@@ -365,7 +395,11 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		require.True(t, kafkaSink.IsNormal())
 
 		kafkaSink.Close()
+<<<<<<< HEAD
 		require.Equal(t, int64(5), closeCount.Load())
+=======
+		require.Equal(t, int64(4), closeCount.Load())
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		require.False(t, kafkaSink.IsNormal())
 		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
 		require.Zero(t, kafkaSink.eventChan.Len())

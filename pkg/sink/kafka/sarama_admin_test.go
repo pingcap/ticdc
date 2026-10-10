@@ -192,6 +192,31 @@ func TestGetTopicsMeta(t *testing.T) {
 
 		topics, err := client.GetTopicsMeta(t.Context(), []string{"valid-topic", "missing-topic"}, true)
 
+		require.Nil(t, topics)
+		require.ErrorIs(t, err, errors.ErrKafkaAdminAPI)
+		require.ErrorIs(t, err, sarama.ErrUnknownTopicOrPartition)
+	})
+
+	t.Run("ignores unknown topic error and returns valid topics", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		admin := NewMocksaramaClusterAdmin(ctrl)
+		admin.EXPECT().DescribeTopics([]string{"valid-topic", "missing-topic"}).Return([]*sarama.TopicMetadata{
+			{
+				Name:       "valid-topic",
+				Partitions: []*sarama.PartitionMetadata{{}, {}},
+			},
+			{
+				Name: "missing-topic",
+				Err:  sarama.ErrUnknownTopicOrPartition,
+			},
+		}, nil)
+		client := &saramaAdminClient{
+			changefeed: common.NewChangeFeedIDWithName("test", "default"),
+			admin:      admin,
+		}
+
+		topics, err := client.GetTopicsMeta([]string{"valid-topic", "missing-topic"}, true)
+
 		require.NoError(t, err)
 		require.Equal(t, map[string]TopicDetail{
 			"valid-topic": {
@@ -312,7 +337,11 @@ func TestIsAuthorizationFailed(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 func TestIsUnretryableSaramaError(t *testing.T) {
+=======
+func TestIsUnretryableKafkaError(t *testing.T) {
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	t.Parallel()
 
 	tests := []struct {
@@ -354,7 +383,11 @@ func TestIsUnretryableSaramaError(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+<<<<<<< HEAD
 			require.Equal(t, test.unretryable, IsUnretryableSaramaError(test.err))
+=======
+			require.Equal(t, test.unretryable, IsUnretryableKafkaError(test.err))
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 		})
 	}
 }

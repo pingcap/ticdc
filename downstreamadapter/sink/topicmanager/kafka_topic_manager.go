@@ -271,7 +271,11 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
 	// If the topic is not in the cache, try to get its metadata.
+<<<<<<< HEAD
 	topicDetails, err := m.admin.GetTopicsMeta(ctx, []string{topicName}, false)
+=======
+	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, false)
+>>>>>>> 51db5185d (kafka: improve stability when creating many topics with Kafka v4 (#6081))
 	if err == nil {
 		if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
 			return numPartition, nil
