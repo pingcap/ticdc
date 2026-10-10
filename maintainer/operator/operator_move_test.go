@@ -156,6 +156,32 @@ func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
+func TestMoveOperator_UsesOriginFinalCheckpointForDestination(t *testing.T) {
+	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
+	op.Start()
+
+	finalStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, finalStatus)
+
+	require.Equal(t, moveStateAddDest, op.state)
+	require.Equal(t, uint64(1500), replicaSet.GetStatus().CheckpointTs)
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeB.String(), msg.To.String())
+	scheduleMsg, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, scheduleMsg.ScheduleAction)
+	require.Equal(t, uint64(1500), scheduleMsg.Config.StartTs)
+}
+
 // TestMoveOperator_OriginNodeRemovedBeforeOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A
 // 2. A move operation is initiated to move 'a' from node A to node B

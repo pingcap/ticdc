@@ -44,6 +44,8 @@ type elector struct {
 	svr                             *server
 }
 
+const logCoordinatorLivenessCheckInterval = 200 * time.Millisecond
+
 // NewElector creates the coordinator elector with scheduler settings captured from server startup config.
 func NewElector(server *server, schedulerCfg *config.SchedulerConfig) common.SubModule {
 	election := concurrency.NewElection(server.session,
@@ -267,14 +269,26 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			zap.Int64("logCoordinatorVersion", logCoordinatorVersion))
 
 		co := logcoordinator.New()
-		err = co.Run(ctx)
+		err = e.runLogCoordinator(ctx, co.Run)
 
-		if err != nil && !errors.Is(err, context.Canceled) {
-			if !errors.ErrNotOwner.Equal(err) {
-				if resignErr := e.resignLogCoordinator(); resignErr != nil {
-					return errors.Trace(resignErr)
+		// Release the election key if this node still owns it, allowing another
+		// node to campaign immediately after the log coordinator exits.
+		if !errors.ErrNotOwner.Equal(err) {
+			if resignErr := e.resignLogCoordinator(); resignErr != nil {
+				log.Warn("log coordinator resign failed",
+					zap.String("nodeID", nodeID),
+					zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+					zap.Error(resignErr))
+				// Preserve the log coordinator error, especially context cancellation
+				// during shutdown or draining. If it exited without an error, the
+				// resignation failure is the primary error and should be returned.
+				if err == nil {
+					return resignErr
 				}
 			}
+		}
+
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn("log coordinator exited with error",
 				zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
 				zap.Error(err))
@@ -285,6 +299,41 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		log.Info("log coordinator exited normally",
 			zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
 			zap.Error(err))
+	}
+}
+
+// runLogCoordinator stops an elected log coordinator as soon as this node
+// enters the drain workflow. Resigning while the old process is still alive
+// lets the replacement publish metrics before the old Prometheus series goes
+// stale during a rolling restart.
+func (e *elector) runLogCoordinator(ctx context.Context, run func(context.Context) error) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(runCtx)
+	}()
+
+	ticker := time.NewTicker(logCoordinatorLivenessCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-errCh:
+			return err
+		case <-ctx.Done():
+			cancel()
+			return <-errCh
+		case <-ticker.C:
+			if currentLiveness := e.svr.liveness.Load(); currentLiveness != liveness.CaptureAlive {
+				log.Info("stop log coordinator because node is not alive",
+					zap.String("nodeID", string(e.svr.info.ID)),
+					zap.String("liveness", currentLiveness.String()))
+				cancel()
+				return <-errCh
+			}
+		}
 	}
 }
 
@@ -319,8 +368,6 @@ func (e *elector) resignLogCoordinator() error {
 				zap.String("nodeID", nodeID), zap.Error(resignErr))
 			return nil
 		}
-		log.Info("log coordinator resign failed",
-			zap.String("nodeID", nodeID), zap.Error(resignErr))
 		return errors.Trace(resignErr)
 	}
 	return nil
