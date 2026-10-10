@@ -22,7 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 )
 
-// Read and Confirm may run concurrently. Close runs after both have stopped.
+// Read and Confirm have one caller each and may run concurrently.
+// Close runs after both have stopped.
 type reader interface {
 	Read(ctx context.Context) (*readData, error)
 	Confirm(ctx context.Context) error

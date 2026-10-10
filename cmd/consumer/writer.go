@@ -41,16 +41,20 @@ const (
 )
 
 type writer struct {
-	downstream     sink.Sink
-	memory         *memoryUsage
-	pendingDML     []*writeEvent
-	inFlight       []*writeBatch
-	mutations      map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
-	writtenBefore  uint64
-	inFlightBytes  int64
-	inFlightEvents int
-	decodedRows    int64
-	writtenRows    int64
+	downstream        sink.Sink
+	memory            *memoryUsage
+	pendingDML        []*writeEvent
+	inFlight          []*writeBatch
+	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
+	writtenBefore     uint64
+	inFlightBytes     int64
+	inFlightEvents    int
+	decodedRows       int64
+	writtenRows       int64
+	pendingWatermarks []*writeEvent
+	watermarks        map[int64]uint64
+	progressChanged   bool
+	progressTick      <-chan time.Time
 }
 type writeBatch struct {
 	items   []*writeEvent
@@ -69,15 +73,44 @@ type mutationKey struct {
 	handle   string
 }
 
-func (c *consumer) writeDDL(ctx context.Context, result *writeEvent) error {
-	w := c.writer
-	if err := c.flushDML(ctx, result.ddl); err != nil {
+func (w *writer) consume(ctx context.Context, result *writeEvent) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if result.dml != nil {
+		w.pendingDML = append(w.pendingDML, result)
+		w.decodedRows += int64(result.dml.Len())
+		w.progressChanged = true
+	}
+	if result.ddl != nil {
+		if err := w.writeDDL(ctx, result); err != nil {
+			return err
+		}
+	}
+	if result.hasWatermark {
+		if w.watermarks == nil {
+			w.watermarks = make(map[int64]uint64)
+		}
+		if result.watermark > w.watermarks[result.tableID] {
+			w.watermarks[result.tableID] = result.watermark
+			w.progressChanged = true
+		}
+		if result.onFlush != nil {
+			w.pendingWatermarks = append(w.pendingWatermarks, result)
+			w.progressChanged = true
+		}
+	}
+	return nil
+}
+
+func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
+	if err := w.flushDML(ctx, result.ddl); err != nil {
 		return err
 	}
 	for _, batch := range slices.Clone(w.inFlight) {
 		for _, item := range batch.items {
 			if ddlBlocksTable(result.ddl, item.dml) {
-				if err := c.waitBatch(ctx, batch); err != nil {
+				if err := w.waitBatch(ctx, batch); err != nil {
 					return err
 				}
 				break
@@ -100,8 +133,7 @@ func (c *consumer) writeDDL(ctx context.Context, result *writeEvent) error {
 	return nil
 }
 
-func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
-	w := c.writer
+func (w *writer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -132,7 +164,7 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		for _, earlier := range slices.Clone(w.inFlight) {
 			for _, item := range earlier.items {
 				if next := tables[item.dml.PhysicalTableID]; next != nil && (item.sequential || next.sequential || !sameTableSchema(item.dml.TableInfo, next.dml.TableInfo)) {
-					if err := c.waitBatch(ctx, earlier); err != nil {
+					if err := w.waitBatch(ctx, earlier); err != nil {
 						return err
 					}
 					break
@@ -140,13 +172,13 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			}
 		}
 		for len(w.inFlight) != 0 && (w.inFlightEvents+len(items) > maxInFlightEvents || w.inFlightBytes+bytes > maxInFlightBytes) {
-			if err := c.waitBatch(ctx, w.inFlight[0]); err != nil {
+			if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
 				return err
 			}
 		}
 		batch := &writeBatch{items: items, bytes: bytes, done: make(chan bool)}
 		for _, item := range batch.items {
-			filtered, err := c.filterRows(ctx, item.dml, batch)
+			filtered, err := w.filterRows(ctx, item.dml, batch)
 			if err != nil {
 				return err
 			}
@@ -165,7 +197,7 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			batch.events = append(batch.events, filtered)
 		}
 		for len(w.inFlight) != 0 && w.inFlightBytes+batch.bytes > maxInFlightBytes {
-			if err := c.waitBatch(ctx, w.inFlight[0]); err != nil {
+			if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
 				return err
 			}
 		}
@@ -216,16 +248,15 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 		reflect.DeepEqual(a.GetColumns(), b.GetColumns()) && reflect.DeepEqual(a.GetIndices(), b.GetIndices()))
 }
 
-func (c *consumer) waitBatch(ctx context.Context, batch *writeBatch) error {
-	w := c.writer
+func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-batch.done:
 			w.finishBatches()
-			return c.confirmCompleted(ctx)
-		case <-c.progressTick:
+			return nil
+		case <-w.progressTick:
 			log.Info("consumer waiting for batch",
 				zap.Int64("receivedInputs", w.memory.received.Load()), zap.Int64("decodedRows", w.decodedRows),
 				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.memory.confirmed.Load()),
@@ -236,9 +267,9 @@ func (c *consumer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	}
 }
 
-func (c *writer) finishBatches() {
-	remaining := c.inFlight[:0]
-	for _, batch := range c.inFlight {
+func (w *writer) finishBatches() {
+	remaining := w.inFlight[:0]
+	for _, batch := range w.inFlight {
 		select {
 		case <-batch.done:
 		default:
@@ -249,55 +280,85 @@ func (c *writer) finishBatches() {
 			dml.PostFlush()
 		}
 		for _, dml := range batch.events {
-			c.writtenRows += int64(dml.Len())
+			w.writtenRows += int64(dml.Len())
 		}
 		for _, key := range batch.keys {
-			c.mutations[key] = nil
+			w.mutations[key] = nil
 		}
 		// Nonempty batches release memory in their final flush callback.
 		if len(batch.events) == 0 {
-			c.memory.release(batch.bytes)
+			w.memory.release(batch.bytes)
 		}
-		c.inFlightBytes -= batch.bytes
-		c.inFlightEvents -= len(batch.items)
+		w.inFlightBytes -= batch.bytes
+		w.inFlightEvents -= len(batch.items)
+		w.progressChanged = true
 	}
-	clear(c.inFlight[len(remaining):])
-	c.inFlight = remaining
+	clear(w.inFlight[len(remaining):])
+	w.inFlight = remaining
+	w.advanceWatermarks()
 }
 
-func (c *writer) advanceReplay(watermark uint64, tableID int64) {
-	before := watermark
-	for _, item := range c.pendingDML {
-		if tableID == 0 || item.dml.PhysicalTableID == tableID {
-			before = min(before, item.dml.CommitTs)
-		}
+func (w *writer) advanceWatermarks() {
+	if !w.progressChanged {
+		return
 	}
-	for _, batch := range c.inFlight {
-		for _, item := range batch.items {
-			if tableID == 0 || item.dml.PhysicalTableID == tableID {
-				before = min(before, item.dml.CommitTs)
+	w.progressChanged = false
+	if len(w.watermarks) == 0 && len(w.pendingWatermarks) == 0 {
+		return
+	}
+	// One scan establishes the unfinished floor for every table and the topic.
+	unfinished := make(map[int64]uint64)
+	for _, item := range w.pendingDML {
+		for _, tableID := range []int64{0, item.dml.PhysicalTableID} {
+			if ts, ok := unfinished[tableID]; !ok || item.dml.CommitTs < ts {
+				unfinished[tableID] = item.dml.CommitTs
 			}
 		}
 	}
-	if tableID == 0 {
-		if before <= c.writtenBefore {
-			return
+	for _, batch := range w.inFlight {
+		for _, item := range batch.items {
+			for _, tableID := range []int64{0, item.dml.PhysicalTableID} {
+				if ts, ok := unfinished[tableID]; !ok || item.dml.CommitTs < ts {
+					unfinished[tableID] = item.dml.CommitTs
+				}
+			}
 		}
-		c.writtenBefore = before
 	}
+	remaining := w.pendingWatermarks[:0]
+	for _, control := range w.pendingWatermarks {
+		if ts, ok := unfinished[control.tableID]; ok && ts <= control.watermark {
+			remaining = append(remaining, control)
+			continue
+		}
+		control.onFlush()
+	}
+	clear(w.pendingWatermarks[len(remaining):])
+	w.pendingWatermarks = remaining
+	before, global := w.watermarks[0]
+	if ts, ok := unfinished[0]; ok {
+		before = min(before, ts)
+	}
+	if before <= w.writtenBefore && global && len(w.watermarks) == 1 {
+		return
+	}
+	w.writtenBefore = max(w.writtenBefore, before)
 	// Storage's per-table progress retires identities, not incoming rows:
 	// unread cross-node file groups can still contain older commit timestamps.
-	for key := range c.mutations {
-		if (tableID == 0 || key.tableID == tableID) && key.commitTs < before {
-			bytes := int64(len(key.handle) + 192)
-			c.memory.release(bytes)
-			delete(c.mutations, key)
+	released := int64(0)
+	for key := range w.mutations {
+		before := w.watermarks[key.tableID]
+		if ts, ok := unfinished[key.tableID]; ok {
+			before = min(before, ts)
+		}
+		if key.commitTs < max(w.writtenBefore, before) {
+			released += int64(len(key.handle) + 192)
+			delete(w.mutations, key)
 		}
 	}
+	w.memory.release(released)
 }
 
-func (c *consumer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
-	w := c.writer
+func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
 	if dml.CommitTs < w.writtenBefore {
 		return nil, nil
 	}
@@ -330,7 +391,7 @@ func (c *consumer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *w
 			key := mutationKey{tableID: dml.PhysicalTableID, commitTs: dml.CommitTs, rowType: row.RowType, handle: string(handle)}
 			if previous, exists := w.mutations[key]; exists {
 				if previous != nil && previous != batch {
-					if err := c.waitBatch(ctx, previous); err != nil {
+					if err := w.waitBatch(ctx, previous); err != nil {
 						return nil, err
 					}
 				}

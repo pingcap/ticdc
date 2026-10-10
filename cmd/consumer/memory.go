@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/uber-go/atomic"
 )
@@ -32,6 +33,55 @@ type memoryUsage struct {
 	mu            sync.Mutex
 	changed       chan struct{}
 	completed     chan struct{}
+	schemas       map[*common.TableInfo]*schemaMemory
+}
+
+type schemaMemory struct {
+	refs  int
+	bytes int64
+}
+
+// Count shared metadata while pipeline events still reference it. Decoder-owned
+// caches have their own lifetime and are not exposed by the decoder interface.
+func (m *memoryUsage) retainSchema(ctx context.Context, table *common.TableInfo) error {
+	if table == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if schema := m.schemas[table]; schema != nil {
+		schema.refs++
+		return nil
+	}
+	data, err := table.Marshal()
+	if err != nil {
+		return errors.WrapError(errors.ErrCodecDecode, err, "measure consumer table metadata")
+	}
+	bytes := int64(len(data))*4 + 1024
+	if err := m.reserve(ctx, bytes); err != nil {
+		return err
+	}
+	if m.schemas == nil {
+		m.schemas = make(map[*common.TableInfo]*schemaMemory)
+	}
+	m.schemas[table] = &schemaMemory{refs: 1, bytes: bytes}
+	return nil
+}
+
+func (m *memoryUsage) releaseSchema(table *common.TableInfo) {
+	if table == nil {
+		return
+	}
+	m.mu.Lock()
+	schema := m.schemas[table]
+	schema.refs--
+	bytes := int64(0)
+	if schema.refs == 0 {
+		bytes = schema.bytes
+		delete(m.schemas, table)
+	}
+	m.mu.Unlock()
+	m.release(bytes)
 }
 
 // An input can be confirmed after decoding and downstream writes release all refs.

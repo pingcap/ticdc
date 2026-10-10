@@ -266,14 +266,17 @@ func (c *kafkaReader) advanceBoundary() {
 }
 
 func (c *kafkaReader) Confirm(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	records := make([]*kgo.Record, 0, len(c.progress))
 	counts := make(map[int32]int, len(c.progress))
 	for partitionID, inputs := range c.records {
 		for index, record := range inputs {
 			refs := record.refs.Load()
 			if refs < 0 {
+				c.mu.Unlock()
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka input completed more than once")
 			}
 			if refs != 0 {
@@ -285,12 +288,16 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 			records = append(records, &kgo.Record{Topic: c.topic, Partition: partitionID, Offset: c.offsets[inputs[count-1]]})
 		}
 	}
+	c.mu.Unlock()
 	if len(records) == 0 {
 		return nil
 	}
 	if err := c.client.CommitRecords(ctx, records...); err != nil {
 		return errors.WrapError(errors.ErrInternalCheckFailed, err, "commit Kafka offsets")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Read may have appended inputs while the commit was in flight.
 	for partitionID, count := range counts {
 		inputs := c.records[partitionID]
 		for _, record := range inputs[:count] {

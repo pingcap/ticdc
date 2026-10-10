@@ -32,13 +32,10 @@ import (
 )
 
 type consumer struct {
-	wg                sync.WaitGroup
-	reader            reader
-	assembler         *assembler
-	writer            *writer
-	pendingWatermarks []*writeEvent
-	watermarks        map[int64]uint64
-	progressTick      <-chan time.Time
+	wg        sync.WaitGroup
+	reader    reader
+	assembler *assembler
+	writer    *writer
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
@@ -74,9 +71,8 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 	return &consumer{
 		reader: reader, assembler: assembler, writer: &writer{
 			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch),
+			watermarks: make(map[int64]uint64), progressTick: time.Tick(progressLogInterval),
 		},
-		watermarks:   make(map[int64]uint64),
-		progressTick: time.Tick(progressLogInterval),
 	}, nil
 }
 
@@ -130,7 +126,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 	memory := c.writer.memory
 	for {
 		c.writer.finishBatches()
-		if err := c.confirmCompleted(ctx); err != nil {
+		if err := c.reader.Confirm(ctx); err != nil {
 			return err
 		}
 		select {
@@ -144,7 +140,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 				return err
 			}
 		case <-memory.completed:
-		case <-c.progressTick:
+		case <-c.writer.progressTick:
 			log.Info("consumer progress", zap.Int64("receivedInputs", memory.received.Load()),
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
 				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
@@ -170,80 +166,19 @@ collect:
 			break collect
 		}
 	}
-	for len(items) != 0 {
-		item, remaining, err := c.assembler.prepare(ctx, items)
-		if err != nil {
-			return err
-		}
-		if err := c.consume(ctx, item); err != nil {
+	items, err := c.assembler.prepare(ctx, items)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err := c.writer.consume(ctx, item); err != nil {
 			return err
 		}
 		if item.sequential {
-			if err := c.flushDML(ctx, nil); err != nil {
+			if err := c.writer.flushDML(ctx, nil); err != nil {
 				return err
 			}
 		}
-		items = remaining
 	}
-	return c.flushDML(ctx, nil)
-}
-
-func (c *consumer) consume(ctx context.Context, result *writeEvent) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	if result.dml != nil {
-		c.writer.pendingDML = append(c.writer.pendingDML, result)
-		c.writer.decodedRows += int64(result.dml.Len())
-	}
-	if result.ddl != nil {
-		if err := c.writeDDL(ctx, result); err != nil {
-			return err
-		}
-	}
-	if result.hasWatermark {
-		c.watermarks[result.tableID] = max(c.watermarks[result.tableID], result.watermark)
-		if result.onFlush != nil {
-			c.pendingWatermarks = append(c.pendingWatermarks, result)
-		}
-	}
-	return nil
-}
-
-func (c *consumer) confirmCompleted(ctx context.Context) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	remaining := c.pendingWatermarks[:0]
-	for _, control := range c.pendingWatermarks {
-		blocked := false
-		for _, item := range c.writer.pendingDML {
-			if (control.tableID == 0 || item.dml.PhysicalTableID == control.tableID) && item.dml.CommitTs <= control.watermark {
-				blocked = true
-				break
-			}
-		}
-		for _, batch := range c.writer.inFlight {
-			for _, item := range batch.items {
-				if (control.tableID == 0 || item.dml.PhysicalTableID == control.tableID) && item.dml.CommitTs <= control.watermark {
-					blocked = true
-					break
-				}
-			}
-		}
-		if blocked {
-			remaining = append(remaining, control)
-			continue
-		}
-		control.onFlush()
-	}
-	clear(c.pendingWatermarks[len(remaining):])
-	c.pendingWatermarks = remaining
-	if err := c.reader.Confirm(ctx); err != nil {
-		return err
-	}
-	for tableID, watermark := range c.watermarks {
-		c.writer.advanceReplay(watermark, tableID)
-	}
-	return nil
+	return c.writer.flushDML(ctx, nil)
 }

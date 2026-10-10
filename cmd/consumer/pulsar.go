@@ -193,13 +193,18 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	counts := make(map[int32]int, len(c.records))
+	messageIDs := make(map[int32]pulsar.MessageID, len(c.records))
 	for partitionID, records := range c.records {
 		count := 0
 		for _, record := range records {
 			refs := record.refs.Load()
 			if refs < 0 {
+				c.mu.Unlock()
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
 			}
 			if refs != 0 {
@@ -210,17 +215,25 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		if count == 0 {
 			continue
 		}
+		counts[partitionID] = count
+		messageIDs[partitionID] = c.messageIDs[records[count-1]]
+	}
+	c.mu.Unlock()
+	for partitionID, count := range counts {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		if err := c.consumer.AckIDCumulative(c.messageIDs[records[count-1]]); err != nil {
+		if err := c.consumer.AckIDCumulative(messageIDs[partitionID]); err != nil {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
+		c.mu.Lock()
+		records := c.records[partitionID]
 		for _, record := range records[:count] {
 			c.memory.confirm(record)
 			delete(c.messageIDs, record)
 		}
 		c.records[partitionID] = slices.Delete(records, 0, count)
+		c.mu.Unlock()
 	}
 	return nil
 }

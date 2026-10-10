@@ -50,6 +50,7 @@ type storageIndexRange struct {
 type storageInput struct {
 	key      cloudstorage.DMLPathKey
 	index    cloudstorage.FileIndex
+	end      uint64 // The pending range is expanded one file at a time.
 	groupEnd bool
 	sort     bool
 }
@@ -271,18 +272,10 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 					sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
 				}
 				for indexKey, span := range files[key] {
-					for index := span.start; ; index++ {
-						if err := c.memory.reserve(ctx, 256); err != nil {
-							return nil, err
-						}
-						c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: index}, sort: sortBeforeWrite})
-						if len(c.inputs) > maxRecords {
-							return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage scan exceeds its input limit")
-						}
-						if index == span.end {
-							break
-						}
+					if err := c.memory.reserve(ctx, 256); err != nil {
+						return nil, err
 					}
+					c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: span.start}, end: span.end, sort: sortBeforeWrite})
 				}
 				if err := c.memory.reserve(ctx, 256); err != nil {
 					return nil, err
@@ -292,15 +285,19 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			continue
 		}
 		input := c.inputs[0]
-		c.inputs[0] = storageInput{}
-		c.inputs = c.inputs[1:]
-		c.memory.release(256)
+		key := input.key
+		tableKey := key.GetKey()
+		if input.index.Idx < input.end && key.TableVersion >= c.ddlWatermarks[tableKey] {
+			c.inputs[0].index.Idx++
+		} else {
+			c.inputs[0] = storageInput{}
+			c.inputs = c.inputs[1:]
+			c.memory.release(256)
+		}
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
 			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
 		}
-		key := input.key
-		tableKey := key.GetKey()
 		if key.IsSchemaFileDMLPathKey() {
 			if schema.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
 				continue
@@ -317,7 +314,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
 			if !input.groupEnd {
-				c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
+				c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
 			}
 			continue
 		}

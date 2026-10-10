@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -30,6 +31,30 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAssemblerReleasesSharedSchema(t *testing.T) {
+	memory := &memoryUsage{}
+	a := &assembler{memory: memory, protocol: config.ProtocolOpen}
+	p := &partition{}
+	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+		ID: 1, Name: ast.NewCIStr("t"),
+		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
+	})
+	for range 2 {
+		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 10, table)
+		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
+		dml.Rows.AppendInt64(0, 1)
+		dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete}, 1
+		require.NoError(t, a.queueDML(t.Context(), dml, nil, p))
+	}
+	first, second := a.pendingDML[0], a.pendingDML[1]
+	first.dml.PostFlush()
+	memory.release(first.bytes)
+	require.Greater(t, memory.used(), second.bytes)
+	second.dml.PostFlush()
+	memory.release(second.bytes)
+	require.Zero(t, memory.used())
+}
 
 func TestAssemblerCSVTransactionBatches(t *testing.T) {
 	field := types.NewFieldType(mysql.TypeLonglong)
@@ -60,13 +85,8 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 		}
 	}
 	a := &assembler{memory: w.memory, mergeRows: true}
-	var prepared []*writeEvent
-	for len(w.pendingDML) != 0 {
-		item, remaining, err := a.prepare(t.Context(), w.pendingDML)
-		require.NoError(t, err)
-		prepared = append(prepared, item)
-		w.pendingDML = remaining
-	}
+	prepared, err := a.prepare(t.Context(), w.pendingDML)
+	require.NoError(t, err)
 	w.pendingDML = prepared
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -87,15 +107,15 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 		}),
 	)
 	w.downstream = downstream
-	c := &consumer{writer: w}
-	require.ErrorIs(t, c.flushDML(ctx, nil), context.Canceled)
+	require.ErrorIs(t, w.flushDML(ctx, nil), context.Canceled)
 	require.Len(t, w.inFlight[0].events, 1)
 	require.Len(t, w.pendingDML, 1)
 	require.Zero(t, callbacks)
 	first.PostFlush()
-	require.NoError(t, c.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context(), nil))
 	require.Equal(t, 4, callbacks)
-	w.advanceReplay(201, 0)
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, tableID: 0, hasWatermark: true}))
+	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
 
@@ -122,13 +142,8 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml, bytes: batchBytes / 2})
 	}
 	a := &assembler{memory: w.memory, mergeRows: true, sortCSVRows: true}
-	var prepared []*writeEvent
-	for len(w.pendingDML) != 0 {
-		item, remaining, err := a.prepare(t.Context(), w.pendingDML)
-		require.NoError(t, err)
-		prepared = append(prepared, item)
-		w.pendingDML = remaining
-	}
+	prepared, err := a.prepare(t.Context(), w.pendingDML)
+	require.NoError(t, err)
 	w.pendingDML = prepared
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	gomock.InOrder(
@@ -147,12 +162,12 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		}),
 	)
 	w.downstream = downstream
-	c := &consumer{writer: w}
-	require.NoError(t, c.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context(), nil))
 	require.Equal(t, 4, callbacks)
 	require.Empty(t, w.pendingDML)
 	require.Empty(t, w.inFlight)
-	w.advanceReplay(101, 0)
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, tableID: 0, hasWatermark: true}))
+	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
 
@@ -173,18 +188,18 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 		items = append(items, &writeEvent{watermark: commitTs, hasWatermark: true})
 	}
 	a := &assembler{memory: &memoryUsage{}, mergeRows: true, sortCSVRows: true}
-	for _, commitTs := range []uint64{100, 200} {
-		result, remaining, err := a.prepare(t.Context(), items)
-		require.NoError(t, err)
+	prepared, err := a.prepare(t.Context(), items)
+	require.NoError(t, err)
+	require.Len(t, prepared, 4)
+	for index, commitTs := range []uint64{100, 200} {
+		result := prepared[index*2]
 		require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeInsert}, result.dml.RowTypes)
 		require.Equal(t, commitTs, result.dml.CommitTs)
 		a.memory.release(result.bytes)
-		result, items, err = a.prepare(t.Context(), remaining)
-		require.NoError(t, err)
+		result = prepared[index*2+1]
 		require.True(t, result.hasWatermark)
 		require.Equal(t, commitTs, result.watermark)
 	}
-	require.Empty(t, items)
 	require.Zero(t, a.memory.used())
 }
 

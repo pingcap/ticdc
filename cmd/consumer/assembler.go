@@ -57,86 +57,107 @@ type writeEvent struct {
 	boundary     *readBoundary
 }
 
-func (a *assembler) prepare(ctx context.Context, items []*writeEvent) (*writeEvent, []*writeEvent, error) {
-	if !a.mergeRows || items[0].dml == nil {
-		return items[0], items[1:], nil
+func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeEvent, error) {
+	if !a.mergeRows {
+		return items, nil
 	}
 	// A control event bounds sorting; no row crosses a DDL or watermark.
-	end := 0
-	for end < len(items) && items[end].dml != nil {
-		items[end].sequential = true
-		end++
-	}
-	if a.sortCSVRows {
-		slices.SortStableFunc(items[:end], func(x, y *writeEvent) int {
-			return cmp.Or(cmp.Compare(x.dml.CommitTs, y.dml.CommitTs), cmp.Compare(x.dml.RowTypes[0], y.dml.RowTypes[0]))
-		})
-	}
-	// Merge only the bounded batch already available. Waiting for an entire
-	// transaction could retain arbitrarily large input in memory.
-	item := items[0]
-	first := item.dml
-	count, retained := int(first.Len()), item.bytes
-	end = 1
-	for end < len(items) {
-		if items[end].dml == nil || count >= batchRows || retained >= batchBytes {
-			break
+	for start := 0; start < len(items); {
+		if items[start].dml == nil {
+			start++
+			continue
 		}
-		next := items[end].dml
-		if next.PhysicalTableID != first.PhysicalTableID || next.CommitTs != first.CommitTs || !sameTableSchema(first.TableInfo, next.TableInfo) {
-			break
+		end := start
+		for end < len(items) && items[end].dml != nil {
+			items[end].sequential = true
+			end++
 		}
-		count += int(next.Len())
-		retained += items[end].bytes
-		end++
-	}
-	if end == 1 {
-		return item, items[1:], nil
-	}
-	rows, bytes := 0, int64(256)
-	for _, part := range items[:end] {
-		rows += len(part.dml.RowTypes)
-		bytes += part.dml.Rows.MemoryUsage() + int64(len(part.dml.RowTypes))*64
-	}
-	// Original chunks remain live through their flush callbacks. Account for
-	// the merged copy separately before allocating it.
-	if err := a.memory.reserve(ctx, bytes); err != nil {
-		return nil, nil, err
-	}
-	dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
-	dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
-	dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
-	dml.Rows = chunk.NewChunkWithCapacity(first.TableInfo.GetFieldSlice(), rows)
-	for _, source := range items[:end] {
-		part := source.dml
-		dml.Rows.Append(part.Rows, part.PreviousTotalOffset, part.PreviousTotalOffset+len(part.RowTypes))
-		dml.RowTypes = append(dml.RowTypes, part.RowTypes...)
-		if len(dml.RowKeys) != 0 || len(part.RowKeys) != 0 {
-			if len(dml.RowKeys) == 0 {
-				dml.RowKeys = make([][]byte, dml.Rows.NumRows()-len(part.RowTypes))
-			}
-			if len(part.RowKeys) == 0 {
-				dml.RowKeys = append(dml.RowKeys, make([][]byte, len(part.RowTypes))...)
-			} else {
-				dml.RowKeys = append(dml.RowKeys, part.RowKeys...)
-			}
+		if a.sortCSVRows {
+			slices.SortStableFunc(items[start:end], func(x, y *writeEvent) int {
+				return cmp.Or(cmp.Compare(x.dml.CommitTs, y.dml.CommitTs), cmp.Compare(x.dml.RowTypes[0], y.dml.RowTypes[0]))
+			})
 		}
-		if len(dml.Checksum) != 0 || len(part.Checksum) != 0 {
-			if len(dml.Checksum) == 0 {
-				dml.Checksum = make([]*integrity.Checksum, dml.Length)
-			}
-			if len(part.Checksum) == 0 {
-				dml.Checksum = append(dml.Checksum, make([]*integrity.Checksum, part.Length)...)
-			} else {
-				dml.Checksum = append(dml.Checksum, part.Checksum...)
-			}
-		}
-		dml.Length += part.Length
-		dml.ApproximateSize += part.ApproximateSize
-		dml.AddPostEnqueueFunc(part.PostEnqueue)
-		dml.AddPostFlushFunc(part.PostFlush)
+		start = end
 	}
-	return &writeEvent{dml: dml, bytes: retained + bytes, sequential: true}, items[end:], nil
+	prepared := items[:0]
+	remaining := items
+	for len(remaining) != 0 {
+		item := remaining[0]
+		if item.dml == nil {
+			prepared = append(prepared, item)
+			remaining = remaining[1:]
+			continue
+		}
+		// Merge only the bounded batch already available. Waiting for an entire
+		// transaction could retain arbitrarily large input in memory.
+		first := item.dml
+		count, retained := int(first.Len()), item.bytes
+		end := 1
+		for end < len(remaining) {
+			if remaining[end].dml == nil || count >= batchRows || retained >= batchBytes {
+				break
+			}
+			next := remaining[end].dml
+			if next.PhysicalTableID != first.PhysicalTableID || next.CommitTs != first.CommitTs || !sameTableSchema(first.TableInfo, next.TableInfo) {
+				break
+			}
+			count += int(next.Len())
+			retained += remaining[end].bytes
+			end++
+		}
+		if end == 1 {
+			prepared = append(prepared, item)
+			remaining = remaining[1:]
+			continue
+		}
+		rows, bytes := 0, int64(256)
+		for _, part := range remaining[:end] {
+			rows += len(part.dml.RowTypes)
+			bytes += part.dml.Rows.MemoryUsage() + int64(len(part.dml.RowTypes))*64
+		}
+		// Original chunks remain live through their flush callbacks. Account for
+		// the merged copy separately before allocating it.
+		if err := a.memory.reserve(ctx, bytes); err != nil {
+			return nil, err
+		}
+		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
+		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
+		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
+		dml.Rows = chunk.NewChunkWithCapacity(first.TableInfo.GetFieldSlice(), rows)
+		for _, source := range remaining[:end] {
+			part := source.dml
+			dml.Rows.Append(part.Rows, part.PreviousTotalOffset, part.PreviousTotalOffset+len(part.RowTypes))
+			dml.RowTypes = append(dml.RowTypes, part.RowTypes...)
+			if len(dml.RowKeys) != 0 || len(part.RowKeys) != 0 {
+				if len(dml.RowKeys) == 0 {
+					dml.RowKeys = make([][]byte, dml.Rows.NumRows()-len(part.RowTypes))
+				}
+				if len(part.RowKeys) == 0 {
+					dml.RowKeys = append(dml.RowKeys, make([][]byte, len(part.RowTypes))...)
+				} else {
+					dml.RowKeys = append(dml.RowKeys, part.RowKeys...)
+				}
+			}
+			if len(dml.Checksum) != 0 || len(part.Checksum) != 0 {
+				if len(dml.Checksum) == 0 {
+					dml.Checksum = make([]*integrity.Checksum, dml.Length)
+				}
+				if len(part.Checksum) == 0 {
+					dml.Checksum = append(dml.Checksum, make([]*integrity.Checksum, part.Length)...)
+				} else {
+					dml.Checksum = append(dml.Checksum, part.Checksum...)
+				}
+			}
+			dml.Length += part.Length
+			dml.ApproximateSize += part.ApproximateSize
+			dml.AddPostEnqueueFunc(part.PostEnqueue)
+			dml.AddPostFlushFunc(part.PostFlush)
+		}
+		prepared = append(prepared, &writeEvent{dml: dml, bytes: retained + bytes, sequential: true})
+		remaining = remaining[end:]
+	}
+	clear(items[len(prepared):])
+	return prepared, nil
 }
 
 type partition struct {
@@ -144,14 +165,6 @@ type partition struct {
 	progress         *readProgress
 	cachedRecords    []*ack
 	cachedUnreleased int
-	schemas          map[schemaKey]bool
-	schemaPointers   map[*common.TableInfo]bool
-}
-
-type schemaKey struct {
-	schema  string
-	table   string
-	version uint64
 }
 
 // assembler decodes inputs and arranges events for downstream writes.
@@ -180,10 +193,8 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
 	}
-	if p != nil {
-		if err := a.trackSchema(ctx, p, dml.TableInfo); err != nil {
-			return err
-		}
+	if err := a.memory.retainSchema(ctx, dml.TableInfo); err != nil {
+		return err
 	}
 	bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64 + 256
 	if err := a.memory.reserve(ctx, bytes); err != nil {
@@ -193,6 +204,7 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 		record.refs.Add(1)
 	}
 	dml.AddPostFlushFunc(func() {
+		a.memory.releaseSchema(dml.TableInfo)
 		for _, record := range records {
 			record.refs.Add(-1)
 		}
@@ -218,35 +230,6 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 		}
 	}
 	a.pendingDML = append(a.pendingDML, item)
-	return nil
-}
-
-func (a *assembler) trackSchema(ctx context.Context, p *partition, table *common.TableInfo) error {
-	if table == nil {
-		return nil
-	}
-	key := schemaKey{schema: table.GetSchemaName(), table: table.GetTableName(), version: table.GetUpdateTS()}
-	unversioned := table.GetUpdateTS() == 0 && (a.protocol == config.ProtocolCanalJSON || a.protocol == config.ProtocolOpen)
-	if unversioned {
-		if p.schemaPointers[table] {
-			return nil
-		}
-	} else if p.schemas[key] {
-		return nil
-	}
-	data, err := table.Marshal()
-	if err != nil {
-		return errors.WrapError(errors.ErrCodecDecode, err, "measure consumer table metadata")
-	}
-	bytes := int64(len(data))*4 + 1024
-	if err := a.memory.reserve(ctx, bytes); err != nil {
-		return err
-	}
-	if unversioned {
-		p.schemaPointers[table] = true
-	} else {
-		p.schemas[key] = true
-	}
 	return nil
 }
 
@@ -285,8 +268,19 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
+	tables := append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...)
+	for _, table := range tables {
+		if err := a.memory.retainSchema(ctx, table); err != nil {
+			return err
+		}
+	}
 	record.refs.Add(1)
-	a.pendingDDL = append(a.pendingDDL, &writeEvent{ddl: ddl, bytes: bytes, onFlush: func() { record.refs.Add(-1) }})
+	a.pendingDDL = append(a.pendingDDL, &writeEvent{ddl: ddl, bytes: bytes, onFlush: func() {
+		for _, table := range tables {
+			a.memory.releaseSchema(table)
+		}
+		record.refs.Add(-1)
+	}})
 	return nil
 }
 
@@ -634,7 +628,7 @@ func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, re
 			if err != nil {
 				return nil, err
 			}
-			partitions[partitionID] = &partition{decoder: decoder, progress: progress, schemas: make(map[schemaKey]bool), schemaPointers: make(map[*common.TableInfo]bool)}
+			partitions[partitionID] = &partition{decoder: decoder, progress: progress}
 		}
 	case *pulsarReader:
 		// Canal metadata belongs to the logical topic, shared by its partitions.
@@ -642,7 +636,7 @@ func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, re
 		if err != nil {
 			return nil, err
 		}
-		partitions[0] = &partition{decoder: decoder, progress: &readProgress{}, schemas: make(map[schemaKey]bool), schemaPointers: make(map[*common.TableInfo]bool)}
+		partitions[0] = &partition{decoder: decoder, progress: &readProgress{}}
 	case *storageReader:
 		selectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
@@ -925,25 +919,6 @@ func (a *assembler) decodeMQ(ctx context.Context, data *readData) error {
 			ddl := p.decoder.NextDDLEvent()
 			if ddl == nil || (a.source == sourcePulsar && ddl.Query == "") {
 				return errors.ErrCodecDecode.FastGenByArgs(decoderName + " returned an empty DDL event")
-			}
-			if a.source != sourcePulsar {
-				if err := a.trackSchema(ctx, p, ddl.TableInfo); err != nil {
-					return err
-				}
-				for _, info := range ddl.MultipleTableInfos {
-					if err := a.trackSchema(ctx, p, info); err != nil {
-						return err
-					}
-				}
-			}
-			if a.protocol == config.ProtocolCanalJSON {
-				key := schemaKey{schema: ddl.SchemaName, table: ddl.TableName, version: ddl.FinishedTs}
-				if !p.schemas[key] {
-					if err := a.memory.reserve(ctx, 128); err != nil {
-						return err
-					}
-					p.schemas[key] = true
-				}
 			}
 			if decoder, ok := p.decoder.(*simple.Decoder); ok {
 				records := slices.Clone(p.cachedRecords)

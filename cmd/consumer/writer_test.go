@@ -46,7 +46,6 @@ func TestWriterReplayBoundary(t *testing.T) {
 		dml.PostFlush()
 	}).Times(2)
 	w := &writer{downstream: downstream, memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
-	c := &consumer{writer: w}
 	for _, ids := range [][]int64{{1, 2, 1, 2}, {1, 2}, {1, 3, 2}} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 99, 100, table)
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), len(ids))
@@ -58,18 +57,46 @@ func TestWriterReplayBoundary(t *testing.T) {
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
-		require.NoError(t, c.flushDML(t.Context(), nil))
+		require.NoError(t, w.flushDML(t.Context(), nil))
 		require.Equal(t, 1, callbacks)
-		w.advanceReplay(100, 0)
+		require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 100, tableID: 0, hasWatermark: true}))
+		w.finishBatches()
 	}
 	require.Equal(t, []int64{1, 2, 3}, handles)
 	require.Len(t, w.mutations, 3)
-	w.advanceReplay(101, 0)
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, tableID: 0, hasWatermark: true}))
+	w.finishBatches()
 	require.Empty(t, w.mutations)
 	require.Zero(t, w.memory.bytes.Load())
-	filtered, err := c.filterRows(t.Context(), &event.DMLEvent{CommitTs: 100}, &writeBatch{})
+	filtered, err := w.filterRows(t.Context(), &event.DMLEvent{CommitTs: 100}, &writeBatch{})
 	require.NoError(t, err)
 	require.Nil(t, filtered)
+}
+
+func TestWriterWatermarksFollowTableWrites(t *testing.T) {
+	first := mutationKey{tableID: 1, commitTs: 10, handle: "a"}
+	second := mutationKey{tableID: 2, commitTs: 10, handle: "b"}
+	batch := &writeBatch{
+		items: []*writeEvent{{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}},
+		keys:  []mutationKey{first}, done: make(chan bool),
+	}
+	w := &writer{
+		memory: &memoryUsage{}, inFlight: []*writeBatch{batch}, inFlightEvents: 1,
+		mutations: map[mutationKey]*writeBatch{first: batch, second: nil},
+	}
+	require.NoError(t, w.memory.reserve(t.Context(), int64(len(first.handle)+len(second.handle)+384)))
+	for tableID := int64(1); tableID <= 2; tableID++ {
+		require.NoError(t, w.consume(t.Context(), &writeEvent{tableID: tableID, watermark: 20, hasWatermark: true}))
+	}
+	w.finishBatches()
+	require.Contains(t, w.mutations, first)
+	require.NotContains(t, w.mutations, second)
+	require.Zero(t, w.writtenBefore)
+	// Completion advances the table boundary even without a newer watermark.
+	close(batch.done)
+	w.finishBatches()
+	require.Empty(t, w.mutations)
+	require.Zero(t, w.memory.used())
 }
 
 func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
@@ -88,7 +115,6 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) { retained = dml })
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
-	c := &consumer{reader: input, writer: w}
 	for range 2 {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 99, 100, table)
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
@@ -100,16 +126,17 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		w.pendingDML = append(w.pendingDML, result)
 	}
 	record.refs.Add(-1)
-	require.NoError(t, c.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context(), nil))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.ErrorIs(t, c.waitBatch(ctx, w.inFlight[0]), context.Canceled)
-	require.NoError(t, c.confirmCompleted(t.Context()))
+	require.ErrorIs(t, w.waitBatch(ctx, w.inFlight[0]), context.Canceled)
+	w.finishBatches()
+	require.NoError(t, input.Confirm(t.Context()))
 	require.Len(t, input.records, 1)
 	require.EqualValues(t, 2, record.refs.Load())
 	retained.PostFlush()
 	w.finishBatches()
-	require.NoError(t, c.confirmCompleted(t.Context()))
+	require.NoError(t, input.Confirm(t.Context()))
 	require.Empty(t, input.records)
 }
 
@@ -133,7 +160,8 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 	}).Times(2)
 	memory := &memoryUsage{}
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
-	c := &consumer{reader: &storageReader{memory: memory}, writer: w, watermarks: map[int64]uint64{0: 90}}
+	input := &storageReader{memory: memory}
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 90, hasWatermark: true}))
 	// A table move can replay the INSERT after a later UPDATE is durable.
 	for index, commitTs := range []uint64{100, 200, 100, 200} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, commitTs-1, commitTs, table)
@@ -147,17 +175,19 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		dml.Length = 1
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
-		require.NoError(t, c.consume(t.Context(), &writeEvent{dml: dml}))
-		require.NoError(t, c.flushDML(t.Context(), nil))
-		require.NoError(t, c.confirmCompleted(t.Context()))
+		require.NoError(t, w.consume(t.Context(), &writeEvent{dml: dml}))
+		require.NoError(t, w.flushDML(t.Context(), nil))
+		w.finishBatches()
+		require.NoError(t, input.Confirm(t.Context()))
 		require.Equal(t, 1, callbacks)
 		if index >= 1 {
 			require.EqualValues(t, 20, value)
 			require.Len(t, w.mutations, 2)
 		}
 	}
-	require.NoError(t, c.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
-	require.NoError(t, c.confirmCompleted(t.Context()))
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
+	w.finishBatches()
+	require.NoError(t, input.Confirm(t.Context()))
 	require.Empty(t, w.mutations)
 	require.Zero(t, memory.bytes.Load())
 }
@@ -181,10 +211,9 @@ func TestWriterReplayPreservesUpdateRows(t *testing.T) {
 	w := &writer{memory: &memoryUsage{}, mutations: map[mutationKey]*writeBatch{
 		{tableID: 1, commitTs: 100, rowType: common.RowTypeUpdate, handle: string([]byte{1, '1'})}: nil,
 	}}
-	c := &consumer{writer: w}
 	callbacks := 0
 	dml.AddPostFlushFunc(func() { callbacks++ })
-	filtered, err := c.filterRows(t.Context(), dml, batch)
+	filtered, err := w.filterRows(t.Context(), dml, batch)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, filtered.Len())
 	require.Equal(t, []common.RowType{common.RowTypeUpdate, common.RowTypeUpdate}, filtered.RowTypes)
@@ -226,8 +255,7 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: b}, {dml: a}},
 		inFlight: []*writeBatch{other}, inFlightEvents: 1,
 	}
-	c := &consumer{writer: w}
-	require.NoError(t, c.writeDDL(t.Context(), &writeEvent{ddl: ddl}))
+	require.NoError(t, w.writeDDL(t.Context(), &writeEvent{ddl: ddl}))
 	require.Len(t, w.pendingDML, 1)
 	require.Same(t, b, w.pendingDML[0].dml)
 	require.Equal(t, []*writeBatch{other}, w.inFlight)
@@ -263,13 +291,12 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
 	)
 	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
-	c := &consumer{writer: w}
-	require.ErrorIs(t, c.flushDML(ctx, nil), context.Canceled)
+	require.ErrorIs(t, w.flushDML(ctx, nil), context.Canceled)
 	require.Len(t, w.inFlight, 1)
 	require.Len(t, w.inFlight[0].items, 1)
 	require.Len(t, w.pendingDML, 1)
 	first.PostFlush()
-	require.NoError(t, c.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context(), nil))
 	require.Empty(t, w.inFlight)
 	require.Empty(t, w.pendingDML)
 }
