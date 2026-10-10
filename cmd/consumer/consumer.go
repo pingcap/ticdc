@@ -17,6 +17,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"net/http"
 	"net/url"
 	"sync"
 	"time"
@@ -31,11 +32,13 @@ import (
 )
 
 type consumer struct {
+	wg                sync.WaitGroup
 	reader            reader
 	assembler         *assembler
 	writer            *writer
 	pendingWatermarks []*writeEvent
 	watermarks        map[int64]uint64
+	progressTick      <-chan time.Time
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
@@ -72,52 +75,37 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 		reader: reader, assembler: assembler, writer: &writer{
 			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch),
 		},
-		watermarks: make(map[int64]uint64),
+		watermarks:   make(map[int64]uint64),
+		progressTick: time.Tick(progressLogInterval),
 	}, nil
 }
 
-func (c *consumer) start(ctx context.Context) (err error) {
-	ctx, cancel := context.WithCancelCause(ctx)
-	var wg sync.WaitGroup
-	defer func() {
-		cancel(err)
-		// Close also wakes sinks whose input channel is blocked while idle.
-		c.writer.downstream.Close()
-		wg.Wait()
-		if closeErr := c.reader.Close(); closeErr != nil {
-			if err == nil {
-				err = closeErr
-			} else {
-				log.Error("consumer reader close failed", zap.Error(closeErr))
+func (c *consumer) stop(cancel context.CancelCauseFunc, profileServer *http.Server, err error) error {
+	cancel(err)
+	if profileServer != nil {
+		if closeErr := profileServer.Close(); closeErr != nil {
+			log.Error("consumer profiling server close failed", zap.Error(closeErr))
+		}
+	}
+	// Close also wakes sinks whose input channel is blocked while idle.
+	c.writer.downstream.Close()
+	c.wg.Wait()
+	if closeErr := c.reader.Close(); closeErr != nil {
+		if err != nil {
+			log.Error("consumer reader close failed", zap.Error(closeErr))
+		}
+		err = cmp.Or(err, closeErr)
+	}
+	if c.assembler.upstreamDB != nil {
+		if closeErr := c.assembler.upstreamDB.Close(); closeErr != nil {
+			closeErr = errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")
+			if err != nil {
+				log.Error("consumer upstream database close failed", zap.Error(closeErr))
 			}
+			err = cmp.Or(err, closeErr)
 		}
-		if c.assembler.upstreamDB != nil {
-			if closeErr := c.assembler.upstreamDB.Close(); closeErr != nil {
-				closeErr = errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")
-				if err == nil {
-					err = closeErr
-				} else {
-					log.Error("consumer upstream database close failed", zap.Error(closeErr))
-				}
-			}
-		}
-	}()
-	results := make(chan *writeEvent, 64)
-	wg.Go(func() {
-		defer close(results)
-		cancel(c.read(ctx, results))
-	})
-	wg.Go(func() {
-		if err := c.writer.downstream.Run(ctx); err != nil {
-			cancel(err)
-			return
-		}
-		if ctx.Err() == nil {
-			cancel(errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly"))
-		}
-	})
-	err = c.write(ctx, results)
-	return cmp.Or(context.Cause(ctx), err)
+	}
+	return err
 }
 
 func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
@@ -140,19 +128,10 @@ func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
 
 func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error {
 	memory := c.writer.memory
-	tick := time.Tick(progressLogInterval)
 	for {
 		c.writer.finishBatches()
 		if err := c.confirmCompleted(ctx); err != nil {
 			return err
-		}
-		if time.Since(c.writer.lastProgressLog) >= progressLogInterval {
-			c.writer.lastProgressLog = time.Now()
-			log.Info("consumer progress", zap.Int64("receivedInputs", memory.received.Load()),
-				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
-				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
-				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int64("uncompletedInputs", memory.received.Load()-memory.confirmed.Load()), zap.Int64("bufferedBytes", memory.used()))
 		}
 		select {
 		case <-ctx.Done():
@@ -165,7 +144,12 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 				return err
 			}
 		case <-memory.completed:
-		case <-tick:
+		case <-c.progressTick:
+			log.Info("consumer progress", zap.Int64("receivedInputs", memory.received.Load()),
+				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
+				zap.Int64("completedInputs", memory.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
+				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
+				zap.Int64("uncompletedInputs", memory.received.Load()-memory.confirmed.Load()), zap.Int64("bufferedBytes", memory.used()))
 		}
 	}
 }

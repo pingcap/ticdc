@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -114,20 +113,6 @@ func start(ctx context.Context, options *options) (err error) {
 	if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
 		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
 	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	var (
-		wg            sync.WaitGroup
-		profileServer *http.Server
-	)
-	defer func() {
-		cancel(err)
-		if profileServer != nil {
-			if closeErr := profileServer.Close(); closeErr != nil {
-				log.Error("consumer profiling server close failed", zap.Error(closeErr))
-			}
-		}
-		wg.Wait()
-	}()
 	version.LogVersionInfo("consumer")
 
 	upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
@@ -156,6 +141,16 @@ func start(ctx context.Context, options *options) (err error) {
 	}
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
 
+	ctx, cancel := context.WithCancelCause(ctx)
+	c, err := newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
+	if err != nil {
+		cancel(err)
+		return cmp.Or(context.Cause(ctx), err)
+	}
+	var profileServer *http.Server
+	defer func() {
+		err = c.stop(cancel, profileServer, err)
+	}()
 	if options.enableProfiling {
 		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
 		if err != nil {
@@ -168,17 +163,27 @@ func start(ctx context.Context, options *options) (err error) {
 		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
 		profileServer = &http.Server{Addr: profileAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-		wg.Go(func() {
+		c.wg.Go(func() {
 			if err := profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
 			}
 		})
 	}
-	c, err := newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
-	if err != nil {
-		return cmp.Or(context.Cause(ctx), err)
-	}
-	err = c.start(ctx)
+	results := make(chan *writeEvent, 64)
+	c.wg.Go(func() {
+		defer close(results)
+		cancel(c.read(ctx, results))
+	})
+	c.wg.Go(func() {
+		if err := c.writer.downstream.Run(ctx); err != nil {
+			cancel(err)
+			return
+		}
+		if ctx.Err() == nil {
+			cancel(errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly"))
+		}
+	})
+	err = c.write(ctx, results)
 	return cmp.Or(context.Cause(ctx), err)
 }
 

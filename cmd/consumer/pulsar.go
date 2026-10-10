@@ -41,7 +41,6 @@ type pulsarReader struct {
 	mu           sync.Mutex
 	partitionIDs map[string]int32
 	messageIDs   map[*ack]pulsar.MessageID
-	watermark    uint64
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {

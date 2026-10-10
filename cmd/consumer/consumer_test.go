@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -144,13 +143,13 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				require.NoError(t, err)
 				r.offsets[record] = int64(offset)
 				r.records[partitionID] = append(r.records[partitionID], record)
-				require.NoError(t, c.decodeKafka(t.Context(), &readData{partition: partitionID, key: message.Key, value: message.Value, record: record}))
+				require.NoError(t, c.decodeMQ(t.Context(), &readData{partition: partitionID, key: message.Key, value: message.Value, record: record}))
 			}
 			record, err := memory.newAck(t.Context(), int64(len(watermark.Key)+len(watermark.Value)+128))
 			require.NoError(t, err)
 			r.offsets[record] = int64(len(input))
 			r.records[partitionID] = append(r.records[partitionID], record)
-			require.NoError(t, c.decodeKafka(t.Context(), &readData{partition: partitionID, key: watermark.Key, value: watermark.Value, record: record}))
+			require.NoError(t, c.decodeMQ(t.Context(), &readData{partition: partitionID, key: watermark.Key, value: watermark.Value, record: record}))
 		}
 		downstream := mock.NewMockSink(gomock.NewController(t))
 		w := &writer{downstream: downstream, memory: memory}
@@ -240,21 +239,17 @@ func TestKafkaReaderWatermark(t *testing.T) {
 
 func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	memory := &memoryUsage{}
-	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
-	codecConfig.EnableTiDBExtension = true
-	decoder, err := codec.NewEventDecoder(t.Context(), 0, codecConfig, "test", nil)
-	require.NoError(t, err)
-	a := &assembler{
-		memory: memory, source: sourcePulsar, orderedDML: true,
-		partitions: map[int32]*partition{0: {decoder: decoder, schemas: make(map[schemaKey]bool)}, 1: {decoder: decoder}},
+	r := &pulsarReader{
+		memory: memory, partitionIDs: map[string]int32{"test-partition-0": 0, "test-partition-1": 1},
 	}
-	r := &pulsarReader{memory: memory}
-	for _, watermark := range []string{"100", "90"} {
+	a, err := newAssembler(t.Context(), &url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), r, memory)
+	require.NoError(t, err)
+	for index, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
 		record, err := memory.newAck(t.Context(), int64(len(value)+256))
 		require.NoError(t, err)
-		require.NoError(t, a.decodePulsar(t.Context(), &readData{value: value, record: record}, r))
-		require.EqualValues(t, 100, r.watermark)
+		require.NoError(t, a.decodeMQ(t.Context(), &readData{value: value, record: record, partition: int32(index)}))
+		require.EqualValues(t, 100, a.partitions[0].progress.watermark)
 		// Idle partitions do not require a broker snapshot or a new message.
 		result, err := a.next(t.Context(), r)
 		require.NoError(t, err)
@@ -270,10 +265,10 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN y INT","_tidb":{"commitTs":100}}`,
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN z INT","_tidb":{"commitTs":200}}`,
 	}
-	for _, query := range queries {
+	for index, query := range queries {
 		record, err := memory.newAck(t.Context(), int64(len(query)+256))
 		require.NoError(t, err)
-		require.NoError(t, a.decodePulsar(t.Context(), &readData{value: []byte(query), record: record}, r))
+		require.NoError(t, a.decodeMQ(t.Context(), &readData{value: []byte(query), record: record, partition: int32(index % 2)}))
 	}
 	require.EqualValues(t, 100, a.nextReady(100).ddl.GetCommitTs())
 	require.Nil(t, a.nextReady(100))
@@ -297,7 +292,7 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 			1: {progress: &readProgress{watermark: 40, hasWatermark: true}},
 		},
 		pendingDML: []*writeEvent{{dml: dml}},
-		pendingDDL: []*readDDL{{event: ddl, record: &ack{}}},
+		pendingDDL: []*writeEvent{{ddl: ddl}},
 		// An already delivered CREATE TABLE still has an unconfirmed copy.
 		ddlCopies: map[uint64]map[int32][]*ack{10: {1: {copyRecord}}},
 	}
@@ -575,7 +570,7 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	// still arrive on another partition, so no candidate row is handed off.
 	require.Nil(t, a.nextReady(0))
 	ddlBoundary := &readBoundary{}
-	a.pendingDDL = []*readDDL{{event: ddl, record: &ack{}, boundary: ddlBoundary}}
+	a.pendingDDL = []*writeEvent{{ddl: ddl, boundary: ddlBoundary}}
 	boundary.reached = true
 	require.Same(t, before, a.nextReady(0).dml)
 	require.Same(t, independent, a.nextReady(0).dml)
@@ -595,7 +590,7 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	first := &event.DMLEvent{CommitTs: 20}
 	second := &event.DMLEvent{CommitTs: 10}
 	buffer := &assembler{
-		memory: &memoryUsage{}, orderedDML: true, dmlDirty: true,
+		memory: &memoryUsage{}, orderedDML: true,
 		partitions: map[int32]*partition{0: {}, 1: {}},
 		pendingDML: []*writeEvent{{dml: first, boundary: &readBoundary{reached: true}}, {dml: second, boundary: &readBoundary{reached: true}}},
 	}
@@ -603,7 +598,7 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	require.Same(t, second, buffer.nextReady(0).dml)
 	ddl := &event.DDLEvent{FinishedTs: 15}
 	buffer.pendingDML = []*writeEvent{{dml: first, boundary: &readBoundary{reached: true}}, {dml: second, boundary: &readBoundary{reached: true}}}
-	buffer.pendingDDL = []*readDDL{{event: ddl}}
+	buffer.pendingDDL = []*writeEvent{{ddl: ddl}}
 	require.Same(t, second, buffer.nextReady(0).dml)
 	require.Nil(t, buffer.nextReady(0))
 	buffer.pendingDDL = nil
@@ -737,14 +732,11 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 func TestConsumerCancellationDuringStartup(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.Protocol = new("csv")
-	upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir()}
-	c, err := newConsumer(ctx, upstreamURI, "blackhole://", "", "UTC", replicaConfig)
-	require.NoError(t, err)
+	upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir(), RawQuery: "protocol=csv"}
+	options := &options{upstreamURI: upstreamURI.String(), downstreamURI: "blackhole://", timezone: "UTC", logLevel: "error"}
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
-	wg.Go(func() { done <- c.start(ctx) })
+	wg.Go(func() { done <- start(ctx, options) })
 	cancel()
 	select {
 	case err := <-done:

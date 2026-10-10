@@ -20,6 +20,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -185,4 +186,33 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 	}
 	require.Empty(t, items)
 	require.Zero(t, a.memory.used())
+}
+
+func TestAssemblerStorageGroupBoundary(t *testing.T) {
+	key := cloudstorage.DMLPathKey{SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t"}}
+	first := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20}}
+	second := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
+	third := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
+	a := &assembler{
+		source: sourceStorage, pendingDML: []*writeEvent{first, second, third},
+		storage: &storageAssembly{
+			schemas:         map[cloudstorage.SchemaPathKey]*common.TableInfo{key.SchemaPathKey: {}},
+			tableIDs:        map[storageTableKey]int64{{schema: key.Schema, table: key.Table}: 1},
+			tableWatermarks: map[int64]uint64{1: 20}, sortBeforeWrite: true,
+		},
+	}
+	r := &storageReader{}
+	result, err := a.decodeStorage(t.Context(), &readData{storage: &storageInput{key: key, groupEnd: true}}, r)
+	require.NoError(t, err)
+	require.Nil(t, result)
+	for _, expected := range []*writeEvent{second, third, first} {
+		result, err = a.next(t.Context(), r)
+		require.NoError(t, err)
+		require.Same(t, expected, result)
+	}
+	result, err = a.next(t.Context(), r)
+	require.NoError(t, err)
+	require.True(t, result.hasWatermark)
+	require.EqualValues(t, 1, result.tableID)
+	require.EqualValues(t, 20, result.watermark)
 }

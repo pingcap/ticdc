@@ -41,17 +41,16 @@ const (
 )
 
 type writer struct {
-	downstream      sink.Sink
-	memory          *memoryUsage
-	pendingDML      []*writeEvent
-	inFlight        []*writeBatch
-	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
-	writtenBefore   uint64
-	inFlightBytes   int64
-	inFlightEvents  int
-	decodedRows     int64
-	writtenRows     int64
-	lastProgressLog time.Time
+	downstream     sink.Sink
+	memory         *memoryUsage
+	pendingDML     []*writeEvent
+	inFlight       []*writeBatch
+	mutations      map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
+	writtenBefore  uint64
+	inFlightBytes  int64
+	inFlightEvents int
+	decodedRows    int64
+	writtenRows    int64
 }
 type writeBatch struct {
 	items   []*writeEvent
@@ -103,24 +102,6 @@ func (c *consumer) writeDDL(ctx context.Context, result *writeEvent) error {
 
 func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 	w := c.writer
-	var building *writeBatch
-	defer func() {
-		// Cancellation can interrupt filtering while it waits for an earlier
-		// batch. Roll back identities and allocations for the unsubmitted batch.
-		if building == nil {
-			return
-		}
-		for _, key := range building.keys {
-			delete(w.mutations, key)
-			bytes := int64(len(key.handle) + 192)
-			w.memory.release(bytes)
-		}
-		originalBytes := int64(0)
-		for _, item := range building.items {
-			originalBytes += item.bytes
-		}
-		w.memory.release(building.bytes - originalBytes)
-	}()
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -164,7 +145,6 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			}
 		}
 		batch := &writeBatch{items: items, bytes: bytes, done: make(chan bool)}
-		building = batch
 		for _, item := range batch.items {
 			filtered, err := c.filterRows(ctx, item.dml, batch)
 			if err != nil {
@@ -193,7 +173,6 @@ func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 			return err
 		}
 		w.inFlight = append(w.inFlight, batch)
-		building = nil
 		w.inFlightBytes += batch.bytes
 		w.inFlightEvents += len(batch.items)
 		remaining, selected := w.pendingDML[:0], 0
@@ -239,7 +218,6 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 
 func (c *consumer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	w := c.writer
-	tick := time.Tick(progressLogInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -247,16 +225,13 @@ func (c *consumer) waitBatch(ctx context.Context, batch *writeBatch) error {
 		case <-batch.done:
 			w.finishBatches()
 			return c.confirmCompleted(ctx)
-		case <-tick:
-			if time.Since(w.lastProgressLog) >= progressLogInterval {
-				w.lastProgressLog = time.Now()
-				log.Info("consumer waiting for batch",
-					zap.Int64("receivedInputs", w.memory.received.Load()), zap.Int64("decodedRows", w.decodedRows),
-					zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.memory.confirmed.Load()),
-					zap.Int("pendingDMLCount", len(w.pendingDML)),
-					zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
-					zap.Int64("uncompletedInputs", w.memory.received.Load()-w.memory.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
-			}
+		case <-c.progressTick:
+			log.Info("consumer waiting for batch",
+				zap.Int64("receivedInputs", w.memory.received.Load()), zap.Int64("decodedRows", w.decodedRows),
+				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.memory.confirmed.Load()),
+				zap.Int("pendingDMLCount", len(w.pendingDML)),
+				zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
+				zap.Int64("uncompletedInputs", w.memory.received.Load()-w.memory.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
 		}
 	}
 }
