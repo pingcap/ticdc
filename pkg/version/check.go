@@ -75,7 +75,12 @@ func SanitizeVersion(v string) string {
 	return strings.TrimPrefix(v, "v")
 }
 
-var checkClusterVersionRetryTimes = 10
+var (
+	checkClusterVersionRetryTimes = 10
+	// The delay between two attempts to reach a healthy PD.
+	checkClusterVersionRetryBaseDelay = 10 * time.Millisecond
+	checkClusterVersionRetryMaxDelay  = time.Second
+)
 
 // CheckClusterVersion check TiKV and PD version.
 // need only one PD alive and match the cdc version.
@@ -96,8 +101,8 @@ func CheckClusterVersion(
 		// the http client may connect to an unhealthy PD that returns 503
 		err = retry.Do(ctx, func() error {
 			return checkPDVersion(ctx, pdAddr, credential)
-		}, retry.WithBackoffBaseDelay(time.Millisecond.Milliseconds()*10),
-			retry.WithBackoffMaxDelay(time.Second.Milliseconds()),
+		}, retry.WithBackoffBaseDelay(checkClusterVersionRetryBaseDelay.Milliseconds()),
+			retry.WithBackoffMaxDelay(checkClusterVersionRetryMaxDelay.Milliseconds()),
 			retry.WithMaxTries(uint64(checkClusterVersionRetryTimes)),
 			retry.WithIsRetryableErr(cerror.IsRetryableError))
 		if err == nil {

@@ -53,6 +53,10 @@ const (
 	createChangefeedRetryInterval = 5 * time.Second
 )
 
+// stopChangefeedWaitInterval is how often the API waits for a stop changefeed
+// operator to finish. Tests shorten it to keep the waits short.
+var stopChangefeedWaitInterval = time.Second
+
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
 //  2. operatorController: manage all operators and execute them periodically.
@@ -1024,7 +1028,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
@@ -1065,7 +1069,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
