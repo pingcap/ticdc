@@ -578,6 +578,17 @@ func newDMLMessageForWriterTest(commitTs uint64, id int64) *codeccommon.DMLMessa
 	})
 }
 
+func TestMessageWithPartitionCheckRejectsNilEvent(t *testing.T) {
+	w := &writer{}
+	message := codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return nil
+	})
+	checked := w.messageWithPartitionCheck(message, 1, 27)
+	require.PanicsWithValue(t, "DML message decoded to nil event", func() {
+		util.DMLMessagesToEvents([]*codeccommon.DMLMessage{checked})
+	})
+}
+
 func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
 	messageData := codeccommon.NewDMLMessageData(nil, nil,
 		func([]byte) ([]*codeccommon.DMLMessage, error) {

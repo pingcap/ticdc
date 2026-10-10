@@ -660,10 +660,10 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 
 		err := common.VerifyChecksum(result, db, timestampLocations(msg.Data, columns), timestampLocations(msg.Old, columns))
 		if err != nil || msg.Checksum.Corrupted {
-			log.Warn("consumer detect checksum corrupted",
-				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-			return nil
-
+			log.Panic("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table),
+				zap.Uint64("commitTs", msg.CommitTs), zap.Bool("corrupted", msg.Checksum.Corrupted),
+				zap.Error(err))
 		}
 	}
 

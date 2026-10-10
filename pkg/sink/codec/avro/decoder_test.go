@@ -174,6 +174,24 @@ func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
 	require.Equal(t, timestamp, row.Row.GetTime(1).String())
 }
 
+func TestChecksumFailureStopsDecode(t *testing.T) {
+	dec := &decoder{}
+	require.PanicsWithValue(t, "verify row checksum failed", func() {
+		dec.assembleDMLEventFromDecoded(
+			map[string]any{"id": int64(1)},
+			map[string]any{
+				"id": int64(1), tidbCommitTs: int64(100), tidbOp: insertOperation,
+				tidbRowLevelChecksum: "1",
+			},
+			map[string]any{
+				"namespace": "default.test", "name": "t",
+				"fields": []any{
+					map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+				},
+			}, false, true, 0)
+	})
+}
+
 // TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator checks the empty key
 // case: without a key column the message carries no row locator, so the decoder
 // must not claim a primary key. An empty primary index would make the sink emit

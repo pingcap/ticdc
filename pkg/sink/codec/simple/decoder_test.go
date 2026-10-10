@@ -88,6 +88,31 @@ func TestChecksumTimestampLocations(t *testing.T) {
 	}
 }
 
+func TestChecksumFailureStopsDecode(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	ddl := helper.DDL2Event("create table test.checksum_failure (id int primary key)")
+	expected := crc32.ChecksumIEEE(binary.LittleEndian.AppendUint64(nil, 1))
+	for name, value := range map[string]checksum{
+		"current mismatch":  {Current: expected + 1, Previous: expected},
+		"previous mismatch": {Current: expected, Previous: expected + 1},
+		"corrupted flag":    {Current: expected, Previous: expected, Corrupted: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			msg := &message{
+				Schema: "test", Table: "checksum_failure", CommitTs: 100,
+				Type: DMLTypeUpdate, Data: map[string]any{"id": int64(1)},
+				Old: map[string]any{"id": int64(1)}, Checksum: &value,
+			}
+			decoder := &Decoder{config: common.NewConfig(config.ProtocolSimple)}
+			decoder.config.EnableRowChecksum = true
+			require.PanicsWithValue(t, "consumer detect checksum corrupted", func() {
+				decoder.newDMLMessage(msg, ddl.TableInfo).ToDMLEvent()
+			})
+		})
+	}
+}
+
 func TestCachedDMLReturnsMessage(t *testing.T) {
 	const (
 		schema          = "test"
