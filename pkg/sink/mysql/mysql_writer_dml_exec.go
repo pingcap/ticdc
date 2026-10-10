@@ -206,16 +206,21 @@ func (w *Writer) multiStmtExecute(
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	// Execute the batch in one RTT and retain the driver's per-statement results.
+	// We use conn.Raw to record the all affected rows.
+	// See https://github.com/go-sql-driver/mysql/pull/1309
 	return conn.Raw(func(raw any) error {
-			// Raw bypasses database/sql's argument conversion, so use the driver's checker.
-			checker := raw.(driver.NamedValueChecker)
-			for i := range multiStmtArgs {
-				if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
-					return err
-				}
+		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+		checker := raw.(driver.NamedValueChecker)
+		for i := range multiStmtArgs {
+			if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
+				return err
 			}
+		}
 		execer := raw.(driver.ExecerContext)
+		// we use ExecContext to reduce the overhead of network latency.
+		// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+		// When an error happens before COMMIT, the server session can be left with an open transaction.
+		// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
 		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
 		if err != nil {
 			// An error before COMMIT can leave an open transaction. Use the driver
