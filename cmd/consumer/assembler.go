@@ -188,9 +188,6 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 		}
 	}
 	bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64 + 256
-	if bytes > maxInFlightBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer DML exceeds its in-flight byte limit")
-	}
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
@@ -454,7 +451,7 @@ func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, re
 		schemas := make(map[schemaKey]bool)
 		pointers := make(map[*common.TableInfo]bool)
 		for _, partitionID := range reader.partitionIDs {
-			a.partitions[partitionID] = &partition{decoder: decoder, schemas: schemas, schemaPointers: pointers}
+			partitions[partitionID] = &partition{decoder: decoder, schemas: schemas, schemaPointers: pointers}
 		}
 	case *storageReader:
 		selectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
@@ -479,6 +476,7 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
+		needsMoreInput := false
 		switch reader := reader.(type) {
 		case *kafkaReader:
 			watermark, ready := a.globalWatermark()
@@ -528,6 +526,7 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 				a.pendingWatermarks = a.pendingWatermarks[1:]
 				return result, nil
 			}
+			needsMoreInput = len(reader.checkpoints) != 0
 		case *storageReader:
 			state := a.storage
 			if !state.sortBeforeWrite || state.groupReady {
@@ -571,6 +570,15 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 				state.decoder = nil
 				state.current = nil
 				continue
+			}
+		}
+		needsMoreInput = needsMoreInput || len(a.pendingDML) != 0 || len(a.pendingDDL) != 0 || len(a.ddlCopies) != 0
+		for _, partition := range a.partitions {
+			needsMoreInput = needsMoreInput || partition.cachedUnreleased != 0
+		}
+		if !needsMoreInput {
+			if err := a.memory.wait(ctx); err != nil {
+				return nil, err
 			}
 		}
 		data, err := reader.Read(ctx)

@@ -190,9 +190,6 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
 		}
 		size := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
-		if size > maxRecordBytes {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message exceeds its size limit")
-		}
 		record, err := c.memory.newAck(ctx, size)
 		if err != nil {
 			return nil, err

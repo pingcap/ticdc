@@ -8,6 +8,7 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
+source "$CUR/credentials.sh"
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -116,11 +117,12 @@ function main() {
 
 	# check dispatcher count > 2
 	check_dispatcher_gt_two
+	check_credential_updates
 
 	cleanup_process $CDC_BINARY
 }
 
-trap 'stop_test $WORK_DIR' EXIT
+trap 'stop_kafka_auth_server; stop_test $WORK_DIR' EXIT
 main $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

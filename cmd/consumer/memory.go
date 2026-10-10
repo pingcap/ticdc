@@ -41,14 +41,9 @@ type ack struct {
 }
 
 func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
-	if bytes < 0 || bytes > maxMemoryBytes-2*maxInFlightBytes {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer input exceeds its memory budget")
-	}
-	// Leave room for decoding and filtering while the input is retained.
-	if err := m.reserve(ctx, bytes+2*maxInFlightBytes); err != nil {
+	if err := m.reserve(ctx, bytes); err != nil {
 		return nil, err
 	}
-	m.release(2 * maxInFlightBytes)
 	record := &ack{}
 	record.memory.Store(bytes)
 	record.refs.Store(1)
@@ -57,8 +52,8 @@ func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
 }
 
 func (m *memoryUsage) confirm(record *ack) {
-	m.release(record.memory.Load())
 	m.confirmed.Inc()
+	m.release(record.memory.Load())
 }
 
 func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
@@ -79,16 +74,25 @@ func (m *memoryUsage) used() int64 {
 }
 
 func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
-	if bytes < 0 || bytes > maxMemoryBytes {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer allocation exceeds its memory budget")
+	if bytes < 0 {
+		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer allocation has a negative size")
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	m.bytes.Add(bytes)
+	return nil
+}
+
+// Wait before starting another independent input. The current input and any
+// unfinished ordering window must be able to finish even if they exceed the budget.
+func (m *memoryUsage) wait(ctx context.Context) error {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
 		m.mu.Lock()
-		if m.used()+bytes <= maxMemoryBytes {
-			m.bytes.Add(bytes)
+		if m.used() < maxMemoryBytes || m.received.Load() == m.confirmed.Load() {
 			m.mu.Unlock()
 			return nil
 		}

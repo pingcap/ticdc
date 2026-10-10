@@ -280,16 +280,14 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 					metrics.FormatKeyspaceID(info.KeyspaceID),
 				).Set(float64(info.State.ToInt()))
 
-				if !updateChangefeedCheckpointMetrics(
+				updateChangefeedCheckpointMetrics(
 					keyspace,
 					name,
 					info.KeyspaceID,
 					info.State,
 					cf.GetLastSavedCheckPointTs(),
 					c.pdClock.CurrentTime(),
-				) {
-					return
-				}
+				)
 
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
@@ -343,11 +341,11 @@ func updateChangefeedCheckpointMetrics(
 	state config.FeedState,
 	checkpointTs uint64,
 	pdTime time.Time,
-) bool {
+) {
 	switch state {
-	case config.StateStopped, config.StateFinished, config.StateRemoved:
+	case config.StateFailed, config.StateStopped, config.StateFinished, config.StateRemoved:
 		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
-		return false
+		return
 	}
 
 	pdPhysicalTime := oracle.GetPhysical(pdTime)
@@ -359,7 +357,6 @@ func updateChangefeedCheckpointMetrics(
 		name,
 		metrics.FormatKeyspaceID(keyspaceID),
 	).Set(lag)
-	return true
 }
 
 // updateAllChangefeedCheckpointMetrics publishes checkpoint metrics from the

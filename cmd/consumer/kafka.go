@@ -150,9 +150,6 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		c.sequences[partitionID] = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
 		c.memory.release(bytes)
-		if bytes > maxRecordBytes {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record exceeds its size limit")
-		}
 		state, err := c.memory.newAck(ctx, bytes)
 		if err != nil {
 			return nil, err

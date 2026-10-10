@@ -334,9 +334,9 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			_ = file.Close()
 			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 		}
-		if size < 0 || size > maxMemoryBytes-2*maxInFlightBytes-256 {
+		if size < 0 {
 			_ = file.Close()
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file exceeds the consumer memory budget")
+			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
 		}
 		record, err := c.memory.newAck(ctx, size+256)
 		if err != nil {

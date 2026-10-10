@@ -33,7 +33,7 @@ func TestNewTokenProviderRejectsInvalidTokenURL(t *testing.T) {
 			oauth2: oauth2Config{
 				clientID:     "client-id",
 				clientSecret: "client-secret",
-				tokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+				tokenURL:     "http://user:password-sentinel@test.com/Segment%%2815197306101420000%29",
 				scopes:       []string{"scope1", "scope2"},
 				grantType:    "client_credentials",
 			},
@@ -45,6 +45,7 @@ func TestNewTokenProviderRejectsInvalidTokenURL(t *testing.T) {
 	var escapeErr url.EscapeError
 	require.ErrorAs(t, err, &escapeErr)
 	require.ErrorContains(t, err, "invalid URL escape")
+	require.NotContains(t, err.Error(), "password-sentinel")
 }
 
 func TestTokenProviderRequestsToken(t *testing.T) {
@@ -107,7 +108,7 @@ func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		if _, err := io.WriteString(w, `{"error":"invalid_client","error_description":"bad credentials"}`); err != nil {
+		if _, err := io.WriteString(w, `{"error":"invalid_client","error_description":"bad credentials client-secret-sentinel"}`); err != nil {
 			t.Errorf("write token error response: %v", err)
 		}
 	}))
@@ -117,7 +118,7 @@ func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 		sasl: &saslConfig{
 			oauth2: oauth2Config{
 				clientID:     "client-id",
-				clientSecret: "client-secret",
+				clientSecret: "client-secret-sentinel",
 				tokenURL:     server.URL,
 			},
 		},
@@ -130,5 +131,7 @@ func TestTokenProviderPropagatesEndpointError(t *testing.T) {
 	require.ErrorAs(t, err, &retrieveErr)
 	require.Equal(t, http.StatusUnauthorized, retrieveErr.Response.StatusCode)
 	require.Equal(t, "invalid_client", retrieveErr.ErrorCode)
-	require.Equal(t, "bad credentials", retrieveErr.ErrorDescription)
+	require.Empty(t, retrieveErr.ErrorDescription)
+	require.Empty(t, retrieveErr.Body)
+	require.NotContains(t, err.Error(), "client-secret-sentinel")
 }

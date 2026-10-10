@@ -422,22 +422,44 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 
 func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	memory := &memoryUsage{}
-	memory.bytes.Store(maxMemoryBytes - 32)
-	require.NoError(t, memory.reserve(t.Context(), 32))
+	record, err := memory.newAck(t.Context(), 128)
+	require.NoError(t, err)
+	require.NoError(t, memory.reserve(t.Context(), maxMemoryBytes-128))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.ErrorIs(t, memory.reserve(ctx, 1), context.Canceled)
+	require.ErrorIs(t, memory.wait(ctx), context.Canceled)
+	ctx, cancel = context.WithTimeout(t.Context(), 50*time.Millisecond)
+	require.ErrorIs(t, memory.wait(ctx), context.DeadlineExceeded)
+	cancel()
+	ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
-	wg.Go(func() { done <- memory.reserve(t.Context(), 128) })
+	wg.Go(func() { done <- memory.wait(ctx) })
 	memory.release(128)
 	require.NoError(t, <-done)
 	wg.Wait()
-	memory.release(128)
-	require.NoError(t, memory.reserve(t.Context(), 128))
-	buffer := &assembler{memory: memory}
-	_, err := buffer.memory.newAck(ctx, 256)
-	require.ErrorIs(t, err, context.Canceled)
+	memory.decoded(record, 128)
+	memory.confirm(record)
+	memory.release(maxMemoryBytes - 256)
+	require.Zero(t, memory.used())
+}
+
+func TestOversizedInputCanComplete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	memory := &memoryUsage{}
+	record, err := memory.newAck(ctx, maxMemoryBytes+(64<<20))
+	require.NoError(t, err)
+	require.Greater(t, memory.used(), int64(maxMemoryBytes))
+	require.NoError(t, memory.reserve(ctx, 1024))
+	memory.decoded(record, 256)
+	require.Zero(t, record.refs.Load())
+	memory.confirm(record)
+	memory.release(1024)
+	require.Zero(t, memory.used())
+	cancel()
+	require.ErrorIs(t, memory.reserve(ctx, 1), context.Canceled)
 }
 
 func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
