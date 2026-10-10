@@ -1381,6 +1381,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 		info.IsLowLatencyMode(),
+		info.GetMode(),
 	)
 
 	if !success {
