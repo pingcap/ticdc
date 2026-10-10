@@ -55,8 +55,12 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 		}
 		return nil, err
 	}
+	serialDML := putil.GetOrZero(replicaConfig.Sink.Protocol) == "csv"
 	return &consumer{
-		reader: reader, writer: &writer{downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch), serialDML: putil.GetOrZero(replicaConfig.Sink.Protocol) == "csv"},
+		reader: reader, writer: &writer{
+			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch), serialDML: serialDML,
+			sortCSVRows: serialDML && replicaConfig.Sink.CSVConfig != nil && replicaConfig.Sink.CSVConfig.OutputOldValue && replicaConfig.Sink.CSVConfig.IncludeCommitTs,
+		},
 		watermarks: make(map[int64]uint64),
 	}, nil
 }

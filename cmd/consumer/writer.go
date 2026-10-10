@@ -15,6 +15,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"reflect"
@@ -48,6 +49,7 @@ type writer struct {
 	inFlight        []*writeBatch
 	mutations       map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
 	serialDML       bool                        // CSV metadata omits secondary unique indexes; preserve per-table batch order.
+	sortCSVRows     bool                        // CSV with old values and commit timestamps orders deletes before inserts.
 	writtenBefore   uint64
 	inFlightBytes   int64
 	inFlightEvents  int
@@ -105,6 +107,13 @@ func (c *consumer) writeDDL(ctx context.Context, result *readResult) error {
 
 func (c *consumer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 	w := c.writer
+	if w.sortCSVRows {
+		// Sort available rows before splitting write batches, preserving order
+		// within each transaction and row type without waiting for more input.
+		slices.SortStableFunc(w.pendingDML, func(a, b *readResult) int {
+			return cmp.Or(cmp.Compare(a.dml.CommitTs, b.dml.CommitTs), cmp.Compare(a.dml.RowTypes[0], b.dml.RowTypes[0]))
+		})
+	}
 	var building *writeBatch
 	defer func() {
 		// Cancellation can interrupt filtering while it waits for an earlier

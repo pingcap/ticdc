@@ -332,3 +332,51 @@ func TestWriterCSVTransactionBatches(t *testing.T) {
 	w.advanceReplay(201, 0)
 	require.Zero(t, w.memory.used())
 }
+
+func TestWriterCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
+	field := types.NewFieldType(mysql.TypeLonglong)
+	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
+	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *field}},
+	})
+	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch), serialDML: true, sortCSVRows: true}
+	require.NoError(t, w.memory.reserve(t.Context(), 2*batchBytes))
+	callbacks := 0
+	for index, rowType := range []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert} {
+		id := int64(index/2 + 1)
+		if rowType == common.RowTypeInsert {
+			id = 3 - id
+		}
+		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 100, table)
+		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
+		dml.Rows.AppendInt64(0, id)
+		dml.RowTypes, dml.Length = []common.RowType{rowType}, 1
+		dml.AddPostFlushFunc(func() { callbacks++ })
+		w.pendingDML = append(w.pendingDML, &readResult{dml: dml, bytes: batchBytes / 2})
+	}
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	gomock.InOrder(
+		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+			require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeDelete}, dml.RowTypes)
+			require.EqualValues(t, 1, dml.Rows.GetRow(0).GetInt64(0))
+			require.EqualValues(t, 2, dml.Rows.GetRow(1).GetInt64(0))
+			dml.PostFlush()
+		}),
+		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+			require.Equal(t, 2, callbacks)
+			require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeInsert}, dml.RowTypes)
+			require.EqualValues(t, 2, dml.Rows.GetRow(0).GetInt64(0))
+			require.EqualValues(t, 1, dml.Rows.GetRow(1).GetInt64(0))
+			dml.PostFlush()
+		}),
+	)
+	w.downstream = downstream
+	c := &consumer{writer: w}
+	require.NoError(t, c.flushDML(t.Context(), nil))
+	require.Equal(t, 4, callbacks)
+	require.Empty(t, w.pendingDML)
+	require.Empty(t, w.inFlight)
+	w.advanceReplay(101, 0)
+	require.Zero(t, w.memory.used())
+}
