@@ -75,7 +75,7 @@ func TestEventRouter(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := &config.SinkConfig{}
-	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	d, err := NewEventRouter(sinkConfig, false, "test", false, false)
 	require.NoError(t, err)
 	require.Equal(t, "test", d.GetDefaultTopic())
 
@@ -88,7 +88,7 @@ func TestEventRouter(t *testing.T) {
 	require.Equal(t, d.defaultTopic, actual)
 
 	sinkConfig = newSinkConfig4Test()
-	d, err = NewEventRouter(sinkConfig, "", false, false)
+	d, err = NewEventRouter(sinkConfig, false, "", false, false)
 	require.NoError(t, err)
 
 	// no matched, use the default
@@ -140,11 +140,35 @@ func TestEventRouter(t *testing.T) {
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 }
 
+func TestEventRouterCaseSensitive(t *testing.T) {
+	for _, caseSensitive := range []bool{false, true} {
+		sinkConfig := &config.SinkConfig{
+			DispatchRules: []*config.DispatchRule{{
+				Matcher:       []string{"Sales.Orders"},
+				TopicRule:     "sales-events",
+				PartitionRule: "ts",
+			}},
+		}
+		router, err := NewEventRouter(sinkConfig, caseSensitive, "default-topic", false, false)
+		require.NoError(t, err)
+		require.Equal(t, "sales-events", router.GetTopicForRowChange("Sales", "Orders"))
+		for _, table := range [][2]string{{"sales", "Orders"}, {"Sales", "orders"}} {
+			if caseSensitive {
+				require.Equal(t, "default-topic", router.GetTopicForRowChange(table[0], table[1]))
+				require.IsType(t, &partition.TablePartitionGenerator{}, router.GetPartitionGenerator(table[0], table[1]))
+			} else {
+				require.Equal(t, "sales-events", router.GetTopicForRowChange(table[0], table[1]))
+				require.IsType(t, &partition.TsPartitionGenerator{}, router.GetPartitionGenerator(table[0], table[1]))
+			}
+		}
+	}
+}
+
 func TestGetActiveTopics(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	d, err := NewEventRouter(sinkConfig, false, "test", false, false)
 	require.NoError(t, err)
 	names := []*commonEvent.SchemaTableName{
 		{SchemaName: "test_default1", TableName: "table"},
@@ -162,7 +186,7 @@ func TestGetTopicForRowChange(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	d, err := NewEventRouter(sinkConfig, false, "test", false, false)
 	require.NoError(t, err)
 
 	topicName := d.GetTopicForRowChange("test_default1", "table")
@@ -185,7 +209,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	d, err := NewEventRouter(sinkConfig, false, "test", false, false)
 	require.NoError(t, err)
 
 	// default partition
@@ -268,7 +292,7 @@ func TestGetTopicForDDL(t *testing.T) {
 		},
 	}
 
-	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	d, err := NewEventRouter(sinkConfig, false, "test", false, false)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -399,7 +423,7 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			d, err := NewEventRouter(tc.sinkConfig, "default_topic", false, false)
+			d, err := NewEventRouter(tc.sinkConfig, false, "default_topic", false, false)
 			require.NoError(t, err)
 
 			require.Equal(t, tc.expectedTopic, d.GetTopicForDDL(tc.ddl))

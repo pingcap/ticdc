@@ -78,7 +78,7 @@ type sink struct {
 	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -88,7 +88,14 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
+<<<<<<< HEAD
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+=======
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
+		return err
+	}
+	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if err != nil {
 		return err
 	}
@@ -102,7 +109,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
@@ -118,9 +125,19 @@ func New(
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
+<<<<<<< HEAD
 	// the last param maxMsgBytes is mainly to limit the size of a single message for
 	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+=======
+	// Message size limits are mainly for MQ batch protocols. Cloud storage uses
+	// max int for both the final message limit and the batch threshold.
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
+	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if err != nil {
 		return nil, err
 	}

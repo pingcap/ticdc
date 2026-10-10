@@ -1764,11 +1764,27 @@ func verifyTable4MQ(
 	protocol config.Protocol,
 	tableInfos []*common.TableInfo,
 ) error {
+<<<<<<< HEAD
+=======
+	if config.IsStorageScheme(scheme) {
+		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			return err
+		}
+		return selectors.VerifyTables(tableInfos, nil)
+	}
+
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if !config.IsMQScheme(scheme) {
 		return nil
 	}
 
+<<<<<<< HEAD
 	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+=======
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), isAvroLike)
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if err != nil {
 		return err
 	}
@@ -1776,7 +1792,7 @@ func verifyTable4MQ(
 		return err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return err
 	}

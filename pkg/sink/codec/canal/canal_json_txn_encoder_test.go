@@ -100,3 +100,30 @@ func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).batchSize)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).valueBuf.Len())
 }
+<<<<<<< HEAD
+=======
+
+func TestCanalJSONTxnEventEncoderWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.t(col1 int primary key, col2 varchar(255))")
+	event := helper.DML2Event("test", "t", `insert into test.t values (1, "filtered")`)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.t"}, Columns: []string{"col1"}},
+		},
+	}, false)
+	require.NoError(t, err)
+
+	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))
+	require.NoError(t, appendTxnEventForTest(encoder, event, selectors.GetForTableInfo(event.TableInfo)))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	value := string(messages[0].Value)
+	require.Contains(t, value, "col1")
+	require.NotContains(t, value, "col2")
+	require.NotContains(t, value, "filtered")
+}
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))

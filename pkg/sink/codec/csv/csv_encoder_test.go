@@ -128,3 +128,86 @@ func TestCSVBatchCodecWithHeader(t *testing.T) {
 	messages = encoder.Build()
 	require.Len(t, messages, 0)
 }
+<<<<<<< HEAD
+=======
+
+func TestCSVTxnEventEncoderWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(col1 int primary key, col2 varchar(255))")
+	event := helper.DML2Event("test", "table1", `insert into test.table1 values (1, "filtered")`)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"col1"}},
+		},
+	}, false)
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:            ",",
+		Quote:                "\"",
+		Terminator:           "\n",
+		NullString:           "\\N",
+		IncludeCommitTs:      true,
+		CSVOutputFieldHeader: true,
+	}
+	encoder := NewTxnEventEncoder(cfg)
+	require.NoError(t, appendTxnEventForTest(encoder, event, selectors.GetForTableInfo(event.TableInfo)))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, "ticdc-meta$operation,ticdc-meta$table,ticdc-meta$schema,ticdc-meta$commit-ts,col1\n", string(messages[0].Key))
+	require.NotContains(t, string(messages[0].Key), "col2")
+	require.NotContains(t, string(messages[0].Value), "filtered")
+}
+
+func TestCSVTxnEventEncoderWithColumnSelectorForUpdateAndDelete(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.DDL2Event("create table test.table1(id int primary key, visible varchar(255), secret varchar(255))")
+	updateEvent, _ := helper.DML2UpdateEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (1, "visible-before", "secret-before")`,
+		`update test.table1 set visible = "visible-after", secret = "secret-after" where id = 1`,
+	)
+	deleteEvent := helper.DML2DeleteEvent(
+		"test",
+		"table1",
+		`insert into test.table1 values (2, "delete-visible", "delete-secret")`,
+		`delete from test.table1 where id = 2`,
+	)
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{
+			{Matcher: []string{"test.table1"}, Columns: []string{"id", "visible"}},
+		},
+	}, false)
+	require.NoError(t, err)
+
+	cfg := &common.Config{
+		Delimiter:       ",",
+		Quote:           "\"",
+		Terminator:      "\n",
+		NullString:      "\\N",
+		OutputOldValue:  true,
+		IncludeCommitTs: false,
+	}
+	selector := selectors.GetForTableInfo(updateEvent.TableInfo)
+	encoder := NewTxnEventEncoder(cfg)
+	require.NoError(t, appendTxnEventForTest(encoder, updateEvent, selector))
+	require.NoError(t, appendTxnEventForTest(encoder, deleteEvent, selector))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	value := string(messages[0].Value)
+	require.Contains(t, value, "visible-before")
+	require.Contains(t, value, "visible-after")
+	require.Contains(t, value, "delete-visible")
+	require.NotContains(t, value, "secret-before")
+	require.NotContains(t, value, "secret-after")
+	require.NotContains(t, value, "delete-secret")
+}
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))

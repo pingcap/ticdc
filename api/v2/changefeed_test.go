@@ -262,5 +262,81 @@ func mustParseURLError(t *testing.T, rawURL string) error {
 
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
+<<<<<<< HEAD
 	return err
+=======
+	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
+
+	replicaCfg.Sink.ColumnSelectors[0].Columns = []string{"id", "name"}
+	require.NoError(t, verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos))
+}
+
+func TestVerifyTablesForSinkCaseSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, scheme := range []string{config.FileScheme, config.KafkaScheme, config.PulsarScheme} {
+				t.Run(scheme, func(t *testing.T) {
+					cfg := config.GetDefaultReplicaConfig()
+					cfg.CaseSensitive = tc.caseSensitive
+					cfg.Sink.ColumnSelectors = []*config.ColumnSelector{{
+						Matcher: []string{"Test.*"}, Columns: []string{"name"},
+					}}
+					// Exercise the CLI/API conversion before checking the effective matcher.
+					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+					tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+					err := verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					if config.IsMQScheme(scheme) {
+						cfg.Sink.ColumnSelectors = nil
+						cfg.Sink.DispatchRules = []*config.DispatchRule{{
+							Matcher: []string{"Test.*"}, PartitionRule: "index-value", IndexName: "missing_index",
+						}}
+						err = verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+						if util.GetOrZero(tc.caseSensitive) {
+							require.NoError(t, err)
+						} else {
+							require.True(t, errors.ErrDispatcherFailed.Equal(err), "%v", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+
+	return common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:         1,
+		Name:       ast.NewCIStr("t"),
+		PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
+>>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 }
