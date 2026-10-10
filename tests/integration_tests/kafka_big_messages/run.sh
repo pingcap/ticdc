@@ -55,30 +55,7 @@ function kafka_sink_uri() {
 	echo "$sink_uri"
 }
 
-function start_kafka_consumer() {
-	local work_dir=$1
-	local sink_uri=$2
-	local schema_registry_uri=$3
-	local protocol_case=$4
-	local downstream_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?enable-ddl-ts=false"
-	local args=(
-		--log-file "$work_dir/cdc_kafka_consumer.log"
-		--log-level debug
-		--upstream-uri "$sink_uri"
-		--downstream-uri "$downstream_uri"
-	)
-	if [ "$schema_registry_uri" != "" ]; then
-		args+=(--schema-registry-uri "$schema_registry_uri")
-	fi
-	if [[ "$protocol_case" == simple_* ]]; then
-		args+=(--upstream-tidb-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?")
-	fi
-
-	cdc_kafka_consumer "${args[@]}" >>"$work_dir/cdc_kafka_consumer_stdout.log" 2>&1 &
-	consumer_pid=$!
-}
-
-function stop_kafka_consumer() {
+function stop_consumer() {
 	if [ "$consumer_pid" != "" ]; then
 		kill -9 "$consumer_pid" 2>/dev/null || true
 		wait "$consumer_pid" 2>/dev/null || true
@@ -148,7 +125,17 @@ function run_protocol_case() {
 	else
 		cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$sink_uri" -c "$changefeed_id"
 	fi
-	start_kafka_consumer "$work_dir" "$sink_uri" "$schema_registry_uri" "$protocol_case"
+	local consumer_uri="$sink_uri"
+	if [ "$schema_registry_uri" != "" ]; then
+		consumer_uri="${consumer_uri}&schema-registry=$(printf '%s' "$schema_registry_uri" | jq -sRr @uri)"
+	fi
+	if [[ "$protocol_case" == simple_* ]]; then
+		consumer_uri="${consumer_uri}&upstream-tidb-dsn=$(printf '%s' "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" | jq -sRr @uri)"
+	fi
+	cdc_consumer --upstream-uri "$consumer_uri" --consumer-id "${changefeed_id}-$$" \
+		--downstream-uri "mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?enable-ddl-ts=false" \
+		--log-file "$work_dir/cdc_consumer.log" --log-level debug >>"$work_dir/cdc_consumer_stdout.log" 2>&1 &
+	consumer_pid=$!
 	wait_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null"
 
 	# Lower the topic limit after the producer has started. The encoder and
@@ -174,7 +161,7 @@ function run_protocol_case() {
 	check_sync_diff "$work_dir" "$diff_config"
 
 	cdc_cli_changefeed remove -c "$changefeed_id"
-	stop_kafka_consumer
+	stop_consumer
 }
 
 function run() {
@@ -208,7 +195,7 @@ function run() {
 	cleanup_process "$CDC_BINARY"
 }
 
-trap 'stop_kafka_consumer; stop_test "$WORK_DIR"' EXIT
+trap 'stop_consumer; stop_test "$WORK_DIR"' EXIT
 run "$@"
 check_logs "$WORK_DIR"
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

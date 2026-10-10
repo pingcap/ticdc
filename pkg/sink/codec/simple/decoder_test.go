@@ -52,6 +52,8 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	}
 
 	require.Nil(t, decoder.NextDMLMessage())
+	pending := decoder.PendingDMLMessage
+	require.NotNil(t, pending)
 	require.Equal(t, 1, decoder.cachedMessages.Len())
 
 	decoder.msg = &message{
@@ -84,6 +86,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	require.Zero(t, decoder.cachedMessages.Len())
 
 	dmlMessage := cachedMessages[0]
+	require.Same(t, pending, dmlMessage)
 	require.Equal(t, physicalTableID, dmlMessage.TableID)
 	require.Equal(t, schema, dmlMessage.Schema)
 	require.Equal(t, table, dmlMessage.Table)

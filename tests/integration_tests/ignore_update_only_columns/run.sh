@@ -55,7 +55,7 @@ function run() {
 	CONSUMER_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760"
 
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:8300" --config=$CUR/conf/changefeed.toml
-	run_kafka_consumer $WORK_DIR "$CONSUMER_URI" "$CUR/conf/changefeed.toml" "" ""
+	run_consumer $WORK_DIR "$CONSUMER_URI" "$CUR/conf/changefeed.toml" ""
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

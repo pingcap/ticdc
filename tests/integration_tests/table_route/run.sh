@@ -503,7 +503,7 @@ function run_storage_case() {
 
 	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
-	run_storage_consumer "$work_dir" "$sink_uri" "$CUR/conf/changefeed.toml" "$protocol"
+	run_consumer "$work_dir" "$sink_uri" "$CUR/conf/changefeed.toml" "$protocol"
 
 	verify_table_route_result "$work_dir"
 	check_storage_files_use_target_names "$storage_dir"
@@ -567,32 +567,6 @@ function kafka_sink_uri() {
 	echo "$sink_uri"
 }
 
-function run_table_route_kafka_consumer() {
-	local work_dir=$1
-	local sink_uri=$2
-	local changefeed_config=$3
-	local schema_registry_uri=$4
-	local log_suffix=$5
-	local protocol_case=$6
-	local downstream_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?enable-ddl-ts=false"
-
-	local args=(
-		--log-file "$work_dir/cdc_kafka_consumer${log_suffix}.log"
-		--log-level debug
-		--upstream-uri "$sink_uri"
-		--downstream-uri "$downstream_uri"
-		--config "$changefeed_config"
-	)
-	if [ "$schema_registry_uri" != "" ]; then
-		args+=(--schema-registry-uri "$schema_registry_uri")
-	fi
-	if [[ "$protocol_case" == simple_* ]]; then
-		args+=(--upstream-tidb-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?")
-	fi
-
-	cdc_kafka_consumer "${args[@]}" >>"$work_dir/cdc_kafka_consumer_stdout${log_suffix}.log" 2>&1 &
-}
-
 function run_kafka() {
 	local schema_registry_uri="http://127.0.0.1:8088"
 	local cases=(
@@ -631,7 +605,14 @@ function run_kafka() {
 		else
 			cdc_cli_changefeed create -c "table-route-${topic_case}" --sink-uri="$sink_uri" --config="$changefeed_config"
 		fi
-		run_table_route_kafka_consumer "$work_dir" "$sink_uri" "$changefeed_config" "$schema_registry" "_$protocol_case" "$protocol_case"
+		local consumer_uri="$sink_uri"
+		if [ "$schema_registry" != "" ]; then
+			consumer_uri="${consumer_uri}&schema-registry=$(printf '%s' "$schema_registry" | jq -sRr @uri)"
+		fi
+		if [[ "$protocol_case" == simple_* ]]; then
+			consumer_uri="${consumer_uri}&upstream-tidb-dsn=$(printf '%s' "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" | jq -sRr @uri)"
+		fi
+		run_consumer "$work_dir" "$consumer_uri" "$changefeed_config" "_$protocol_case"
 	done
 
 	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"

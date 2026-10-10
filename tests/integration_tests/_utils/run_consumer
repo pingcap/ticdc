@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Parameters: work directory, upstream URI, optional config, optional log suffix.
+set -eu
+
+workdir=$1
+upstream_uri=$2
+consumer_config=${3:-}
+log_suffix=${4:-}
+consumer_id="${TEST_NAME:-consumer}-$$"
+case "$upstream_uri" in
+pulsar*) consumer_id=pulsar-test-subscription ;;
+esac
+
+args=(
+	--upstream-uri "$upstream_uri"
+	--downstream-uri "mysql://root@${DOWN_TIDB_HOST:-127.0.0.1}:${DOWN_TIDB_PORT:-3306}/?enable-ddl-ts=false"
+	--consumer-id "$consumer_id"
+	--log-file "$workdir/cdc_consumer${log_suffix}.log"
+	--log-level debug
+)
+if [ -n "$consumer_config" ]; then
+	args+=(--config "$consumer_config")
+fi
+
+echo "[$(date)] <<<<<< START consumer in ${TEST_NAME:-consumer} case >>>>>>"
+cd "$workdir"
+cdc_consumer "${args[@]}" >>"$workdir/cdc_consumer_stdout${log_suffix}.log" 2>&1 &
