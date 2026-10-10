@@ -40,6 +40,11 @@ type rowChangeWithKeys struct {
 	commitTs   uint64
 }
 
+var (
+	errDuplicateInsertRows       = cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
+	errDuplicateUpdateInsertRows = cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
+)
+
 // ===== Normal SQL (one row -> one statement) =====
 
 // generateNormalSQLs simply iterates each event and produces SQLs without batching.
@@ -240,6 +245,14 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 		}
 	}
 
+	// Validate all updates before merging so a filtered duplicate cannot hide
+	// an unexpected, unsplit primary-key change later in the batch.
+	for _, row := range rowLists {
+		if row.rowChange.RowType == common.RowTypeUpdate && !compareKeys(row.preRowKeys, row.rowKeys) {
+			return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+		}
+	}
+
 	// Step 2 combine the rows until there is no change
 	// Consider we will split the event if PK is changed, so the Update will not change the PK
 	// for the rows comparation, there are six situations:
@@ -273,7 +286,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					rowKey := rowLists[i].rowKeys
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
+							return nil, nil, errDuplicateInsertRows
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -282,9 +295,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-						}
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
 							preRowChange := rowLists[j].rowChange
@@ -303,12 +313,9 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					}
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].rowKeys
-					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
-						return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
+							return nil, nil, errDuplicateUpdateInsertRows
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -328,9 +335,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
-							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-								return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-							}
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].rowChange.PreRow,
 								Row:     rowLists[j].rowChange.Row,
@@ -378,6 +382,11 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	tableInfo := events[0].TableInfo
 	finalRowLists, _, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
+	if err == errDuplicateInsertRows || err == errDuplicateUpdateInsertRows {
+		// Event filtering can remove an intervening delete. Keep event order and
+		// batch only within each event, as in the legacy MySQL sink.
+		return w.generateBatchSQLsPerEvent(events)
+	}
 	if err != nil {
 		sql, values, rowTypes := w.generateBatchSQLsPerEvent(events)
 		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Any("rowTypes", rowTypes), zap.Int("writerID", w.id))
@@ -467,11 +476,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
-				sql, values, rowTypes := w.generateBatchSQLsPerEvent(events)
-				log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Any("rowTypes", rowTypes), zap.Int("writerID", w.id))
-				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()), zap.Any("PKIndex", tableInfo.GetPKIndex()),
-					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
-					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
+				// Filtering can break the alternating sequence across events.
+				// Preserve the operations using per-event batching instead of merging.
+				return w.generateBatchSQLsPerEvent(events)
 			}
 			prevType = rowType
 		}
