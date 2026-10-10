@@ -94,6 +94,9 @@ type Config struct {
 	DebeziumDisableSchema bool
 	// Debezium only. Whether before value should be included in the output.
 	DebeziumOutputOldValue bool
+	// Debezium only. Whether the transaction start_ts should be included in
+	// the source block of the output. JSON protocol only.
+	DebeziumIncludeStartTs bool
 	// CSV only. Whether header should be included in the output.
 	CSVOutputFieldHeader bool
 }
@@ -138,6 +141,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		DebeziumOutputOldValue: true,
 		OpenOutputOldValue:     true,
 		DebeziumDisableSchema:  false,
+		DebeziumIncludeStartTs: false,
 		CSVOutputFieldHeader:   false,
 	}
 }
@@ -177,7 +181,8 @@ type urlConfig struct {
 	OnlyOutputUpdatedColumns *bool  `form:"only-output-updated-columns"`
 	ContentCompatible        *bool  `form:"content-compatible"`
 
-	DebeziumDisableSchema *bool `form:"debezium-disable-schema"`
+	DebeziumDisableSchema  *bool `form:"debezium-disable-schema"`
+	DebeziumIncludeStartTs *bool `form:"debezium-include-start-ts"`
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
@@ -195,6 +200,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
 		return errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
+	// Keep the raw URI parameters: mergeConfig uses mergo, which cannot
+	// override a *bool "true" (from the config file) with an explicit
+	// "false" from the sink URI, so explicit URI values are applied last.
+	rawURLParameter := urlParameter
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
 	}
@@ -300,6 +309,12 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if urlParameter.DebeziumDisableSchema != nil {
 		c.DebeziumDisableSchema = *urlParameter.DebeziumDisableSchema
 	}
+	if urlParameter.DebeziumIncludeStartTs != nil {
+		c.DebeziumIncludeStartTs = *urlParameter.DebeziumIncludeStartTs
+	}
+	if rawURLParameter.DebeziumIncludeStartTs != nil {
+		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
+	}
 
 	return nil
 }
@@ -331,6 +346,9 @@ func mergeConfig(
 		if sinkConfig.DebeziumDisableSchema != nil {
 			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
 		}
+		if sinkConfig.Debezium != nil && sinkConfig.Debezium.IncludeStartTs != nil {
+			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
+		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, err
@@ -358,6 +376,12 @@ func (c *Config) Validate() error {
 			"only supports canal-json/avro/debezium protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
+	}
+
+	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`debezium-include-start-ts only takes effect with protocol "debezium"`,
+		)
 	}
 
 	if c.Protocol == config.ProtocolAvro {
