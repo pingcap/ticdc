@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
@@ -37,6 +39,8 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1682,6 +1686,93 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, decoded, decodedRow.TableInfo)
 			}
 		}
+	}
+}
+
+func TestClaimCheckChecksumWithTimeZone(t *testing.T) {
+	for _, zones := range [][2]string{
+		{"UTC", "UTC"},
+		{"Asia/Shanghai", "Asia/Shanghai"},
+		{"Asia/Shanghai", "UTC"},
+		{"UTC", "Asia/Shanghai"},
+	} {
+		t.Run(zones[0]+"/to/"+zones[1], func(t *testing.T) {
+			location, err := time.LoadLocation(zones[0])
+			require.NoError(t, err)
+			consumerLocation, err := time.LoadLocation(zones[1])
+			require.NoError(t, err)
+			helper := commonEvent.NewEventTestHelperWithTimeZone(t, location)
+			defer helper.Close()
+			ddl := helper.DDL2Event(`create table test.checksum_t (
+				id int primary key, ts timestamp(6), dt datetime, payload text)`)
+			dml, _ := helper.DML2UpdateEvent("test", "checksum_t",
+				`insert into test.checksum_t values (1, '2020-02-20 02:20:20.123456', '2020-02-20 02:20:20', repeat('a', 2048))`,
+				`update test.checksum_t set ts = '2020-02-21 03:21:21.654321', dt = '2020-02-21 03:21:21' where id = 1`)
+			row, ok := dml.GetNextRow()
+			require.True(t, ok)
+			checksum := func(row chunk.Row) uint32 {
+				data := rowcodec.RowData{}
+				for i, column := range dml.TableInfo.GetColumns() {
+					datum := row.GetDatum(i, &column.FieldType)
+					data.Cols = append(data.Cols, rowcodec.ColData{ColumnInfo: column, Datum: &datum})
+				}
+				value, err := data.Checksum(location)
+				require.NoError(t, err)
+				return value
+			}
+			event := &commonEvent.RowEvent{
+				PhysicalTableID: dml.PhysicalTableID,
+				StartTs:         dml.StartTs,
+				CommitTs:        dml.CommitTs,
+				TableInfo:       dml.TableInfo,
+				Event:           row,
+				ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+				Checksum:        &integrity.Checksum{Current: checksum(row.Row), Previous: checksum(row.PreRow)},
+			}
+			for _, format := range []common.EncodingFormatType{common.EncodingFormatJSON, common.EncodingFormatAvro} {
+				t.Run(string(format), func(t *testing.T) {
+					ctx := context.Background()
+					cfg := common.NewConfig(config.ProtocolSimple)
+					cfg.TimeZone = location
+					cfg.EncodingFormat = format
+					cfg.EnableRowChecksum = true
+					cfg.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
+					cfg.LargeMessageHandle.ClaimCheckStorageURI = "file://" + t.TempDir()
+					claimCheck, err := claimcheck.New(ctx, cfg.LargeMessageHandle, cfg.ChangefeedID)
+					require.NoError(t, err)
+					t.Cleanup(claimCheck.Close)
+					enc, err := NewEncoder(cfg, claimCheck)
+					require.NoError(t, err)
+					decoderCfg := *cfg
+					decoderCfg.TimeZone = consumerLocation
+					decoder, err := NewDecoder(ctx, &decoderCfg, nil)
+					require.NoError(t, err)
+					dec := decoder.(*Decoder)
+					message, err := enc.EncodeDDLEvent(ddl)
+					require.NoError(t, err)
+					dec.AddKeyValue(message.Key, message.Value)
+					messageType, hasNext := dec.HasNext()
+					require.True(t, hasNext)
+					require.Equal(t, common.MessageTypeDDL, messageType)
+					dec.NextDDLEvent()
+					cfg.MaxMessageBytes = 1024
+					require.NoError(t, enc.AppendRowChangedEvent(ctx, "", event))
+					messages := enc.Build()
+					require.Len(t, messages, 1)
+					dec.AddKeyValue(messages[0].Key, messages[0].Value)
+					messageType, hasNext = dec.HasNext()
+					require.True(t, hasNext)
+					require.Equal(t, common.MessageTypeRow, messageType)
+					require.NotEmpty(t, dec.msg.ClaimCheckLocation)
+					decoded := dec.NextDMLMessage().ToDMLEvent()
+					require.NotNil(t, decoded)
+					decodedRow, ok := decoded.GetNextRow()
+					require.True(t, ok)
+					require.Equal(t, event.Checksum, decodedRow.Checksum)
+					common.CompareRow(t, row, dml.TableInfo, decodedRow, decoded.TableInfo)
+				})
+			}
+		})
 	}
 }
 

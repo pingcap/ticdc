@@ -259,7 +259,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
+		if err = common.VerifyChecksum(event, d.upstreamTiDB, nil, nil); err != nil {
 			return nil
 		}
 	}
