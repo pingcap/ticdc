@@ -170,7 +170,8 @@ func newPersistentStorage(
 	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
 	err := dataStorage.initialize(gcSafePoint)
 	if err != nil {
-		return nil, errors.Trace(err)
+		dataStorage.cancel()
+		return nil, err
 	}
 
 	return dataStorage, nil
@@ -219,12 +220,12 @@ func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 		}
 	}
 	if !isDataReusable {
-		p.initializeFromKVStorage(dbPath, gcSafePoint)
+		return p.initializeFromKVStorage(dbPath, gcSafePoint)
 	}
 	return nil
 }
 
-func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
+func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) error {
 	now := time.Now()
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Fatal("fail to remove path in initializeFromKVStorage")
@@ -236,9 +237,14 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 
 	var err error
 	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshotWithEncryption(
-		p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
-		// TODO: retry
-		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
+		p.ctx, p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
+		closeErr := p.db.Close()
+		p.db = nil
+		if closeErr != nil {
+			log.Warn("close schema store database after initialization failed",
+				zap.Uint32("keyspaceID", p.keyspaceID), zap.Error(closeErr))
+		}
+		return err
 	}
 
 	p.gcTs = gcTs
@@ -252,6 +258,7 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Int("databaseMapLen", len(p.databaseMap)),
 		zap.Int("tableMapLen", len(p.tableMap)),
 		zap.Any("duration(s)", time.Since(now).Seconds()))
+	return nil
 }
 
 func (p *persistentStorage) initializeFromDisk() {
@@ -623,12 +630,12 @@ func (p *persistentStorage) gc(ctx context.Context) {
 				log.Warn("get ts failed", zap.Error(err))
 				continue
 			}
-			p.doGc(gcSafePoint)
+			p.doGc(ctx, gcSafePoint)
 		}
 	}
 }
 
-func (p *persistentStorage) doGc(gcTs uint64) {
+func (p *persistentStorage) doGc(ctx context.Context, gcTs uint64) {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
 		// It might happen when all changefeed is removed in the maintainer side,
@@ -652,8 +659,11 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 
 	start := time.Now()
 	_, _, _, err := persistSchemaSnapshotWithEncryption(
-		p.db, p.kvStorage, gcTs, false, p.encryptionManager, p.keyspaceID)
+		ctx, p.db, p.kvStorage, gcTs, false, p.encryptionManager, p.keyspaceID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
