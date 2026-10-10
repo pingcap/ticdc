@@ -156,10 +156,6 @@ func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeC
 	return m.handleEvents(m.events, wakeCallback)
 }
 
-func (m *mockDispatcher) GetTimezone() string {
-	return "UTC"
-}
-
 func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return &eventpb.IntegrityConfig{}
 }
