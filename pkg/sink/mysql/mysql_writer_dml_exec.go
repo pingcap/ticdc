@@ -208,7 +208,13 @@ func (w *Writer) multiStmtExecute(
 
 	// Execute the batch in one RTT and retain the driver's per-statement results.
 	return conn.Raw(func(raw any) error {
-		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+			// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+			checker := raw.(driver.NamedValueChecker)
+			for i := range multiStmtArgs {
+				if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
+					return err
+				}
+			}
 		execer := raw.(driver.ExecerContext)
 		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
 		if err != nil {
