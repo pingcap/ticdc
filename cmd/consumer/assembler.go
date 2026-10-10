@@ -40,6 +40,7 @@ import (
 
 type writeEvent struct {
 	dml          *event.DMLEvent
+	decoding     *decodeTask
 	ddl          *event.DDLEvent
 	onFlush      func()
 	bytes        int64
@@ -168,6 +169,8 @@ type assembler struct {
 	topic             string
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
+	decoder           *decoderGroup
+	tables            map[[2]string]*common.TableInfo
 	current           *readData
 	currentDecoder    codecCommon.Decoder
 	pendingWatermarks []*writeEvent
@@ -195,14 +198,19 @@ type assembler struct {
 	waitingKnown      bool
 }
 
-func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, boundary *readBoundary) error {
-	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
+func (a *assembler) queueDML(ctx context.Context, item *writeEvent, records []*ack, boundary *readBoundary) error {
+	dml := item.dml
+	if dml == nil || dml.TableInfo == nil || (item.decoding == nil && (dml.Rows == nil || dml.Len() == 0)) {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
 	}
-	if err := a.memory.retainSchema(ctx, dml.TableInfo); err != nil {
-		return err
+	bytes := int64(256)
+	materialized := item.decoding == nil
+	if materialized {
+		if err := a.memory.retainSchema(ctx, dml.TableInfo); err != nil {
+			return err
+		}
+		bytes += dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
 	}
-	bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64 + 256
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
@@ -210,12 +218,14 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 		record.refs.Add(1)
 	}
 	dml.AddPostFlushFunc(func() {
-		a.memory.releaseSchema(dml.TableInfo)
+		if materialized {
+			a.memory.releaseSchema(dml.TableInfo)
+		}
 		for _, record := range records {
 			record.release()
 		}
 	})
-	item := &writeEvent{dml: dml, bytes: bytes, sequential: a.mergeRows, boundary: boundary}
+	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
 	if item.boundary == nil {
 		for _, ddl := range a.pendingDDL {
 			if dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, dml) {
@@ -499,7 +509,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*assembler, error) {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -508,9 +518,26 @@ func newAssembler(decoding *decodeConfig, replicaConfig *config.ReplicaConfig, m
 			return nil, err
 		}
 	}
+	streams := make(map[int32]*decodeStream)
+	if decoding.format == messageFormat {
+		ids := decoding.streams
+		if len(ids) == 0 {
+			ids = []int32{0}
+		}
+		// Constructors reset protocol table-ID allocation. Create all cursors
+		// before parsing inputs or starting concurrent row conversion.
+		for _, id := range ids {
+			decoder, err := codec.NewEventDecoder(ctx, int(id), decoding.codec, decoding.topic, decoding.upstreamDB)
+			if err != nil {
+				return nil, err
+			}
+			streams[id] = &decodeStream{decoder: decoder}
+		}
+	}
 	return &assembler{
 		memory: memory, codecConfig: decoding.codec, upstreamDB: decoding.upstreamDB, topic: decoding.topic,
-		protocol: decoding.codec.Protocol, selectors: selectors, streams: make(map[int32]*decodeStream),
+		protocol: decoding.codec.Protocol, selectors: selectors, streams: streams,
+		decoder: newDecoderGroup(memory), tables: make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
 	}, nil
@@ -711,18 +738,25 @@ func (a *assembler) decodeRows(ctx context.Context, reader reader) error {
 		if message == nil {
 			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 		}
-		return a.assembleDML(ctx, data, message.ToDMLEvent(), []*ack{data.record}, reader)
+		return a.assembleMessage(ctx, data, message, []*ack{data.record}, reader)
 	}
 }
 
-func (a *assembler) assembleDML(ctx context.Context, data *readData, dml *event.DMLEvent, records []*ack, reader reader) error {
-	if dml == nil || dml.TableInfo == nil {
-		return errors.ErrCodecDecode.FastGenByArgs("DML message has no table metadata")
-	}
+func (a *assembler) assembleMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, records []*ack, reader reader) error {
+	tableID := message.TableID
 	if data.format == rowFormat {
-		dml.PhysicalTableID = data.group.tableID
-		dml.TableInfo.UpdateTS = data.table.UpdateTS
+		tableID = data.group.tableID
 	}
+	name := [2]string{message.Schema, message.Table}
+	table := a.tables[name]
+	if table == nil {
+		table = &common.TableInfo{TableName: common.TableName{Schema: message.Schema, Table: message.Table, TableID: tableID}}
+		if err := a.memory.reserve(ctx, int64(512+len(message.Schema)+len(message.Table))); err != nil {
+			return err
+		}
+		a.tables[name] = table
+	}
+	dml := &event.DMLEvent{PhysicalTableID: tableID, CommitTs: message.GetCommitTs(), TableInfo: table, Length: 1, RowTypes: []common.RowType{message.RowType}}
 	progress, err := reader.Advance(ctx, readFeedback{data: data, dml: dml})
 	if err != nil {
 		return err
@@ -731,7 +765,12 @@ func (a *assembler) assembleDML(ctx context.Context, data *readData, dml *event.
 	if progress.skip {
 		return nil
 	}
-	return a.queueDML(ctx, dml, records, data.dmlBoundary)
+	task := &decodeTask{message: message, records: records, done: make(chan struct{}), table: data.table, tableID: tableID, retainedBytes: data.retainedBytes}
+	item := &writeEvent{dml: dml, decoding: task}
+	if err := a.queueDML(ctx, item, records, data.dmlBoundary); err != nil {
+		return err
+	}
+	return a.decoder.submit(ctx, task)
 }
 
 func (a *assembler) assembleDDL(ctx context.Context, data *readData, ddl *event.DDLEvent, reader reader) error {
@@ -773,7 +812,13 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 		a.streams[data.stream] = p
 	}
 	record := data.record
-	cachedInput := false
+	// Captured protocol data remains live while conversion jobs run. Account
+	// once per input, not once per derived row in a batched message.
+	bytes := int64(len(data.key)+len(data.value))*3 + 256
+	if err := a.memory.reserve(ctx, bytes); err != nil {
+		return err
+	}
+	record.memory.Add(bytes)
 	p.decoder.AddKeyValue(data.key, data.value)
 	for {
 		messageType, hasNext := p.decoder.HasNext()
@@ -789,19 +834,14 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 				}
 				record.refs.Add(1)
+				record.decodes.Inc()
 				if p.cachedRecords == nil {
 					p.cachedRecords = make(map[*codecCommon.DMLMessage]*ack)
 				}
 				p.cachedRecords[decoder.PendingDMLMessage] = record
-				cachedInput = true
-				bytes := int64(len(data.key)+len(data.value))*3 + 256
-				if err := a.memory.reserve(ctx, bytes); err != nil {
-					return err
-				}
-				record.memory.Add(bytes)
 				continue
 			}
-			if err := a.assembleDML(ctx, data, message.ToDMLEvent(), []*ack{record}, reader); err != nil {
+			if err := a.assembleMessage(ctx, data, message, []*ack{record}, reader); err != nil {
 				return err
 			}
 		case codecCommon.MessageTypeDDL:
@@ -839,7 +879,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input")
 					}
 					delete(p.cachedRecords, message)
-					if err := a.assembleDML(ctx, data, message.ToDMLEvent(), []*ack{cached}, reader); err != nil {
+					if err := a.assembleMessage(ctx, data, message, []*ack{cached}, reader); err != nil {
 						return err
 					}
 					a.memory.decoded(cached, data.retainedBytes)
@@ -871,10 +911,6 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 		return err
 	}
 	a.applyProgress(progress)
-	if !cachedInput {
-		a.memory.decoded(record, data.retainedBytes)
-	} else {
-		record.release()
-	}
+	a.memory.decoded(record, data.retainedBytes)
 	return nil
 }

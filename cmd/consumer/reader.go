@@ -118,8 +118,10 @@ type readBoundary struct {
 
 type decodeConfig struct {
 	codec      *codecCommon.Config
+	format     readFormat
 	topic      string
 	upstreamDB *sql.DB
+	streams    []int32
 }
 
 func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (reader, *decodeConfig, error) {
@@ -143,6 +145,14 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone s
 	if err != nil {
 		_ = r.Close()
 		return nil, nil, err
+	}
+	switch r := r.(type) {
+	case *kafkaReader:
+		for id := range r.progress {
+			decoding.streams = append(decoding.streams, id)
+		}
+	case *pulsarReader:
+		decoding.streams = []int32{0} // Pulsar publishes one topic-wide control stream.
 	}
 	return r, decoding, nil
 }
@@ -225,5 +235,9 @@ func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string,
 			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
 		}
 	}
-	return &decodeConfig{codec: codecConfig, topic: strings.Trim(upstreamURI.Path, "/"), upstreamDB: db}, nil
+	format := messageFormat
+	if source == sourceStorage {
+		format = rowFormat
+	}
+	return &decodeConfig{codec: codecConfig, format: format, topic: strings.Trim(upstreamURI.Path, "/"), upstreamDB: db}, nil
 }

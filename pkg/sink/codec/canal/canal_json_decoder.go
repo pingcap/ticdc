@@ -94,6 +94,7 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 type decoder struct {
 	msg     canalJSONMessageInterface
 	decoder *bufferedJSONDecoder
+	row     *jsonRow
 
 	config *common.Config
 
@@ -102,6 +103,17 @@ type decoder struct {
 	tableInfoMu    sync.RWMutex
 	tableInfoCache map[tableKey]*commonType.TableInfo
 	ddlCommitTs    map[tableNameKey][]uint64
+}
+
+// Parse routing and control metadata first. Column maps are decoded only when
+// the captured DMLMessage is converted, which can run in a consumer worker.
+type jsonRow struct {
+	*JSONMessage
+	Extensions *tidbExtension  `json:"_tidb"`
+	SQLType    json.RawMessage `json:"sqlType"`
+	MySQLType  json.RawMessage `json:"mysqlType"`
+	Data       json.RawMessage `json:"data"`
+	Old        json.RawMessage `json:"old"`
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -159,20 +171,25 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeUnknown, false
 	}
 
-	var msg canalJSONMessageInterface = &JSONMessage{}
+	row := &jsonRow{JSONMessage: &JSONMessage{}, Extensions: &tidbExtension{}}
+	var msg canalJSONMessageInterface = row.JSONMessage
 	if d.config.EnableTiDBExtension {
 		msg = &canalJSONMessageWithTiDBExtension{
-			JSONMessage: &JSONMessage{},
-			Extensions:  &tidbExtension{},
+			JSONMessage: row.JSONMessage,
+			Extensions:  row.Extensions,
 		}
 	}
 
-	if err := d.decoder.Decode(msg); err != nil {
+	if err := d.decoder.Decode(row); err != nil {
 		log.Panic("canal-json decode failed",
 			zap.ByteString("data", d.decoder.Bytes()),
 			zap.Error(err))
 	}
-	d.msg = msg
+	// JSON decoding can replace the extension pointer (including JSON null).
+	if message, ok := msg.(*canalJSONMessageWithTiDBExtension); ok {
+		message.Extensions = row.Extensions
+	}
+	d.msg, d.row = msg, row
 	return d.msg.messageType(), true
 }
 
@@ -318,6 +335,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	msg := d.msg
+	row := d.row
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
@@ -336,8 +354,28 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		if row != nil {
+			for _, field := range []jsonColumnField{
+				{data: row.SQLType, target: &row.JSONMessage.SQLType},
+				{data: row.MySQLType, target: &row.JSONMessage.MySQLType},
+				{data: row.Data, target: &row.JSONMessage.Data},
+				{data: row.Old, target: &row.JSONMessage.Old},
+			} {
+				if len(field.data) != 0 {
+					if err := json.Unmarshal(field.data, field.target); err != nil {
+						log.Panic("canal-json decode failed", zap.Error(errors.WrapError(errors.ErrCodecDecode, err)))
+					}
+				}
+			}
+			row.SQLType, row.MySQLType, row.Data, row.Old = nil, nil, nil, nil
+		}
 		return d.decodeDMLMessage(msg)
 	})
+}
+
+type jsonColumnField struct {
+	data   json.RawMessage
+	target any
 }
 
 func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {

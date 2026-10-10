@@ -36,6 +36,7 @@ type consumer struct {
 	reader    reader
 	assembler *assembler
 	writer    *writer
+	decoding  []*writeEvent
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
@@ -44,7 +45,7 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 	if err != nil {
 		return nil, err
 	}
-	assembler, err := newAssembler(decoding, replicaConfig, memory)
+	assembler, err := newAssembler(ctx, decoding, replicaConfig, memory)
 	if err != nil {
 		if closeErr := reader.Close(); closeErr != nil {
 			log.Error("consumer reader close failed", zap.Error(closeErr))
@@ -140,7 +141,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 				return err
 			}
 		case <-memory.completed:
-			if err := c.writer.flushDML(ctx); err != nil {
+			if err := c.collectDecoded(ctx); err != nil {
 				return err
 			}
 		case <-c.writer.ddlDone:
@@ -215,6 +216,70 @@ collect:
 			break collect
 		}
 	}
+	c.decoding = append(c.decoding, items...)
+	return c.collectDecoded(ctx)
+}
+
+// Join conversion results in table order. A slow table does not hold up other
+// tables, but controls cannot pass unfinished conversions in their scope.
+func (c *consumer) collectDecoded(ctx context.Context) error {
+	var (
+		items           []*writeEvent
+		blockedRows     []*writeEvent
+		blockedControls []*writeEvent
+		blockedTables   map[int64]bool
+	)
+	remaining := c.decoding[:0]
+	for _, item := range c.decoding {
+		ready := true
+		if item.decoding != nil {
+			select {
+			case <-item.decoding.done:
+			default:
+				ready = false
+			}
+		}
+		if ready && len(remaining) != 0 {
+			ready = !c.assembler.mergeRows && (item.dml == nil || !blockedTables[item.dml.PhysicalTableID])
+			for _, prior := range blockedControls {
+				if item.hasWatermark || (prior.ddl != nil && (item.dml == nil || ddlBlocksTable(prior.ddl, item.dml))) {
+					ready = false
+					break
+				}
+			}
+			// Ordinary DML only checks its table and the few pending controls.
+			// Scan row scopes when a control itself needs a completion barrier.
+			if item.dml == nil {
+				for _, prior := range blockedRows {
+					if (item.ddl != nil && ddlBlocksTable(item.ddl, prior.dml)) ||
+						(item.hasWatermark && prior.dml.CommitTs <= item.watermark && (item.tableID == 0 || prior.dml.PhysicalTableID == item.tableID)) {
+						ready = false
+						break
+					}
+				}
+			}
+		}
+		if !ready {
+			if item.dml != nil {
+				if blockedTables == nil {
+					blockedTables = make(map[int64]bool)
+				}
+				blockedTables[item.dml.PhysicalTableID] = true
+				blockedRows = append(blockedRows, item)
+			} else {
+				blockedControls = append(blockedControls, item)
+			}
+			remaining = append(remaining, item)
+			continue
+		}
+		if task := item.decoding; task != nil {
+			task.dml.AddPostFlushFunc(item.dml.PostFlush)
+			item.dml, item.bytes, item.decoding = task.dml, item.bytes+task.bytes, nil
+		}
+		items = append(items, item)
+	}
+	clear(c.decoding[len(remaining):])
+	c.decoding = remaining
 	items, err := c.assembler.prepare(ctx, items)
 	if err != nil {
 		return err

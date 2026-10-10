@@ -43,7 +43,7 @@ func TestAssemblerReleasesSharedSchema(t *testing.T) {
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete}, 1
-		require.NoError(t, a.queueDML(t.Context(), dml, nil, nil))
+		require.NoError(t, a.queueDML(t.Context(), &writeEvent{dml: dml}, nil, nil))
 	}
 	first, second := a.pendingDML[0], a.pendingDML[1]
 	first.dml.PostFlush()

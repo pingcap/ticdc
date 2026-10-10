@@ -338,7 +338,10 @@ func TestNewCanalJSONMessageHandleKeyOnly4LargeMessage(t *testing.T) {
 	require.Equal(t, messageType, common.MessageTypeRow)
 	require.True(t, ok)
 
-	handleKeyOnlyMessage := dec.(*decoder).msg.(*canalJSONMessageWithTiDBExtension)
+	handleKeyOnlyMessage := &canalJSONMessageWithTiDBExtension{}
+	value, err := common.Decompress(codecConfig.LargeMessageHandle.LargeMessageHandleCompression, message.Value)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(value, handleKeyOnlyMessage))
 	require.True(t, handleKeyOnlyMessage.Extensions.OnlyHandleKey)
 	for _, col := range insertEvent.TableInfo.GetColumns() {
 		if col == nil {

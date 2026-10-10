@@ -96,9 +96,10 @@ func (m *memoryUsage) releaseSchema(table *common.TableInfo) {
 
 // An input can be confirmed after decoding and downstream writes release all refs.
 type ack struct {
-	refs   atomic.Int64
-	memory atomic.Int64
-	done   chan<- struct{}
+	refs    atomic.Int64
+	decodes atomic.Int64
+	memory  atomic.Int64
+	done    chan<- struct{}
 }
 
 func (a *ack) release() {
@@ -117,6 +118,7 @@ func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
 	record := &ack{done: m.confirmable}
 	record.memory.Store(bytes)
 	record.refs.Store(1)
+	record.decodes.Store(1)
 	m.received.Inc()
 	return record, nil
 }
@@ -127,7 +129,9 @@ func (m *memoryUsage) confirm(record *ack) {
 }
 
 func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
-	m.release(record.memory.Swap(retainedBytes) - retainedBytes)
+	if record.decodes.Dec() == 0 {
+		m.release(record.memory.Swap(retainedBytes) - retainedBytes)
+	}
 	record.release()
 	select {
 	case m.completed <- struct{}{}:

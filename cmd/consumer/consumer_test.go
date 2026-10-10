@@ -64,11 +64,17 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, input.Close()) })
 			decoding, err := newDecodeConfig(ctx, upstreamURI, "UTC", config.GetDefaultReplicaConfig())
 			require.NoError(t, err)
-			a, err := newAssembler(decoding, config.GetDefaultReplicaConfig(), input.memory)
+			a, err := newAssembler(ctx, decoding, config.GetDefaultReplicaConfig(), input.memory)
 			require.NoError(t, err)
 			require.Equal(t, decoding.codec.Protocol, a.protocol)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
+			}
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			defer cancel()
+			for _, input := range a.decoder.inputs {
+				wg.Go(func() { _ = a.decoder.decode(ctx, input) })
 			}
 			// The topic limit can grow while this reader keeps the original URI.
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
@@ -83,6 +89,12 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			result, err := a.next(ctx, input)
 			require.NoError(t, err)
 			require.NotNil(t, result.dml)
+			select {
+			case <-result.decoding.done:
+			case <-ctx.Done():
+				t.Fatal("row conversion did not finish")
+			}
+			result.dml = result.decoding.dml
 			require.EqualValues(t, 10, result.dml.CommitTs)
 			require.Equal(t, payload, result.dml.Rows.GetRow(0).GetString(1))
 		})
@@ -167,7 +179,15 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 
 func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	memory := &memoryUsage{}
-	a := &assembler{memory: memory, protocol: config.ProtocolSimple, codecConfig: codecCommon.NewConfig(config.ProtocolSimple), streams: make(map[int32]*decodeStream)}
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, config.GetDefaultReplicaConfig(), memory)
+	require.NoError(t, err)
+	for _, input := range a.decoder.inputs {
+		wg.Go(func() { _ = a.decoder.decode(ctx, input) })
+	}
 	r := &pulsarReader{memory: memory}
 	var records []*ack
 	for _, table := range []string{"a", "b"} {
@@ -184,7 +204,15 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 		require.NoError(t, a.decodeMessages(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}, r))
 		item := a.nextReady(0)
 		require.NotNil(t, item)
+		select {
+		case <-item.decoding.done:
+		case <-ctx.Done():
+			t.Fatal("cached row conversion did not finish")
+		}
 		require.Equal(t, table, item.dml.TableInfo.GetTableName())
+		item.decoding.dml.AddPostFlushFunc(item.dml.PostFlush)
+		memory.release(item.decoding.bytes)
+		item.dml = item.decoding.dml
 		item.dml.PostFlush()
 		memory.release(item.bytes)
 		require.Zero(t, records[index].refs.Load())
@@ -206,7 +234,7 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, input.Close()) })
 			decoding, err := newDecodeConfig(t.Context(), upstreamURI, "UTC", replicaConfig)
 			require.NoError(t, err)
-			a, err := newAssembler(decoding, replicaConfig, input.memory)
+			a, err := newAssembler(t.Context(), decoding, replicaConfig, input.memory)
 			require.NoError(t, err)
 			require.Equal(t, decoding.codec.Protocol, a.protocol)
 		})
@@ -399,7 +427,7 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	}
 	decoding, err := newDecodeConfig(t.Context(), &url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig())
 	require.NoError(t, err)
-	a, err := newAssembler(decoding, config.GetDefaultReplicaConfig(), memory)
+	a, err := newAssembler(t.Context(), decoding, config.GetDefaultReplicaConfig(), memory)
 	require.NoError(t, err)
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
@@ -552,7 +580,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	buffer := &assembler{memory: memory}
 	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
-	require.NoError(t, buffer.queueDML(t.Context(), dml, []*ack{record}, nil))
+	require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, []*ack{record}, nil))
 	record.refs.Add(-1)
 	result := buffer.nextReady(10)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}

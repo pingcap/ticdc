@@ -123,7 +123,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes = []common.RowType{common.RowTypeInsert}
 		dml.Length = 1
-		require.NoError(t, buffer.queueDML(t.Context(), dml, []*ack{record}, nil))
+		require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, []*ack{record}, nil))
 		result := buffer.nextReady(100)
 		w.pendingDML = append(w.pendingDML, result)
 	}
