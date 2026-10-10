@@ -342,8 +342,7 @@ func (w *writer) advanceWatermarks() {
 		return
 	}
 	w.writtenBefore = max(w.writtenBefore, before)
-	// Storage's per-table progress retires identities, not incoming rows:
-	// unread cross-node file groups can still contain older commit timestamps.
+	// Retire identities only after input progress and all earlier writes pass.
 	released := int64(0)
 	for key := range w.mutations {
 		before := w.watermarks[key.tableID]

@@ -695,6 +695,16 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 }
 
 func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
+	waiting := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}, boundary: &readBoundary{}}
+	later := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20}, boundary: &readBoundary{reached: true}}
+	other := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 15}, boundary: &readBoundary{reached: true}}
+	a := &assembler{pendingDML: []*writeEvent{waiting, later, other}}
+	require.Same(t, other, a.nextReady(0))
+	require.Nil(t, a.nextReady(0))
+	waiting.boundary.reached = true
+	require.Same(t, waiting, a.nextReady(0))
+	require.Same(t, later, a.nextReady(0))
+
 	first := &event.DMLEvent{CommitTs: 20}
 	second := &event.DMLEvent{CommitTs: 10}
 	buffer := &assembler{

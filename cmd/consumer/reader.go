@@ -64,6 +64,7 @@ type readData struct {
 	retainedBytes int64
 	table         *common.TableInfo
 	ddl           *event.DDLEvent
+	control       *readControl
 	group         *readGroup
 	groupEnd      bool
 	dmlBoundary   *readBoundary

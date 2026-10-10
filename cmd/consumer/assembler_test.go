@@ -211,7 +211,7 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	}
 	unrelated := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 5}}
 	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}}
-	r := &storageReader{tableWatermarks: map[int64]uint64{1: 20}}
+	r := &storageReader{checkpoint: 20, scanned: true}
 	err := a.decode(t.Context(), &readData{group: group, groupEnd: true}, r)
 	require.NoError(t, err)
 	for _, expected := range []*writeEvent{second, third, first} {
@@ -219,10 +219,25 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 		require.NoError(t, err)
 		require.Same(t, expected, result)
 	}
+	data, err := r.Read(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, data.control)
+	require.NoError(t, a.decode(t.Context(), data, r))
+	// The completed scan's checkpoint also covers the earlier table.
+	unrelated.boundary = &readBoundary{reached: true}
 	result, err := a.next(t.Context(), r)
 	require.NoError(t, err)
+	require.Same(t, unrelated, result)
+	result, err = a.next(t.Context(), r)
+	require.NoError(t, err)
 	require.True(t, result.hasWatermark)
-	require.EqualValues(t, 1, result.tableID)
+	require.Zero(t, result.tableID)
 	require.EqualValues(t, 20, result.watermark)
-	require.Equal(t, []*writeEvent{unrelated}, a.pendingDML)
+	require.Empty(t, a.pendingDML)
+	progress, err := r.Advance(t.Context(), readFeedback{data: &readData{}, dml: &event.DMLEvent{CommitTs: 19}})
+	require.NoError(t, err)
+	require.True(t, progress.skip)
+	progress, err = r.Advance(t.Context(), readFeedback{data: &readData{}, dml: &event.DMLEvent{CommitTs: 20}})
+	require.NoError(t, err)
+	require.False(t, progress.skip)
 }

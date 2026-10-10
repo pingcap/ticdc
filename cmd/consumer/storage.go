@@ -63,26 +63,25 @@ type storageTableKey struct {
 }
 
 type storageReader struct {
-	tables          map[cloudstorage.SchemaPathKey]*common.TableInfo
-	tableIDs        map[storageTableKey]int64
-	tableWatermarks map[int64]uint64
-	nextTableID     int64
-	group           *readGroup
-	groupKey        cloudstorage.DMLPathKey
-	fileOrdered     bool
-	storage         storeapi.Storage
-	memory          *memoryUsage
-	dateSeparator   config.DateSeparator
-	fileExtension   string
-	fileIndexWidth  int
-	checkpoint      uint64
-	schemas         map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
-	fileIndices     map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks   map[string]uint64
-	mu              sync.Mutex
-	records         []*ack
-	inputs          []storageInput
-	scanned         bool
+	tables         map[cloudstorage.SchemaPathKey]*common.TableInfo
+	tableIDs       map[storageTableKey]int64
+	nextTableID    int64
+	group          *readGroup
+	groupKey       cloudstorage.DMLPathKey
+	storage        storeapi.Storage
+	memory         *memoryUsage
+	dateSeparator  config.DateSeparator
+	fileExtension  string
+	fileIndexWidth int
+	checkpoint     uint64
+	readCheckpoint uint64
+	schemas        map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
+	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks  map[string]uint64
+	mu             sync.Mutex
+	records        []*ack
+	inputs         []storageInput
+	scanned        bool
 }
 
 func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
@@ -114,7 +113,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks: make(map[string]uint64),
 		tables:        make(map[cloudstorage.SchemaPathKey]*common.TableInfo),
-		tableIDs:      make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
+		tableIDs:      make(map[storageTableKey]int64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
@@ -248,6 +247,10 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			return nil, err
 		}
 		if len(c.inputs) == 0 {
+			if c.scanned && c.checkpoint > c.readCheckpoint {
+				// The metadata checkpoint covers every file in the completed scan.
+				return &readData{control: &readControl{watermark: c.checkpoint}}, nil
+			}
 			if c.scanned {
 				select {
 				case <-ctx.Done():
@@ -373,7 +376,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		if input.groupEnd {
 			return &readData{table: table, group: c.group, groupEnd: true}, nil
 		}
-		c.fileOrdered = !input.index.EnableTableAcrossNodes
 		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 		file, err := c.storage.Open(ctx, path, nil)
 		if err != nil {
@@ -420,6 +422,10 @@ func (c *storageReader) Advance(ctx context.Context, feedback readFeedback) (rea
 	if data == nil {
 		return readProgress{}, nil
 	}
+	if data.control != nil {
+		c.readCheckpoint = max(c.readCheckpoint, data.control.watermark)
+		return readProgress{control: data.control}, nil
+	}
 	if feedback.ddl != nil {
 		ddl := feedback.ddl
 		key := common.QuoteSchema(data.table.GetSchemaName(), data.table.GetTableName())
@@ -434,16 +440,13 @@ func (c *storageReader) Advance(ctx context.Context, feedback readFeedback) (rea
 		}
 	}
 	if feedback.dml != nil {
-		watermark := c.tableWatermarks[data.group.tableID]
-		if c.fileOrdered && feedback.dml.GetCommitTs() < watermark {
+		if feedback.dml.GetCommitTs() < c.readCheckpoint {
 			return readProgress{skip: true}, nil
 		}
-		c.tableWatermarks[data.group.tableID] = max(watermark, feedback.dml.GetCommitTs())
 	}
 	if data.groupEnd {
 		data.group.boundary.reached = true
 		c.group = nil
-		return readProgress{control: &readControl{tableID: data.group.tableID, watermark: c.tableWatermarks[data.group.tableID]}}, nil
 	}
 	return readProgress{}, nil
 }
