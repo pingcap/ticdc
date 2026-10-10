@@ -39,7 +39,7 @@ type consumer struct {
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
-	memory := &memoryUsage{completed: make(chan struct{}, 1)}
+	memory := &memoryUsage{completed: make(chan struct{}, 1), confirmable: make(chan struct{}, 1)}
 	reader, decoding, err := newReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
 	if err != nil {
 		return nil, err
@@ -75,6 +75,7 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 		reader: reader, assembler: assembler, writer: &writer{
 			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch),
 			watermarks: make(map[int64]uint64), progressTick: time.Tick(progressLogInterval),
+			ddlJobs: make(chan *writeEvent, 1), ddlDone: make(chan struct{}, 1),
 		},
 	}, nil
 }
@@ -128,10 +129,6 @@ func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
 func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error {
 	memory := c.writer.memory
 	for {
-		c.writer.finishBatches()
-		if err := c.reader.Confirm(ctx); err != nil {
-			return err
-		}
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
@@ -143,6 +140,15 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 				return err
 			}
 		case <-memory.completed:
+			if err := c.writer.flushDML(ctx); err != nil {
+				return err
+			}
+		case <-c.writer.ddlDone:
+			c.writer.ddlInFlight = nil
+			c.writer.progressChanged = true
+			if err := c.writer.flushDML(ctx); err != nil {
+				return err
+			}
 		case <-c.writer.progressTick:
 			log.Info("consumer progress", zap.Int64("receivedInputs", memory.received.Load()),
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
@@ -153,10 +159,50 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 	}
 }
 
+func (c *consumer) confirm(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-c.writer.memory.confirmable:
+			if err := c.reader.Confirm(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (c *consumer) executeDDL(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case result := <-c.writer.ddlJobs:
+			if err := c.writer.writeDDL(ctx, result); err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case c.writer.ddlDone <- struct{}{}:
+			}
+		}
+	}
+}
+
 func (c *consumer) consumeBatch(ctx context.Context, results <-chan *writeEvent, result *writeEvent) error {
 	items := []*writeEvent{result}
+	rows, bytes := int64(0), int64(0)
 collect:
-	for len(items) < cap(results) {
+	for len(items) < batchRows && rows < batchRows && bytes < batchBytes {
+		last := items[len(items)-1]
+		bytes += last.bytes
+		if last.dml != nil {
+			rows += int64(last.dml.Len())
+		}
+		if rows >= batchRows || bytes >= batchBytes {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
@@ -177,11 +223,6 @@ collect:
 		if err := c.writer.consume(ctx, item); err != nil {
 			return err
 		}
-		if item.sequential {
-			if err := c.writer.flushDML(ctx, nil); err != nil {
-				return err
-			}
-		}
 	}
-	return c.writer.flushDML(ctx, nil)
+	return c.writer.flushDML(ctx)
 }

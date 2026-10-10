@@ -139,11 +139,60 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("reading was blocked by confirmation")
 	}
+	// A broker commit must also leave the downstream dispatch loop runnable.
+	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
+	dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 10, table)
+	dml.Length = 1
+	written := make(chan struct{})
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush(); close(written) })
+	c := &consumer{reader: r, assembler: &assembler{}, writer: &writer{memory: r.memory, downstream: downstream}}
+	results := make(chan *writeEvent, 1)
+	writeErrors := make(chan error, 1)
+	wg.Go(func() { writeErrors <- c.write(ctx, results) })
+	results <- &writeEvent{dml: dml}
+	select {
+	case <-written:
+	case <-ctx.Done():
+		t.Fatal("downstream dispatch was blocked by confirmation")
+	}
 	close(release)
 	require.NoError(t, <-confirmed)
 	require.Equal(t, []*ack{second.record}, r.records[0])
 	require.EqualValues(t, 1, r.memory.confirmed.Load())
 	require.EqualValues(t, 1, second.record.refs.Load())
+	cancel()
+	require.ErrorIs(t, <-writeErrors, context.Canceled)
+}
+
+func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
+	memory := &memoryUsage{}
+	a := &assembler{memory: memory, protocol: config.ProtocolSimple, codecConfig: codecCommon.NewConfig(config.ProtocolSimple), streams: make(map[int32]*decodeStream)}
+	r := &pulsarReader{memory: memory}
+	var records []*ack
+	for _, table := range []string{"a", "b"} {
+		value := []byte(`{"version":1,"database":"test","table":"` + table + `","tableID":1,"type":"INSERT","commitTs":101,"schemaVersion":100,"data":{"id":"1"}}`)
+		record, err := memory.newAck(t.Context(), int64(len(value)+256))
+		require.NoError(t, err)
+		records = append(records, record)
+		require.NoError(t, a.decodeMessages(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}, r))
+	}
+	for index, table := range []string{"a", "b"} {
+		value := []byte(`{"version":1,"type":"BOOTSTRAP","commitTs":100,"tableSchema":{"schema":"test","table":"` + table + `","tableID":1,"version":100,"columns":[{"name":"id","dataType":{"mysqlType":"bigint","charset":"binary","collate":"binary","length":20}}]}}`)
+		record, err := memory.newAck(t.Context(), int64(len(value)+256))
+		require.NoError(t, err)
+		require.NoError(t, a.decodeMessages(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}, r))
+		item := a.nextReady(0)
+		require.NotNil(t, item)
+		require.Equal(t, table, item.dml.TableInfo.GetTableName())
+		item.dml.PostFlush()
+		memory.release(item.bytes)
+		require.Zero(t, records[index].refs.Load())
+		if index == 0 {
+			require.EqualValues(t, 1, records[1].refs.Load())
+		}
+	}
+	require.Empty(t, a.streams[0].cachedRecords)
 }
 
 func TestStorageReaderSmallMessageLimit(t *testing.T) {
@@ -512,7 +561,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
 	require.NoError(t, w.consume(t.Context(), result))
 	require.Len(t, w.pendingDML, 1)
-	require.NoError(t, w.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context()))
 	require.Empty(t, w.pendingDML)
 	w.finishBatches()
 	require.NoError(t, input.Confirm(t.Context()))
@@ -704,6 +753,19 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	waiting.boundary.reached = true
 	require.Same(t, waiting, a.nextReady(0))
 	require.Same(t, later, a.nextReady(0))
+	// An independent row cannot skip a pre-DDL row whose proof is unfinished.
+	preBoundary := &readBoundary{}
+	preDDL := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}, boundary: preBoundary}
+	control := &writeEvent{ddl: &event.DDLEvent{FinishedTs: 15}, boundary: &readBoundary{reached: true}}
+	ordered := &assembler{pendingDML: []*writeEvent{preDDL, other}, pendingDDL: []*writeEvent{control}}
+	preDDL.dml.TableInfo = common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
+	other.dml.TableInfo = common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
+	control.ddl.SchemaName, control.ddl.TableName = "test", "a"
+	require.Same(t, other, ordered.nextReady(0))
+	require.Nil(t, ordered.nextReady(0))
+	preBoundary.reached = true
+	require.Same(t, preDDL, ordered.nextReady(0))
+	require.Same(t, control, ordered.nextReady(0))
 
 	first := &event.DMLEvent{CommitTs: 20}
 	second := &event.DMLEvent{CommitTs: 10}

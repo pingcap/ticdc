@@ -105,12 +105,12 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 		}),
 	)
 	w.downstream = downstream
-	require.ErrorIs(t, w.flushDML(ctx, nil), context.Canceled)
+	require.ErrorIs(t, w.flushDML(ctx), context.Canceled)
 	require.Len(t, w.inFlight[0].events, 1)
 	require.Len(t, w.pendingDML, 1)
 	require.Zero(t, callbacks)
 	first.PostFlush()
-	require.NoError(t, w.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context()))
 	require.Equal(t, 4, callbacks)
 	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, tableID: 0, hasWatermark: true}))
 	w.finishBatches()
@@ -160,7 +160,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		}),
 	)
 	w.downstream = downstream
-	require.NoError(t, w.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context()))
 	require.Equal(t, 4, callbacks)
 	require.Empty(t, w.pendingDML)
 	require.Empty(t, w.inFlight)
@@ -202,19 +202,19 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 }
 
 func TestAssemblerGroupBoundary(t *testing.T) {
-	first := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20}}
-	second := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
-	third := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
+	first := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20, RowTypes: []common.RowType{common.RowTypeInsert}}}
+	second := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, RowTypes: []common.RowType{common.RowTypeInsert}}}
+	third := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, RowTypes: []common.RowType{common.RowTypeDelete}}}
 	group := &readGroup{tableID: 1, order: commitOrder, boundary: &readBoundary{}}
 	for _, item := range []*writeEvent{first, second, third} {
 		item.boundary = group.boundary
 	}
 	unrelated := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 5}}
-	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}}
+	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}, sortCSVRows: true}
 	r := &storageReader{checkpoint: 20, scanned: true}
 	err := a.decode(t.Context(), &readData{group: group, groupEnd: true}, r)
 	require.NoError(t, err)
-	for _, expected := range []*writeEvent{second, third, first} {
+	for _, expected := range []*writeEvent{third, second, first} {
 		result, err := a.next(t.Context(), r)
 		require.NoError(t, err)
 		require.Same(t, expected, result)

@@ -33,6 +33,7 @@ type memoryUsage struct {
 	mu            sync.Mutex
 	changed       chan struct{}
 	completed     chan struct{}
+	confirmable   chan struct{}
 	schemas       map[*common.TableInfo]*schemaMemory
 }
 
@@ -41,8 +42,7 @@ type schemaMemory struct {
 	bytes int64
 }
 
-// Count shared metadata while pipeline events still reference it. Decoder-owned
-// caches have their own lifetime and are not exposed by the decoder interface.
+// Count shared metadata once across pipeline events and reader/decoder caches.
 func (m *memoryUsage) retainSchema(ctx context.Context, table *common.TableInfo) error {
 	if table == nil {
 		return nil
@@ -53,11 +53,21 @@ func (m *memoryUsage) retainSchema(ctx context.Context, table *common.TableInfo)
 		schema.refs++
 		return nil
 	}
-	data, err := table.Marshal()
-	if err != nil {
-		return errors.WrapError(errors.ErrCodecDecode, err, "measure consumer table metadata")
+	// The budget is an estimate. Serializing metadata here allocates large JSON
+	// buffers and repeats whenever the last pipeline reference is released.
+	bytes := int64(1024 + len(table.GetSchemaName()) + len(table.GetTableName()))
+	for _, column := range table.GetColumns() {
+		bytes += int64(512 + len(column.Name.O) + len(column.Comment) + len(column.GeneratedExprString))
+		for _, value := range column.FieldType.GetElems() {
+			bytes += int64(16 + len(value))
+		}
+		if value, ok := column.DefaultValue.(string); ok {
+			bytes += int64(len(value))
+		}
 	}
-	bytes := int64(len(data))*4 + 1024
+	for _, index := range table.GetIndices() {
+		bytes += int64(256 + len(index.Name.O) + len(index.Columns)*64)
+	}
 	if err := m.reserve(ctx, bytes); err != nil {
 		return err
 	}
@@ -88,13 +98,23 @@ func (m *memoryUsage) releaseSchema(table *common.TableInfo) {
 type ack struct {
 	refs   atomic.Int64
 	memory atomic.Int64
+	done   chan<- struct{}
+}
+
+func (a *ack) release() {
+	if a.refs.Add(-1) == 0 {
+		select {
+		case a.done <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
 	if err := m.reserve(ctx, bytes); err != nil {
 		return nil, err
 	}
-	record := &ack{}
+	record := &ack{done: m.confirmable}
 	record.memory.Store(bytes)
 	record.refs.Store(1)
 	m.received.Inc()
@@ -108,7 +128,7 @@ func (m *memoryUsage) confirm(record *ack) {
 
 func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
 	m.release(record.memory.Swap(retainedBytes) - retainedBytes)
-	record.refs.Add(-1)
+	record.release()
 	select {
 	case m.completed <- struct{}{}:
 	default:

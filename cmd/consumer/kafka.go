@@ -38,6 +38,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 )
 
@@ -101,7 +102,6 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		kgo.FetchMaxBytes(4 << 20),
 		kgo.FetchMaxPartitionBytes(1 << 20),
 		kgo.FetchMaxWait(100 * time.Millisecond),
-		kgo.MaxConcurrentFetches(1),
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	if upstreamURI.Scheme == config.KafkaSSLScheme {
@@ -185,7 +185,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		c.limitReads()
 		partitionID := c.nextPartition()
 		if partitionID < 0 {
-			fetches := c.client.PollRecords(ctx, 128)
+			fetches := c.client.PollRecords(ctx, batchRows)
 			if err := context.Cause(ctx); err != nil {
 				return nil, err
 			}
@@ -319,7 +319,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 	if len(c.progress) <= 1 || (feedback.boundaryDDL == nil && feedback.pendingDML == 0) {
 		return result, nil
 	}
-	if feedback.boundaryDDL == nil && feedback.pendingDML < 128 && c.memory.used() < maxMemoryBytes {
+	if feedback.boundaryDDL == nil && feedback.pendingDML < batchRows && c.memory.used() < maxMemoryBytes {
 		c.limitReads()
 		if c.nextPartition() >= 0 {
 			result.needsMoreInput = true
@@ -410,23 +410,38 @@ func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) ([]int32, error) {
 // Capture once after candidate events have been read. New arrivals cannot
 // extend this window or certify events read while catching up to it.
 func (c *kafkaReader) capture(ctx context.Context, partitions []int32, commitTs uint64) (*readBoundary, error) {
-	ends, err := kadm.NewClient(c.client).ListEndOffsets(ctx, c.topic)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
-	}
-	if err := ends.Error(); err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
-	}
-	targets := make(map[int32]int64)
+	req := kmsg.NewPtrListOffsetsRequest()
+	req.TimeoutMillis = 10000
+	topic := kmsg.NewListOffsetsRequestTopic()
+	topic.Topic = c.topic
 	for partitionID := range c.progress {
 		if partitions != nil && !slices.Contains(partitions, partitionID) {
 			continue
 		}
-		end, ok := ends[c.topic][partitionID]
-		if !ok || end.Offset < 0 {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary is missing a partition")
+		partition := kmsg.NewListOffsetsRequestTopicPartition()
+		partition.Partition, partition.Timestamp = partitionID, -1
+		topic.Partitions = append(topic.Partitions, partition)
+	}
+	req.Topics = append(req.Topics, topic)
+	targets := make(map[int32]int64, len(topic.Partitions))
+	for _, shard := range c.client.RequestSharded(ctx, req) {
+		if shard.Err != nil {
+			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, shard.Err, "get input boundary", c.topic)
 		}
-		targets[partitionID] = end.Offset
+		for _, topic := range shard.Resp.(*kmsg.ListOffsetsResponse).Topics {
+			for _, partition := range topic.Partitions {
+				if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
+				}
+				if partition.Offset < 0 {
+					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary has a negative offset")
+				}
+				targets[partition.Partition] = partition.Offset
+			}
+		}
+	}
+	if len(targets) != len(topic.Partitions) {
+		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary is missing a partition")
 	}
 	if err := c.memory.reserve(ctx, int64(len(targets))*128); err != nil {
 		return nil, err
@@ -509,7 +524,8 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 			c.memory.confirm(record)
 			delete(c.offsets, record)
 		}
-		c.records[partitionID] = slices.Delete(inputs, 0, count)
+		clear(inputs[:count])
+		c.records[partitionID] = inputs[count:]
 	}
 	return nil
 }

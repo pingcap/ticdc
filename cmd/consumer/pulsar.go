@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +79,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		TLSCertificateFile:    cmp.Or(query.Get("cert"), putil.GetOrZero(pulsarConfig.TLSCertificateFile)),
 		TLSKeyFilePath:        cmp.Or(query.Get("key"), putil.GetOrZero(pulsarConfig.TLSKeyFilePath)),
 		Logger:                pulsarutil.NewPulsarLogger(log.L()),
+		MemoryLimitBytes:      64 << 20,
 	}
 	if (clientOptions.TLSCertificateFile == "") != (clientOptions.TLSKeyFilePath == "") {
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar TLS certificate and key must be configured together")
@@ -150,13 +150,17 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
 		Topic: topic, SubscriptionName: consumerID, Type: pulsar.Exclusive,
 		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
-		ReceiverQueueSize:           1, MessageChannel: make(chan pulsar.ConsumerMessage, 1),
-		AckWithResponse: true, MaxPendingChunkedMessage: 1,
+		ReceiverQueueSize:           64, MessageChannel: make(chan pulsar.ConsumerMessage, 64),
+		EnableAutoScaledReceiverQueueSize: true,
+		AckWithResponse:                   true, MaxPendingChunkedMessage: 1,
 	})
 	if err != nil {
 		client.Close()
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "subscribe to Pulsar topic")
 	}
+	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
+	// scale down under the client memory limit; oversized messages may exceed it.
+	memory.externalBytes = func() int64 { return clientOptions.MemoryLimitBytes }
 	partitionIDs := make(map[string]int32, len(topics))
 	for index, partitionTopic := range topics {
 		partitionIDs[partitionTopic] = int32(index)
@@ -196,6 +200,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 
 func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
 	result := readProgress{watermark: c.watermark, hasWatermark: c.hasWatermark}
+	result.needsMoreInput = feedback.boundaryDDL != nil && (!c.hasWatermark || feedback.boundaryDDL.GetCommitTs() > c.watermark)
 	if !feedback.hasWatermark {
 		return result, nil
 	}
@@ -250,7 +255,8 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			c.memory.confirm(record)
 			delete(c.messageIDs, record)
 		}
-		c.records[partitionID] = slices.Delete(records, 0, count)
+		clear(records[:count])
+		c.records[partitionID] = records[count:]
 		c.mu.Unlock()
 	}
 	return nil

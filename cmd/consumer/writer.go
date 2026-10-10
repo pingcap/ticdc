@@ -44,6 +44,10 @@ type writer struct {
 	downstream        sink.Sink
 	memory            *memoryUsage
 	pendingDML        []*writeEvent
+	pendingDDL        []*writeEvent
+	ddlInFlight       *writeEvent
+	ddlJobs           chan *writeEvent
+	ddlDone           chan struct{}
 	inFlight          []*writeBatch
 	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
 	writtenBefore     uint64
@@ -83,9 +87,8 @@ func (w *writer) consume(ctx context.Context, result *writeEvent) error {
 		w.progressChanged = true
 	}
 	if result.ddl != nil {
-		if err := w.writeDDL(ctx, result); err != nil {
-			return err
-		}
+		w.pendingDDL = append(w.pendingDDL, result)
+		w.progressChanged = true
 	}
 	if result.hasWatermark {
 		if w.watermarks == nil {
@@ -104,19 +107,6 @@ func (w *writer) consume(ctx context.Context, result *writeEvent) error {
 }
 
 func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
-	if err := w.flushDML(ctx, result.ddl); err != nil {
-		return err
-	}
-	for _, batch := range slices.Clone(w.inFlight) {
-		for _, item := range batch.items {
-			if ddlBlocksTable(result.ddl, item.dml) {
-				if err := w.waitBatch(ctx, batch); err != nil {
-					return err
-				}
-				break
-			}
-		}
-	}
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -133,21 +123,68 @@ func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
 	return nil
 }
 
-func (w *writer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
+func (w *writer) flushDDL(ctx context.Context) error {
+	if w.ddlInFlight != nil || len(w.pendingDDL) == 0 {
+		return nil
+	}
+	result := w.pendingDDL[0]
+	for _, item := range w.pendingDML {
+		if item.dml.CommitTs <= result.ddl.GetCommitTs() && ddlBlocksTable(result.ddl, item.dml) {
+			return nil
+		}
+	}
+	for _, batch := range w.inFlight {
+		if slices.ContainsFunc(batch.items, func(item *writeEvent) bool { return ddlBlocksTable(result.ddl, item.dml) }) {
+			return nil
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case w.ddlJobs <- result:
+		w.ddlInFlight = result
+		w.pendingDDL[0] = nil
+		w.pendingDDL = w.pendingDDL[1:]
+		return nil
+	}
+}
+
+func (w *writer) flushDML(ctx context.Context) error {
+	w.finishBatches()
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+		active := make(map[int64]*writeEvent)
+		for _, batch := range w.inFlight {
+			for _, item := range batch.items {
+				active[item.dml.PhysicalTableID] = item
+			}
+		}
+		blocked := make(map[int64]bool)
 		rows, bytes := 0, int64(0)
 		items := make([]*writeEvent, 0, len(w.pendingDML))
 		tables := make(map[int64]*writeEvent)
 		for _, item := range w.pendingDML {
-			if ddl != nil && !ddlBlocksTable(ddl, item.dml) {
+			id := item.dml.PhysicalTableID
+			if blocked[id] {
+				continue
+			}
+			fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
+			if fenced || slices.ContainsFunc(w.pendingDDL, func(control *writeEvent) bool {
+				return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
+			}) {
+				blocked[id] = true
+				continue
+			}
+			if earlier := active[id]; earlier != nil && (earlier.sequential || item.sequential || !sameTableSchema(earlier.dml.TableInfo, item.dml.TableInfo)) {
+				blocked[id] = true
 				continue
 			}
 			if previous := tables[item.dml.PhysicalTableID]; previous != nil &&
 				(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
-				break
+				blocked[id] = true
+				continue
 			}
 			tables[item.dml.PhysicalTableID] = item
 			rows += int(item.dml.Len())
@@ -159,17 +196,6 @@ func (w *writer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		}
 		if len(items) == 0 {
 			break
-		}
-		w.finishBatches()
-		for _, earlier := range slices.Clone(w.inFlight) {
-			for _, item := range earlier.items {
-				if next := tables[item.dml.PhysicalTableID]; next != nil && (item.sequential || next.sequential || !sameTableSchema(item.dml.TableInfo, next.dml.TableInfo)) {
-					if err := w.waitBatch(ctx, earlier); err != nil {
-						return err
-					}
-					break
-				}
-			}
 		}
 		for len(w.inFlight) != 0 && (w.inFlightEvents+len(items) > maxInFlightEvents || w.inFlightBytes+bytes > maxInFlightBytes) {
 			if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
@@ -239,7 +265,7 @@ func (w *writer) flushDML(ctx context.Context, ddl *event.DDLEvent) error {
 		}
 		w.finishBatches()
 	}
-	return nil
+	return w.flushDDL(ctx)
 }
 
 func sameTableSchema(a, b *common.TableInfo) bool {
@@ -308,6 +334,16 @@ func (w *writer) advanceWatermarks() {
 	}
 	// One scan establishes the unfinished floor for every table and the topic.
 	unfinished := make(map[int64]uint64)
+	for _, control := range w.pendingDDL {
+		if ts, ok := unfinished[0]; !ok || control.ddl.GetCommitTs() < ts {
+			unfinished[0] = control.ddl.GetCommitTs()
+		}
+	}
+	if control := w.ddlInFlight; control != nil {
+		if ts, ok := unfinished[0]; !ok || control.ddl.GetCommitTs() < ts {
+			unfinished[0] = control.ddl.GetCommitTs()
+		}
+	}
 	for _, item := range w.pendingDML {
 		for _, tableID := range []int64{0, item.dml.PhysicalTableID} {
 			if ts, ok := unfinished[tableID]; !ok || item.dml.CommitTs < ts {

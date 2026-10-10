@@ -59,6 +59,15 @@ type Decoder struct {
 	cachedMessages *list.List
 	// CachedDMLMessages are messages just released from the cachedMessages.
 	CachedDMLMessages []*common.DMLMessage
+	// PendingDMLMessage identifies the input just cached by NextDMLMessage.
+	// The same object is returned by GetCachedMessages once its schema is known.
+	// It cannot be materialized until it is returned by GetCachedMessages.
+	PendingDMLMessage *common.DMLMessage
+}
+
+type cachedDMLMessage struct {
+	message *message
+	decoded *common.DMLMessage
 }
 
 // NewDecoder returns a new Decoder
@@ -155,6 +164,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 	msg := d.msg
 	d.msg = nil
+	d.PendingDMLMessage = nil
 
 	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
@@ -163,7 +173,9 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 			zap.String("schema", msg.Schema),
 			zap.String("table", msg.Table),
 			zap.Uint64("version", msg.SchemaVersion))
-		d.cachedMessages.PushBack(msg)
+		pending := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), nil)
+		d.cachedMessages.PushBack(&cachedDMLMessage{message: msg, decoded: pending})
+		d.PendingDMLMessage = pending
 		return nil
 	}
 
@@ -306,11 +318,13 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.memo.Write(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
-		msg := ele.Value.(*message)
+		cached := ele.Value.(*cachedDMLMessage)
+		msg := cached.message
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			*cached.decoded = *d.newDMLMessage(msg, tableInfo)
+			d.CachedDMLMessages = append(d.CachedDMLMessages, cached.decoded)
 			d.cachedMessages.Remove(ele)
 		}
 		ele = next

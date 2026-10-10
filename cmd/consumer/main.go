@@ -170,6 +170,8 @@ func start(ctx context.Context, options *options) (err error) {
 		})
 	}
 	results := make(chan *writeEvent, 64)
+	c.wg.Go(func() { cancel(c.confirm(ctx)) })
+	c.wg.Go(func() { cancel(c.executeDDL(ctx)) })
 	c.wg.Go(func() {
 		defer close(results)
 		cancel(c.read(ctx, results))

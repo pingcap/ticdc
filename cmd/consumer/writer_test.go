@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
@@ -57,7 +59,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
-		require.NoError(t, w.flushDML(t.Context(), nil))
+		require.NoError(t, w.flushDML(t.Context()))
 		require.Equal(t, 1, callbacks)
 		require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 100, tableID: 0, hasWatermark: true}))
 		w.finishBatches()
@@ -126,7 +128,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		w.pendingDML = append(w.pendingDML, result)
 	}
 	record.refs.Add(-1)
-	require.NoError(t, w.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, w.waitBatch(ctx, w.inFlight[0]), context.Canceled)
@@ -176,7 +178,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		callbacks := 0
 		dml.AddPostFlushFunc(func() { callbacks++ })
 		require.NoError(t, w.consume(t.Context(), &writeEvent{dml: dml}))
-		require.NoError(t, w.flushDML(t.Context(), nil))
+		require.NoError(t, w.flushDML(t.Context()))
 		w.finishBatches()
 		require.NoError(t, input.Confirm(t.Context()))
 		require.Equal(t, 1, callbacks)
@@ -253,20 +255,105 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 	}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 20}
 	downstream := mock.NewMockSink(gomock.NewController(t))
-	gomock.InOrder(
-		downstream.EXPECT().AddDMLEvent(a).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
-		downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil),
-		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil),
-	)
+	downstream.EXPECT().AddDMLEvent(a).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
 	other := &writeBatch{items: []*writeEvent{{dml: b}}, done: make(chan bool)}
+	control := &writeEvent{ddl: ddl}
 	w := &writer{
-		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: b}, {dml: a}},
+		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: a}},
 		inFlight: []*writeBatch{other}, inFlightEvents: 1,
+		pendingDDL: []*writeEvent{control}, ddlJobs: make(chan *writeEvent, 1),
 	}
-	require.NoError(t, w.writeDDL(t.Context(), &writeEvent{ddl: ddl}))
-	require.Len(t, w.pendingDML, 1)
-	require.Same(t, b, w.pendingDML[0].dml)
+	require.NoError(t, w.flushDML(t.Context()))
+	select {
+	case result := <-w.ddlJobs:
+		require.Same(t, control, result)
+	default:
+		t.Fatal("DDL waited for an unrelated table")
+	}
+	require.Empty(t, w.pendingDML)
 	require.Equal(t, []*writeBatch{other}, w.inFlight)
+}
+
+func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	memory := &memoryUsage{completed: make(chan struct{}, 1)}
+	var events []*event.DMLEvent
+	for index, table := range []string{"a", "a", "b"} {
+		info := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+			ID: int64(index + 1), Name: ast.NewCIStr(table),
+			Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
+		})
+		id := int64(1)
+		if table == "b" {
+			id = 2
+		}
+		dml := event.NewDMLEvent(common.NewDispatcherID(), id, 0, uint64(10+index*10), info)
+		dml.Rows = chunk.NewChunkWithCapacity(info.GetFieldSlice(), 1)
+		dml.Rows.AppendInt64(0, 1)
+		dml.RowTypes, dml.Length = []common.RowType{common.RowTypeInsert}, 1
+		events = append(events, dml)
+	}
+	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 15}
+	ddlEntered, releaseDDL, independent := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	downstream.EXPECT().AddDMLEvent(events[0])
+	downstream.EXPECT().AddDMLEvent(events[2]).Do(func(dml *event.DMLEvent) { close(independent); dml.PostFlush() })
+	downstream.EXPECT().AddDMLEvent(events[1]).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
+	downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil)
+	downstream.EXPECT().WriteBlockEvent(ddl).DoAndReturn(func(*event.DDLEvent) error {
+		close(ddlEntered)
+		select {
+		case <-releaseDDL:
+			return nil
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	})
+	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch), ddlJobs: make(chan *writeEvent, 1), ddlDone: make(chan struct{}, 1)}
+	c := &consumer{writer: w}
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = c.executeDDL(ctx) })
+	defer func() { cancel(); wg.Wait() }()
+	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[0], sequential: true}))
+	require.NoError(t, w.flushDML(ctx))
+	require.NoError(t, w.consume(ctx, &writeEvent{ddl: ddl}))
+	require.NoError(t, w.flushDML(ctx))
+	select {
+	case <-ddlEntered:
+		t.Fatal("DDL overtook an unfinished affected write")
+	default:
+	}
+	events[0].PostFlush()
+	require.NoError(t, w.flushDML(ctx))
+	select {
+	case <-ddlEntered:
+	case <-ctx.Done():
+		t.Fatal("DDL did not start after its affected write completed")
+	}
+	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[1], sequential: true}))
+	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[2], sequential: true}))
+	checkpoint := false
+	require.NoError(t, w.consume(ctx, &writeEvent{hasWatermark: true, watermark: 15, onFlush: func() { checkpoint = true }}))
+	require.NoError(t, w.flushDML(ctx))
+	select {
+	case <-independent:
+	case <-ctx.Done():
+		t.Fatal("an independent table was blocked by the running DDL")
+	}
+	require.Len(t, w.pendingDML, 1)
+	require.False(t, checkpoint, "watermark cannot pass an unfinished DDL")
+	close(releaseDDL)
+	select {
+	case <-w.ddlDone:
+	case <-ctx.Done():
+		t.Fatal("DDL did not complete")
+	}
+	w.ddlInFlight = nil
+	w.progressChanged = true
+	require.NoError(t, w.flushDML(ctx))
+	require.Empty(t, w.pendingDML)
+	require.True(t, checkpoint)
 }
 
 func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
@@ -299,12 +386,12 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
 	)
 	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
-	require.ErrorIs(t, w.flushDML(ctx, nil), context.Canceled)
+	require.ErrorIs(t, w.flushDML(ctx), context.Canceled)
 	require.Len(t, w.inFlight, 1)
 	require.Len(t, w.inFlight[0].items, 1)
 	require.Len(t, w.pendingDML, 1)
 	first.PostFlush()
-	require.NoError(t, w.flushDML(t.Context(), nil))
+	require.NoError(t, w.flushDML(t.Context()))
 	require.Empty(t, w.inFlight)
 	require.Empty(t, w.pendingDML)
 }
