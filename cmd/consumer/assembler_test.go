@@ -20,7 +20,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -35,7 +34,6 @@ import (
 func TestAssemblerReleasesSharedSchema(t *testing.T) {
 	memory := &memoryUsage{}
 	a := &assembler{memory: memory, protocol: config.ProtocolOpen}
-	p := &partition{}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID: 1, Name: ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
@@ -45,7 +43,7 @@ func TestAssemblerReleasesSharedSchema(t *testing.T) {
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete}, 1
-		require.NoError(t, a.queueDML(t.Context(), dml, nil, p))
+		require.NoError(t, a.queueDML(t.Context(), dml, nil, nil))
 	}
 	first, second := a.pendingDML[0], a.pendingDML[1]
 	first.dml.PostFlush()
@@ -203,31 +201,28 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 	require.Zero(t, a.memory.used())
 }
 
-func TestAssemblerStorageGroupBoundary(t *testing.T) {
-	key := cloudstorage.DMLPathKey{SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t"}}
+func TestAssemblerGroupBoundary(t *testing.T) {
 	first := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20}}
 	second := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
 	third := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10}}
-	a := &assembler{
-		source: sourceStorage, pendingDML: []*writeEvent{first, second, third},
-		storage: &storageAssembly{
-			schemas:         map[cloudstorage.SchemaPathKey]*common.TableInfo{key.SchemaPathKey: {}},
-			tableIDs:        map[storageTableKey]int64{{schema: key.Schema, table: key.Table}: 1},
-			tableWatermarks: map[int64]uint64{1: 20}, sortBeforeWrite: true,
-		},
+	group := &readGroup{tableID: 1, order: commitOrder, boundary: &readBoundary{}}
+	for _, item := range []*writeEvent{first, second, third} {
+		item.boundary = group.boundary
 	}
-	r := &storageReader{}
-	result, err := a.decodeStorage(t.Context(), &readData{storage: &storageInput{key: key, groupEnd: true}}, r)
+	unrelated := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 5}}
+	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}}
+	r := &storageReader{tableWatermarks: map[int64]uint64{1: 20}}
+	err := a.decode(t.Context(), &readData{group: group, groupEnd: true}, r)
 	require.NoError(t, err)
-	require.Nil(t, result)
 	for _, expected := range []*writeEvent{second, third, first} {
-		result, err = a.next(t.Context(), r)
+		result, err := a.next(t.Context(), r)
 		require.NoError(t, err)
 		require.Same(t, expected, result)
 	}
-	result, err = a.next(t.Context(), r)
+	result, err := a.next(t.Context(), r)
 	require.NoError(t, err)
 	require.True(t, result.hasWatermark)
 	require.EqualValues(t, 1, result.tableID)
 	require.EqualValues(t, 20, result.watermark)
+	require.Equal(t, []*writeEvent{unrelated}, a.pendingDML)
 }

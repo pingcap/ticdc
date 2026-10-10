@@ -18,16 +18,9 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"math"
-	"net/url"
 	"slices"
-	"strings"
-	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	routing "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -160,36 +153,32 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 	return prepared, nil
 }
 
-type partition struct {
+type decodeStream struct {
 	decoder          codecCommon.Decoder
-	progress         *readProgress
 	cachedRecords    []*ack
 	cachedUnreleased int
 }
 
-// assembler decodes inputs and arranges events for downstream writes.
+// assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
-	memory                *memoryUsage
-	codecConfig           *codecCommon.Config
-	upstreamDB            *sql.DB
-	storage               *storageAssembly
-	ddlCopies             map[uint64]map[int32][]*ack
-	pendingWatermarks     []*writeEvent
-	deliveredWatermark    uint64
-	hasDeliveredWatermark bool
-	mergeRows             bool
-	sortCSVRows           bool
-	protocol              config.Protocol
-	source                sourceType
-	partitions            map[int32]*partition
-	pendingDML            []*writeEvent
-	pendingDDL            []*writeEvent
-	orderedDML            bool
-	boundary              *readBoundary
-	router                *eventrouter.EventRouter
+	memory            *memoryUsage
+	codecConfig       *codecCommon.Config
+	upstreamDB        *sql.DB
+	topic             string
+	selectors         *columnselector.ColumnSelectors
+	streams           map[int32]*decodeStream
+	current           *readData
+	currentDecoder    codecCommon.Decoder
+	pendingWatermarks []*writeEvent
+	watermark         uint64
+	mergeRows         bool
+	sortCSVRows       bool
+	protocol          config.Protocol
+	pendingDML        []*writeEvent
+	pendingDDL        []*writeEvent
 }
 
-func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, p *partition) error {
+func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records []*ack, boundary *readBoundary) error {
 	if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
 		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
 	}
@@ -209,22 +198,13 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 			record.refs.Add(-1)
 		}
 	})
-	item := &writeEvent{dml: dml, bytes: bytes, sequential: a.mergeRows}
-	if p != nil && (a.source == sourcePulsar || (p.progress != nil && p == a.partitions[0])) {
-		// Pulsar keeps its existing input-order contract. Kafka partition zero
-		// already exposes every preceding executable DDL.
-		item.boundary = &readBoundary{reached: true}
-	}
+	item := &writeEvent{dml: dml, bytes: bytes, sequential: a.mergeRows, boundary: boundary}
 	if item.boundary == nil {
 		for _, ddl := range a.pendingDDL {
 			if dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, dml) {
-				if p != nil && p.progress != nil {
-					// Kafka's canonical DDL stream already contains the preceding
-					// controls for these rows. Flush them while reading its scope.
-					item.boundary = &readBoundary{reached: true}
-				} else {
-					item.boundary = ddl.boundary
-				}
+				// The already observed control proves that its earlier rows can
+				// drain while the reader completes the control's input scope.
+				item.boundary = &readBoundary{reached: true}
 				break
 			}
 		}
@@ -233,7 +213,7 @@ func (a *assembler) queueDML(ctx context.Context, dml *event.DMLEvent, records [
 	return nil
 }
 
-func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *ack) error {
+func setDDLTableNames(ddl *event.DDLEvent) error {
 	// Decoder table IDs describe metadata already observed, not the complete
 	// scope of rename, exchange, or CREATE TABLE LIKE. Extract their logical names.
 	switch timodel.ActionType(ddl.Type) {
@@ -264,6 +244,10 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 			}
 		}
 	}
+	return nil
+}
+
+func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *ack) error {
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
@@ -291,7 +275,7 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	}
 	readyIndex := -1
 	for index, result := range a.pendingDML {
-		ready := result.dml.CommitTs <= watermark || (a.orderedDML && (len(a.partitions) <= 1 || (result.boundary != nil && result.boundary.reached)))
+		ready := result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)
 		// Every queued DDL fences its own post-DDL rows. Independent tables can
 		// keep writing while the head waits for its input boundary.
 		for _, pending := range a.pendingDDL {
@@ -314,9 +298,6 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 				break
 			}
 		}
-		if !a.orderedDML && result.dml.CommitTs > watermark {
-			break
-		}
 	}
 	if head != nil {
 		early := false
@@ -327,7 +308,7 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 			blocked := head.ddl.GetBlockedTables()
 			early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && (len(blocked.TableIDs) == 0 || (len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID)) && len(head.ddl.GetBlockedTableNames()) == 0
 		}
-		ready := head.ddl.GetCommitTs() <= watermark || early || (a.source != sourcePulsar && a.orderedDML && (len(a.partitions) <= 1 || (head.boundary != nil && head.boundary.reached)))
+		ready := head.ddl.GetCommitTs() <= watermark || early || (head.boundary != nil && head.boundary.reached)
 		if ready {
 			for _, pending := range a.pendingDML {
 				if pending.dml.CommitTs <= head.ddl.GetCommitTs() && ddlBlocksTable(head.ddl, pending.dml) {
@@ -355,9 +336,9 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	return nil
 }
 
-func (a *assembler) hasPendingThrough(watermark uint64) bool {
+func (a *assembler) hasPendingThrough(watermark uint64, tableID int64) bool {
 	for _, pending := range a.pendingDML {
-		if pending.dml.CommitTs <= watermark {
+		if pending.dml.CommitTs <= watermark && (tableID == 0 || pending.dml.PhysicalTableID == tableID) {
 			return true
 		}
 	}
@@ -367,116 +348,6 @@ func (a *assembler) hasPendingThrough(watermark uint64) bool {
 		}
 	}
 	return false
-}
-
-// Only events already decoded before the offset snapshot share its control proof.
-func (a *assembler) captureBoundary(ctx context.Context, reader reader, watermark uint64) (bool, error) {
-	r, ok := reader.(*kafkaReader)
-	if !ok || !a.orderedDML || len(a.partitions) <= 1 {
-		return false, nil
-	}
-	if a.boundary != nil && !a.boundary.reached {
-		return true, nil
-	}
-	a.boundary = nil
-	var (
-		needed  bool
-		control *writeEvent
-		err     error
-	)
-	for _, pending := range a.pendingDDL {
-		if pending.boundary == nil && pending.ddl.GetCommitTs() > watermark {
-			needed, control = true, pending
-			break
-		}
-	}
-	for _, pending := range a.pendingDML {
-		needed = needed || (pending.boundary == nil && pending.dml.CommitTs > watermark)
-	}
-	if !needed {
-		return false, nil
-	}
-	// Drain already available input into a bounded candidate batch without
-	// waiting for another message or starting a new over-budget read window.
-	if control == nil && len(a.pendingDML) < 128 && a.memory.used() < maxMemoryBytes {
-		r.limitReads()
-		if r.nextPartition() >= 0 {
-			return true, nil
-		}
-	}
-	partitions := []int32{0}
-	var commitTs uint64
-	if control != nil {
-		partitions, err = a.ddlPartitions(control.ddl)
-		if err != nil {
-			return false, err
-		}
-		if partitions != nil && !slices.Contains(partitions, int32(0)) {
-			partitions = append(partitions, 0)
-		}
-		commitTs = control.ddl.GetCommitTs()
-	}
-	a.boundary, err = r.capture(ctx, partitions, commitTs)
-	if err != nil {
-		return false, err
-	}
-	if commitTs != 0 {
-		r.receivedDDL(0, commitTs)
-		for partitionID := range a.ddlCopies[commitTs] {
-			r.receivedDDL(partitionID, commitTs)
-		}
-		r.advanceBoundary()
-	}
-	if control != nil {
-		control.boundary = a.boundary
-	}
-	for _, pending := range a.pendingDML {
-		if pending.boundary == nil {
-			pending.boundary = a.boundary
-		}
-	}
-	return true, nil
-}
-
-// A nil selection conservatively covers every partition. Table dispatch uses
-// logical names, including both sides of rename/exchange and physical partitions.
-func (a *assembler) ddlPartitions(ddl *event.DDLEvent) ([]int32, error) {
-	if a.router == nil || ddl.SchemaName == "" || ddl.TableName == "" ||
-		(ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType != event.InfluenceTypeNormal) {
-		return nil, nil
-	}
-	names := []event.SchemaTableName{{SchemaName: ddl.SchemaName, TableName: ddl.TableName}}
-	if ddl.ExtraTableName != "" {
-		names = append(names, event.SchemaTableName{SchemaName: ddl.ExtraSchemaName, TableName: ddl.ExtraTableName})
-	}
-	names = append(names, ddl.BlockedTableNames...)
-	for _, info := range ddl.MultipleTableInfos {
-		if info != nil {
-			names = append(names, event.SchemaTableName{SchemaName: info.GetSchemaName(), TableName: info.GetTableName()})
-		}
-	}
-	var partitions []int32
-	for _, name := range names {
-		if name.SchemaName == "" || name.TableName == "" {
-			return nil, nil
-		}
-		generator := a.router.GetPartitionGenerator(name.SchemaName, name.TableName)
-		switch generator.(type) {
-		case *routing.TablePartitionGenerator:
-		default:
-			// Index/column values can place a table's rows in any partition.
-			return nil, nil
-		}
-		table := common.NewTableInfo4Decoder(name.SchemaName, &timodel.TableInfo{Name: ast.NewCIStr(name.TableName)})
-		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(a.partitions)), table, ddl.GetCommitTs())
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(partitions, partitionID) {
-			partitions = append(partitions, partitionID)
-		}
-	}
-	return partitions, nil
 }
 
 func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
@@ -511,147 +382,20 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-type storageTableKey struct {
-	schema    string
-	table     string
-	partition int64
-}
-
-type storageAssembly struct {
-	selectors       *columnselector.ColumnSelectors
-	schemas         map[cloudstorage.SchemaPathKey]*common.TableInfo
-	tableIDs        map[storageTableKey]int64
-	tableWatermarks map[int64]uint64
-	nextTableID     int64
-	current         *readData
-	tableID         int64
-	decoder         codecCommon.Decoder
-	sortBeforeWrite bool
-	groupReady      bool
-}
-
-func newAssembler(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, reader reader, memory *memoryUsage) (a *assembler, err error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, err
-	}
-	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
-	switch source {
-	case sourcePulsar:
-		protocolName = cmp.Or(protocolName, putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json")
-	case sourceStorage:
-		protocolName = putil.GetOrZero(replicaConfig.Sink.Protocol)
-	}
-	protocol, err := config.ParseSinkProtocolFromString(protocolName)
-	if err != nil {
-		return nil, err
-	}
-	switch source {
-	case sourceKafka:
-		switch protocol {
-		case config.ProtocolOpen, config.ProtocolCanalJSON, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium, config.ProtocolDebeziumAvro:
-		default:
-			return nil, errors.ErrKafkaInvalidConfig.FastGenByArgs("unsupported Kafka protocol " + protocol.String())
-		}
-	case sourcePulsar:
-		if protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar consumer requires canal-json")
-		}
-	case sourceStorage:
-		if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
-		}
-	}
-	codecConfig := codecCommon.NewConfig(protocol)
-	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
-	}
-	if source != sourceStorage {
-		switch protocol {
-		case config.ProtocolCanalJSON, config.ProtocolDebezium:
-			if !codecConfig.EnableTiDBExtension {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
-			}
-		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
-			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension and avro-enable-watermark must be true")
-			}
-			if codecConfig.AvroConfluentSchemaRegistry == "" {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
-			}
-		}
-	} else if protocol == config.ProtocolCanalJSON {
-		codecConfig.EnableTiDBExtension = true
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		return nil, err
-	}
-	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
-		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
-	}
-	var db *sql.DB
-	if source == sourceKafka && upstreamURI.Query().Get("upstream-tidb-dsn") != "" {
-		db, err = sql.Open("mysql", upstreamURI.Query().Get("upstream-tidb-dsn"))
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "open consumer upstream TiDB")
-		}
-		defer func() {
-			if err != nil {
-				_ = db.Close()
-			}
-		}()
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(10 * time.Minute)
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = db.PingContext(ctx)
-		cancel()
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
-		}
-	}
-	partitions := make(map[int32]*partition)
-	var storage *storageAssembly
-	topic := strings.Trim(upstreamURI.Path, "/")
-	var router *eventrouter.EventRouter
-	if source == sourceKafka {
-		router, err = eventrouter.NewEventRouter(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive), topic, false, protocol == config.ProtocolAvro)
+func newAssembler(decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*assembler, error) {
+	var selectors *columnselector.ColumnSelectors
+	if decoding.codec.Protocol == config.ProtocolCsv {
+		var err error
+		selectors, err = columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
 			return nil, err
-		}
-	}
-	switch reader := reader.(type) {
-	case *kafkaReader:
-		for partitionID, progress := range reader.progress {
-			decoder, err := codec.NewEventDecoder(ctx, int(partitionID), codecConfig, topic, db)
-			if err != nil {
-				return nil, err
-			}
-			partitions[partitionID] = &partition{decoder: decoder, progress: progress}
-		}
-	case *pulsarReader:
-		// Canal metadata belongs to the logical topic, shared by its partitions.
-		decoder, err := codec.NewEventDecoder(ctx, 0, codecConfig, topic, nil)
-		if err != nil {
-			return nil, err
-		}
-		partitions[0] = &partition{decoder: decoder, progress: &readProgress{}}
-	case *storageReader:
-		selectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
-		if err != nil {
-			return nil, err
-		}
-		storage = &storageAssembly{
-			selectors: selectors, schemas: make(map[cloudstorage.SchemaPathKey]*common.TableInfo),
-			tableIDs: make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
 		}
 	}
 	return &assembler{
-		memory: memory, codecConfig: codecConfig, protocol: protocol, source: source, router: router, upstreamDB: db, storage: storage,
-		partitions: partitions, orderedDML: source != sourceStorage,
-		ddlCopies: make(map[uint64]map[int32][]*ack), mergeRows: protocol == config.ProtocolCsv,
-		sortCSVRows: protocol == config.ProtocolCsv && codecConfig.OutputOldValue && codecConfig.IncludeCommitTs,
+		memory: memory, codecConfig: decoding.codec, upstreamDB: decoding.upstreamDB, topic: decoding.topic,
+		protocol: decoding.codec.Protocol, selectors: selectors, streams: make(map[int32]*decodeStream),
+		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
+		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
 	}, nil
 }
 
@@ -660,118 +404,69 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		needsMoreInput := false
-		var inputWatermark uint64
-		switch reader := reader.(type) {
-		case *kafkaReader:
-			reader.advanceBoundary()
-			watermark, ready := a.globalWatermark()
-			inputWatermark = watermark
-			if result := a.nextReady(watermark); result != nil {
-				return result, nil
+		if result := a.nextReady(a.watermark); result != nil {
+			return result, nil
+		}
+		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark, a.pendingWatermarks[0].tableID) {
+			result := a.pendingWatermarks[0]
+			a.pendingWatermarks[0] = nil
+			a.pendingWatermarks = a.pendingWatermarks[1:]
+			return result, nil
+		}
+		if a.current != nil {
+			if err := a.decodeRows(ctx, reader); err != nil {
+				return nil, err
 			}
-			hasControls := slices.ContainsFunc(a.pendingWatermarks, func(control *writeEvent) bool { return control.watermark <= watermark })
-			if ready && !a.hasPendingThrough(watermark) && (!a.hasDeliveredWatermark || watermark > a.deliveredWatermark || hasControls) {
-				var completed []*ack
-				for commitTs, records := range a.ddlCopies {
-					if commitTs <= watermark {
-						for _, copies := range records {
-							completed = append(completed, copies...)
-						}
-						delete(a.ddlCopies, commitTs)
-					}
-				}
-				a.deliveredWatermark = watermark
-				a.hasDeliveredWatermark = true
-				result := &writeEvent{watermark: watermark, hasWatermark: true}
-				var controls []*writeEvent
-				a.pendingWatermarks = slices.DeleteFunc(a.pendingWatermarks, func(control *writeEvent) bool {
-					if control.watermark <= watermark {
-						controls = append(controls, control)
-						return true
-					}
-					return false
-				})
-				if len(completed) != 0 || len(controls) != 0 {
-					result.onFlush = func() {
-						for _, control := range controls {
-							control.onFlush()
-						}
-						for _, record := range completed {
-							record.refs.Add(-1)
-						}
-						a.memory.release(int64(len(completed)) * 128)
-					}
-				}
-				return result, nil
-			}
-		case *pulsarReader:
-			watermark := a.partitions[0].progress.watermark
-			if result := a.nextReady(watermark); result != nil {
-				return result, nil
-			}
-			inputWatermark = watermark
-			if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
-				result := a.pendingWatermarks[0]
-				a.pendingWatermarks[0] = nil
-				a.pendingWatermarks = a.pendingWatermarks[1:]
-				return result, nil
-			}
-		case *storageReader:
-			state := a.storage
-			if !state.sortBeforeWrite || state.groupReady {
-				if result := a.nextReady(math.MaxUint64); result != nil {
-					return result, nil
-				}
-			}
-			if state.groupReady {
-				state.groupReady = false
-				return &writeEvent{tableID: state.tableID, watermark: state.tableWatermarks[state.tableID], hasWatermark: true}, nil
-			}
-			if state.decoder != nil {
-				messageType, hasNext := state.decoder.HasNext()
-				if hasNext {
-					if messageType != codecCommon.MessageTypeRow {
-						continue
-					}
-					message := state.decoder.NextDMLMessage()
-					if message == nil {
-						return nil, errors.ErrCodecDecode.FastGenByArgs("Storage decoder returned an empty DML message")
-					}
-					if !state.current.storage.index.EnableTableAcrossNodes && message.GetCommitTs() < state.tableWatermarks[state.tableID] {
-						continue
-					}
-					state.tableWatermarks[state.tableID] = max(state.tableWatermarks[state.tableID], message.GetCommitTs())
-					dml := message.ToDMLEvent()
-					if dml == nil || dml.TableInfo == nil {
-						return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML message has no table metadata")
-					}
-					dml.PhysicalTableID = state.tableID
-					if a.protocol == config.ProtocolCanalJSON {
-						dml.TableInfo.UpdateTS = state.current.storage.key.TableVersion
-					}
-					if err := a.queueDML(ctx, dml, []*ack{state.current.record}, nil); err != nil {
-						return nil, err
-					}
-					continue
-				}
-				// Every derived row now owns a downstream completion reference.
-				a.memory.decoded(state.current.record, 256)
-				state.decoder = nil
-				state.current = nil
-				continue
+			continue
+		}
+
+		feedback := readFeedback{}
+		var control *writeEvent
+		for _, pending := range a.pendingDDL {
+			if pending.boundary == nil && pending.ddl.GetCommitTs() > a.watermark {
+				feedback.boundaryDDL, control = pending.ddl, pending
+				break
 			}
 		}
-		boundaryPending, err := a.captureBoundary(ctx, reader, inputWatermark)
+		for _, pending := range a.pendingDML {
+			if pending.boundary == nil && pending.dml.CommitTs > a.watermark {
+				feedback.pendingDML++
+			}
+		}
+		progress, err := reader.Advance(ctx, feedback)
 		if err != nil {
 			return nil, err
 		}
-		if boundaryPending && a.boundary != nil && a.boundary.reached {
+		a.applyProgress(progress)
+		if progress.control != nil {
 			continue
 		}
-		needsMoreInput = needsMoreInput || boundaryPending || len(a.pendingDDL) != 0 || len(a.ddlCopies) != 0 || len(a.pendingWatermarks) != 0 || (a.storage != nil && len(a.pendingDML) != 0)
-		for _, partition := range a.partitions {
-			needsMoreInput = needsMoreInput || partition.cachedUnreleased != 0
+		if progress.boundary != nil {
+			// Only candidates decoded before this proof was captured may use it.
+			if control != nil {
+				control.boundary = progress.boundary
+			}
+			for _, pending := range a.pendingDML {
+				if pending.boundary == nil {
+					pending.boundary = progress.boundary
+				}
+			}
+			if progress.boundary.reached {
+				continue
+			}
+		}
+		if result := a.nextReady(a.watermark); result != nil {
+			return result, nil
+		}
+		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark, a.pendingWatermarks[0].tableID) {
+			continue
+		}
+		needsMoreInput := progress.needsMoreInput || len(a.pendingDDL) != 0 || len(a.pendingWatermarks) != 0
+		for _, pending := range a.pendingDML {
+			needsMoreInput = needsMoreInput || (pending.boundary != nil && !pending.boundary.reached)
+		}
+		for _, stream := range a.streams {
+			needsMoreInput = needsMoreInput || stream.cachedUnreleased != 0
 		}
 		if !needsMoreInput {
 			if err := a.memory.wait(ctx); err != nil {
@@ -785,109 +480,167 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		if data == nil {
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
 		}
-		switch reader := reader.(type) {
-		case *kafkaReader, *pulsarReader:
-			if err := a.decodeMQ(ctx, data); err != nil {
-				return nil, err
-			}
-		case *storageReader:
-			result, err := a.decodeStorage(ctx, data, reader)
-			if err != nil || result != nil {
-				return result, err
-			}
-		}
-	}
-}
-
-func (a *assembler) globalWatermark() (uint64, bool) {
-	watermark := uint64(math.MaxUint64)
-	for _, partition := range a.partitions {
-		if !partition.progress.hasWatermark || partition.cachedUnreleased != 0 {
-			return 0, false
-		}
-		watermark = min(watermark, partition.progress.watermark)
-	}
-	return watermark, true
-}
-
-func (a *assembler) decodeStorage(ctx context.Context, data *readData, reader *storageReader) (*writeEvent, error) {
-	state := a.storage
-	input := data.storage
-	key := input.key
-	table := state.schemas[key.SchemaPathKey]
-	if table == nil {
-		table = data.schema.TableInfo()
-		table.UpdateTS = data.schema.TableVersion
-		state.schemas[key.SchemaPathKey] = table
-	}
-	if key.IsSchemaFileDMLPathKey() {
-		oldKey := ""
-		if data.schema.Type == byte(timodel.ActionRenameTable) {
-			statement, err := parser.New().ParseOneStmt(data.schema.Query, "", "")
-			if err != nil {
-				return nil, errors.WrapError(errors.ErrCodecDecode, err, "parse Storage rename DDL")
-			}
-			rename, ok := statement.(*ast.RenameTableStmt)
-			if !ok || len(rename.TableToTables) == 0 {
-				return nil, errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
-			}
-			old := rename.TableToTables[0].OldTable
-			oldKey = common.QuoteSchema(cmp.Or(old.Schema.O, data.schema.Schema), old.Name.O)
-		}
-		ddl := data.schema.DDLEvent()
-		ddl.TableInfo = table
-		tableKey := key.GetKey()
-		reader.ddlWatermarks[tableKey] = max(reader.ddlWatermarks[tableKey], key.TableVersion)
-		if oldKey != "" {
-			reader.ddlWatermarks[oldKey] = max(reader.ddlWatermarks[oldKey], key.TableVersion)
-		}
-		return &writeEvent{ddl: ddl, onFlush: func() { data.record.refs.Add(-1) }}, nil
-	}
-	idKey := storageTableKey{schema: key.Schema, table: key.Table, partition: key.PartitionNum}
-	tableID := state.tableIDs[idKey]
-	if tableID == 0 {
-		if len(state.tableIDs) >= maxRecords {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
-		}
-		size := int64(len(key.Schema) + len(key.Table) + 128)
-		if err := a.memory.reserve(ctx, size); err != nil {
+		if err := a.decode(ctx, data, reader); err != nil {
 			return nil, err
 		}
-		state.nextTableID++
-		tableID = state.nextTableID
-		state.tableIDs[idKey] = tableID
 	}
-	state.tableID = tableID
-	if input.groupEnd {
-		if state.sortBeforeWrite {
-			slices.SortStableFunc(a.pendingDML, func(a, b *writeEvent) int { return cmp.Compare(a.dml.CommitTs, b.dml.CommitTs) })
-		}
-		state.groupReady = true
-		return nil, nil
-	}
-	state.current = data
-	state.sortBeforeWrite = input.sort
-	if a.protocol == config.ProtocolCsv {
-		decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, table, data.value, state.selectors.GetForTableInfo(table))
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrCodecDecode, err, "create Storage CSV decoder")
-		}
-		state.decoder = decoder
-	} else {
-		state.decoder = canal.NewTxnDecoder(a.codecConfig)
-		state.decoder.AddKeyValue(nil, data.value)
-	}
-	return nil, nil
 }
 
-func (a *assembler) decodeMQ(ctx context.Context, data *readData) error {
-	partitionID, retainedBytes, decoderName := data.partition, int64(128), "decoder"
-	if a.source == sourcePulsar {
-		partitionID, retainedBytes, decoderName = 0, 256, "Pulsar decoder"
+func (a *assembler) applyProgress(progress readProgress) {
+	a.watermark = 0
+	if progress.hasWatermark {
+		a.watermark = progress.watermark
 	}
-	p, ok := a.partitions[partitionID]
-	if !ok {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
+	if control := progress.control; control != nil {
+		item := &writeEvent{watermark: control.watermark, tableID: control.tableID, hasWatermark: true}
+		if len(control.records) != 0 {
+			item.onFlush = func() {
+				for _, record := range control.records {
+					record.refs.Add(-1)
+				}
+				a.memory.release(control.bytes)
+			}
+		}
+		a.pendingWatermarks = append(a.pendingWatermarks, item)
+	}
+}
+
+func (a *assembler) decode(ctx context.Context, data *readData, reader reader) error {
+	if data.groupEnd {
+		if data.group.order == commitOrder {
+			start := slices.IndexFunc(a.pendingDML, func(item *writeEvent) bool { return item.boundary == data.group.boundary })
+			if start >= 0 {
+				end := start
+				for end < len(a.pendingDML) && a.pendingDML[end].boundary == data.group.boundary {
+					end++
+				}
+				slices.SortStableFunc(a.pendingDML[start:end], func(first, second *writeEvent) int {
+					return cmp.Compare(first.dml.CommitTs, second.dml.CommitTs)
+				})
+			}
+		}
+		progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true})
+		if err != nil {
+			return err
+		}
+		a.applyProgress(progress)
+		return nil
+	}
+	if data.ddl != nil {
+		if err := a.assembleDDL(ctx, data, data.ddl, reader); err != nil {
+			return err
+		}
+		progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true})
+		if err != nil {
+			return err
+		}
+		a.applyProgress(progress)
+		a.memory.decoded(data.record, data.retainedBytes)
+		return nil
+	}
+	switch data.format {
+	case rowFormat:
+		if data.table == nil || data.group == nil {
+			return errors.ErrInternalCheckFailed.FastGenByArgs("row input has no table metadata or group")
+		}
+		switch a.protocol {
+		case config.ProtocolCsv:
+			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
+			if err != nil {
+				return errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder")
+			}
+			a.currentDecoder = decoder
+		case config.ProtocolCanalJSON:
+			a.currentDecoder = canal.NewTxnDecoder(a.codecConfig)
+			a.currentDecoder.AddKeyValue(data.key, data.value)
+		default:
+			return errors.ErrCodecDecode.FastGenByArgs("protocol cannot decode rows with external table metadata")
+		}
+		a.current = data
+		return nil
+	case messageFormat:
+		return a.decodeMessages(ctx, data, reader)
+	default:
+		return errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an unknown input format")
+	}
+}
+
+func (a *assembler) decodeRows(ctx context.Context, reader reader) error {
+	data := a.current
+	for {
+		messageType, hasNext := a.currentDecoder.HasNext()
+		if !hasNext {
+			a.memory.decoded(data.record, data.retainedBytes)
+			a.current, a.currentDecoder = nil, nil
+			return nil
+		}
+		if messageType != codecCommon.MessageTypeRow {
+			continue
+		}
+		message := a.currentDecoder.NextDMLMessage()
+		if message == nil {
+			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
+		}
+		return a.assembleDML(ctx, data, message.ToDMLEvent(), []*ack{data.record}, reader)
+	}
+}
+
+func (a *assembler) assembleDML(ctx context.Context, data *readData, dml *event.DMLEvent, records []*ack, reader reader) error {
+	if dml == nil || dml.TableInfo == nil {
+		return errors.ErrCodecDecode.FastGenByArgs("DML message has no table metadata")
+	}
+	if data.format == rowFormat {
+		dml.PhysicalTableID = data.group.tableID
+		dml.TableInfo.UpdateTS = data.table.UpdateTS
+	}
+	progress, err := reader.Advance(ctx, readFeedback{data: data, dml: dml})
+	if err != nil {
+		return err
+	}
+	a.applyProgress(progress)
+	if progress.skip {
+		return nil
+	}
+	return a.queueDML(ctx, dml, records, data.dmlBoundary)
+}
+
+func (a *assembler) assembleDDL(ctx context.Context, data *readData, ddl *event.DDLEvent, reader reader) error {
+	if err := setDDLTableNames(ddl); err != nil {
+		return err
+	}
+	needsMoreInput := false
+	if stream := a.streams[data.stream]; stream != nil {
+		needsMoreInput = stream.cachedUnreleased != 0
+	}
+	progress, err := reader.Advance(ctx, readFeedback{data: data, ddl: ddl, needsMoreInput: needsMoreInput})
+	if err != nil {
+		return err
+	}
+	a.applyProgress(progress)
+	if progress.skip {
+		return nil
+	}
+	if err := a.queueDDL(ctx, ddl, data.record); err != nil {
+		return err
+	}
+	a.pendingDDL[len(a.pendingDDL)-1].boundary = data.ddlBoundary
+	if data.ddlOrder == commitOrder {
+		slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
+			return cmp.Compare(first.ddl.GetCommitTs(), second.ddl.GetCommitTs())
+		})
+	}
+	return nil
+}
+
+func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader reader) error {
+	p := a.streams[data.stream]
+	if p == nil {
+		decoder, err := codec.NewEventDecoder(ctx, int(data.stream), a.codecConfig, a.topic, a.upstreamDB)
+		if err != nil {
+			return err
+		}
+		p = &decodeStream{decoder: decoder}
+		a.streams[data.stream] = p
 	}
 	record := data.record
 	p.decoder.AddKeyValue(data.key, data.value)
@@ -901,40 +654,35 @@ func (a *assembler) decodeMQ(ctx context.Context, data *readData) error {
 			message := p.decoder.NextDMLMessage()
 			if message == nil {
 				if _, ok := p.decoder.(*simple.Decoder); !ok {
-					return errors.ErrCodecDecode.FastGenByArgs(decoderName + " returned an empty DML message")
+					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 				}
 				record.refs.Add(1)
 				p.cachedUnreleased++
-				p.progress.needsMoreInput = true
 				p.cachedRecords = append(p.cachedRecords, record)
 				continue
 			}
-			if err := a.queueDML(ctx, message.ToDMLEvent(), []*ack{record}, p); err != nil {
+			if err := a.assembleDML(ctx, data, message.ToDMLEvent(), []*ack{record}, reader); err != nil {
 				return err
 			}
 		case codecCommon.MessageTypeDDL:
-			if a.protocol == config.ProtocolCanalJSON && a.source != sourcePulsar && data.partition != 0 {
-				return errors.ErrCodecDecode.FastGenByArgs("Canal JSON DDL must come from partition 0")
-			}
 			ddl := p.decoder.NextDDLEvent()
-			if ddl == nil || (a.source == sourcePulsar && ddl.Query == "") {
-				return errors.ErrCodecDecode.FastGenByArgs(decoderName + " returned an empty DDL event")
+			if ddl == nil {
+				return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DDL event")
 			}
 			if decoder, ok := p.decoder.(*simple.Decoder); ok {
 				records := slices.Clone(p.cachedRecords)
 				for _, message := range decoder.GetCachedMessages() {
 					if p.cachedUnreleased == 0 {
-						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its Kafka record")
+						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input")
 					}
 					p.cachedUnreleased--
-					if err := a.queueDML(ctx, message.ToDMLEvent(), records, p); err != nil {
+					if err := a.assembleDML(ctx, data, message.ToDMLEvent(), records, reader); err != nil {
 						return err
 					}
 				}
 				if p.cachedUnreleased == 0 {
-					p.progress.needsMoreInput = false
 					for _, cached := range p.cachedRecords {
-						a.memory.decoded(cached, 128)
+						a.memory.decoded(cached, data.retainedBytes)
 					}
 					clear(p.cachedRecords)
 					p.cachedRecords = nil
@@ -946,51 +694,28 @@ func (a *assembler) decodeMQ(ctx context.Context, data *readData) error {
 				}
 				continue
 			}
-			p.progress.ddlTs = ddl.GetCommitTs()
-			if a.source != sourcePulsar && data.partition != 0 {
-				// Only partition zero supplies executable DDLs. Other copies wait
-				// for downstream progress without matching individual statements.
-				if err := a.memory.reserve(ctx, 128); err != nil {
-					return err
-				}
-				record.refs.Add(1)
-				copies := a.ddlCopies[ddl.GetCommitTs()]
-				if copies == nil {
-					copies = make(map[int32][]*ack)
-					a.ddlCopies[ddl.GetCommitTs()] = copies
-				}
-				copies[data.partition] = append(copies[data.partition], record)
-				continue
-			}
-			if err := a.queueDDL(ctx, ddl, record); err != nil {
+			if err := a.assembleDDL(ctx, data, ddl, reader); err != nil {
 				return err
-			}
-			if a.source == sourcePulsar {
-				// Equal timestamps retain input order, including split rename jobs.
-				slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
-					return cmp.Compare(first.ddl.GetCommitTs(), second.ddl.GetCommitTs())
-				})
 			}
 		case codecCommon.MessageTypeResolved:
-			watermark := p.decoder.NextResolvedEvent()
-			if !p.progress.hasWatermark || watermark > p.progress.watermark {
-				p.progress.watermark = watermark
-				p.progress.hasWatermark = true
-			}
-			if err := a.memory.reserve(ctx, 128); err != nil {
+			progress, err := reader.Advance(ctx, readFeedback{
+				data: data, watermark: p.decoder.NextResolvedEvent(), hasWatermark: true, needsMoreInput: p.cachedUnreleased != 0,
+			})
+			if err != nil {
 				return err
 			}
-			record.refs.Add(1)
-			a.pendingWatermarks = append(a.pendingWatermarks, &writeEvent{watermark: watermark, hasWatermark: true, onFlush: func() {
-				record.refs.Add(-1)
-				a.memory.release(128)
-			}})
+			a.applyProgress(progress)
 		default:
-			return errors.ErrCodecDecode.FastGenByArgs(decoderName + " returned an unknown message type")
+			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type")
 		}
 	}
+	progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true, needsMoreInput: p.cachedUnreleased != 0})
+	if err != nil {
+		return err
+	}
+	a.applyProgress(progress)
 	if !slices.Contains(p.cachedRecords, record) {
-		a.memory.decoded(record, retainedBytes)
+		a.memory.decoded(record, data.retainedBytes)
 	} else {
 		record.refs.Add(-1)
 	}

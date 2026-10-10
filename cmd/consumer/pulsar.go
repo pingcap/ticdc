@@ -41,6 +41,8 @@ type pulsarReader struct {
 	mu           sync.Mutex
 	partitionIDs map[string]int32
 	messageIDs   map[*ack]pulsar.MessageID
+	watermark    uint64
+	hasWatermark bool
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
@@ -188,8 +190,24 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		c.messageIDs[record] = message.ID()
 		c.records[partitionID] = append(c.records[partitionID], record)
 		c.mu.Unlock()
-		return &readData{key: []byte(message.Key()), value: message.Payload(), partition: partitionID, record: record}, nil
+		return &readData{key: []byte(message.Key()), value: message.Payload(), record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}, nil
 	}
+}
+
+func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
+	result := readProgress{watermark: c.watermark, hasWatermark: c.hasWatermark}
+	if !feedback.hasWatermark {
+		return result, nil
+	}
+	c.watermark = max(c.watermark, feedback.watermark)
+	c.hasWatermark = true
+	if err := c.memory.reserve(ctx, 128); err != nil {
+		return result, err
+	}
+	feedback.data.record.refs.Add(1)
+	result.watermark, result.hasWatermark = c.watermark, true
+	result.control = &readControl{watermark: feedback.watermark, records: []*ack{feedback.data.record}, bytes: 128}
+	return result, nil
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {

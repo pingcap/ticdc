@@ -59,13 +59,14 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: query + "&max-message-bytes=262144"}
-			input, err := newKafkaReader(ctx, upstreamURI, "small-message-limit", &memoryUsage{})
+			input, err := newKafkaReader(ctx, upstreamURI, "small-message-limit", &memoryUsage{}, config.GetDefaultReplicaConfig())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, input.Close()) })
-			a, err := newAssembler(ctx, upstreamURI, "UTC", config.GetDefaultReplicaConfig(), input, input.memory)
+			decoding, err := newDecodeConfig(ctx, upstreamURI, "UTC", config.GetDefaultReplicaConfig())
 			require.NoError(t, err)
-			require.Len(t, a.partitions, 1)
-			require.NotNil(t, a.partitions[0].decoder)
+			a, err := newAssembler(decoding, config.GetDefaultReplicaConfig(), input.memory)
+			require.NoError(t, err)
+			require.Equal(t, decoding.codec.Protocol, a.protocol)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
 			}
@@ -96,7 +97,7 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	const topic = "confirm-prefix"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
 	t.Cleanup(cluster.Close)
-	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, topic, &memoryUsage{})
+	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, topic, &memoryUsage{}, config.GetDefaultReplicaConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 	require.NoError(t, r.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("a")}, &kgo.Record{Topic: topic, Value: []byte("b")}).FirstErr())
@@ -154,9 +155,11 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			input, err := newStorageReader(t.Context(), upstreamURI, replicaConfig, &memoryUsage{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, input.Close()) })
-			a, err := newAssembler(t.Context(), upstreamURI, "UTC", replicaConfig, input, input.memory)
+			decoding, err := newDecodeConfig(t.Context(), upstreamURI, "UTC", replicaConfig)
 			require.NoError(t, err)
-			require.NotNil(t, a.storage)
+			a, err := newAssembler(decoding, replicaConfig, input.memory)
+			require.NoError(t, err)
+			require.Equal(t, decoding.codec.Protocol, a.protocol)
 		})
 	}
 }
@@ -184,13 +187,16 @@ func TestStorageReaderStreamsFileRanges(t *testing.T) {
 			for id := uint64(1); id <= 2; id++ {
 				data, err := r.Read(ctx)
 				require.NoError(t, err)
-				require.Equal(t, id, data.storage.index.Idx)
+				require.Equal(t, id, r.fileIndices[key][index.FileIndexKey])
+				require.NotNil(t, data.table)
+				require.NotNil(t, data.group)
+				require.Equal(t, rowFormat, data.format)
 				require.Equal(t, []byte("row"), data.value)
 			}
 			if end == 2 {
 				data, err := r.Read(ctx)
 				require.NoError(t, err)
-				require.True(t, data.storage.groupEnd)
+				require.True(t, data.groupEnd)
 				require.Nil(t, data.record)
 			}
 		})
@@ -218,13 +224,13 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(client.Close)
 		memory := &memoryUsage{}
-		r := &kafkaReader{client: client, memory: memory, progress: make(map[int32]*readProgress), records: make(map[int32][]*ack), offsets: make(map[*ack]int64)}
-		c := &assembler{memory: memory, protocol: config.ProtocolOpen, partitions: make(map[int32]*partition), orderedDML: true, ddlCopies: make(map[uint64]map[int32][]*ack)}
+		r := &kafkaReader{client: client, memory: memory, protocol: config.ProtocolOpen, progress: make(map[int32]*kafkaProgress), records: make(map[int32][]*ack), offsets: make(map[*ack]int64), ddlCopies: make(map[uint64]map[int32][]*ack)}
+		c := &assembler{memory: memory, protocol: config.ProtocolOpen, streams: make(map[int32]*decodeStream)}
 		for partitionID := range int32(2) {
 			decoder, err := open.NewDecoder(t.Context(), int(partitionID), codecConfig, nil)
 			require.NoError(t, err)
-			r.progress[partitionID] = &readProgress{}
-			c.partitions[partitionID] = &partition{decoder: decoder, progress: r.progress[partitionID]}
+			r.progress[partitionID] = &kafkaProgress{}
+			c.streams[partitionID] = &decodeStream{decoder: decoder}
 		}
 		// Noncanonical copies may arrive first and are never executed.
 		for _, partitionID := range []int32{1, 0} {
@@ -239,13 +245,13 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				require.NoError(t, err)
 				r.offsets[record] = int64(offset)
 				r.records[partitionID] = append(r.records[partitionID], record)
-				require.NoError(t, c.decodeMQ(t.Context(), &readData{partition: partitionID, key: message.Key, value: message.Value, record: record}))
+				require.NoError(t, c.decodeMessages(t.Context(), &readData{stream: partitionID, key: message.Key, value: message.Value, record: record, retainedBytes: 128}, r))
 			}
 			record, err := memory.newAck(t.Context(), int64(len(watermark.Key)+len(watermark.Value)+128))
 			require.NoError(t, err)
 			r.offsets[record] = int64(len(input))
 			r.records[partitionID] = append(r.records[partitionID], record)
-			require.NoError(t, c.decodeMQ(t.Context(), &readData{partition: partitionID, key: watermark.Key, value: watermark.Value, record: record}))
+			require.NoError(t, c.decodeMessages(t.Context(), &readData{stream: partitionID, key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}, r))
 		}
 		downstream := mock.NewMockSink(gomock.NewController(t))
 		w := &writer{downstream: downstream, memory: memory}
@@ -315,20 +321,26 @@ func TestReaderDDLNormalization(t *testing.T) {
 }
 
 func TestKafkaReaderWatermark(t *testing.T) {
-	c := &assembler{partitions: map[int32]*partition{
-		0: {progress: &readProgress{watermark: 20, hasWatermark: true}},
-		1: {progress: &readProgress{watermark: 10, hasWatermark: true}},
+	c := &kafkaReader{progress: map[int32]*kafkaProgress{
+		0: {watermark: 20, hasWatermark: true},
+		1: {watermark: 10, hasWatermark: true},
 	}}
 	watermark, ready := c.globalWatermark()
 	require.True(t, ready)
 	require.EqualValues(t, 10, watermark)
-	c.partitions[1].progress.hasWatermark = false
+	c.progress[1].hasWatermark = false
 	_, ready = c.globalWatermark()
 	require.False(t, ready)
-	c.partitions[1].progress.hasWatermark = true
-	c.partitions[1].cachedUnreleased = 1
+	c.progress[1].hasWatermark = true
+	c.progress[1].needsMoreInput = true
 	_, ready = c.globalWatermark()
 	require.False(t, ready)
+	c.controls = []*readControl{{watermark: 20}}
+	progress, err := c.Advance(t.Context(), readFeedback{})
+	require.NoError(t, err)
+	require.True(t, progress.needsMoreInput)
+	require.False(t, progress.hasWatermark)
+	require.Nil(t, progress.control)
 }
 
 func TestPulsarControlsUseTopicProgress(t *testing.T) {
@@ -336,14 +348,16 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	r := &pulsarReader{
 		memory: memory, partitionIDs: map[string]int32{"test-partition-0": 0, "test-partition-1": 1},
 	}
-	a, err := newAssembler(t.Context(), &url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), r, memory)
+	decoding, err := newDecodeConfig(t.Context(), &url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig())
 	require.NoError(t, err)
-	for index, watermark := range []string{"100", "90"} {
+	a, err := newAssembler(decoding, config.GetDefaultReplicaConfig(), memory)
+	require.NoError(t, err)
+	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
 		record, err := memory.newAck(t.Context(), int64(len(value)+256))
 		require.NoError(t, err)
-		require.NoError(t, a.decodeMQ(t.Context(), &readData{value: value, record: record, partition: int32(index)}))
-		require.EqualValues(t, 100, a.partitions[0].progress.watermark)
+		require.NoError(t, a.decodeMessages(t.Context(), &readData{value: value, record: record, retainedBytes: 256, ddlOrder: commitOrder}, r))
+		require.EqualValues(t, 100, r.watermark)
 		// Idle partitions do not require a broker snapshot or a new message.
 		result, err := a.next(t.Context(), r)
 		require.NoError(t, err)
@@ -359,10 +373,10 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN y INT","_tidb":{"commitTs":100}}`,
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN z INT","_tidb":{"commitTs":200}}`,
 	}
-	for index, query := range queries {
+	for _, query := range queries {
 		record, err := memory.newAck(t.Context(), int64(len(query)+256))
 		require.NoError(t, err)
-		require.NoError(t, a.decodeMQ(t.Context(), &readData{value: []byte(query), record: record, partition: int32(index % 2)}))
+		require.NoError(t, a.decodeMessages(t.Context(), &readData{value: []byte(query), record: record, retainedBytes: 256, ddlOrder: commitOrder}, r))
 	}
 	require.EqualValues(t, 100, a.nextReady(100).ddl.GetCommitTs())
 	require.Nil(t, a.nextReady(100))
@@ -380,17 +394,15 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 	memory := &memoryUsage{}
 	memory.bytes.Store(128)
 	c := &assembler{
-		memory: memory, orderedDML: true,
-		partitions: map[int32]*partition{
-			0: {progress: &readProgress{watermark: 40, hasWatermark: true}},
-			1: {progress: &readProgress{watermark: 40, hasWatermark: true}},
-		},
+		memory:     memory,
 		pendingDML: []*writeEvent{{dml: dml}},
 		pendingDDL: []*writeEvent{{ddl: ddl}},
+	}
+	r := &kafkaReader{
+		memory: memory, progress: map[int32]*kafkaProgress{0: {watermark: 40, hasWatermark: true}, 1: {watermark: 40, hasWatermark: true}},
 		// An already delivered CREATE TABLE still has an unconfirmed copy.
 		ddlCopies: map[uint64]map[int32][]*ack{10: {1: {copyRecord}}},
 	}
-	r := &kafkaReader{}
 	result, err := c.next(t.Context(), r)
 	require.NoError(t, err)
 	require.Same(t, dml, result.dml)
@@ -570,7 +582,7 @@ func TestOversizedInputCanComplete(t *testing.T) {
 func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	c := &kafkaReader{
 		memory: &memoryUsage{},
-		progress: map[int32]*readProgress{
+		progress: map[int32]*kafkaProgress{
 			0: {hasWatermark: true, watermark: 20},
 			1: {hasWatermark: true, watermark: 10},
 			2: {},
@@ -595,7 +607,7 @@ func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	c.targets = map[int32]int64{0: 10, 1: 5, 2: 10}
 	require.EqualValues(t, 1, c.nextPartition())
 	require.NoError(t, c.memory.reserve(t.Context(), 3*128))
-	c.boundary.commitTs = 100
+	c.boundaryDDL = 100
 	c.positions[1] = 1
 	c.progress[1].ddlTs = 99
 	c.advanceBoundary()
@@ -622,7 +634,7 @@ func TestKafkaInputBoundaryIsFixed(t *testing.T) {
 		&kgo.Record{Topic: topic, Partition: 0, Value: []byte("control")},
 		&kgo.Record{Topic: topic, Partition: 1, Value: []byte("data")},
 	).FirstErr())
-	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, "input-boundary", &memoryUsage{})
+	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, "input-boundary", &memoryUsage{}, config.GetDefaultReplicaConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 	boundary, err := r.capture(ctx, nil, 0)
@@ -658,7 +670,6 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	independent := &event.DMLEvent{CommitTs: 12, TableInfo: tableB}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 10}
 	a := &assembler{
-		orderedDML: true, partitions: map[int32]*partition{0: {}, 1: {}},
 		pendingDML: []*writeEvent{
 			{dml: before, boundary: boundary}, {dml: after, boundary: boundary}, {dml: independent, boundary: boundary},
 		},
@@ -672,23 +683,22 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	require.Same(t, before, a.nextReady(0).dml)
 	require.Same(t, independent, a.nextReady(0).dml)
 	require.Nil(t, a.nextReady(0))
-	require.True(t, a.hasPendingThrough(10))
+	require.True(t, a.hasPendingThrough(10, 0))
 	ddlBoundary.reached = true
 	require.Same(t, ddl, a.nextReady(0).ddl)
-	require.False(t, a.hasPendingThrough(10))
+	require.False(t, a.hasPendingThrough(10, 0))
 	require.Same(t, after, a.nextReady(0).dml)
 	// Rows read during catch-up need their own later control boundary.
 	a.pendingDML = []*writeEvent{{dml: after}}
 	require.Nil(t, a.nextReady(0))
-	require.True(t, a.hasPendingThrough(11))
+	require.True(t, a.hasPendingThrough(11, 0))
 }
 
 func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	first := &event.DMLEvent{CommitTs: 20}
 	second := &event.DMLEvent{CommitTs: 10}
 	buffer := &assembler{
-		memory: &memoryUsage{}, orderedDML: true,
-		partitions: map[int32]*partition{0: {}, 1: {}},
+		memory:     &memoryUsage{},
 		pendingDML: []*writeEvent{{dml: first, boundary: &readBoundary{reached: true}}, {dml: second, boundary: &readBoundary{reached: true}}},
 	}
 	require.Same(t, first, buffer.nextReady(0).dml)
@@ -715,8 +725,13 @@ func TestReaderDDLArrivalOrder(t *testing.T) {
 	beforeA, afterA := &event.DMLEvent{CommitTs: 280, TableInfo: tableA}, &event.DMLEvent{CommitTs: 310, TableInfo: tableA}
 	beforeB, afterB := &event.DMLEvent{CommitTs: 180, TableInfo: tableB}, &event.DMLEvent{CommitTs: 220, TableInfo: tableB}
 	buffer := &assembler{
-		memory: &memoryUsage{}, orderedDML: true,
-		pendingDML: []*writeEvent{{dml: beforeB}, {dml: afterB}, {dml: beforeA}, {dml: afterA}},
+		memory: &memoryUsage{},
+		pendingDML: []*writeEvent{
+			{dml: beforeB, boundary: &readBoundary{reached: true}},
+			{dml: afterB, boundary: &readBoundary{reached: true}},
+			{dml: beforeA, boundary: &readBoundary{reached: true}},
+			{dml: afterA, boundary: &readBoundary{reached: true}},
+		},
 	}
 	ddlA := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 300}
 	ddlB := &event.DDLEvent{SchemaName: "test", TableName: "b", FinishedTs: 200}
@@ -775,28 +790,29 @@ func TestDDLScope(t *testing.T) {
 			action = timodel.ActionCreateTable
 		}
 		ddl = &event.DDLEvent{SchemaName: "test", TableName: "unseen", Type: byte(action), Query: query}
+		require.NoError(t, setDDLTableNames(ddl))
 		require.NoError(t, assembly.queueDDL(t.Context(), ddl, &ack{}))
 		require.True(t, ddlBlocksTable(ddl, a))
 		require.True(t, ddlBlocksTable(ddl, c))
 		require.False(t, ddlBlocksTable(ddl, b))
 	}
-	assembly.partitions = map[int32]*partition{0: {}, 1: {}, 2: {}, 3: {}}
+	input := &kafkaReader{progress: map[int32]*kafkaProgress{0: {}, 1: {}, 2: {}, 3: {}}}
 	router, err := eventrouter.NewEventRouter(config.GetDefaultReplicaConfig().Sink, true, "test", false, false)
 	require.NoError(t, err)
-	assembly.router = router
-	partitionID, _, err := assembly.router.GetPartitionGenerator("test", "a").GeneratePartitionIndexAndKey(nil, 4, tableA, 10)
+	input.router = router
+	partitionID, _, err := input.router.GetPartitionGenerator("test", "a").GeneratePartitionIndexAndKey(nil, 4, tableA, 10)
 	require.NoError(t, err)
-	selected, err := assembly.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
+	selected, err := input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
 	require.NoError(t, err)
 	require.Equal(t, []int32{partitionID}, selected)
-	selected, err = assembly.ddlPartitions(&event.DDLEvent{SchemaName: "test"})
+	selected, err = input.ddlPartitions(&event.DDLEvent{SchemaName: "test"})
 	require.NoError(t, err)
 	require.Nil(t, selected)
 	sinkConfig := config.GetDefaultReplicaConfig().Sink
 	sinkConfig.DispatchRules = []*config.DispatchRule{{Matcher: []string{"*.*"}, PartitionRule: "index-value"}}
-	assembly.router, err = eventrouter.NewEventRouter(sinkConfig, true, "test", false, false)
+	input.router, err = eventrouter.NewEventRouter(sinkConfig, true, "test", false, false)
 	require.NoError(t, err)
-	selected, err = assembly.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
+	selected, err = input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
 	require.NoError(t, err)
 	require.Nil(t, selected)
 }

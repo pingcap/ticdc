@@ -29,9 +29,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 )
@@ -54,20 +56,33 @@ type storageInput struct {
 	groupEnd bool
 	sort     bool
 }
+type storageTableKey struct {
+	schema    string
+	table     string
+	partition int64
+}
+
 type storageReader struct {
-	storage        storeapi.Storage
-	memory         *memoryUsage
-	dateSeparator  config.DateSeparator
-	fileExtension  string
-	fileIndexWidth int
-	checkpoint     uint64
-	schemas        map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
-	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks  map[string]uint64
-	mu             sync.Mutex
-	records        []*ack
-	inputs         []storageInput
-	scanned        bool
+	tables          map[cloudstorage.SchemaPathKey]*common.TableInfo
+	tableIDs        map[storageTableKey]int64
+	tableWatermarks map[int64]uint64
+	nextTableID     int64
+	group           *readGroup
+	groupKey        cloudstorage.DMLPathKey
+	fileOrdered     bool
+	storage         storeapi.Storage
+	memory          *memoryUsage
+	dateSeparator   config.DateSeparator
+	fileExtension   string
+	fileIndexWidth  int
+	checkpoint      uint64
+	schemas         map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
+	fileIndices     map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks   map[string]uint64
+	mu              sync.Mutex
+	records         []*ack
+	inputs          []storageInput
+	scanned         bool
 }
 
 func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
@@ -98,6 +113,8 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks: make(map[string]uint64),
+		tables:        make(map[cloudstorage.SchemaPathKey]*common.TableInfo),
+		tableIDs:      make(map[storageTableKey]int64), tableWatermarks: make(map[int64]uint64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
@@ -310,7 +327,15 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			c.mu.Lock()
 			c.records = append(c.records, record)
 			c.mu.Unlock()
-			return &readData{storage: &input, schema: schema, record: record}, nil
+			table := c.tables[key.SchemaPathKey]
+			if table == nil {
+				table = schema.TableInfo()
+				table.UpdateTS = schema.TableVersion
+				c.tables[key.SchemaPathKey] = table
+			}
+			ddl := schema.DDLEvent()
+			ddl.TableInfo = table
+			return &readData{table: table, ddl: ddl, record: record, retainedBytes: 256, ddlBoundary: &readBoundary{reached: true}}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
 			if !input.groupEnd {
@@ -318,9 +343,37 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			}
 			continue
 		}
-		if input.groupEnd {
-			return &readData{storage: &input, schema: schema}, nil
+		table := c.tables[key.SchemaPathKey]
+		if table == nil {
+			table = schema.TableInfo()
+			table.UpdateTS = schema.TableVersion
+			c.tables[key.SchemaPathKey] = table
 		}
+		idKey := storageTableKey{schema: key.Schema, table: key.Table, partition: key.PartitionNum}
+		tableID := c.tableIDs[idKey]
+		if tableID == 0 {
+			if len(c.tableIDs) >= maxRecords {
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
+			}
+			if err := c.memory.reserve(ctx, int64(len(key.Schema)+len(key.Table)+128)); err != nil {
+				return nil, err
+			}
+			c.nextTableID++
+			tableID = c.nextTableID
+			c.tableIDs[idKey] = tableID
+		}
+		if c.group == nil || c.groupKey != key {
+			order := inputOrder
+			if input.sort {
+				order = commitOrder
+			}
+			c.group = &readGroup{tableID: tableID, order: order, boundary: &readBoundary{reached: !input.sort}}
+			c.groupKey = key
+		}
+		if input.groupEnd {
+			return &readData{table: table, group: c.group, groupEnd: true}, nil
+		}
+		c.fileOrdered = !input.index.EnableTableAcrossNodes
 		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 		file, err := c.storage.Open(ctx, path, nil)
 		if err != nil {
@@ -355,8 +408,44 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		c.records = append(c.records, record)
 		c.mu.Unlock()
 		c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
-		return &readData{value: data, storage: &input, schema: schema, record: record}, nil
+		return &readData{format: rowFormat, value: data, table: table, group: c.group, record: record, retainedBytes: 256, dmlBoundary: c.group.boundary}, nil
 	}
+}
+
+func (c *storageReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
+	if err := context.Cause(ctx); err != nil {
+		return readProgress{}, err
+	}
+	data := feedback.data
+	if data == nil {
+		return readProgress{}, nil
+	}
+	if feedback.ddl != nil {
+		ddl := feedback.ddl
+		key := common.QuoteSchema(data.table.GetSchemaName(), data.table.GetTableName())
+		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], data.table.UpdateTS)
+		if ddl.Type == byte(timodel.ActionRenameTable) {
+			if len(ddl.BlockedTableNames) == 0 {
+				return readProgress{}, errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
+			}
+			old := ddl.BlockedTableNames[0]
+			oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
+			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], data.table.UpdateTS)
+		}
+	}
+	if feedback.dml != nil {
+		watermark := c.tableWatermarks[data.group.tableID]
+		if c.fileOrdered && feedback.dml.GetCommitTs() < watermark {
+			return readProgress{skip: true}, nil
+		}
+		c.tableWatermarks[data.group.tableID] = max(watermark, feedback.dml.GetCommitTs())
+	}
+	if data.groupEnd {
+		data.group.boundary.reached = true
+		c.group = nil
+		return readProgress{control: &readControl{tableID: data.group.tableID, watermark: c.tableWatermarks[data.group.tableID]}}, nil
+	}
+	return readProgress{}, nil
 }
 
 func (c *storageReader) Confirm(ctx context.Context) error {

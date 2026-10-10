@@ -40,14 +40,17 @@ type consumer struct {
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (*consumer, error) {
 	memory := &memoryUsage{completed: make(chan struct{}, 1)}
-	reader, err := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory)
+	reader, decoding, err := newReader(ctx, upstreamURI, consumerID, timezone, replicaConfig, memory)
 	if err != nil {
 		return nil, err
 	}
-	assembler, err := newAssembler(ctx, upstreamURI, timezone, replicaConfig, reader, memory)
+	assembler, err := newAssembler(decoding, replicaConfig, memory)
 	if err != nil {
 		if closeErr := reader.Close(); closeErr != nil {
 			log.Error("consumer reader close failed", zap.Error(closeErr))
+		}
+		if decoding.upstreamDB != nil {
+			_ = decoding.upstreamDB.Close()
 		}
 		return nil, err
 	}
