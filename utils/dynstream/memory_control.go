@@ -106,6 +106,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
+	appendToPendingQueue := func() {
+		path.pendingQueue.PushBack(event)
+		path.updatePendingSize(int64(event.eventSize))
+		as.totalPendingSize.Add(int64(event.eventSize))
+	}
 
 	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
 		if failpointAPITestLogged.CompareAndSwap(false, true) {
@@ -136,7 +141,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
+				appendToPendingQueue()
 				return true, true
 			}
 		}
@@ -148,17 +153,13 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
+				appendToPendingQueue()
 				failpoint.Return(true, true)
 			}
 		}
 	})
 
-	// Add the event to the pending queue.
-	path.pendingQueue.PushBack(event)
-	// Update the pending size.
-	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(int64(event.eventSize))
+	appendToPendingQueue()
 	return true, true
 }
 

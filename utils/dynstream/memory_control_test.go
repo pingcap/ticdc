@@ -218,6 +218,46 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.False(t, path1.areaMemStat.paused.Load())
 }
 
+func TestAreaMemStatAppendDropEventUpdatesPendingSize(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		maxPendingSize:   10,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	mc.addPathToArea(path, settings, make(chan Feedback[int, string, any], 1))
+
+	dropEvent := &mockEvent{id: 3, path: path.path}
+	handler := &mockHandler{dropEvent: dropEvent}
+
+	accepted, appended := path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 1, path: path.path},
+		eventSize: 15,
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+
+	accepted, appended = path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 2, path: path.path},
+		eventSize: 7,
+		eventType: EventType{Droppable: true},
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+	require.Equal(t, int64(22), path.pendingSize.Load())
+	require.Equal(t, int64(22), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, 2, path.pendingQueue.Length())
+
+	_, ok := path.popEvent()
+	require.True(t, ok)
+	event, ok := path.popEvent()
+	require.True(t, ok)
+	require.Same(t, dropEvent, event.event)
+	require.Equal(t, 7, event.eventSize)
+	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
+}
+
 func TestSetAreaSettings(t *testing.T) {
 	mc, path := setupTestComponents()
 	// Case 1: Set the initial settings.
