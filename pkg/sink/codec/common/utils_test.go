@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,18 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mysql
+package common
 
 import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/leakutil"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	// The event test helpers share one TiDB mock store for the whole test
-	// binary, so close it before the goroutine leak check runs.
-	leakutil.AddCleanup(commonEvent.CloseSharedEventTestStore)
-	leakutil.SetUpLeakTest(m)
+func TestNewLargeEvent4TestNeedAddedTablesIsolation(t *testing.T) {
+	ddlEvent, _, _, _ := NewLargeEvent4Test(t)
+	require.Len(t, ddlEvent.NeedAddedTables, 1)
+	original := ddlEvent.NeedAddedTables[0]
+	t.Cleanup(func() {
+		ddlEvent.NeedAddedTables[0] = original
+	})
+	ddlEvent.NeedAddedTables[0].TableID++
+
+	nextDDLEvent, _, _, _ := NewLargeEvent4Test(t)
+	require.Equal(t, []commonEvent.Table{original}, nextDDLEvent.NeedAddedTables)
 }

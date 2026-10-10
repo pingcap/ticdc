@@ -269,6 +269,7 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Nil(err)
 
 	helper := NewSQLTestHelper(s.T(), "foo", string(dataDDL))
+	defer helper.Close()
 
 	helper.MustExec(`SET sql_mode='';`)
 	helper.MustExec(`SET time_zone='UTC';`)

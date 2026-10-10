@@ -21,6 +21,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEventTestHelperDropsSchemaWithBacktick(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	helper.Tk().MustExec("CREATE DATABASE `a``b`")
+	helper.Close()
+
+	nextHelper := NewEventTestHelper(t)
+	defer nextHelper.Close()
+	require.Empty(t, nextHelper.Tk().MustQuery("SHOW DATABASES LIKE 'a`b'").Rows())
+}
+
 func TestIsSplitable(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
