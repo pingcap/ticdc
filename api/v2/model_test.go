@@ -13,6 +13,7 @@
 package v2
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
@@ -20,6 +21,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
+=======
+func TestSinkConfigDateSeparator(t *testing.T) {
+	t.Parallel()
+
+	var sinkConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date_separator":"DAY"}`), &sinkConfig))
+	require.Equal(t, config.DateSeparatorDay, util.GetOrZero(sinkConfig.DateSeparator))
+
+	err := json.Unmarshal([]byte(`{"date_separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
+
+func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
+	info := &ChangeFeedInfo{
+		ID:      "test",
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config: &ReplicaConfig{
+			Sink: &SinkConfig{
+				SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel"),
+				KafkaConfig: &KafkaConfig{
+					KafkaClientID:         util.AddressOf("visible-client-id"),
+					SASLPassword:          util.AddressOf("plain-password-sentinel"),
+					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+					SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+						AccessKey:       "glue-access-sentinel",
+						SecretAccessKey: "glue-secret-sentinel",
+						Token:           "glue-token-sentinel",
+					},
+				},
+				PulsarConfig: &PulsarConfig{
+					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
+					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
+					OAuth2:              &PulsarOAuth2{OAuth2PrivateKey: "pulsar-private-key-sentinel"},
+				},
+			},
+			Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret-sentinel")},
+		},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	masked, err := info.CloneWithMaskedSensitiveData()
+	require.NoError(t, err)
+	output, err := masked.Marshal()
+	require.NoError(t, err)
+	require.NotContains(t, output, "sentinel")
+	require.NotContains(t, output, "memory_quota")
+	require.Contains(t, output, "visible-client-id")
+	require.Nil(t, masked.Config.Sink.KafkaConfig.Key)
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+>>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078))
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.
 func TestReplicaConfigConversion(t *testing.T) {

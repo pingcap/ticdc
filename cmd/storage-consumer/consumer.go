@@ -59,6 +59,7 @@ type indexRange struct {
 
 type consumer struct {
 	replicationCfg  *config.ReplicaConfig
+	dateSeparator   config.DateSeparator
 	codecCfg        *common.Config
 	externalStorage storage.ExternalStorage
 	fileExtension   string
@@ -101,6 +102,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		log.Error("failed to validate replica config", zap.Error(err))
 		return nil, err
 	}
+	dateSeparator := putil.GetOrZero(replicaConfig.Sink.DateSeparator)
 
 	switch putil.GetOrZero(replicaConfig.Sink.Protocol) {
 	case config.ProtocolCsv.String():
@@ -146,6 +148,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	return &consumer{
 		replicationCfg:    replicaConfig,
+		dateSeparator:     dateSeparator,
 		codecCfg:          codecConfig,
 		externalStorage:   storage,
 		fileExtension:     extension,
@@ -211,7 +214,6 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
-	dateSeparator := putil.GetOrZero(c.replicationCfg.Sink.DateSeparator)
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			c.parseSchemaFilePath(ctx, path)
@@ -219,7 +221,7 @@ func (c *consumer) getNewFiles(
 		}
 		if strings.HasSuffix(path, ".index") {
 			var dmlkey cloudstorage.DMLPathKey
-			if err := dmlkey.ParseIndexFilePath(dateSeparator, path); err != nil {
+			if err := dmlkey.ParseIndexFilePath(c.dateSeparator, path); err != nil {
 				log.Debug("ignore handling unsupported dml index file", zap.String("path", path))
 				return nil
 			}
