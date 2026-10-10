@@ -259,8 +259,11 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-			return nil
+		if err = common.VerifyChecksum(event, d.upstreamTiDB, nil, nil); err != nil {
+			log.Panic("verify row checksum failed",
+				zap.String("schema", event.TableInfo.GetSchemaName()),
+				zap.String("table", event.TableInfo.GetTableName()),
+				zap.Uint64("commitTs", event.GetCommitTs()), zap.Error(err))
 		}
 	}
 

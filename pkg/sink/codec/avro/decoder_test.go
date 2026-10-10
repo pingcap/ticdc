@@ -20,12 +20,16 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +132,64 @@ func TestDecodeIntegerPrimaryKeyWithUpstreamChecksum(t *testing.T) {
 	_, ok = event.GetNextRow()
 	require.False(t, ok)
 	t.Cleanup(event.PostFlush)
+}
+
+func TestDecodeTimestampChecksumUsesLocalTimeZone(t *testing.T) {
+	local, err := util.GetLocalTimezone()
+	require.NoError(t, err)
+	const timestamp = "2020-02-20 02:20:20.123456"
+	key := map[string]any{"id": int64(1)}
+	value := map[string]any{"id": int64(1), "ts": timestamp, tidbCommitTs: int64(100), tidbOp: insertOperation}
+	schema := map[string]any{
+		"namespace": "default.test", "name": "t",
+		"fields": []any{
+			map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+			map[string]any{"name": "ts", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "TIMESTAMP"}}},
+		},
+	}
+	source, err := assembleEvent(key, value, schema, false, true)
+	require.NoError(t, err)
+	t.Cleanup(source.PostFlush)
+	data := rowcodec.RowData{}
+	for i, column := range source.TableInfo.GetColumns() {
+		datum := source.Rows.GetRow(0).GetDatum(i, &column.FieldType)
+		data.Cols = append(data.Cols, rowcodec.ColData{ColumnInfo: column, Datum: &datum})
+	}
+	checksum, err := data.Checksum(local)
+	require.NoError(t, err)
+	value[tidbRowLevelChecksum] = strconv.FormatUint(uint64(checksum), 10)
+
+	// Avro carries no timestamp location, so the legacy consumer uses local
+	// time even when a different time zone is configured for the decoder.
+	_, offset := time.Date(2020, 2, 20, 2, 20, 20, 0, local).Zone()
+	cfg := common.NewConfig(config.ProtocolAvro)
+	cfg.TimeZone = time.FixedZone("consumer", offset+3600)
+	dec := &decoder{config: cfg}
+	event := dec.assembleDMLEventFromDecoded(key, value, schema, false, true, 0)
+	require.NotNil(t, event)
+	t.Cleanup(event.PostFlush)
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, checksum, row.Checksum.Current)
+	require.Equal(t, timestamp, row.Row.GetTime(1).String())
+}
+
+func TestChecksumFailureStopsDecode(t *testing.T) {
+	dec := &decoder{}
+	require.PanicsWithValue(t, "verify row checksum failed", func() {
+		dec.assembleDMLEventFromDecoded(
+			map[string]any{"id": int64(1)},
+			map[string]any{
+				"id": int64(1), tidbCommitTs: int64(100), tidbOp: insertOperation,
+				tidbRowLevelChecksum: "1",
+			},
+			map[string]any{
+				"namespace": "default.test", "name": "t",
+				"fields": []any{
+					map[string]any{"name": "id", "type": map[string]any{"connect.parameters": map[string]any{"tidb_type": "INT"}}},
+				},
+			}, false, true, 0)
+	})
 }
 
 // TestDecodedTableInfoWithoutKeyColumnsHasNoRowLocator checks the empty key

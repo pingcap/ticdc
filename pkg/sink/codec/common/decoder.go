@@ -16,8 +16,11 @@ package common
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 // DMLMessageData keeps the original encoded input needed to restore a DML
@@ -157,8 +160,17 @@ func (m *DMLMessage) GetCommitTs() uint64 {
 	return m.commitTs
 }
 
+// ToDMLEvent materializes a decoded DML message. Once a message exists, decoding
+// must produce an event or stop with an error; nil does not mean a skipped row.
 func (m *DMLMessage) ToDMLEvent() *commonEvent.DMLEvent {
-	return m.toDMLEvent()
+	event := m.toDMLEvent()
+	if event == nil {
+		log.Panic("DML message decoded to nil event",
+			zap.String("schema", m.Schema), zap.String("table", m.Table),
+			zap.Int64("tableID", m.TableID), zap.Uint64("commitTs", m.commitTs),
+			zap.Error(errors.ErrDecodeFailed.GenWithStackByArgs("decoder returned a nil DML event")))
+	}
+	return event
 }
 
 // AttachDMLMessageData attaches the original input required to restore this
