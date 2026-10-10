@@ -870,7 +870,7 @@ func (s *EventTestHelper) dropUserSchemas() {
 		if isSystemSchema(name) {
 			continue
 		}
-		s.tk.MustExec("drop database if exists `" + name + "`")
+		s.tk.MustExec("drop database if exists " + common.QuoteName(name))
 	}
 	s.tk.MustExec("create database if not exists test")
 }
