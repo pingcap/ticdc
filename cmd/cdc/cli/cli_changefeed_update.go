@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
@@ -112,7 +113,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if len(changelog) == 0 {
+	// A supplied URI can match the masked GET result while changing its real password.
+	if len(changelog) == 0 && newInfo.SinkURI == "" {
 		cmd.Printf("changefeed config is the same with the old one, do nothing\n")
 		return nil
 	}
@@ -169,7 +171,15 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+<<<<<<< HEAD
 	infoStr, err := json.Marshal(info)
+=======
+	maskedInfo, err := info.CloneWithMaskedSensitiveData()
+	if err != nil {
+		return err
+	}
+	infoStr, err := maskedInfo.Marshal()
+>>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 	if err != nil {
 		return err
 	}
@@ -201,10 +211,14 @@ func (o *updateChangefeedOptions) applyChanges(oldInfo *v2.ChangeFeedInfo,
 			newInfo.SinkURI = o.commonChangefeedOptions.sinkURI
 		case "config":
 			cfg := newInfo.Config.ToInternalReplicaConfig()
-			if err = o.commonChangefeedOptions.strictDecodeConfig("TiCDC changefeed", cfg); err != nil {
+			var metaData toml.MetaData
+			if metaData, err = o.commonChangefeedOptions.strictDecodeConfigWithMeta("TiCDC changefeed", cfg); err != nil {
 				log.Error("decode config file error", zap.Error(err))
+				return
 			}
-			newInfo.Config = v2.ToAPIReplicaConfig(cfg)
+			updatedConfig := v2.ToAPIReplicaConfig(cfg)
+			preserveOmittedCredentials(newInfo.Config, updatedConfig, metaData)
+			newInfo.Config = updatedConfig
 		case "schema-registry":
 			newInfo.Config.Sink.SchemaRegistry = putil.AddressOf(o.commonChangefeedOptions.schemaRegistry)
 		case "sort-engine":
@@ -226,6 +240,42 @@ func (o *updateChangefeedOptions) applyChanges(oldInfo *v2.ChangeFeedInfo,
 		return nil, err
 	}
 	return newInfo, nil
+}
+
+// Internal string fields and default storage values otherwise turn omitted API
+// credentials into empty replacements. Only explicit TOML values may replace them.
+func preserveOmittedCredentials(old, updated *v2.ReplicaConfig, metaData toml.MetaData) {
+	keepOmitted := func(previous *string, field **string, path ...string) {
+		if previous == nil && !metaData.IsDefined(path...) {
+			*field = nil
+		}
+	}
+	if old.Consistent != nil && updated.Consistent != nil {
+		keepOmitted(old.Consistent.Storage, &updated.Consistent.Storage, "consistent", "storage")
+	}
+	if old.Sink == nil || updated.Sink == nil {
+		return
+	}
+	if before, after := old.Sink.KafkaConfig, updated.Sink.KafkaConfig; before != nil && after != nil {
+		if before.LargeMessageHandle != nil && after.LargeMessageHandle != nil {
+			keepOmitted(before.LargeMessageHandle.ClaimCheckStorageURI, &after.LargeMessageHandle.ClaimCheckStorageURI,
+				"sink", "kafka-config", "large-message-handle", "claim-check-storage-uri")
+		}
+		if before.GlueSchemaRegistryConfig != nil && after.GlueSchemaRegistryConfig != nil {
+			keepOmitted(before.GlueSchemaRegistryConfig.AccessKey, &after.GlueSchemaRegistryConfig.AccessKey,
+				"sink", "kafka-config", "glue-schema-registry-config", "access-key")
+			keepOmitted(before.GlueSchemaRegistryConfig.SecretAccessKey, &after.GlueSchemaRegistryConfig.SecretAccessKey,
+				"sink", "kafka-config", "glue-schema-registry-config", "secret-access-key")
+			keepOmitted(before.GlueSchemaRegistryConfig.Token, &after.GlueSchemaRegistryConfig.Token,
+				"sink", "kafka-config", "glue-schema-registry-config", "token")
+		}
+	}
+	if before, after := old.Sink.PulsarConfig, updated.Sink.PulsarConfig; before != nil && after != nil && before.OAuth2 != nil && after.OAuth2 != nil {
+		keepOmitted(before.OAuth2.OAuth2PrivateKey, &after.OAuth2.OAuth2PrivateKey,
+			"sink", "pulsar-config", "oauth2", "oauth2-private-key")
+		keepOmitted(before.OAuth2.OAuth2IssuerURL, &after.OAuth2.OAuth2IssuerURL,
+			"sink", "pulsar-config", "oauth2", "oauth2-issuer-url")
+	}
 }
 
 // newCmdPauseChangefeed creates the `cli changefeed update` command.

@@ -21,7 +21,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+<<<<<<< HEAD
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+=======
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+>>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
 )
@@ -35,6 +40,17 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 	}
 	resp := make([]EtcdData, 0, len(kvs))
 	for _, pair := range kvs {
+<<<<<<< HEAD
+=======
+		value := string(pair.Value)
+		if strings.Contains(string(pair.Key), "/changefeed/info/") {
+			value, err = config.MaskChangefeedInfo(pair.Value)
+			if err != nil {
+				_ = c.Error(err)
+				return
+			}
+		}
+>>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 		resp = append(resp, EtcdData{
 			Key:   string(pair.Key),
 			Value: string(pair.Value),
@@ -47,7 +63,7 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 	var resolveLockReq ResolveLockReq
 	if err := c.BindJSON(&resolveLockReq); err != nil {
-		_ = c.Error(cerror.ErrAPIInvalidParam.Wrap(err))
+		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
 
@@ -77,7 +93,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	upstreamConfig := &UpstreamConfig{}
 	if err := c.BindJSON(upstreamConfig); err != nil {
-		_ = c.Error(cerror.WrapError(cerror.ErrAPIInvalidParam, err))
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
 	pdClient := h.server.GetPdClient()
@@ -91,7 +107,7 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 		h.server.GetEtcdClient().GetGCServiceID(),
 	)
 	if err != nil {
-		_ = c.Error(cerror.WrapError(cerror.ErrInternalServerError, err))
+		_ = c.Error(errors.WrapError(errors.ErrInternalServerError, err))
 	}
 	c.JSON(http.StatusOK, &EmptyResponse{})
 }

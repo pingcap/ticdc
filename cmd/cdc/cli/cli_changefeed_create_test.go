@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -164,8 +165,19 @@ func TestChangefeedCreateCli(t *testing.T) {
 	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{
 		IneligibleTables: []v2.TableName{{}},
 	}, nil)
-	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{}, nil)
+	info := &v2.ChangeFeedInfo{
+		SinkURI: "kafka://user:uri-secret-sentinel@host/topic",
+		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
+			SASLPassword: new("password-sentinel"),
+		}}},
+	}
+	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(info, nil)
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
+	require.NotContains(t, output.String(), "sentinel")
+	require.Contains(t, output.String(), "******")
+	require.Equal(t, "password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
 
 	cmd = newCmdCreateChangefeed(f)
 	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
