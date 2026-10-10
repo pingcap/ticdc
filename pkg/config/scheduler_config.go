@@ -60,10 +60,10 @@ type ChangefeedSchedulerConfig struct {
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
 	// Default value is 20
 	BalanceScoreThreshold *int `toml:"balance-score-threshold" json:"balance-score-threshold,omitempty"`
-	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
+	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means more frequent balancing.
 	// MinTrafficPercentage must be less then 1. Default value is 0.8
 	MinTrafficPercentage *float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage,omitempty"`
-	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
+	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Smaller value means more frequent balancing.
 	// MaxTrafficPercentage must be greater then 1. Default value is 1.25
 	MaxTrafficPercentage *float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage,omitempty"`
 }

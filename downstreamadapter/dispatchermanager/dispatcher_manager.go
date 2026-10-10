@@ -924,7 +924,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
-
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 

@@ -51,6 +51,94 @@ func TestCaptureWriteLeaseGrantsRemoteNode(t *testing.T) {
 	require.Equal(t, uint64(12), requireWriteLeaseResponse(t, messages[0]).TargetNodeEpoch)
 }
 
+func TestCaptureWriteLeaseSharesFreshNodeResourceUsage(t *testing.T) {
+	now := time.Unix(100, 0)
+	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
+	controller.now = func() time.Time { return now }
+	enableP2PForNodes(controller, node.ID("capture-1"), node.ID("capture-2"))
+
+	capture2Heartbeat := newWriteLeaseHeartbeat(21, 1)
+	capture2Heartbeat.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+		EventStoreWriteBytes: 1000,
+	}
+	controller.handleHeartbeat(node.ID("capture-2"), capture2Heartbeat, nil)
+
+	capture1Heartbeat := newWriteLeaseHeartbeat(11, 1)
+	capture1Heartbeat.NodeResourceUsage = &heartbeatpb.NodeResourceUsage{
+		EventStoreWriteBytes: 100,
+	}
+	messages := controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Len(t, messages, 1)
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
+		requireWriteLeaseResponse(t, messages[0]).NodeResourceUsageStatus)
+
+	// Each node's rate is calculated from its own heartbeat interval.
+	now = now.Add(time.Second)
+	capture2Heartbeat.WriteLeaseRequestSeq = 2
+	capture2Heartbeat.NodeResourceUsage.EventStoreWriteBytes = 3000
+	controller.handleHeartbeat(node.ID("capture-2"), capture2Heartbeat, nil)
+	capture1Heartbeat.WriteLeaseRequestSeq = 2
+	capture1Heartbeat.NodeResourceUsage.EventStoreWriteBytes = 200
+	messages = controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Len(t, messages, 1)
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_AVAILABLE,
+		requireWriteLeaseResponse(t, messages[0]).NodeResourceUsageStatus)
+	require.Equal(t, []*heartbeatpb.NodeResourceUsage{
+		{NodeId: "capture-1", EventStoreWriteBytesPerSecond: 100},
+		{NodeId: "capture-2", EventStoreWriteBytesPerSecond: 2000},
+	}, requireWriteLeaseResponse(t, messages[0]).NodeResourceUsages)
+
+	// Only capture-1 reports again. A response reuses capture-2's last valid
+	// rate instead of interpreting the unchanged snapshot as zero traffic.
+	now = now.Add(time.Second)
+	capture1Heartbeat.WriteLeaseRequestSeq = 3
+	capture1Heartbeat.NodeResourceUsage.EventStoreWriteBytes = 300
+	messages = controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Equal(t, []*heartbeatpb.NodeResourceUsage{
+		{NodeId: "capture-1", EventStoreWriteBytesPerSecond: 100},
+		{NodeId: "capture-2", EventStoreWriteBytesPerSecond: 2000},
+	}, requireWriteLeaseResponse(t, messages[0]).NodeResourceUsages)
+
+	// A fresh report must not keep another node's stale sample in the cluster
+	// snapshot. All nodes support reporting, so this is an interruption rather
+	// than a rolling-upgrade fallback.
+	now = now.Add(nodeResourceUsageStaleThreshold + time.Nanosecond)
+	capture1Heartbeat.WriteLeaseRequestSeq = 4
+	capture1Heartbeat.NodeResourceUsage.EventStoreWriteBytes = 400
+	messages = controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Len(t, messages, 1)
+	response := requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
+		response.NodeResourceUsageStatus)
+	require.Empty(t, response.NodeResourceUsages)
+
+	// Missing usage means the sender no longer supports or cannot provide the
+	// counter, so its previous value is removed immediately.
+	capture1Heartbeat.WriteLeaseRequestSeq = 5
+	capture1Heartbeat.NodeResourceUsage = nil
+	messages = controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Len(t, messages, 1)
+	response = requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_INCOMPLETE,
+		response.NodeResourceUsageStatus)
+	require.Empty(t, response.NodeResourceUsages)
+
+	// A node that does not declare the resource protocol is a rolling-upgrade
+	// compatibility case, distinct from interrupted telemetry.
+	capture1Heartbeat.WriteLeaseRequestSeq = 6
+	capture1Heartbeat.NodeResourceUsageProtocolVersion = heartbeatpb.LegacyNodeResourceUsageProtocolVersion
+	messages = controller.handleHeartbeat(node.ID("capture-1"), capture1Heartbeat, nil)
+	require.Len(t, messages, 1)
+	response = requireWriteLeaseResponse(t, messages[0])
+	require.Equal(t,
+		heartbeatpb.NodeResourceUsageStatus_UNSUPPORTED,
+		response.NodeResourceUsageStatus)
+}
+
 func TestCaptureWriteLeaseRequiresRemoteWitnessForCoordinatorNode(t *testing.T) {
 	now := time.Unix(100, 0)
 	controller := newCaptureWriteLeaseController(10, node.ID("coordinator"))
@@ -246,10 +334,11 @@ func TestCaptureWriteLeaseRejectsInvalidHeartbeatAndLateWitness(t *testing.T) {
 
 func newWriteLeaseHeartbeat(nodeEpoch, requestSeq uint64) *heartbeatpb.NodeHeartbeat {
 	return &heartbeatpb.NodeHeartbeat{
-		Liveness:                  heartbeatpb.NodeLiveness_ALIVE,
-		NodeEpoch:                 nodeEpoch,
-		WriteLeaseRequestSeq:      requestSeq,
-		WriteLeaseProtocolVersion: heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		Liveness:                         heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                        nodeEpoch,
+		WriteLeaseRequestSeq:             requestSeq,
+		WriteLeaseProtocolVersion:        heartbeatpb.CurrentWriteLeaseProtocolVersion,
+		NodeResourceUsageProtocolVersion: heartbeatpb.CurrentNodeResourceUsageProtocolVersion,
 	}
 }
 
