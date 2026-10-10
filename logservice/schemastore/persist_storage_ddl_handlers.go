@@ -870,6 +870,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			oldTableName = queryInfo.oldTableName
 		}
 		if queryInfo.oldSchemaName != "" {
+<<<<<<< HEAD
 			oldSchemaName = queryInfo.oldSchemaName
 			queryProvidedOldSchema = true
 			oldSchemaSource = "query"
@@ -881,6 +882,37 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
 			oldSchemaName = extraName
 			oldSchemaSource = "extra_schema_id"
+=======
+			queryOldSchemaID, _ := findSchemaIDByName(args.databaseMap, queryInfo.oldSchemaName)
+			if oldSchemaID != 0 && oldSchemaID != queryOldSchemaID && !filter.IsSysSchema(queryInfo.oldSchemaName) {
+				log.Warn("rename table old schema is inconsistent between job args and query",
+					zap.Int64("jobID", args.job.ID),
+					zap.Int64("argsOldSchemaID", oldSchemaID),
+					zap.Int64("queryOldSchemaID", queryOldSchemaID),
+					zap.String("queryOldSchemaName", queryInfo.oldSchemaName),
+					zap.String("query", event.Query))
+				oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+			} else {
+				// System schemas are absent from databaseMap. Keep their ID from job args.
+				if queryOldSchemaID != 0 {
+					oldSchemaID = queryOldSchemaID
+				}
+				oldSchemaName = queryInfo.oldSchemaName
+				oldSchemaSource = "query"
+			}
+		}
+	}
+
+	// Complete a missing old schema ID or name through databaseMap.
+	if oldSchemaID == 0 && oldSchemaName != "" {
+		oldSchemaID, _ = findSchemaIDByName(args.databaseMap, oldSchemaName)
+	}
+	if queryInfo.oldSchemaName == "" && !filter.IsSysSchema(oldSchemaName) {
+		if oldSchemaID != 0 {
+			// SQL does not provide the old schema spelling. Use databaseMap to replace
+			// the lower-case InvolvingSchemaInfo name with its original capitalization.
+			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+>>>>>>> 288838fe9 (schemastore: fix panic on table renames from system schemas (#6480))
 		}
 	}
 	if oldSchemaName != "" && oldTableName != "" {
@@ -1517,6 +1549,11 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 }
 
 func updateSchemaMetadataForRenameTable(args updateSchemaMetadataFuncArgs) {
+	if filter.IsSysSchema(args.event.ExtraSchemaName) {
+		// The old table was filtered out. Register its metadata in the new schema.
+		updateSchemaMetadataForNewTableDDL(args)
+		return
+	}
 	tableID := args.event.TableID
 	if args.event.ExtraSchemaID != args.event.SchemaID {
 		args.tableMap[tableID].SchemaID = args.event.SchemaID
@@ -1582,6 +1619,16 @@ func updateSchemaMetadataForRenameTables(args updateSchemaMetadataFuncArgs) {
 	}
 	for i, info := range args.event.MultipleTableInfos {
 		if info.ID == InvalidTableID {
+			continue
+		}
+		if filter.IsSysSchema(args.event.ExtraSchemaNames[i]) {
+			newTableArgs := args
+			newTableArgs.event = &PersistedDDLEvent{
+				SchemaID:  args.event.SchemaIDs[i],
+				TableID:   info.ID,
+				TableInfo: info,
+			}
+			updateSchemaMetadataForNewTableDDL(newTableArgs)
 			continue
 		}
 		if args.event.ExtraSchemaIDs[i] != args.event.SchemaIDs[i] {
