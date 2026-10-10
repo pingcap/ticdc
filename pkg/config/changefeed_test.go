@@ -82,6 +82,9 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{
+		OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"},
+	}
 	cfg.Sink.KafkaConfig = &KafkaConfig{
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
@@ -116,6 +119,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 		"glue-access-sentinel",
 		"glue-secret-sentinel",
 		"glue-token-sentinel",
+		"pulsar-issuer-secret-sentinel",
 	} {
 		require.NotContains(t, output, secret)
 	}

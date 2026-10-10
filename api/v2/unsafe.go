@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
 )
@@ -39,11 +39,10 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 	for _, pair := range kvs {
 		value := string(pair.Value)
 		if strings.Contains(string(pair.Key), "/changefeed/info/") {
-			info := new(config.ChangeFeedInfo)
-			if err := info.Unmarshal(pair.Value); err != nil {
-				value = "<redacted>"
-			} else {
-				value = info.String()
+			value, err = config.MaskChangefeedInfo(pair.Value)
+			if err != nil {
+				_ = c.Error(err)
+				return
 			}
 		}
 		resp = append(resp, EtcdData{
@@ -58,7 +57,7 @@ func (h *OpenAPIV2) CDCMetaData(c *gin.Context) {
 func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 	var resolveLockReq ResolveLockReq
 	if err := c.BindJSON(&resolveLockReq); err != nil {
-		_ = c.Error(cerror.ErrAPIInvalidParam.Wrap(err))
+		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
 
@@ -88,7 +87,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	upstreamConfig := &UpstreamConfig{}
 	if err := c.BindJSON(upstreamConfig); err != nil {
-		_ = c.Error(cerror.WrapError(cerror.ErrAPIInvalidParam, err))
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
 	pdClient := h.server.GetPdClient()
@@ -102,7 +101,7 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 		h.server.GetEtcdClient().GetGCServiceID(),
 	)
 	if err != nil {
-		_ = c.Error(cerror.WrapError(cerror.ErrInternalServerError, err))
+		_ = c.Error(errors.WrapError(errors.ErrInternalServerError, err))
 	}
 	c.JSON(http.StatusOK, &EmptyResponse{})
 }
