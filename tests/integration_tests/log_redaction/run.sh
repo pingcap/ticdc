@@ -154,12 +154,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ OFF mode (BlackHole): Raw data visible in DMLEvent logs"
-<<<<<<< HEAD
-=======
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_blackhole"
 	check_config_credential_redaction off blackhole-off-test
 	stop_cdc_server_guards
->>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -219,12 +216,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ MARKER mode (BlackHole): Data wrapped with ‹› markers"
-<<<<<<< HEAD
-=======
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_blackhole"
 	check_config_credential_redaction marker blackhole-marker-test
 	stop_cdc_server_guards
->>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -289,12 +283,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ ON mode (BlackHole): All sensitive data fully redacted to '?'"
-<<<<<<< HEAD
-=======
 	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_blackhole"
 	check_config_credential_redaction on blackhole-on-test
 	stop_cdc_server_guards
->>>>>>> ce44c4dde (api,cli: keep credential redaction at display boundaries (#6464))
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
