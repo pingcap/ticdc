@@ -27,7 +27,8 @@ import (
 // Protocol cursors and schema updates remain with the assembler. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
-	inputs    []chan *decodeTask
+	input     chan *decodeTask
+	workers   int
 	memory    *memoryUsage
 	completed chan<- struct{}
 }
@@ -44,65 +45,80 @@ type decodeTask struct {
 }
 
 func newDecoderGroup(memory *memoryUsage, completed chan<- struct{}) *decoderGroup {
-	inputs := make([]chan *decodeTask, runtime.GOMAXPROCS(0))
-	for i := range inputs {
-		inputs[i] = make(chan *decodeTask, 64)
-	}
+	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
-		inputs:    inputs,
+		input:     make(chan *decodeTask, workers*64),
+		workers:   workers,
 		memory:    memory,
 		completed: completed,
 	}
 }
 
 func (g *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	task.record.retainDecode()
-	// A table keeps conversion order as well as write order. Different tables
-	// share CPU workers, independently of their upstream partition placement.
-	index := uint64(task.message.TableID) % uint64(len(g.inputs))
+	// Conversion can finish out of order. The assembler joins results in table
+	// order before allowing controls or writes to pass them.
 	select {
-	case g.inputs[index] <- task:
+	case g.input <- task:
+		return nil
+	default:
+	}
+	select {
+	case g.input <- task:
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
 }
 
-func (g *decoderGroup) decode(ctx context.Context, input <-chan *decodeTask) error {
+func (g *decoderGroup) decode(ctx context.Context) error {
 	for {
+		var task *decodeTask
 		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case task := <-input:
-			if err := context.Cause(ctx); err != nil {
-				return err
-			}
-			dml := task.message.ToDMLEvent()
-			if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
-				return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
-			}
-			if task.table != nil {
-				dml.PhysicalTableID = task.tableID
-				if dml.TableInfo != task.table {
-					dml.TableInfo.UpdateTS = task.table.UpdateTS
-				}
-			}
-			if err := g.memory.retainSchema(ctx, dml.TableInfo); err != nil {
-				return err
-			}
-			bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
-			if err := g.memory.reserve(ctx, bytes); err != nil {
-				return err
-			}
-			dml.AddPostFlushFunc(func() { g.memory.releaseSchema(dml.TableInfo) })
-			task.dml, task.bytes = dml, bytes
-			g.memory.decoded(task.record, task.retainedBytes)
-			task.message, task.record, task.table = nil, nil, nil
-			close(task.done)
+		case task = <-g.input:
+		default:
+			// Buffered work only takes the input-channel lock. A blocking
+			// receive also listens for cancellation when the queue is idle.
 			select {
-			case g.completed <- struct{}{}:
-			default:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case task = <-g.input:
 			}
+		}
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		dml := task.message.ToDMLEvent()
+		if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
+			return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
+		}
+		if task.table != nil {
+			dml.PhysicalTableID = task.tableID
+			if dml.TableInfo.UpdateTS != task.table.UpdateTS {
+				// A CSV column selection may share this metadata with other
+				// conversions. Keep the captured schema immutable.
+				dml.TableInfo = dml.TableInfo.CloneWithRouting(dml.TableInfo.GetTargetSchemaName(), dml.TableInfo.GetTargetTableName())
+				dml.TableInfo.UpdateTS = task.table.UpdateTS
+			}
+		}
+		if err := g.memory.retainSchema(ctx, dml.TableInfo); err != nil {
+			return err
+		}
+		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
+		if err := g.memory.reserve(ctx, bytes); err != nil {
+			return err
+		}
+		dml.AddPostFlushFunc(func() { g.memory.releaseSchema(dml.TableInfo) })
+		task.dml, task.bytes = dml, bytes
+		g.memory.decoded(task.record, task.retainedBytes)
+		task.message, task.record, task.table = nil, nil, nil
+		close(task.done)
+		select {
+		case g.completed <- struct{}{}:
+		default:
 		}
 	}
 }

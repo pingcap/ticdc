@@ -421,6 +421,12 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 				schema.table = table
 			}
 			// Reuse the cached table instead of reconstructing its columns again.
+			scope := event.InfluenceTypeNormal
+			if schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView {
+				scope = event.InfluenceTypeAll
+			} else if schema.file.Table == "" {
+				scope = event.InfluenceTypeDB
+			}
 			ddl := &event.DDLEvent{
 				TableInfo:     table,
 				FinishedTs:    schema.file.TableVersion,
@@ -428,7 +434,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 				Query:         schema.file.Query,
 				SchemaName:    schema.file.Schema,
 				TableName:     schema.file.Table,
-				BlockedTables: &event.InfluencedTables{InfluenceType: event.InfluenceTypeAll},
+				BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 			}
 			return &readData{
 				table:         table,

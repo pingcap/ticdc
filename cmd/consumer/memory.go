@@ -29,6 +29,7 @@ type memoryUsage struct {
 	bytes         atomic.Int64
 	received      atomic.Int64
 	confirmed     atomic.Int64
+	waiters       atomic.Int64
 	externalBytes func() int64
 	mu            sync.Mutex
 	changed       chan struct{}
@@ -172,6 +173,16 @@ func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
 // Wait before starting another independent input. The current input and any
 // unfinished ordering window must be able to finish even if they exceed the budget.
 func (m *memoryUsage) wait(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if m.used() < maxMemoryBytes || m.received.Load() == m.confirmed.Load() {
+		return nil
+	}
+	// Register before checking the budget under the lock, so a concurrent
+	// release either makes that check pass or wakes the registered waiter.
+	m.waiters.Inc()
+	defer m.waiters.Dec()
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -198,8 +209,11 @@ func (m *memoryUsage) release(bytes int64) {
 	if bytes == 0 {
 		return
 	}
-	m.mu.Lock()
 	m.bytes.Add(-bytes)
+	if m.waiters.Load() == 0 {
+		return
+	}
+	m.mu.Lock()
 	if m.changed != nil {
 		close(m.changed)
 		m.changed = nil

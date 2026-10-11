@@ -118,9 +118,9 @@ function run() {
 	check_table_exists "event_filter.t_rename3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_rename5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql_file $CUR/data/test_rename.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql_file $CUR/data/test_create.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE event_filter.t_create (id INT PRIMARY KEY, val INT);" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_create" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql_file $CUR/data/test_create.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "create table event_filter.finish_mark(id int primary key);" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.finish_mark" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 

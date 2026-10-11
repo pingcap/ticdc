@@ -66,6 +66,8 @@ type kafkaReader struct {
 	protocol              config.Protocol
 	ddlCopies             map[uint64]map[int32][]*ack
 	controls              []*readControl
+	watermark             uint64
+	hasWatermark          bool
 	deliveredWatermark    uint64
 	hasDeliveredWatermark bool
 	client                *kgo.Client
@@ -74,6 +76,7 @@ type kafkaReader struct {
 	confirmable           chan<- struct{}
 	partitions            map[int32]*kafkaPartition
 	readSequence          uint64
+	pausedPartitions      int
 	boundary              *readBoundary
 	boundaryDDL           uint64
 }
@@ -260,11 +263,13 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 
 func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
 	var result readProgress
+	progressChanged := feedback.hasWatermark
 	if data := feedback.data; data != nil {
 		partition, ok := c.partitions[data.stream]
 		if !ok {
 			return result, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
 		}
+		progressChanged = progressChanged || partition.needsMoreInput != feedback.needsMoreInput
 		partition.needsMoreInput = feedback.needsMoreInput
 		if ddl := feedback.ddl; ddl != nil {
 			if c.protocol == config.ProtocolCanalJSON && data.stream != 0 {
@@ -299,12 +304,17 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 			})
 		}
 	}
+	// Ordinary DML does not change progress. Recompute the minimum only when
+	// a partition advances or enters/leaves schema bootstrap.
+	if progressChanged || !c.hasDeliveredWatermark {
+		c.watermark, c.hasWatermark = c.globalWatermark()
+	}
 	if feedback.data != nil && !feedback.decoded {
 		return result, nil
 	}
 	c.advanceBoundary()
-	result.watermark, result.hasWatermark = c.globalWatermark()
-	if result.hasWatermark {
+	result.watermark, result.hasWatermark = c.watermark, c.hasWatermark
+	if result.hasWatermark && (!c.hasDeliveredWatermark || result.watermark > c.deliveredWatermark || len(c.controls) != 0 || len(c.ddlCopies) != 0) {
 		control := &readControl{watermark: result.watermark}
 		for commitTs, records := range c.ddlCopies {
 			if commitTs <= result.watermark {
@@ -574,19 +584,26 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 }
 
 func (c *kafkaReader) limitReads() {
+	boundaryPending := c.boundary != nil && !c.boundary.reached
+	underPressure := !boundaryPending && c.memory.used() >= maxMemoryBytes
+	if !boundaryPending && !underPressure && c.pausedPartitions == 0 {
+		return
+	}
 	slowest := uint64(math.MaxUint64)
-	for _, partition := range c.partitions {
-		if !partition.hasWatermark {
-			slowest = 0
-			break
+	if underPressure {
+		for _, partition := range c.partitions {
+			if !partition.hasWatermark {
+				slowest = 0
+				break
+			}
+			slowest = min(slowest, partition.watermark)
 		}
-		slowest = min(slowest, partition.watermark)
 	}
 	for partitionID, partition := range c.partitions {
 		// Fetch unfinished fixed boundaries first. Schema bootstrap messages
 		// remain readable even beyond that boundary.
-		pause := c.boundary != nil && !c.boundary.reached && partition.position >= partition.target && !partition.needsMoreInput
-		if (c.boundary == nil || c.boundary.reached) && c.memory.used() >= maxMemoryBytes {
+		pause := boundaryPending && partition.position >= partition.target && !partition.needsMoreInput
+		if underPressure {
 			// Retained controls still need slow partitions to advance before
 			// they can release memory. Do not fetch ahead of that progress.
 			pause = partition.hasWatermark && partition.watermark > slowest && !partition.needsMoreInput
@@ -597,8 +614,10 @@ func (c *kafkaReader) limitReads() {
 		partitions := map[string][]int32{c.topic: {partitionID}}
 		if pause {
 			c.client.PauseFetchPartitions(partitions)
+			c.pausedPartitions++
 		} else {
 			c.client.ResumeFetchPartitions(partitions)
+			c.pausedPartitions--
 		}
 		partition.paused = pause
 	}

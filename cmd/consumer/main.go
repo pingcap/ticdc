@@ -177,8 +177,8 @@ func start(ctx context.Context, options *options) (err error) {
 		})
 	}
 	results := make(chan *writeEvent, 64)
-	for _, input := range c.assembler.decoder.inputs {
-		c.wg.Go(func() { cancel(c.assembler.decoder.decode(ctx, input)) })
+	for range c.assembler.decoder.workers {
+		c.wg.Go(func() { cancel(c.assembler.decoder.decode(ctx)) })
 	}
 	c.wg.Go(func() { cancel(c.confirm(ctx)) })
 	c.wg.Go(func() { cancel(c.writer.executeDDL(ctx)) })

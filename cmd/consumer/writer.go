@@ -224,24 +224,29 @@ func (w *writer) flushDML(ctx context.Context) error {
 	if err := w.flushDDL(ctx); err != nil {
 		return err
 	}
+	active := make(map[int64]*writeEvent)
+	blocked := make(map[int64]bool)
+	tables := make(map[int64]*writeEvent)
+	pending := w.pendingDML
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		active := make(map[int64]*writeEvent)
+		clear(active)
+		clear(blocked)
+		clear(tables)
 		for _, batch := range w.inFlight {
 			for _, item := range batch.items {
 				active[item.dml.PhysicalTableID] = item
 			}
 		}
-		blocked := make(map[int64]bool)
 		var (
 			rows  int
 			bytes int64
+			end   int
 		)
-		items := make([]*writeEvent, 0, len(w.pendingDML))
-		tables := make(map[int64]*writeEvent)
-		for _, item := range w.pendingDML {
+		items := make([]*writeEvent, 0, min(batchRows, len(w.pendingDML)))
+		for index, item := range w.pendingDML {
 			id := item.dml.PhysicalTableID
 			if blocked[id] {
 				continue
@@ -266,6 +271,7 @@ func (w *writer) flushDML(ctx context.Context) error {
 			rows += int(item.dml.Len())
 			bytes += item.bytes
 			items = append(items, item)
+			end = index + 1
 			if rows >= batchRows || bytes >= batchBytes {
 				break
 			}
@@ -279,9 +285,10 @@ func (w *writer) flushDML(ctx context.Context) error {
 			}
 		}
 		batch := &writeBatch{
-			items: items,
-			bytes: bytes,
-			done:  make(chan struct{}),
+			items:  items,
+			events: make([]*event.DMLEvent, 0, len(items)),
+			bytes:  bytes,
+			done:   make(chan struct{}),
 		}
 		for _, item := range batch.items {
 			filtered, err := w.filterRows(ctx, item.dml, batch)
@@ -313,16 +320,22 @@ func (w *writer) flushDML(ctx context.Context) error {
 		w.inFlight = append(w.inFlight, batch)
 		w.inFlightBytes += batch.bytes
 		w.inFlightEvents += len(batch.items)
-		remaining, selected := w.pendingDML[:0], 0
-		for _, item := range w.pendingDML {
-			if selected < len(items) && item == items[selected] {
-				selected++
-				continue
+		if end == len(items) {
+			// The common case consumes a prefix without moving the backlog.
+			clear(w.pendingDML[:end])
+			w.pendingDML = w.pendingDML[end:]
+		} else {
+			remaining, selected := w.pendingDML[:0], 0
+			for _, item := range w.pendingDML {
+				if selected < len(items) && item == items[selected] {
+					selected++
+					continue
+				}
+				remaining = append(remaining, item)
 			}
-			remaining = append(remaining, item)
+			clear(w.pendingDML[len(remaining):])
+			w.pendingDML = remaining
 		}
-		clear(w.pendingDML[len(remaining):])
-		w.pendingDML = remaining
 		if len(batch.events) == 0 {
 			close(batch.done)
 		}
@@ -344,6 +357,9 @@ func (w *writer) flushDML(ctx context.Context) error {
 			w.downstream.AddDMLEvent(dml)
 		}
 		w.finishBatches()
+	}
+	if len(w.pendingDML) == 0 {
+		w.pendingDML = pending[:0]
 	}
 	return w.flushDDL(ctx)
 }

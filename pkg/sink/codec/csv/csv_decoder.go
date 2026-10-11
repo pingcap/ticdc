@@ -139,6 +139,7 @@ func filterTableInfoByColumnSelector(
 	}
 
 	tidbTableInfo := tableInfo.ToTiDBTableInfo().Clone()
+	tidbTableInfo.UpdateTS = tableInfo.UpdateTS
 	tidbTableInfo.Columns = selectedColumns
 	tidbTableInfo.Indices = filterSelectedIndices(tableInfo.GetIndices(), columns, selectedColumnOffsets)
 	tidbTableInfo.PKIsHandle = tableInfo.PKIsHandle() && hasSelectedPKIsHandleColumn(selectedColumns)

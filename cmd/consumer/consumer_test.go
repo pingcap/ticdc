@@ -72,8 +72,8 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 			defer cancel()
-			for _, input := range a.decoder.inputs {
-				wg.Go(func() { _ = a.decoder.decode(ctx, input) })
+			for range a.decoder.workers {
+				wg.Go(func() { _ = a.decoder.decode(ctx) })
 			}
 			// The topic limit can grow while this reader keeps the original URI.
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
@@ -194,8 +194,8 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	defer cancel()
 	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, config.GetDefaultReplicaConfig(), memory, nil)
 	require.NoError(t, err)
-	for _, input := range a.decoder.inputs {
-		wg.Go(func() { _ = a.decoder.decode(ctx, input) })
+	for range a.decoder.workers {
+		wg.Go(func() { _ = a.decoder.decode(ctx) })
 	}
 	r := &pulsarReader{memory: memory}
 	var records []*ack
@@ -289,72 +289,81 @@ func TestStorageReaderStreamsFileRanges(t *testing.T) {
 }
 
 func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
-	ctx := t.Context()
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.Protocol = new("csv")
-	memory := &memoryUsage{}
-	r, err := newStorageReader(ctx, &url.URL{Scheme: "file", Path: t.TempDir()}, replicaConfig, memory, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, r.Close()) })
-	a, err := newAssembler(ctx, &decodeConfig{
-		codec:  codecCommon.NewConfig(config.ProtocolCsv),
-		format: rowFormat,
-	}, replicaConfig, memory, nil)
-	require.NoError(t, err)
-	w := &writer{
-		memory:  memory,
-		ddlJobs: make(chan *writeEvent, 1),
-		ddlDone: make(chan struct{}, 1),
-	}
-	// Independent schema files can become visible in different scans. A later
-	// CREATE must not wait for rows fenced by an earlier CREATE on another table.
-	for _, schema := range []*cloudstorage.SchemaFile{
-		{
-			Schema:       "test",
-			Table:        "b",
-			TableVersion: 20,
-			Type:         byte(timodel.ActionCreateTable),
-			Query:        "CREATE TABLE test.b (id INT)",
-		},
-		{
-			Schema:       "test",
-			Table:        "a",
-			TableVersion: 10,
-			Type:         byte(timodel.ActionCreateTable),
-			Query:        "CREATE TABLE test.a (id INT)",
-		},
+	for ddlType, query := range map[timodel.ActionType]string{
+		timodel.ActionCreateTable:   "CREATE TABLE test.%s (id INT)",
+		timodel.ActionTruncateTable: "TRUNCATE TABLE test.%s",
+		timodel.ActionDropTable:     "DROP TABLE test.%s",
+		timodel.ActionRecoverTable:  "RECOVER TABLE test.%s",
 	} {
-		require.NoError(t, r.storage.WriteFile(ctx, schema.Path(false, 0), schema.Marshal()))
-		r.scanned = false
-		data, err := r.Read(ctx)
-		require.NoError(t, err)
-		require.NoError(t, a.decode(ctx, data, r))
-		item := a.nextReady(0)
-		require.NotNil(t, item)
-		require.NoError(t, w.consume(ctx, item))
+		t.Run(ddlType.String(), func(t *testing.T) {
+			ctx := t.Context()
+			replicaConfig := config.GetDefaultReplicaConfig()
+			replicaConfig.Sink.Protocol = new("csv")
+			memory := &memoryUsage{}
+			r, err := newStorageReader(ctx, &url.URL{Scheme: "file", Path: t.TempDir()}, replicaConfig, memory, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			a, err := newAssembler(ctx, &decodeConfig{
+				codec:  codecCommon.NewConfig(config.ProtocolCsv),
+				format: rowFormat,
+			}, replicaConfig, memory, nil)
+			require.NoError(t, err)
+			w := &writer{
+				memory:  memory,
+				ddlJobs: make(chan *writeEvent, 1),
+				ddlDone: make(chan struct{}, 1),
+			}
+			// Independent schema files can become visible in different scans. A later
+			// DDL must not wait for rows fenced by an earlier DDL on another table.
+			for _, schema := range []*cloudstorage.SchemaFile{
+				{
+					Schema:       "test",
+					Table:        "b",
+					TableVersion: 20,
+					Type:         byte(ddlType),
+					Query:        strings.ReplaceAll(query, "%s", "b"),
+				},
+				{
+					Schema:       "test",
+					Table:        "a",
+					TableVersion: 10,
+					Type:         byte(ddlType),
+					Query:        strings.ReplaceAll(query, "%s", "a"),
+				},
+			} {
+				require.NoError(t, r.storage.WriteFile(ctx, schema.Path(false, 0), schema.Marshal()))
+				r.scanned = false
+				data, err := r.Read(ctx)
+				require.NoError(t, err)
+				require.NoError(t, a.decode(ctx, data, r))
+				item := a.nextReady(0)
+				require.NotNil(t, item)
+				require.NoError(t, w.consume(ctx, item))
+			}
+			table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
+			dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 15, table)
+			dml.Length = 1
+			downstream := mock.NewMockSink(gomock.NewController(t))
+			downstream.EXPECT().FlushDMLBeforeBlock(gomock.Any()).Return(nil).Times(2)
+			downstream.EXPECT().WriteBlockEvent(gomock.Any()).Return(nil).Times(2)
+			downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
+			w.downstream = downstream
+			require.NoError(t, w.consume(ctx, &writeEvent{dml: dml}))
+			for _, name := range []string{"b", "a"} {
+				require.NoError(t, w.flushDML(ctx))
+				require.Len(t, w.ddlJobs, 1, "independent DDL must not form a cycle with a fenced row")
+				require.Len(t, w.pendingDML, 1, "rows cannot pass their own DDL")
+				item := <-w.ddlJobs
+				require.Equal(t, name, item.ddl.TableName)
+				require.NoError(t, w.writeDDL(ctx, item))
+				w.ddlDone <- struct{}{}
+			}
+			require.NoError(t, w.flushDML(ctx))
+			require.Empty(t, w.pendingDML)
+			require.Empty(t, w.pendingDDL)
+			require.Nil(t, w.ddlInFlight)
+		})
 	}
-	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
-	dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 15, table)
-	dml.Length = 1
-	downstream := mock.NewMockSink(gomock.NewController(t))
-	downstream.EXPECT().FlushDMLBeforeBlock(gomock.Any()).Return(nil).Times(2)
-	downstream.EXPECT().WriteBlockEvent(gomock.Any()).Return(nil).Times(2)
-	downstream.EXPECT().AddDMLEvent(dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
-	w.downstream = downstream
-	require.NoError(t, w.consume(ctx, &writeEvent{dml: dml}))
-	for _, name := range []string{"b", "a"} {
-		require.NoError(t, w.flushDML(ctx))
-		require.Len(t, w.ddlJobs, 1, "independent DDL must not form a cycle with a fenced row")
-		require.Len(t, w.pendingDML, 1, "rows cannot pass their own CREATE")
-		item := <-w.ddlJobs
-		require.Equal(t, name, item.ddl.TableName)
-		require.NoError(t, w.writeDDL(ctx, item))
-		w.ddlDone <- struct{}{}
-	}
-	require.NoError(t, w.flushDML(ctx))
-	require.Empty(t, w.pendingDML)
-	require.Empty(t, w.pendingDDL)
-	require.Nil(t, w.ddlInFlight)
 }
 
 func TestKafkaReaderSplitRenameDDL(t *testing.T) {
@@ -484,6 +493,7 @@ func TestReaderDDLNormalization(t *testing.T) {
 
 func TestKafkaReaderWatermark(t *testing.T) {
 	c := &kafkaReader{
+		memory: &memoryUsage{},
 		partitions: map[int32]*kafkaPartition{
 			0: {
 				watermark:    20,
@@ -510,6 +520,29 @@ func TestKafkaReaderWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, progress.needsMoreInput)
 	require.False(t, progress.hasWatermark)
+	require.Nil(t, progress.control)
+	data := &readData{stream: 1, record: &ack{}}
+	// Schema availability can change while an input is still being decoded.
+	_, err = c.Advance(t.Context(), readFeedback{data: data})
+	require.NoError(t, err)
+	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true})
+	require.NoError(t, err)
+	require.True(t, progress.hasWatermark)
+	require.EqualValues(t, 10, progress.watermark)
+	_, err = c.Advance(t.Context(), readFeedback{data: data, needsMoreInput: true})
+	require.NoError(t, err)
+	progress, err = c.Advance(t.Context(), readFeedback{})
+	require.NoError(t, err)
+	require.False(t, progress.hasWatermark)
+	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true, watermark: 20, hasWatermark: true})
+	require.NoError(t, err)
+	require.True(t, progress.hasWatermark)
+	require.EqualValues(t, 20, progress.watermark)
+	require.NotNil(t, progress.control)
+	require.Equal(t, []*ack{data.record}, progress.control.records)
+	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true})
+	require.NoError(t, err)
+	require.True(t, progress.hasWatermark)
 	require.Nil(t, progress.control)
 }
 
@@ -731,6 +764,11 @@ func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
 	wg.Go(func() { done <- memory.wait(ctx) })
+	require.Eventually(t, func() bool {
+		memory.mu.Lock()
+		defer memory.mu.Unlock()
+		return memory.changed != nil
+	}, time.Second, time.Millisecond)
 	memory.release(128)
 	require.NoError(t, <-done)
 	wg.Wait()

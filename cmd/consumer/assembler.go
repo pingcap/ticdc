@@ -88,7 +88,7 @@ func (a *assembler) collectDecoded(ctx context.Context) ([]*writeEvent, error) {
 			}
 		}
 		if ready && len(remaining) != 0 {
-			ready = !a.mergeRows && (item.dml == nil || !blockedTables[item.dml.PhysicalTableID])
+			ready = item.dml == nil || !blockedTables[item.dml.PhysicalTableID]
 			for _, prior := range blockedControls {
 				if item.hasWatermark || (prior.ddl != nil && (item.dml == nil || ddlBlocksTable(prior.ddl, item.dml))) {
 					ready = false
@@ -337,8 +337,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 		}
 		switch stmt := stmt.(type) {
 		case *ast.CreateTableStmt:
-			// Schema-file decoding uses a legacy flush-all default. CREATE only
-			// fences its new table and, for LIKE, the source table named below.
+			// CREATE fences its new table and, for LIKE, the source table.
 			ddl.BlockedTables = &event.InfluencedTables{InfluenceType: event.InfluenceTypeNormal}
 			if stmt.ReferTable != nil {
 				for _, table := range []*ast.TableName{stmt.Table, stmt.ReferTable} {
