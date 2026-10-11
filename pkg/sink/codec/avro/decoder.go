@@ -315,6 +315,12 @@ func assembleEvent(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
+		// Recover TIME precision from the before image when the new value is NULL.
+		for _, column := range columns {
+			if duration, ok := beforeData[column.Name.O].(types.Duration); ok && data[column.Name.O] == nil {
+				column.SetDecimal(duration.Fsp)
+			}
+		}
 	}
 
 	// Without a before image, represent an update as a keyed delete followed
@@ -471,6 +477,12 @@ func avroData2Columns(
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
+		switch value := value.(type) {
+		case types.Time:
+			tiCol.SetDecimal(value.Fsp())
+		case types.Duration:
+			tiCol.SetDecimal(value.Fsp)
+		}
 		columns = append(columns, tiCol)
 	}
 	return columns, data, nil
@@ -621,13 +633,14 @@ func getColumnValue(
 			value = types.NewDecFromFloatForTest(v)
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.MaxFsp)
+		// Fractional precision is preserved in the Avro string and affects the checksum.
+		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		value = val
 	case mysql.TypeDuration:
-		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.MaxFsp)
+		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
