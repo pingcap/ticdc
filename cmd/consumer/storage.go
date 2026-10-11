@@ -399,10 +399,25 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		if schema == nil {
 			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
 		}
-		if key.IsSchemaFileDMLPathKey() {
-			if schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
-				continue
+		if key.IsSchemaFileDMLPathKey() && (schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey]) {
+			continue
+		}
+		if key.TableVersion < c.ddlWatermarks[tableKey] {
+			if !input.groupEnd {
+				c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
 			}
+			continue
+		}
+		table := schema.table
+		if table == nil {
+			table = schema.file.TableInfo()
+			table.UpdateTS = schema.file.TableVersion
+			if err := c.memory.retainSchema(ctx, table); err != nil {
+				return nil, err
+			}
+			schema.table = table
+		}
+		if key.IsSchemaFileDMLPathKey() {
 			size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
 			record, err := c.memory.newAck(ctx, size, c.confirmable)
 			if err != nil {
@@ -411,15 +426,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			c.mu.Lock()
 			c.records = append(c.records, record)
 			c.mu.Unlock()
-			table := schema.table
-			if table == nil {
-				table = schema.file.TableInfo()
-				table.UpdateTS = schema.file.TableVersion
-				if err := c.memory.retainSchema(ctx, table); err != nil {
-					return nil, err
-				}
-				schema.table = table
-			}
 			// Reuse the cached table instead of reconstructing its columns again.
 			scope := event.InfluenceTypeNormal
 			if schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView {
@@ -443,21 +449,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 				retainedBytes: 256,
 				ddlBoundary:   &readBoundary{reached: true},
 			}, nil
-		}
-		if key.TableVersion < c.ddlWatermarks[tableKey] {
-			if !input.groupEnd {
-				c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
-			}
-			continue
-		}
-		table := schema.table
-		if table == nil {
-			table = schema.file.TableInfo()
-			table.UpdateTS = schema.file.TableVersion
-			if err := c.memory.retainSchema(ctx, table); err != nil {
-				return nil, err
-			}
-			schema.table = table
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,

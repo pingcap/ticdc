@@ -285,7 +285,6 @@ type assembler struct {
 	scanWatermark     uint64
 	scanDDL           *writeEvent
 	scanDDLReady      bool
-	scanFirst         *writeEvent
 	scanInvalid       bool
 	scanBlocked       map[int64]uint64
 	scanBoundaries    map[*readBoundary]bool
@@ -318,6 +317,9 @@ func (a *assembler) queueDML(ctx context.Context, item *writeEvent, record *ack,
 		item.proofPending = true
 		a.unproven = append(a.unproven, item)
 		a.unprovenCount++
+	}
+	if len(a.pendingDML) == 0 {
+		a.scanInvalid = true
 	}
 	a.pendingDML = append(a.pendingDML, item)
 	if a.waitingKnown && dml.CommitTs <= a.waitingWatermark {
@@ -421,9 +423,6 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 		headReady = head.ddl.GetCommitTs() <= watermark || early || (head.boundary != nil && head.boundary.reached)
 	}
 	reset := a.scanInvalid || a.scanWatermark != watermark || a.scanDDL != head || a.scanDDLReady != headReady || a.scanIndex > len(a.pendingDML)
-	if len(a.pendingDML) != 0 && a.scanFirst != a.pendingDML[0] {
-		reset = true
-	}
 	for boundary := range a.scanBoundaries {
 		reset = reset || boundary.reached
 	}
@@ -543,15 +542,7 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 			a.pendingDML = remaining
 			a.holes, a.scanInvalid = 0, true
 		}
-		if len(a.pendingDML) != 0 {
-			a.scanFirst = a.pendingDML[0]
-		} else {
-			a.scanFirst = nil
-		}
 		return result
-	}
-	if len(a.pendingDML) != 0 {
-		a.scanFirst = a.pendingDML[0]
 	}
 	return nil
 }

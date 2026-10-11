@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"reflect"
 	"slices"
 	"time"
@@ -431,29 +432,21 @@ func (w *writer) advanceWatermarks() {
 	// Readers publish global watermarks. Every unfinished write limits their
 	// downstream completion, regardless of its table.
 	var (
-		unfinished uint64
+		unfinished uint64 = math.MaxUint64
 		pending    bool
 	)
 	for _, control := range w.pendingDDL {
-		if !pending || control.ddl.GetCommitTs() < unfinished {
-			unfinished, pending = control.ddl.GetCommitTs(), true
-		}
+		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
 	}
 	if control := w.ddlInFlight; control != nil {
-		if !pending || control.ddl.GetCommitTs() < unfinished {
-			unfinished, pending = control.ddl.GetCommitTs(), true
-		}
+		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
 	}
 	for _, item := range w.pendingDML {
-		if !pending || item.dml.CommitTs < unfinished {
-			unfinished, pending = item.dml.CommitTs, true
-		}
+		unfinished, pending = min(unfinished, item.dml.CommitTs), true
 	}
 	for _, batch := range w.inFlight {
 		for _, item := range batch.items {
-			if !pending || item.dml.CommitTs < unfinished {
-				unfinished, pending = item.dml.CommitTs, true
-			}
+			unfinished, pending = min(unfinished, item.dml.CommitTs), true
 		}
 	}
 	remaining := w.pendingWatermarks[:0]
@@ -466,10 +459,7 @@ func (w *writer) advanceWatermarks() {
 	}
 	clear(w.pendingWatermarks[len(remaining):])
 	w.pendingWatermarks = remaining
-	before := w.watermark
-	if pending {
-		before = min(before, unfinished)
-	}
+	before := min(w.watermark, unfinished)
 	if before <= w.writtenBefore {
 		return
 	}

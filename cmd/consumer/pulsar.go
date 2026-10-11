@@ -251,12 +251,6 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	type pulsarCommit struct {
-		partition *pulsarPartition
-		count     int
-		messageID pulsar.MessageID
-	}
-	var commits []pulsarCommit
 	for _, partition := range c.partitions {
 		partition.mu.Lock()
 		var count int
@@ -271,30 +265,25 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			}
 			count++
 		}
-		if count != 0 {
-			commits = append(commits, pulsarCommit{
-				partition: partition,
-				count:     count,
-				messageID: partition.records[count-1].messageID,
-			})
+		if count == 0 {
+			partition.mu.Unlock()
+			continue
 		}
+		messageID := partition.records[count-1].messageID
 		partition.mu.Unlock()
-	}
-	for _, commit := range commits {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		if err := c.consumer.AckIDCumulative(commit.messageID); err != nil {
+		if err := c.consumer.AckIDCumulative(messageID); err != nil {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
-		partition := commit.partition
 		partition.mu.Lock()
 		records := partition.records
-		for _, record := range records[:commit.count] {
+		for _, record := range records[:count] {
 			c.memory.confirm(record.ack)
 		}
-		clear(records[:commit.count])
-		partition.records = records[commit.count:]
+		clear(records[:count])
+		partition.records = records[count:]
 		partition.mu.Unlock()
 	}
 	return nil
