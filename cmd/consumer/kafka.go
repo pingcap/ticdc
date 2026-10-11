@@ -276,7 +276,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 				return result, err
 			}
 			data.record.refs.Add(1)
-			c.controls = append(c.controls, &readControl{watermark: feedback.watermark, records: []*ack{data.record}, bytes: 128})
+			c.controls = append(c.controls, &readControl{watermark: feedback.watermark, records: []*ack{data.record}})
 		}
 	}
 	if feedback.data != nil && !feedback.decoded {
@@ -290,7 +290,6 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 			if commitTs <= result.watermark {
 				for _, copies := range records {
 					control.records = append(control.records, copies...)
-					control.bytes += int64(len(copies)) * 128
 				}
 				delete(c.ddlCopies, commitTs)
 			}
@@ -300,7 +299,6 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 				return false
 			}
 			control.records = append(control.records, pending.records...)
-			control.bytes += pending.bytes
 			return true
 		})
 		if !c.hasDeliveredWatermark || result.watermark > c.deliveredWatermark || len(control.records) != 0 {

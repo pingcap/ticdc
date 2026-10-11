@@ -33,7 +33,7 @@ type decoderGroup struct {
 
 type decodeTask struct {
 	message       *codecCommon.DMLMessage
-	records       []*ack
+	record        *ack
 	dml           *event.DMLEvent
 	bytes         int64
 	done          chan struct{}
@@ -51,10 +51,8 @@ func newDecoderGroup(memory *memoryUsage) *decoderGroup {
 }
 
 func (g *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
-	for _, record := range task.records {
-		record.decodes.Inc()
-		record.refs.Inc()
-	}
+	task.record.decodes.Inc()
+	task.record.refs.Inc()
 	// A table keeps conversion order as well as write order. Different tables
 	// share CPU workers, independently of their upstream partition placement.
 	index := uint64(task.message.TableID) % uint64(len(g.inputs))
@@ -94,10 +92,8 @@ func (g *decoderGroup) decode(ctx context.Context, input <-chan *decodeTask) err
 			}
 			dml.AddPostFlushFunc(func() { g.memory.releaseSchema(dml.TableInfo) })
 			task.dml, task.bytes = dml, bytes
-			for _, record := range task.records {
-				g.memory.decoded(record, task.retainedBytes)
-			}
-			task.message, task.records, task.table = nil, nil, nil
+			g.memory.decoded(task.record, task.retainedBytes)
+			task.message, task.record, task.table = nil, nil, nil
 			close(task.done)
 			select {
 			case g.memory.completed <- struct{}{}:

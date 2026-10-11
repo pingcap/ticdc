@@ -211,7 +211,7 @@ func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (read
 	}
 	feedback.data.record.refs.Add(1)
 	result.watermark, result.hasWatermark = c.watermark, true
-	result.control = &readControl{watermark: feedback.watermark, records: []*ack{feedback.data.record}, bytes: 128}
+	result.control = &readControl{watermark: feedback.watermark, records: []*ack{feedback.data.record}}
 	return result, nil
 }
 

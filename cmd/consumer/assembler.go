@@ -46,7 +46,6 @@ type writeEvent struct {
 	bytes        int64
 	watermark    uint64
 	hasWatermark bool
-	tableID      int64
 	sequential   bool // Preserve table batch order when metadata cannot describe every conflict key.
 	boundary     *readBoundary
 	proofPending bool
@@ -166,7 +165,6 @@ type assembler struct {
 	memory            *memoryUsage
 	codecConfig       *codecCommon.Config
 	upstreamDB        *sql.DB
-	topic             string
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
 	decoder           *decoderGroup
@@ -177,7 +175,6 @@ type assembler struct {
 	watermark         uint64
 	mergeRows         bool
 	sortCSVRows       bool
-	protocol          config.Protocol
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
 	unproven          []*writeEvent
@@ -193,38 +190,18 @@ type assembler struct {
 	scanBoundaries    map[*readBoundary]bool
 	holes             int
 	waitingWatermark  uint64
-	waitingTable      int64
 	waitingCount      int
 	waitingKnown      bool
 }
 
-func (a *assembler) queueDML(ctx context.Context, item *writeEvent, records []*ack, boundary *readBoundary) error {
+func (a *assembler) queueDML(ctx context.Context, item *writeEvent, record *ack, boundary *readBoundary) error {
 	dml := item.dml
-	if dml == nil || dml.TableInfo == nil || (item.decoding == nil && (dml.Rows == nil || dml.Len() == 0)) {
-		return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
-	}
 	bytes := int64(256)
-	materialized := item.decoding == nil
-	if materialized {
-		if err := a.memory.retainSchema(ctx, dml.TableInfo); err != nil {
-			return err
-		}
-		bytes += dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
-	}
 	if err := a.memory.reserve(ctx, bytes); err != nil {
 		return err
 	}
-	for _, record := range records {
-		record.refs.Add(1)
-	}
-	dml.AddPostFlushFunc(func() {
-		if materialized {
-			a.memory.releaseSchema(dml.TableInfo)
-		}
-		for _, record := range records {
-			record.release()
-		}
-	})
+	record.refs.Inc()
+	dml.AddPostFlushFunc(record.release)
 	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
 	if item.boundary == nil {
 		for _, ddl := range a.pendingDDL {
@@ -242,7 +219,7 @@ func (a *assembler) queueDML(ctx context.Context, item *writeEvent, records []*a
 		a.unprovenCount++
 	}
 	a.pendingDML = append(a.pendingDML, item)
-	if a.waitingKnown && dml.CommitTs <= a.waitingWatermark && (a.waitingTable == 0 || dml.PhysicalTableID == a.waitingTable) {
+	if a.waitingKnown && dml.CommitTs <= a.waitingWatermark {
 		a.waitingCount++
 	}
 	return nil
@@ -414,7 +391,7 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	}
 	if readyIndex >= 0 {
 		result := a.pendingDML[readyIndex]
-		if a.waitingKnown && result.dml.CommitTs <= a.waitingWatermark && (a.waitingTable == 0 || result.dml.PhysicalTableID == a.waitingTable) {
+		if a.waitingKnown && result.dml.CommitTs <= a.waitingWatermark {
 			a.waitingCount--
 		}
 		if priority {
@@ -460,11 +437,11 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	return nil
 }
 
-func (a *assembler) hasPendingThrough(watermark uint64, tableID int64) bool {
-	if !a.waitingKnown || a.waitingWatermark != watermark || a.waitingTable != tableID {
-		a.waitingWatermark, a.waitingTable, a.waitingCount, a.waitingKnown = watermark, tableID, 0, true
+func (a *assembler) hasPendingThrough(watermark uint64) bool {
+	if !a.waitingKnown || a.waitingWatermark != watermark {
+		a.waitingWatermark, a.waitingCount, a.waitingKnown = watermark, 0, true
 		for _, pending := range a.pendingDML {
-			if pending != nil && pending.dml.CommitTs <= watermark && (tableID == 0 || pending.dml.PhysicalTableID == tableID) {
+			if pending != nil && pending.dml.CommitTs <= watermark {
 				a.waitingCount++
 			}
 		}
@@ -535,8 +512,8 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		}
 	}
 	return &assembler{
-		memory: memory, codecConfig: decoding.codec, upstreamDB: decoding.upstreamDB, topic: decoding.topic,
-		protocol: decoding.codec.Protocol, selectors: selectors, streams: streams,
+		memory: memory, codecConfig: decoding.codec, upstreamDB: decoding.upstreamDB,
+		selectors: selectors, streams: streams,
 		decoder: newDecoderGroup(memory), tables: make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
@@ -551,7 +528,7 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		if result := a.nextReady(a.watermark); result != nil {
 			return result, nil
 		}
-		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark, a.pendingWatermarks[0].tableID) {
+		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
 			result := a.pendingWatermarks[0]
 			a.pendingWatermarks[0] = nil
 			a.pendingWatermarks = a.pendingWatermarks[1:]
@@ -603,7 +580,7 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		if result := a.nextReady(a.watermark); result != nil {
 			return result, nil
 		}
-		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark, a.pendingWatermarks[0].tableID) {
+		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
 			continue
 		}
 		needsMoreInput := progress.needsMoreInput
@@ -637,13 +614,13 @@ func (a *assembler) applyProgress(progress readProgress) {
 		a.watermark = progress.watermark
 	}
 	if control := progress.control; control != nil {
-		item := &writeEvent{watermark: control.watermark, tableID: control.tableID, hasWatermark: true}
+		item := &writeEvent{watermark: control.watermark, hasWatermark: true}
 		if len(control.records) != 0 {
 			item.onFlush = func() {
 				for _, record := range control.records {
 					record.release()
 				}
-				a.memory.release(control.bytes)
+				a.memory.release(int64(len(control.records)) * 128)
 			}
 		}
 		a.pendingWatermarks = append(a.pendingWatermarks, item)
@@ -700,7 +677,7 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 			return err
 		}
 		data.record.memory.Add(bytes)
-		switch a.protocol {
+		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
 			if err != nil {
@@ -738,11 +715,11 @@ func (a *assembler) decodeRows(ctx context.Context, reader reader) error {
 		if message == nil {
 			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 		}
-		return a.assembleMessage(ctx, data, message, []*ack{data.record}, reader)
+		return a.assembleMessage(ctx, data, message, data.record, reader)
 	}
 }
 
-func (a *assembler) assembleMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, records []*ack, reader reader) error {
+func (a *assembler) assembleMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, record *ack, reader reader) error {
 	tableID := message.TableID
 	if data.format == rowFormat {
 		tableID = data.group.tableID
@@ -765,9 +742,9 @@ func (a *assembler) assembleMessage(ctx context.Context, data *readData, message
 	if progress.skip {
 		return nil
 	}
-	task := &decodeTask{message: message, records: records, done: make(chan struct{}), table: data.table, tableID: tableID, retainedBytes: data.retainedBytes}
+	task := &decodeTask{message: message, record: record, done: make(chan struct{}), table: data.table, tableID: tableID, retainedBytes: data.retainedBytes}
 	item := &writeEvent{dml: dml, decoding: task}
-	if err := a.queueDML(ctx, item, records, data.dmlBoundary); err != nil {
+	if err := a.queueDML(ctx, item, record, data.dmlBoundary); err != nil {
 		return err
 	}
 	return a.decoder.submit(ctx, task)
@@ -804,12 +781,7 @@ func (a *assembler) assembleDDL(ctx context.Context, data *readData, ddl *event.
 func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader reader) error {
 	p := a.streams[data.stream]
 	if p == nil {
-		decoder, err := codec.NewEventDecoder(ctx, int(data.stream), a.codecConfig, a.topic, a.upstreamDB)
-		if err != nil {
-			return err
-		}
-		p = &decodeStream{decoder: decoder}
-		a.streams[data.stream] = p
+		return errors.ErrInternalCheckFailed.FastGenByArgs("input stream has no initialized decoder")
 	}
 	record := data.record
 	// Captured protocol data remains live while conversion jobs run. Account
@@ -841,7 +813,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 				p.cachedRecords[decoder.PendingDMLMessage] = record
 				continue
 			}
-			if err := a.assembleMessage(ctx, data, message, []*ack{record}, reader); err != nil {
+			if err := a.assembleMessage(ctx, data, message, record, reader); err != nil {
 				return err
 			}
 		case codecCommon.MessageTypeDDL:
@@ -879,14 +851,14 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input")
 					}
 					delete(p.cachedRecords, message)
-					if err := a.assembleMessage(ctx, data, message, []*ack{cached}, reader); err != nil {
+					if err := a.assembleMessage(ctx, data, message, cached, reader); err != nil {
 						return err
 					}
 					a.memory.decoded(cached, data.retainedBytes)
 				}
 			}
 			if ddl.Query == "" {
-				if a.protocol != config.ProtocolSimple {
+				if a.codecConfig.Protocol != config.ProtocolSimple {
 					return errors.ErrCodecDecode.FastGenByArgs("DDL query is empty")
 				}
 				continue

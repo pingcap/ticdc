@@ -106,9 +106,7 @@ type readProgress struct {
 // Controls retain their input references until the downstream watermark passes.
 type readControl struct {
 	watermark uint64
-	tableID   int64
 	records   []*ack
-	bytes     int64
 }
 
 // Readers own the positions behind a proof and publish when it is reached.
@@ -146,13 +144,10 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone s
 		_ = r.Close()
 		return nil, nil, err
 	}
-	switch r := r.(type) {
-	case *kafkaReader:
+	if r, ok := r.(*kafkaReader); ok {
 		for id := range r.progress {
 			decoding.streams = append(decoding.streams, id)
 		}
-	case *pulsarReader:
-		decoding.streams = []int32{0} // Pulsar publishes one topic-wide control stream.
 	}
 	return r, decoding, nil
 }

@@ -75,8 +75,8 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 	return &consumer{
 		reader: reader, assembler: assembler, writer: &writer{
 			downstream: target, memory: memory, mutations: make(map[mutationKey]*writeBatch),
-			watermarks: make(map[int64]uint64), progressTick: time.Tick(progressLogInterval),
-			ddlJobs: make(chan *writeEvent, 1), ddlDone: make(chan struct{}, 1),
+			progressTick: time.Tick(progressLogInterval),
+			ddlJobs:      make(chan *writeEvent, 1), ddlDone: make(chan struct{}, 1),
 		},
 	}, nil
 }
@@ -192,16 +192,15 @@ func (c *consumer) executeDDL(ctx context.Context) error {
 }
 
 func (c *consumer) consumeBatch(ctx context.Context, results <-chan *writeEvent, result *writeEvent) error {
-	items := []*writeEvent{result}
 	rows, bytes := int64(0), int64(0)
 collect:
-	for len(items) < batchRows && rows < batchRows && bytes < batchBytes {
-		last := items[len(items)-1]
-		bytes += last.bytes
-		if last.dml != nil {
-			rows += int64(last.dml.Len())
+	for count := range batchRows {
+		c.decoding = append(c.decoding, result)
+		bytes += result.bytes
+		if result.dml != nil {
+			rows += int64(result.dml.Len())
 		}
-		if rows >= batchRows || bytes >= batchBytes {
+		if count+1 == batchRows || rows >= batchRows || bytes >= batchBytes {
 			break
 		}
 		select {
@@ -211,12 +210,11 @@ collect:
 			if !ok {
 				break collect
 			}
-			items = append(items, next)
+			result = next
 		default:
 			break collect
 		}
 	}
-	c.decoding = append(c.decoding, items...)
 	return c.collectDecoded(ctx)
 }
 
@@ -252,7 +250,7 @@ func (c *consumer) collectDecoded(ctx context.Context) error {
 			if item.dml == nil {
 				for _, prior := range blockedRows {
 					if (item.ddl != nil && ddlBlocksTable(item.ddl, prior.dml)) ||
-						(item.hasWatermark && prior.dml.CommitTs <= item.watermark && (item.tableID == 0 || prior.dml.PhysicalTableID == item.tableID)) {
+						(item.hasWatermark && prior.dml.CommitTs <= item.watermark) {
 						ready = false
 						break
 					}

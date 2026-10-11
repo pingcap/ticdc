@@ -172,22 +172,14 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 	}
 
 	row := &jsonRow{JSONMessage: &JSONMessage{}, Extensions: &tidbExtension{}}
-	var msg canalJSONMessageInterface = row.JSONMessage
-	if d.config.EnableTiDBExtension {
-		msg = &canalJSONMessageWithTiDBExtension{
-			JSONMessage: row.JSONMessage,
-			Extensions:  row.Extensions,
-		}
-	}
-
 	if err := d.decoder.Decode(row); err != nil {
 		log.Panic("canal-json decode failed",
 			zap.ByteString("data", d.decoder.Bytes()),
 			zap.Error(err))
 	}
-	// JSON decoding can replace the extension pointer (including JSON null).
-	if message, ok := msg.(*canalJSONMessageWithTiDBExtension); ok {
-		message.Extensions = row.Extensions
+	var msg canalJSONMessageInterface = row.JSONMessage
+	if d.config.EnableTiDBExtension {
+		msg = &canalJSONMessageWithTiDBExtension{JSONMessage: row.JSONMessage, Extensions: row.Extensions}
 	}
 	d.msg, d.row = msg, row
 	return d.msg.messageType(), true

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -31,26 +30,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAssemblerReleasesSharedSchema(t *testing.T) {
+func TestMemoryReleasesSharedSchema(t *testing.T) {
 	memory := &memoryUsage{}
-	a := &assembler{memory: memory, protocol: config.ProtocolOpen}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID: 1, Name: ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
 	})
-	for range 2 {
-		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 10, table)
-		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
-		dml.Rows.AppendInt64(0, 1)
-		dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete}, 1
-		require.NoError(t, a.queueDML(t.Context(), &writeEvent{dml: dml}, nil, nil))
-	}
-	first, second := a.pendingDML[0], a.pendingDML[1]
-	first.dml.PostFlush()
-	memory.release(first.bytes)
-	require.Greater(t, memory.used(), second.bytes)
-	second.dml.PostFlush()
-	memory.release(second.bytes)
+	require.NoError(t, memory.retainSchema(t.Context(), table))
+	bytes := memory.used()
+	require.Positive(t, bytes)
+	require.NoError(t, memory.retainSchema(t.Context(), table))
+	require.Equal(t, bytes, memory.used())
+	memory.releaseSchema(table)
+	require.Equal(t, bytes, memory.used())
+	memory.releaseSchema(table)
 	require.Zero(t, memory.used())
 }
 
@@ -112,7 +105,7 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 	first.PostFlush()
 	require.NoError(t, w.flushDML(t.Context()))
 	require.Equal(t, 4, callbacks)
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, tableID: 0, hasWatermark: true}))
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
 	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
@@ -164,7 +157,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 	require.Equal(t, 4, callbacks)
 	require.Empty(t, w.pendingDML)
 	require.Empty(t, w.inFlight)
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, tableID: 0, hasWatermark: true}))
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, hasWatermark: true}))
 	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
@@ -231,7 +224,6 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	result, err = a.next(t.Context(), r)
 	require.NoError(t, err)
 	require.True(t, result.hasWatermark)
-	require.Zero(t, result.tableID)
 	require.EqualValues(t, 20, result.watermark)
 	require.Empty(t, a.pendingDML)
 	progress, err := r.Advance(t.Context(), readFeedback{data: &readData{}, dml: &event.DMLEvent{CommitTs: 19}})

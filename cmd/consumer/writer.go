@@ -56,7 +56,7 @@ type writer struct {
 	decodedRows       int64
 	writtenRows       int64
 	pendingWatermarks []*writeEvent
-	watermarks        map[int64]uint64
+	watermark         uint64
 	progressChanged   bool
 	progressTick      <-chan time.Time
 }
@@ -66,7 +66,7 @@ type writeBatch struct {
 	dropped []*event.DMLEvent
 	keys    []mutationKey
 	bytes   int64
-	done    chan bool
+	done    chan struct{}
 	flushed atomic.Int64
 }
 
@@ -91,11 +91,8 @@ func (w *writer) consume(ctx context.Context, result *writeEvent) error {
 		w.progressChanged = true
 	}
 	if result.hasWatermark {
-		if w.watermarks == nil {
-			w.watermarks = make(map[int64]uint64)
-		}
-		if result.watermark > w.watermarks[result.tableID] {
-			w.watermarks[result.tableID] = result.watermark
+		if result.watermark > w.watermark {
+			w.watermark = result.watermark
 			w.progressChanged = true
 		}
 		if result.onFlush != nil {
@@ -202,7 +199,7 @@ func (w *writer) flushDML(ctx context.Context) error {
 				return err
 			}
 		}
-		batch := &writeBatch{items: items, bytes: bytes, done: make(chan bool)}
+		batch := &writeBatch{items: items, bytes: bytes, done: make(chan struct{})}
 		for _, item := range batch.items {
 			filtered, err := w.filterRows(ctx, item.dml, batch)
 			if err != nil {
@@ -329,40 +326,40 @@ func (w *writer) advanceWatermarks() {
 		return
 	}
 	w.progressChanged = false
-	if len(w.watermarks) == 0 && len(w.pendingWatermarks) == 0 {
+	if w.watermark == 0 && len(w.pendingWatermarks) == 0 {
 		return
 	}
-	// One scan establishes the unfinished floor for every table and the topic.
-	unfinished := make(map[int64]uint64)
+	// Readers publish global watermarks. Every unfinished write limits their
+	// downstream completion, regardless of its table.
+	var (
+		unfinished uint64
+		pending    bool
+	)
 	for _, control := range w.pendingDDL {
-		if ts, ok := unfinished[0]; !ok || control.ddl.GetCommitTs() < ts {
-			unfinished[0] = control.ddl.GetCommitTs()
+		if !pending || control.ddl.GetCommitTs() < unfinished {
+			unfinished, pending = control.ddl.GetCommitTs(), true
 		}
 	}
 	if control := w.ddlInFlight; control != nil {
-		if ts, ok := unfinished[0]; !ok || control.ddl.GetCommitTs() < ts {
-			unfinished[0] = control.ddl.GetCommitTs()
+		if !pending || control.ddl.GetCommitTs() < unfinished {
+			unfinished, pending = control.ddl.GetCommitTs(), true
 		}
 	}
 	for _, item := range w.pendingDML {
-		for _, tableID := range []int64{0, item.dml.PhysicalTableID} {
-			if ts, ok := unfinished[tableID]; !ok || item.dml.CommitTs < ts {
-				unfinished[tableID] = item.dml.CommitTs
-			}
+		if !pending || item.dml.CommitTs < unfinished {
+			unfinished, pending = item.dml.CommitTs, true
 		}
 	}
 	for _, batch := range w.inFlight {
 		for _, item := range batch.items {
-			for _, tableID := range []int64{0, item.dml.PhysicalTableID} {
-				if ts, ok := unfinished[tableID]; !ok || item.dml.CommitTs < ts {
-					unfinished[tableID] = item.dml.CommitTs
-				}
+			if !pending || item.dml.CommitTs < unfinished {
+				unfinished, pending = item.dml.CommitTs, true
 			}
 		}
 	}
 	remaining := w.pendingWatermarks[:0]
 	for _, control := range w.pendingWatermarks {
-		if ts, ok := unfinished[control.tableID]; ok && ts <= control.watermark {
+		if pending && unfinished <= control.watermark {
 			remaining = append(remaining, control)
 			continue
 		}
@@ -370,22 +367,18 @@ func (w *writer) advanceWatermarks() {
 	}
 	clear(w.pendingWatermarks[len(remaining):])
 	w.pendingWatermarks = remaining
-	before, global := w.watermarks[0]
-	if ts, ok := unfinished[0]; ok {
-		before = min(before, ts)
+	before := w.watermark
+	if pending {
+		before = min(before, unfinished)
 	}
-	if before <= w.writtenBefore && global && len(w.watermarks) == 1 {
+	if before <= w.writtenBefore {
 		return
 	}
 	w.writtenBefore = max(w.writtenBefore, before)
 	// Retire identities only after input progress and all earlier writes pass.
 	released := int64(0)
 	for key := range w.mutations {
-		before := w.watermarks[key.tableID]
-		if ts, ok := unfinished[key.tableID]; ok {
-			before = min(before, ts)
-		}
-		if key.commitTs < max(w.writtenBefore, before) {
+		if key.commitTs < w.writtenBefore {
 			released += int64(len(key.handle) + 192)
 			delete(w.mutations, key)
 		}

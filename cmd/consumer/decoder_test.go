@@ -82,7 +82,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			dml.RowTypes, dml.Length = []common.RowType{common.RowTypeInsert}, 1
 			return dml
 		})
-		require.NoError(t, a.assembleMessage(ctx, data, message, []*ack{record}, r))
+		require.NoError(t, a.assembleMessage(ctx, data, message, record, r))
 		c.decoding = append(c.decoding, a.nextReady(0))
 	}
 	memory.decoded(record, 128)
@@ -95,8 +95,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 	require.EqualValues(t, 4096, record.memory.Load())
 	require.Greater(t, record.refs.Load(), int64(0))
 	watermark := &writeEvent{watermark: 20, hasWatermark: true}
-	c.decoding = append(c.decoding, watermark)
-	require.NoError(t, c.collectDecoded(ctx))
+	require.NoError(t, c.consumeBatch(ctx, nil, watermark))
 	require.Equal(t, []string{"b"}, written)
 	require.Len(t, c.decoding, 3)
 	require.Zero(t, c.writer.writtenBefore)

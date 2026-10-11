@@ -66,7 +66,6 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			require.NoError(t, err)
 			a, err := newAssembler(ctx, decoding, config.GetDefaultReplicaConfig(), input.memory)
 			require.NoError(t, err)
-			require.Equal(t, decoding.codec.Protocol, a.protocol)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
 			}
@@ -234,9 +233,8 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, input.Close()) })
 			decoding, err := newDecodeConfig(t.Context(), upstreamURI, "UTC", replicaConfig)
 			require.NoError(t, err)
-			a, err := newAssembler(t.Context(), decoding, replicaConfig, input.memory)
+			_, err = newAssembler(t.Context(), decoding, replicaConfig, input.memory)
 			require.NoError(t, err)
-			require.Equal(t, decoding.codec.Protocol, a.protocol)
 		})
 	}
 }
@@ -302,7 +300,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 		t.Cleanup(client.Close)
 		memory := &memoryUsage{}
 		r := &kafkaReader{client: client, memory: memory, protocol: config.ProtocolOpen, progress: make(map[int32]*kafkaProgress), records: make(map[int32][]*ack), offsets: make(map[*ack]int64), ddlCopies: make(map[uint64]map[int32][]*ack)}
-		c := &assembler{memory: memory, protocol: config.ProtocolOpen, streams: make(map[int32]*decodeStream)}
+		c := &assembler{memory: memory, codecConfig: codecConfig, streams: make(map[int32]*decodeStream)}
 		for partitionID := range int32(2) {
 			decoder, err := open.NewDecoder(t.Context(), int(partitionID), codecConfig, nil)
 			require.NoError(t, err)
@@ -512,8 +510,8 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 			file.refs.Add(-1)
 		})
 	}
-	first := &writeBatch{events: []*event.DMLEvent{firstDML}, done: make(chan bool)}
-	second := &writeBatch{events: []*event.DMLEvent{secondDML}, done: make(chan bool)}
+	first := &writeBatch{events: []*event.DMLEvent{firstDML}, done: make(chan struct{})}
+	second := &writeBatch{events: []*event.DMLEvent{secondDML}, done: make(chan struct{})}
 	input := &storageReader{memory: buffer.memory, records: []*ack{file, later}}
 	w := &writer{memory: memory, inFlight: []*writeBatch{first, second}}
 	// A later input cannot release positions past an incomplete file.
@@ -546,7 +544,7 @@ func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
-	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 10}}}, done: make(chan bool)}
+	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 10}}}, done: make(chan struct{})}
 	w := &writer{
 		memory: memory, inFlight: []*writeBatch{batch}, progressChanged: true,
 		pendingWatermarks: []*writeEvent{{watermark: 10, onFlush: func() {
@@ -580,7 +578,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	buffer := &assembler{memory: memory}
 	record, err := buffer.memory.newAck(t.Context(), 128)
 	require.NoError(t, err)
-	require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, []*ack{record}, nil))
+	require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, record, nil))
 	record.refs.Add(-1)
 	result := buffer.nextReady(10)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
@@ -601,13 +599,11 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
 	dml := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, TableInfo: table}
 	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 20, tableID: 1, hasWatermark: true}))
-	w.finishBatches()
 	filtered, err := w.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
 	require.Same(t, dml, filtered)
 	// A true topic-wide complete watermark retains the MQ replay cutoff.
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 20, tableID: 0, hasWatermark: true}))
+	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 20, hasWatermark: true}))
 	w.finishBatches()
 	filtered, err = w.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
@@ -760,15 +756,15 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	require.Same(t, before, a.nextReady(0).dml)
 	require.Same(t, independent, a.nextReady(0).dml)
 	require.Nil(t, a.nextReady(0))
-	require.True(t, a.hasPendingThrough(10, 0))
+	require.True(t, a.hasPendingThrough(10))
 	ddlBoundary.reached = true
 	require.Same(t, ddl, a.nextReady(0).ddl)
-	require.False(t, a.hasPendingThrough(10, 0))
+	require.False(t, a.hasPendingThrough(10))
 	require.Same(t, after, a.nextReady(0).dml)
 	// Rows read during catch-up need their own later control boundary.
 	a.pendingDML = []*writeEvent{{dml: after}}
 	require.Nil(t, a.nextReady(0))
-	require.True(t, a.hasPendingThrough(11, 0))
+	require.True(t, a.hasPendingThrough(11))
 }
 
 func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
@@ -924,7 +920,7 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	require.NoError(t, err)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
-	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan bool)}
+	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan struct{})}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
 	result := &writeEvent{ddl: ddl, onFlush: func() {
 		record.refs.Add(-1)
