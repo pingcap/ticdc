@@ -272,6 +272,88 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 	require.Equal(t, []*writeBatch{other}, w.inFlight)
 }
 
+func TestWriterDDLReplay(t *testing.T) {
+	ctx := t.Context()
+	memory := &memoryUsage{}
+	a := &assembler{memory: memory}
+	w := &writer{memory: memory, ddlJobs: make(chan *writeEvent, 1)}
+	truncate := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 100, Query: "TRUNCATE TABLE `test`.`table_3`"}
+	drop := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 200, Query: "DROP TABLE `test`.`table_3`"}
+	first := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 300, Query: "RENAME TABLE `test`.`table_3` TO `test`.`tmp`"}
+	second := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 300, Query: "RENAME TABLE `test`.`other` TO `test`.`table_3`"}
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	for _, ddl := range []*event.DDLEvent{truncate, drop, first, second} {
+		downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil)
+		downstream.EXPECT().WriteBlockEvent(ddl).Return(nil)
+	}
+	w.downstream = downstream
+	for index, ddl := range []*event.DDLEvent{truncate, drop, truncate, first, second, first} {
+		record, err := memory.newAck(ctx, 128)
+		require.NoError(t, err)
+		require.NoError(t, a.queueDDL(ctx, ddl, record))
+		require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
+		memory.decoded(record, 128)
+		require.NoError(t, w.flushDML(ctx))
+		if index == 2 || index == 5 {
+			require.Empty(t, w.ddlJobs, "a replay must not execute again")
+			require.Zero(t, record.refs.Load())
+			memory.confirm(record)
+			continue
+		}
+		require.Len(t, w.ddlJobs, 1)
+		job := <-w.ddlJobs
+		var duplicate *ack
+		if index == 0 {
+			duplicate, err = memory.newAck(ctx, 128)
+			require.NoError(t, err)
+			require.NoError(t, a.queueDDL(ctx, ddl, duplicate))
+			require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
+			memory.decoded(duplicate, 128)
+			require.NoError(t, w.flushDML(ctx))
+			require.EqualValues(t, 1, duplicate.refs.Load(), "a replay must wait for the original write")
+		}
+		require.NoError(t, w.writeDDL(ctx, job))
+		w.ddlInFlight = nil
+		w.progressChanged = true
+		require.NoError(t, w.flushDML(ctx))
+		require.Empty(t, w.ddlJobs)
+		require.Zero(t, record.refs.Load())
+		memory.confirm(record)
+		if duplicate != nil {
+			require.Zero(t, duplicate.refs.Load())
+			memory.confirm(duplicate)
+		}
+	}
+	// Equality stays protected by the replay identity. Once progress passes it,
+	// the identity is retired and the old input is rejected by writtenBefore.
+	checkpoint := false
+	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 300, hasWatermark: true, onFlush: func() { checkpoint = true }}))
+	record, err := memory.newAck(ctx, 128)
+	require.NoError(t, err)
+	require.NoError(t, a.queueDDL(ctx, first, record))
+	require.NoError(t, w.consume(ctx, a.nextReady(300)))
+	memory.decoded(record, 128)
+	require.NoError(t, w.flushDML(ctx))
+	require.True(t, checkpoint, "retiring the last replay must unblock the watermark")
+	require.Empty(t, w.ddlJobs)
+	require.Zero(t, record.refs.Load())
+	memory.confirm(record)
+	require.Positive(t, memory.used())
+	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 301, hasWatermark: true}))
+	require.NoError(t, w.flushDML(ctx))
+	require.Zero(t, memory.used())
+	record, err = memory.newAck(ctx, 128)
+	require.NoError(t, err)
+	require.NoError(t, a.queueDDL(ctx, truncate, record))
+	require.NoError(t, w.consume(ctx, a.nextReady(301)))
+	memory.decoded(record, 128)
+	require.NoError(t, w.flushDML(ctx))
+	require.Empty(t, w.ddlJobs)
+	require.Zero(t, record.refs.Load())
+	memory.confirm(record)
+	require.Zero(t, memory.used())
+}
+
 func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -329,6 +411,8 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("DDL did not start after its affected write completed")
 	}
+	replayConfirmed := false
+	require.NoError(t, w.consume(ctx, &writeEvent{ddl: ddl, onFlush: func() { replayConfirmed = true }}))
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[1], sequential: true}))
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[2], sequential: true}))
 	checkpoint := false
@@ -340,6 +424,7 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 		t.Fatal("an independent table was blocked by the running DDL")
 	}
 	require.Len(t, w.pendingDML, 1)
+	require.False(t, replayConfirmed, "replay cannot be confirmed while its original DDL is running")
 	require.False(t, checkpoint, "watermark cannot pass an unfinished DDL")
 	close(releaseDDL)
 	select {
@@ -352,6 +437,7 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	require.NoError(t, w.flushDML(ctx))
 	require.Empty(t, w.pendingDML)
 	require.True(t, checkpoint)
+	require.True(t, replayConfirmed)
 }
 
 func TestWriterSeparatesUnversionedSchemas(t *testing.T) {

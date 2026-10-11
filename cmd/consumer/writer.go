@@ -50,6 +50,7 @@ type writer struct {
 	ddlDone           chan struct{}
 	inFlight          []*writeBatch
 	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
+	ddlWrites         map[ddlKey]bool
 	writtenBefore     uint64
 	inFlightBytes     int64
 	inFlightEvents    int
@@ -75,6 +76,13 @@ type mutationKey struct {
 	commitTs uint64
 	rowType  common.RowType
 	handle   string
+}
+
+type ddlKey struct {
+	commitTs uint64
+	schema   string
+	table    string
+	query    string
 }
 
 func (w *writer) consume(ctx context.Context, result *writeEvent) error {
@@ -121,33 +129,65 @@ func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
 }
 
 func (w *writer) flushDDL(ctx context.Context) error {
-	if w.ddlInFlight != nil || len(w.pendingDDL) == 0 {
-		return nil
-	}
-	result := w.pendingDDL[0]
-	for _, item := range w.pendingDML {
-		if item.dml.CommitTs <= result.ddl.GetCommitTs() && ddlBlocksTable(result.ddl, item.dml) {
+	for w.ddlInFlight == nil && len(w.pendingDDL) != 0 {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		result := w.pendingDDL[0]
+		ddl := result.ddl
+		// Failover can resend an old DDL after a newer one. Query is part of
+		// its identity because split DDLs can share the timestamp and table.
+		key := ddlKey{commitTs: ddl.GetCommitTs(), schema: ddl.SchemaName, table: ddl.TableName, query: ddl.Query}
+		if w.ddlWrites[key] || key.commitTs < w.writtenBefore {
+			// No DDL is in flight, so the original write has succeeded.
+			if result.onFlush != nil {
+				result.onFlush()
+			}
+			w.memory.release(result.bytes)
+			w.pendingDDL[0] = nil
+			w.pendingDDL = w.pendingDDL[1:]
+			w.progressChanged = true
+			continue
+		}
+		for _, item := range w.pendingDML {
+			if item.dml.CommitTs <= ddl.GetCommitTs() && ddlBlocksTable(ddl, item.dml) {
+				return nil
+			}
+		}
+		for _, batch := range w.inFlight {
+			if slices.ContainsFunc(batch.items, func(item *writeEvent) bool { return ddlBlocksTable(ddl, item.dml) }) {
+				return nil
+			}
+		}
+		bytes := int64(len(key.schema) + len(key.table) + len(key.query) + 192)
+		if err := w.memory.reserve(ctx, bytes); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			w.memory.release(bytes)
+			return context.Cause(ctx)
+		case w.ddlJobs <- result:
+			if w.ddlWrites == nil {
+				w.ddlWrites = make(map[ddlKey]bool)
+			}
+			w.ddlWrites[key] = true
+			w.ddlInFlight = result
+			w.pendingDDL[0] = nil
+			w.pendingDDL = w.pendingDDL[1:]
 			return nil
 		}
 	}
-	for _, batch := range w.inFlight {
-		if slices.ContainsFunc(batch.items, func(item *writeEvent) bool { return ddlBlocksTable(result.ddl, item.dml) }) {
-			return nil
-		}
-	}
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case w.ddlJobs <- result:
-		w.ddlInFlight = result
-		w.pendingDDL[0] = nil
-		w.pendingDDL = w.pendingDDL[1:]
-		return nil
-	}
+	w.advanceWatermarks()
+	return nil
 }
 
 func (w *writer) flushDML(ctx context.Context) error {
 	w.finishBatches()
+	// Retire replayed DDLs before they can fence later rows of the table.
+	if err := w.flushDDL(ctx); err != nil {
+		return err
+	}
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -381,6 +421,12 @@ func (w *writer) advanceWatermarks() {
 		if key.commitTs < w.writtenBefore {
 			released += int64(len(key.handle) + 192)
 			delete(w.mutations, key)
+		}
+	}
+	for key := range w.ddlWrites {
+		if key.commitTs < w.writtenBefore {
+			released += int64(len(key.schema) + len(key.table) + len(key.query) + 192)
+			delete(w.ddlWrites, key)
 		}
 	}
 	w.memory.release(released)
