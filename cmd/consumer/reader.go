@@ -122,7 +122,7 @@ type decodeConfig struct {
 	streams    []int32
 }
 
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (reader, *decodeConfig, error) {
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader, *decodeConfig, error) {
 	source, err := sourceTypeFromURI(upstreamURI)
 	if err != nil {
 		return nil, nil, err
@@ -130,11 +130,11 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone s
 	var r reader
 	switch source {
 	case sourceKafka:
-		r, err = newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig)
+		r, err = newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
 	case sourcePulsar:
-		r, err = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory)
+		r, err = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
-		r, err = newStorageReader(ctx, upstreamURI, replicaConfig, memory)
+		r, err = newStorageReader(ctx, upstreamURI, replicaConfig, memory, confirmable)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -145,7 +145,7 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone s
 		return nil, nil, err
 	}
 	if r, ok := r.(*kafkaReader); ok {
-		for id := range r.progress {
+		for id := range r.partitions {
 			decoding.streams = append(decoding.streams, id)
 		}
 	}
@@ -234,5 +234,10 @@ func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string,
 	if source == sourceStorage {
 		format = rowFormat
 	}
-	return &decodeConfig{codec: codecConfig, format: format, topic: strings.Trim(upstreamURI.Path, "/"), upstreamDB: db}, nil
+	return &decodeConfig{
+		codec:      codecConfig,
+		format:     format,
+		topic:      strings.Trim(upstreamURI.Path, "/"),
+		upstreamDB: db,
+	}, nil
 }

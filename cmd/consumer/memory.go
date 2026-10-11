@@ -32,8 +32,6 @@ type memoryUsage struct {
 	externalBytes func() int64
 	mu            sync.Mutex
 	changed       chan struct{}
-	completed     chan struct{}
-	confirmable   chan struct{}
 	schemas       map[*common.TableInfo]*schemaMemory
 }
 
@@ -74,7 +72,10 @@ func (m *memoryUsage) retainSchema(ctx context.Context, table *common.TableInfo)
 	if m.schemas == nil {
 		m.schemas = make(map[*common.TableInfo]*schemaMemory)
 	}
-	m.schemas[table] = &schemaMemory{refs: 1, bytes: bytes}
+	m.schemas[table] = &schemaMemory{
+		refs:  1,
+		bytes: bytes,
+	}
 	return nil
 }
 
@@ -85,7 +86,7 @@ func (m *memoryUsage) releaseSchema(table *common.TableInfo) {
 	m.mu.Lock()
 	schema := m.schemas[table]
 	schema.refs--
-	bytes := int64(0)
+	var bytes int64
 	if schema.refs == 0 {
 		bytes = schema.bytes
 		delete(m.schemas, table)
@@ -111,11 +112,25 @@ func (a *ack) release() {
 	}
 }
 
-func (m *memoryUsage) newAck(ctx context.Context, bytes int64) (*ack, error) {
+// A decoding operation keeps both the input and its parsed contents alive.
+func (a *ack) retainDecode() {
+	a.decodes.Inc()
+	a.refs.Inc()
+}
+
+func (m *memoryUsage) retainInput(ctx context.Context, record *ack, bytes int64) error {
+	if err := m.reserve(ctx, bytes); err != nil {
+		return err
+	}
+	record.memory.Add(bytes)
+	return nil
+}
+
+func (m *memoryUsage) newAck(ctx context.Context, bytes int64, done chan<- struct{}) (*ack, error) {
 	if err := m.reserve(ctx, bytes); err != nil {
 		return nil, err
 	}
-	record := &ack{done: m.confirmable}
+	record := &ack{done: done}
 	record.memory.Store(bytes)
 	record.refs.Store(1)
 	record.decodes.Store(1)
@@ -133,10 +148,6 @@ func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
 		m.release(record.memory.Swap(retainedBytes) - retainedBytes)
 	}
 	record.release()
-	select {
-	case m.completed <- struct{}{}:
-	default:
-	}
 }
 
 func (m *memoryUsage) used() int64 {

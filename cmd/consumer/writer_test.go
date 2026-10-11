@@ -108,7 +108,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 	})
 	memory := &memoryUsage{}
 	buffer := &assembler{memory: memory}
-	record, err := buffer.memory.newAck(t.Context(), 128)
+	record, err := buffer.memory.newAck(t.Context(), 128, nil)
 	require.NoError(t, err)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
@@ -150,7 +150,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 			{ID: 2, Name: ast.NewCIStr("v"), Offset: 1, State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
 		},
 	})
-	value := int64(0)
+	var value int64
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
 		for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
@@ -288,7 +288,7 @@ func TestWriterDDLReplay(t *testing.T) {
 	}
 	w.downstream = downstream
 	for index, ddl := range []*event.DDLEvent{truncate, drop, truncate, first, second, first} {
-		record, err := memory.newAck(ctx, 128)
+		record, err := memory.newAck(ctx, 128, nil)
 		require.NoError(t, err)
 		require.NoError(t, a.queueDDL(ctx, ddl, record))
 		require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
@@ -304,7 +304,7 @@ func TestWriterDDLReplay(t *testing.T) {
 		job := <-w.ddlJobs
 		var duplicate *ack
 		if index == 0 {
-			duplicate, err = memory.newAck(ctx, 128)
+			duplicate, err = memory.newAck(ctx, 128, nil)
 			require.NoError(t, err)
 			require.NoError(t, a.queueDDL(ctx, ddl, duplicate))
 			require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
@@ -328,7 +328,7 @@ func TestWriterDDLReplay(t *testing.T) {
 	// the identity is retired and the old input is rejected by writtenBefore.
 	checkpoint := false
 	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 300, hasWatermark: true, onFlush: func() { checkpoint = true }}))
-	record, err := memory.newAck(ctx, 128)
+	record, err := memory.newAck(ctx, 128, nil)
 	require.NoError(t, err)
 	require.NoError(t, a.queueDDL(ctx, first, record))
 	require.NoError(t, w.consume(ctx, a.nextReady(300)))
@@ -342,7 +342,7 @@ func TestWriterDDLReplay(t *testing.T) {
 	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 301, hasWatermark: true}))
 	require.NoError(t, w.flushDML(ctx))
 	require.Zero(t, memory.used())
-	record, err = memory.newAck(ctx, 128)
+	record, err = memory.newAck(ctx, 128, nil)
 	require.NoError(t, err)
 	require.NoError(t, a.queueDDL(ctx, truncate, record))
 	require.NoError(t, w.consume(ctx, a.nextReady(301)))
@@ -357,7 +357,8 @@ func TestWriterDDLReplay(t *testing.T) {
 func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	memory := &memoryUsage{completed: make(chan struct{}, 1)}
+	memory := &memoryUsage{}
+	completed := make(chan struct{}, 1)
 	var events []*event.DMLEvent
 	for index, table := range []string{"a", "a", "b"} {
 		info := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
@@ -390,10 +391,16 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 			return context.Cause(ctx)
 		}
 	})
-	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch), ddlJobs: make(chan *writeEvent, 1), ddlDone: make(chan struct{}, 1)}
-	c := &consumer{writer: w}
+	w := &writer{
+		downstream: downstream,
+		memory:     memory,
+		completed:  completed,
+		mutations:  make(map[mutationKey]*writeBatch),
+		ddlJobs:    make(chan *writeEvent, 1),
+		ddlDone:    make(chan struct{}, 1),
+	}
 	var wg sync.WaitGroup
-	wg.Go(func() { _ = c.executeDDL(ctx) })
+	wg.Go(func() { _ = w.executeDDL(ctx) })
 	defer func() { cancel(); wg.Wait() }()
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[0], sequential: true}))
 	require.NoError(t, w.flushDML(ctx))
@@ -426,14 +433,16 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	require.Len(t, w.pendingDML, 1)
 	require.False(t, replayConfirmed, "replay cannot be confirmed while its original DDL is running")
 	require.False(t, checkpoint, "watermark cannot pass an unfinished DDL")
+	select {
+	case <-completed:
+	default:
+	}
 	close(releaseDDL)
 	select {
-	case <-w.ddlDone:
+	case <-completed:
 	case <-ctx.Done():
 		t.Fatal("DDL did not complete")
 	}
-	w.ddlInFlight = nil
-	w.progressChanged = true
 	require.NoError(t, w.flushDML(ctx))
 	require.Empty(t, w.pendingDML)
 	require.True(t, checkpoint)

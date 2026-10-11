@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	putil "github.com/pingcap/ticdc/pkg/util"
@@ -68,21 +69,26 @@ type storageTableKey struct {
 	partition int64
 }
 
+type storageSchema struct {
+	file  *cloudstorage.SchemaFile
+	table *common.TableInfo
+	bytes int64
+}
+
 type storageReader struct {
-	tables         map[cloudstorage.SchemaPathKey]*common.TableInfo
 	tableIDs       map[storageTableKey]int64
 	nextTableID    int64
 	group          *readGroup
 	groupKey       cloudstorage.DMLPathKey
 	storage        storeapi.Storage
 	memory         *memoryUsage
+	confirmable    chan<- struct{}
 	dateSeparator  config.DateSeparator
 	fileExtension  string
 	fileIndexWidth int
 	checkpoint     uint64
 	readCheckpoint uint64
-	schemas        map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
-	schemaBytes    map[cloudstorage.SchemaPathKey]int64
+	schemas        map[cloudstorage.SchemaPathKey]*storageSchema
 	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks  map[string]uint64
 	mu             sync.Mutex
@@ -91,7 +97,7 @@ type storageReader struct {
 	scanned        bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*storageReader, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (*storageReader, error) {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
 	}
@@ -114,14 +120,16 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 	}
 
 	c := &storageReader{
-		storage: storage, memory: memory,
-		dateSeparator: putil.GetOrZero(replicaConfig.Sink.DateSeparator), fileExtension: helper.GetFileExtension(protocol),
+		storage:        storage,
+		memory:         memory,
+		confirmable:    confirmable,
+		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
+		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
-		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile), fileIndices: make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
-		schemaBytes:   make(map[cloudstorage.SchemaPathKey]int64),
-		ddlWatermarks: make(map[string]uint64),
-		tables:        make(map[cloudstorage.SchemaPathKey]*common.TableInfo),
-		tableIDs:      make(map[storageTableKey]int64),
+		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema),
+		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
+		ddlWatermarks:  make(map[string]uint64),
+		tableIDs:       make(map[storageTableKey]int64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c, nil
@@ -163,15 +171,11 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			c.memory.release(bytes)
 		}
 	}
-	for key := range c.schemas {
+	for key, schema := range c.schemas {
 		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 			delete(c.schemas, key)
-			c.memory.release(c.schemaBytes[key])
-			delete(c.schemaBytes, key)
-			if table := c.tables[key]; table != nil {
-				c.memory.releaseSchema(table)
-				delete(c.tables, key)
-			}
+			c.memory.release(schema.bytes)
+			c.memory.releaseSchema(schema.table)
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
@@ -197,7 +201,10 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 			return nil
 		}
-		paths = append(paths, &storageIndex{path: path, key: key})
+		paths = append(paths, &storageIndex{
+			path: path,
+			key:  key,
+		})
 		return nil
 	})
 	if err != nil {
@@ -236,7 +243,10 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 			if files[key] == nil {
 				files[key] = make(map[cloudstorage.FileIndexKey]storageIndexRange)
 			}
-			files[key][index.FileIndexKey] = storageIndexRange{start: previous + 1, end: index.Idx}
+			files[key][index.FileIndexKey] = storageIndexRange{
+				start: previous + 1,
+				end:   index.Idx,
+			}
 		}
 	}
 	return files, nil
@@ -294,11 +304,10 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if err := c.memory.reserve(ctx, bytes); err != nil {
 		return key, false, err
 	}
-	c.schemas[key] = &file
-	if c.schemaBytes == nil {
-		c.schemaBytes = make(map[cloudstorage.SchemaPathKey]int64)
+	c.schemas[key] = &storageSchema{
+		file:  &file,
+		bytes: bytes,
 	}
-	c.schemaBytes[key] = bytes
 	return key, true, nil
 }
 
@@ -348,7 +357,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 					c.inputs = append(c.inputs, storageInput{key: key})
 					continue
 				}
-				sortBeforeWrite := false
+				var sortBeforeWrite bool
 				for indexKey := range files[key] {
 					sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
 				}
@@ -356,12 +365,23 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 					if err := c.memory.reserve(ctx, 256); err != nil {
 						return nil, err
 					}
-					c.inputs = append(c.inputs, storageInput{key: key, index: cloudstorage.FileIndex{FileIndexKey: indexKey, Idx: span.start}, end: span.end, sort: sortBeforeWrite})
+					c.inputs = append(c.inputs, storageInput{
+						key: key,
+						index: cloudstorage.FileIndex{
+							FileIndexKey: indexKey,
+							Idx:          span.start,
+						},
+						end:  span.end,
+						sort: sortBeforeWrite,
+					})
 				}
 				if err := c.memory.reserve(ctx, 256); err != nil {
 					return nil, err
 				}
-				c.inputs = append(c.inputs, storageInput{key: key, groupEnd: true})
+				c.inputs = append(c.inputs, storageInput{
+					key:      key,
+					groupEnd: true,
+				})
 			}
 			continue
 		}
@@ -380,29 +400,43 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
 		}
 		if key.IsSchemaFileDMLPathKey() {
-			if schema.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
+			if schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey] {
 				continue
 			}
-			size := int64(len(schema.Query) + len(key.Schema) + len(key.Table) + 1024)
-			record, err := c.memory.newAck(ctx, size)
+			size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
+			record, err := c.memory.newAck(ctx, size, c.confirmable)
 			if err != nil {
 				return nil, err
 			}
 			c.mu.Lock()
 			c.records = append(c.records, record)
 			c.mu.Unlock()
-			table := c.tables[key.SchemaPathKey]
+			table := schema.table
 			if table == nil {
-				table = schema.TableInfo()
-				table.UpdateTS = schema.TableVersion
+				table = schema.file.TableInfo()
+				table.UpdateTS = schema.file.TableVersion
 				if err := c.memory.retainSchema(ctx, table); err != nil {
 					return nil, err
 				}
-				c.tables[key.SchemaPathKey] = table
+				schema.table = table
 			}
-			ddl := schema.DDLEvent()
-			ddl.TableInfo = table
-			return &readData{table: table, ddl: ddl, record: record, retainedBytes: 256, ddlBoundary: &readBoundary{reached: true}}, nil
+			// Reuse the cached table instead of reconstructing its columns again.
+			ddl := &event.DDLEvent{
+				TableInfo:     table,
+				FinishedTs:    schema.file.TableVersion,
+				Type:          schema.file.Type,
+				Query:         schema.file.Query,
+				SchemaName:    schema.file.Schema,
+				TableName:     schema.file.Table,
+				BlockedTables: &event.InfluencedTables{InfluenceType: event.InfluenceTypeAll},
+			}
+			return &readData{
+				table:         table,
+				ddl:           ddl,
+				record:        record,
+				retainedBytes: 256,
+				ddlBoundary:   &readBoundary{reached: true},
+			}, nil
 		}
 		if key.TableVersion < c.ddlWatermarks[tableKey] {
 			if !input.groupEnd {
@@ -410,16 +444,20 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			}
 			continue
 		}
-		table := c.tables[key.SchemaPathKey]
+		table := schema.table
 		if table == nil {
-			table = schema.TableInfo()
-			table.UpdateTS = schema.TableVersion
+			table = schema.file.TableInfo()
+			table.UpdateTS = schema.file.TableVersion
 			if err := c.memory.retainSchema(ctx, table); err != nil {
 				return nil, err
 			}
-			c.tables[key.SchemaPathKey] = table
+			schema.table = table
 		}
-		idKey := storageTableKey{schema: key.Schema, table: key.Table, partition: key.PartitionNum}
+		idKey := storageTableKey{
+			schema:    key.Schema,
+			table:     key.Table,
+			partition: key.PartitionNum,
+		}
 		tableID := c.tableIDs[idKey]
 		if tableID == 0 {
 			if len(c.tableIDs) >= maxRecords {
@@ -437,11 +475,19 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			if input.sort {
 				order = commitOrder
 			}
-			c.group = &readGroup{tableID: tableID, order: order, boundary: &readBoundary{reached: !input.sort}}
+			c.group = &readGroup{
+				tableID:  tableID,
+				order:    order,
+				boundary: &readBoundary{reached: !input.sort},
+			}
 			c.groupKey = key
 		}
 		if input.groupEnd {
-			return &readData{table: table, group: c.group, groupEnd: true}, nil
+			return &readData{
+				table:    table,
+				group:    c.group,
+				groupEnd: true,
+			}, nil
 		}
 		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 		file, err := c.storage.Open(ctx, path, nil)
@@ -457,7 +503,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			_ = file.Close()
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
 		}
-		record, err := c.memory.newAck(ctx, size+256)
+		record, err := c.memory.newAck(ctx, size+256, c.confirmable)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
@@ -486,7 +532,15 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		c.records = append(c.records, record)
 		c.mu.Unlock()
 		c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
-		return &readData{format: rowFormat, value: data, table: table, group: c.group, record: record, retainedBytes: 256, dmlBoundary: c.group.boundary}, nil
+		return &readData{
+			format:        rowFormat,
+			value:         data,
+			table:         table,
+			group:         c.group,
+			record:        record,
+			retainedBytes: 256,
+			dmlBoundary:   c.group.boundary,
+		}, nil
 	}
 }
 
@@ -533,7 +587,7 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	count := 0
+	var count int
 	for _, record := range c.records {
 		refs := record.refs.Load()
 		if refs < 0 {

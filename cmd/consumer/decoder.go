@@ -27,8 +27,9 @@ import (
 // Protocol cursors and schema updates remain with the assembler. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
-	inputs []chan *decodeTask
-	memory *memoryUsage
+	inputs    []chan *decodeTask
+	memory    *memoryUsage
+	completed chan<- struct{}
 }
 
 type decodeTask struct {
@@ -42,17 +43,20 @@ type decodeTask struct {
 	retainedBytes int64
 }
 
-func newDecoderGroup(memory *memoryUsage) *decoderGroup {
+func newDecoderGroup(memory *memoryUsage, completed chan<- struct{}) *decoderGroup {
 	inputs := make([]chan *decodeTask, runtime.GOMAXPROCS(0))
 	for i := range inputs {
 		inputs[i] = make(chan *decodeTask, 64)
 	}
-	return &decoderGroup{inputs: inputs, memory: memory}
+	return &decoderGroup{
+		inputs:    inputs,
+		memory:    memory,
+		completed: completed,
+	}
 }
 
 func (g *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
-	task.record.decodes.Inc()
-	task.record.refs.Inc()
+	task.record.retainDecode()
 	// A table keeps conversion order as well as write order. Different tables
 	// share CPU workers, independently of their upstream partition placement.
 	index := uint64(task.message.TableID) % uint64(len(g.inputs))
@@ -96,7 +100,7 @@ func (g *decoderGroup) decode(ctx context.Context, input <-chan *decodeTask) err
 			task.message, task.record, task.table = nil, nil, nil
 			close(task.done)
 			select {
-			case g.memory.completed <- struct{}{}:
+			case g.completed <- struct{}{}:
 			default:
 			}
 		}

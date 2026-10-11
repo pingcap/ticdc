@@ -38,6 +38,99 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
+func (a *assembler) assemble(ctx context.Context, results <-chan *writeEvent, result *writeEvent) ([]*writeEvent, error) {
+	var (
+		rows  int64
+		bytes int64
+	)
+collect:
+	for count := range batchRows {
+		a.decoding = append(a.decoding, result)
+		bytes += result.bytes
+		if result.dml != nil {
+			rows += int64(result.dml.Len())
+		}
+		if count+1 == batchRows || rows >= batchRows || bytes >= batchBytes {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case next, ok := <-results:
+			if !ok {
+				break collect
+			}
+			result = next
+		default:
+			break collect
+		}
+	}
+	return a.collectDecoded(ctx)
+}
+
+// Join conversion results in table order. A slow table does not hold up other
+// tables, but controls cannot pass unfinished conversions in their scope.
+func (a *assembler) collectDecoded(ctx context.Context) ([]*writeEvent, error) {
+	var (
+		items           []*writeEvent
+		blockedRows     []*writeEvent
+		blockedControls []*writeEvent
+		blockedTables   map[int64]bool
+	)
+	remaining := a.decoding[:0]
+	for _, item := range a.decoding {
+		ready := true
+		if item.decoding != nil {
+			select {
+			case <-item.decoding.done:
+			default:
+				ready = false
+			}
+		}
+		if ready && len(remaining) != 0 {
+			ready = !a.mergeRows && (item.dml == nil || !blockedTables[item.dml.PhysicalTableID])
+			for _, prior := range blockedControls {
+				if item.hasWatermark || (prior.ddl != nil && (item.dml == nil || ddlBlocksTable(prior.ddl, item.dml))) {
+					ready = false
+					break
+				}
+			}
+			// Ordinary DML only checks its table and the few pending controls.
+			// Scan row scopes when a control itself needs a completion barrier.
+			if item.dml == nil {
+				for _, prior := range blockedRows {
+					if (item.ddl != nil && ddlBlocksTable(item.ddl, prior.dml)) ||
+						(item.hasWatermark && prior.dml.CommitTs <= item.watermark) {
+						ready = false
+						break
+					}
+				}
+			}
+		}
+		if !ready {
+			if item.dml != nil {
+				if blockedTables == nil {
+					blockedTables = make(map[int64]bool)
+				}
+				blockedTables[item.dml.PhysicalTableID] = true
+				blockedRows = append(blockedRows, item)
+			} else {
+				blockedControls = append(blockedControls, item)
+			}
+			remaining = append(remaining, item)
+			continue
+		}
+		if task := item.decoding; task != nil {
+			task.dml.AddPostFlushFunc(item.dml.PostFlush)
+			item.dml, item.bytes, item.decoding = task.dml, item.bytes+task.bytes, nil
+		}
+		items = append(items, item)
+	}
+	clear(a.decoding[len(remaining):])
+	a.decoding = remaining
+	return a.prepare(ctx, items)
+}
+
 type writeEvent struct {
 	dml          *event.DMLEvent
 	decoding     *decodeTask
@@ -104,7 +197,10 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 			remaining = remaining[1:]
 			continue
 		}
-		rows, bytes := 0, int64(256)
+		var (
+			rows  int
+			bytes int64 = 256
+		)
 		for _, part := range remaining[:end] {
 			rows += len(part.dml.RowTypes)
 			bytes += part.dml.Rows.MemoryUsage() + int64(len(part.dml.RowTypes))*64
@@ -147,7 +243,11 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 			dml.AddPostEnqueueFunc(part.PostEnqueue)
 			dml.AddPostFlushFunc(part.PostFlush)
 		}
-		prepared = append(prepared, &writeEvent{dml: dml, bytes: retained + bytes, sequential: true})
+		prepared = append(prepared, &writeEvent{
+			dml:        dml,
+			bytes:      retained + bytes,
+			sequential: true,
+		})
 		remaining = remaining[end:]
 	}
 	clear(items[len(prepared):])
@@ -175,6 +275,7 @@ type assembler struct {
 	watermark         uint64
 	mergeRows         bool
 	sortCSVRows       bool
+	decoding          []*writeEvent // Owned by the goroutine that collects conversion results.
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
 	unproven          []*writeEvent
@@ -236,22 +337,37 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 		}
 		switch stmt := stmt.(type) {
 		case *ast.CreateTableStmt:
+			// Schema-file decoding uses a legacy flush-all default. CREATE only
+			// fences its new table and, for LIKE, the source table named below.
+			ddl.BlockedTables = &event.InfluencedTables{InfluenceType: event.InfluenceTypeNormal}
 			if stmt.ReferTable != nil {
 				for _, table := range []*ast.TableName{stmt.Table, stmt.ReferTable} {
-					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName), TableName: table.Name.O})
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{
+						SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName),
+						TableName:  table.Name.O,
+					})
 				}
 			}
 		case *ast.RenameTableStmt:
 			for _, pair := range stmt.TableToTables {
 				for _, table := range []*ast.TableName{pair.OldTable, pair.NewTable} {
-					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName), TableName: table.Name.O})
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{
+						SchemaName: cmp.Or(table.Schema.O, ddl.SchemaName),
+						TableName:  table.Name.O,
+					})
 				}
 			}
 		case *ast.AlterTableStmt:
-			ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(stmt.Table.Schema.O, ddl.SchemaName), TableName: stmt.Table.Name.O})
+			ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{
+				SchemaName: cmp.Or(stmt.Table.Schema.O, ddl.SchemaName),
+				TableName:  stmt.Table.Name.O,
+			})
 			for _, spec := range stmt.Specs {
 				if spec.Tp == ast.AlterTableExchangePartition && spec.NewTable != nil {
-					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{SchemaName: cmp.Or(spec.NewTable.Schema.O, ddl.SchemaName), TableName: spec.NewTable.Name.O})
+					ddl.BlockedTableNames = append(ddl.BlockedTableNames, event.SchemaTableName{
+						SchemaName: cmp.Or(spec.NewTable.Schema.O, ddl.SchemaName),
+						TableName:  spec.NewTable.Name.O,
+					})
 				}
 			}
 		}
@@ -275,12 +391,16 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 		}
 	}
 	record.refs.Add(1)
-	a.pendingDDL = append(a.pendingDDL, &writeEvent{ddl: ddl, bytes: bytes, onFlush: func() {
-		for _, table := range tables {
-			a.memory.releaseSchema(table)
-		}
-		record.release()
-	}})
+	a.pendingDDL = append(a.pendingDDL, &writeEvent{
+		ddl:   ddl,
+		bytes: bytes,
+		onFlush: func() {
+			for _, table := range tables {
+				a.memory.releaseSchema(table)
+			}
+			record.release()
+		},
+	})
 	return nil
 }
 
@@ -289,9 +409,9 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	if len(a.pendingDDL) != 0 {
 		head = a.pendingDDL[0]
 	}
-	headReady := false
+	var headReady bool
 	if head != nil {
-		early := false
+		var early bool
 		switch timodel.ActionType(head.ddl.Type) {
 		case timodel.ActionCreateSchema:
 			early = true
@@ -315,7 +435,7 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	}
 	a.scanWatermark, a.scanDDL, a.scanDDLReady = watermark, head, headReady
 	readyIndex := -1
-	priority := false
+	var priority bool
 	if headReady {
 		ready := true
 		for index := a.priorityIndex; index < len(a.pendingDML); index++ {
@@ -486,7 +606,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage, completed chan<- struct{}) (*assembler, error) {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -512,9 +632,13 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		}
 	}
 	return &assembler{
-		memory: memory, codecConfig: decoding.codec, upstreamDB: decoding.upstreamDB,
-		selectors: selectors, streams: streams,
-		decoder: newDecoderGroup(memory), tables: make(map[[2]string]*common.TableInfo),
+		memory:      memory,
+		codecConfig: decoding.codec,
+		upstreamDB:  decoding.upstreamDB,
+		selectors:   selectors,
+		streams:     streams,
+		decoder:     newDecoderGroup(memory, completed),
+		tables:      make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
 	}, nil
@@ -614,7 +738,10 @@ func (a *assembler) applyProgress(progress readProgress) {
 		a.watermark = progress.watermark
 	}
 	if control := progress.control; control != nil {
-		item := &writeEvent{watermark: control.watermark, hasWatermark: true}
+		item := &writeEvent{
+			watermark:    control.watermark,
+			hasWatermark: true,
+		}
 		if len(control.records) != 0 {
 			item.onFlush = func() {
 				for _, record := range control.records {
@@ -646,7 +773,10 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 				})
 			}
 		}
-		progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true})
+		progress, err := reader.Advance(ctx, readFeedback{
+			data:    data,
+			decoded: true,
+		})
 		if err != nil {
 			return err
 		}
@@ -657,7 +787,10 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 		if err := a.assembleDDL(ctx, data, data.ddl, reader); err != nil {
 			return err
 		}
-		progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true})
+		progress, err := reader.Advance(ctx, readFeedback{
+			data:    data,
+			decoded: true,
+		})
 		if err != nil {
 			return err
 		}
@@ -673,10 +806,9 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 		// Row decoders retain parsed records alongside the encoded file until
 		// the input is exhausted. Include their scratch space in its lifetime.
 		bytes := int64(len(data.value))*3 + 256
-		if err := a.memory.reserve(ctx, bytes); err != nil {
+		if err := a.memory.retainInput(ctx, data.record, bytes); err != nil {
 			return err
 		}
-		data.record.memory.Add(bytes)
 		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
@@ -727,14 +859,29 @@ func (a *assembler) assembleMessage(ctx context.Context, data *readData, message
 	name := [2]string{message.Schema, message.Table}
 	table := a.tables[name]
 	if table == nil {
-		table = &common.TableInfo{TableName: common.TableName{Schema: message.Schema, Table: message.Table, TableID: tableID}}
+		table = &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  message.Schema,
+				Table:   message.Table,
+				TableID: tableID,
+			},
+		}
 		if err := a.memory.reserve(ctx, int64(512+len(message.Schema)+len(message.Table))); err != nil {
 			return err
 		}
 		a.tables[name] = table
 	}
-	dml := &event.DMLEvent{PhysicalTableID: tableID, CommitTs: message.GetCommitTs(), TableInfo: table, Length: 1, RowTypes: []common.RowType{message.RowType}}
-	progress, err := reader.Advance(ctx, readFeedback{data: data, dml: dml})
+	dml := &event.DMLEvent{
+		PhysicalTableID: tableID,
+		CommitTs:        message.GetCommitTs(),
+		TableInfo:       table,
+		Length:          1,
+		RowTypes:        []common.RowType{message.RowType},
+	}
+	progress, err := reader.Advance(ctx, readFeedback{
+		data: data,
+		dml:  dml,
+	})
 	if err != nil {
 		return err
 	}
@@ -742,8 +889,18 @@ func (a *assembler) assembleMessage(ctx context.Context, data *readData, message
 	if progress.skip {
 		return nil
 	}
-	task := &decodeTask{message: message, record: record, done: make(chan struct{}), table: data.table, tableID: tableID, retainedBytes: data.retainedBytes}
-	item := &writeEvent{dml: dml, decoding: task}
+	task := &decodeTask{
+		message:       message,
+		record:        record,
+		done:          make(chan struct{}),
+		table:         data.table,
+		tableID:       tableID,
+		retainedBytes: data.retainedBytes,
+	}
+	item := &writeEvent{
+		dml:      dml,
+		decoding: task,
+	}
 	if err := a.queueDML(ctx, item, record, data.dmlBoundary); err != nil {
 		return err
 	}
@@ -754,11 +911,15 @@ func (a *assembler) assembleDDL(ctx context.Context, data *readData, ddl *event.
 	if err := setDDLTableNames(ddl); err != nil {
 		return err
 	}
-	needsMoreInput := false
+	var needsMoreInput bool
 	if stream := a.streams[data.stream]; stream != nil {
 		needsMoreInput = len(stream.cachedRecords) != 0
 	}
-	progress, err := reader.Advance(ctx, readFeedback{data: data, ddl: ddl, needsMoreInput: needsMoreInput})
+	progress, err := reader.Advance(ctx, readFeedback{
+		data:           data,
+		ddl:            ddl,
+		needsMoreInput: needsMoreInput,
+	})
 	if err != nil {
 		return err
 	}
@@ -787,10 +948,9 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 	// Captured protocol data remains live while conversion jobs run. Account
 	// once per input, not once per derived row in a batched message.
 	bytes := int64(len(data.key)+len(data.value))*3 + 256
-	if err := a.memory.reserve(ctx, bytes); err != nil {
+	if err := a.memory.retainInput(ctx, record, bytes); err != nil {
 		return err
 	}
-	record.memory.Add(bytes)
 	p.decoder.AddKeyValue(data.key, data.value)
 	for {
 		messageType, hasNext := p.decoder.HasNext()
@@ -805,8 +965,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 				if !ok {
 					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 				}
-				record.refs.Add(1)
-				record.decodes.Inc()
+				record.retainDecode()
 				if p.cachedRecords == nil {
 					p.cachedRecords = make(map[*codecCommon.DMLMessage]*ack)
 				}
@@ -868,7 +1027,10 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 			}
 		case codecCommon.MessageTypeResolved:
 			progress, err := reader.Advance(ctx, readFeedback{
-				data: data, watermark: p.decoder.NextResolvedEvent(), hasWatermark: true, needsMoreInput: len(p.cachedRecords) != 0,
+				data:           data,
+				watermark:      p.decoder.NextResolvedEvent(),
+				hasWatermark:   true,
+				needsMoreInput: len(p.cachedRecords) != 0,
 			})
 			if err != nil {
 				return err
@@ -878,7 +1040,11 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type")
 		}
 	}
-	progress, err := reader.Advance(ctx, readFeedback{data: data, decoded: true, needsMoreInput: len(p.cachedRecords) != 0})
+	progress, err := reader.Advance(ctx, readFeedback{
+		data:           data,
+		decoded:        true,
+		needsMoreInput: len(p.cachedRecords) != 0,
+	})
 	if err != nil {
 		return err
 	}

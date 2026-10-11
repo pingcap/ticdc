@@ -36,8 +36,13 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	ctx, cancelWorkers := context.WithCancelCause(ctx)
-	memory := &memoryUsage{completed: make(chan struct{}, 1)}
-	g := &decoderGroup{memory: memory, inputs: []chan *decodeTask{make(chan *decodeTask, 4), make(chan *decodeTask, 4)}}
+	memory := &memoryUsage{}
+	completed := make(chan struct{}, 1)
+	g := &decoderGroup{
+		memory:    memory,
+		completed: completed,
+		inputs:    []chan *decodeTask{make(chan *decodeTask, 4), make(chan *decodeTask, 4)},
+	}
 	a := &assembler{memory: memory, decoder: g, tables: make(map[[2]string]*common.TableInfo)}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	var (
@@ -49,13 +54,22 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 		commits = append(commits, dml.CommitTs)
 		dml.PostFlush()
 	}).Times(3)
-	c := &consumer{assembler: a, writer: &writer{memory: memory, downstream: downstream}}
+	c := &consumer{
+		assembler: a,
+		memory:    memory,
+		completed: completed,
+		writer: &writer{
+			memory:     memory,
+			downstream: downstream,
+			completed:  completed,
+		},
+	}
 	defer c.wg.Wait()
 	defer cancelWorkers(nil)
 	for _, input := range g.inputs {
 		c.wg.Go(func() { cancelWorkers(g.decode(ctx, input)) })
 	}
-	record, err := memory.newAck(ctx, 4096)
+	record, err := memory.newAck(ctx, 4096, nil)
 	require.NoError(t, err)
 	data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}
 	r := &pulsarReader{memory: memory}
@@ -83,11 +97,11 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			return dml
 		})
 		require.NoError(t, a.assembleMessage(ctx, data, message, record, r))
-		c.decoding = append(c.decoding, a.nextReady(0))
+		a.decoding = append(a.decoding, a.nextReady(0))
 	}
 	memory.decoded(record, 128)
 	select {
-	case <-c.decoding[2].decoding.done:
+	case <-a.decoding[2].decoding.done:
 	case <-ctx.Done():
 		t.Fatal("independent table could not convert while table a was blocked")
 	}
@@ -95,11 +109,16 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 	require.EqualValues(t, 4096, record.memory.Load())
 	require.Greater(t, record.refs.Load(), int64(0))
 	watermark := &writeEvent{watermark: 20, hasWatermark: true}
-	require.NoError(t, c.consumeBatch(ctx, nil, watermark))
+	items, err := a.assemble(ctx, nil, watermark)
+	require.NoError(t, err)
+	for _, item := range items {
+		require.NoError(t, c.writer.consume(ctx, item))
+	}
+	require.NoError(t, c.writer.flushDML(ctx))
 	require.Equal(t, []string{"b"}, written)
-	require.Len(t, c.decoding, 3)
+	require.Len(t, a.decoding, 3)
 	require.Zero(t, c.writer.writtenBefore)
-	first, second := c.decoding[0].decoding, c.decoding[1].decoding
+	first, second := a.decoding[0].decoding, a.decoding[1].decoding
 	close(release)
 	for _, task := range []*decodeTask{first, second} {
 		select {
@@ -110,10 +129,15 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 	}
 	require.EqualValues(t, 128, record.memory.Load())
 	require.Greater(t, record.refs.Load(), int64(0))
-	require.NoError(t, c.collectDecoded(ctx))
+	items, err = a.collectDecoded(ctx)
+	require.NoError(t, err)
+	for _, item := range items {
+		require.NoError(t, c.writer.consume(ctx, item))
+	}
+	require.NoError(t, c.writer.flushDML(ctx))
 	require.Equal(t, []string{"b", "a", "a"}, written)
 	require.Equal(t, []uint64{12, 10, 11}, commits)
-	require.Empty(t, c.decoding)
+	require.Empty(t, a.decoding)
 	require.Zero(t, record.refs.Load())
 	require.EqualValues(t, 20, c.writer.writtenBefore)
 	memory.confirm(record)
@@ -125,15 +149,24 @@ func TestDecodingDDLScope(t *testing.T) {
 			table := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "a", TableID: 1}}
 			pending := &writeEvent{dml: &event.DMLEvent{TableInfo: table, PhysicalTableID: 1, CommitTs: 10}, decoding: &decodeTask{done: make(chan struct{})}}
 			ddl := &writeEvent{ddl: &event.DDLEvent{SchemaName: "test", TableName: name, FinishedTs: 20, Type: byte(timodel.ActionAddColumn)}}
-			c := &consumer{assembler: &assembler{}, writer: &writer{memory: &memoryUsage{}, ddlJobs: make(chan *writeEvent, 1)}, decoding: []*writeEvent{pending, ddl}}
-			require.NoError(t, c.collectDecoded(t.Context()))
+			a := &assembler{decoding: []*writeEvent{pending, ddl}}
+			w := &writer{
+				memory:  &memoryUsage{},
+				ddlJobs: make(chan *writeEvent, 1),
+			}
+			items, err := a.collectDecoded(t.Context())
+			require.NoError(t, err)
+			for _, item := range items {
+				require.NoError(t, w.consume(t.Context(), item))
+			}
+			require.NoError(t, w.flushDML(t.Context()))
 			if name == "b" {
-				require.Len(t, c.writer.ddlJobs, 1)
-				require.Equal(t, ddl, <-c.writer.ddlJobs)
-				require.Equal(t, []*writeEvent{pending}, c.decoding)
+				require.Len(t, w.ddlJobs, 1)
+				require.Equal(t, ddl, <-w.ddlJobs)
+				require.Equal(t, []*writeEvent{pending}, a.decoding)
 			} else {
-				require.Empty(t, c.writer.ddlJobs)
-				require.Equal(t, []*writeEvent{pending, ddl}, c.decoding)
+				require.Empty(t, w.ddlJobs)
+				require.Equal(t, []*writeEvent{pending, ddl}, a.decoding)
 			}
 		})
 	}

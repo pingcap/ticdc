@@ -32,19 +32,27 @@ import (
 	"go.uber.org/zap"
 )
 
+type pulsarRecord struct {
+	ack       *ack
+	messageID pulsar.MessageID
+}
+
+type pulsarPartition struct {
+	records []pulsarRecord
+	mu      sync.Mutex // Protects records, shared by Read and Confirm.
+}
+
 type pulsarReader struct {
 	client       pulsar.Client
 	consumer     pulsar.Consumer
 	memory       *memoryUsage
-	records      map[int32][]*ack
-	mu           sync.Mutex
-	partitionIDs map[string]int32
-	messageIDs   map[*ack]pulsar.MessageID
+	partitions   map[string]*pulsarPartition
+	confirmable  chan<- struct{}
 	watermark    uint64
 	hasWatermark bool
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) (*pulsarReader, error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader, err error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
@@ -104,8 +112,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar authentication certificate and key must be configured together")
 	}
 	useOAuth2 := oauth2.OAuth2IssuerURL != "" || oauth2.OAuth2ClientID != "" || oauth2.OAuth2PrivateKey != "" || oauth2.OAuth2Audience != "" || oauth2.OAuth2Scope != ""
-	var err error
-	authCount := 0
+	var authCount int
 	for _, enabled := range []bool{token != "", tokenFile != "", certificate != "", useOAuth2} {
 		if enabled {
 			authCount++
@@ -138,38 +145,47 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "create Pulsar client")
 	}
+	defer func() {
+		if reader == nil {
+			client.Close()
+		}
+	}()
 	topics, err := client.TopicPartitions(topic)
 	if err != nil {
-		client.Close()
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "discover Pulsar partitions")
 	}
 	if len(topics) == 0 {
-		client.Close()
 		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar topic has an invalid partition count")
 	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
-		Topic: topic, SubscriptionName: consumerID, Type: pulsar.Exclusive,
-		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
-		ReceiverQueueSize:           64, MessageChannel: make(chan pulsar.ConsumerMessage, 64),
+		Topic:                             topic,
+		SubscriptionName:                  consumerID,
+		Type:                              pulsar.Exclusive,
+		SubscriptionInitialPosition:       pulsar.SubscriptionPositionEarliest,
+		ReceiverQueueSize:                 64,
+		MessageChannel:                    make(chan pulsar.ConsumerMessage, 64),
 		EnableAutoScaledReceiverQueueSize: true,
-		AckWithResponse:                   true, MaxPendingChunkedMessage: 1,
+		AckWithResponse:                   true,
+		MaxPendingChunkedMessage:          1,
 	})
 	if err != nil {
-		client.Close()
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "subscribe to Pulsar topic")
 	}
 	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
 	// scale down under the client memory limit; oversized messages may exceed it.
 	memory.externalBytes = func() int64 { return clientOptions.MemoryLimitBytes }
-	partitionIDs := make(map[string]int32, len(topics))
-	for index, partitionTopic := range topics {
-		partitionIDs[partitionTopic] = int32(index)
+	partitions := make(map[string]*pulsarPartition, len(topics))
+	for _, partitionTopic := range topics {
+		partitions[partitionTopic] = &pulsarPartition{}
 	}
 	c := &pulsarReader{
-		client: client, consumer: consumer, memory: memory, partitionIDs: partitionIDs,
-		records: make(map[int32][]*ack), messageIDs: make(map[*ack]pulsar.MessageID),
+		client:      client,
+		consumer:    consumer,
+		memory:      memory,
+		partitions:  partitions,
+		confirmable: confirmable,
 	}
-	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitionIDs)))
+	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c, nil
 }
 
@@ -181,25 +197,38 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		if !ok {
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar reader stopped unexpectedly")
 		}
-		partitionID, ok := c.partitionIDs[message.Topic()]
-		if !ok {
+		partition := c.partitions[message.Topic()]
+		if partition == nil {
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
 		}
-		size := int64(len(message.Key()) + len(message.Payload()) + len(message.ID().Serialize()) + 256)
-		record, err := c.memory.newAck(ctx, size)
+		messageID := message.ID()
+		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
+		record, err := c.memory.newAck(ctx, size, c.confirmable)
 		if err != nil {
 			return nil, err
 		}
-		c.mu.Lock()
-		c.messageIDs[record] = message.ID()
-		c.records[partitionID] = append(c.records[partitionID], record)
-		c.mu.Unlock()
-		return &readData{key: []byte(message.Key()), value: message.Payload(), record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}, nil
+		partition.mu.Lock()
+		partition.records = append(partition.records, pulsarRecord{
+			ack:       record,
+			messageID: messageID,
+		})
+		partition.mu.Unlock()
+		return &readData{
+			key:           []byte(message.Key()),
+			value:         message.Payload(),
+			record:        record,
+			retainedBytes: 256,
+			dmlBoundary:   &readBoundary{reached: true},
+			ddlOrder:      commitOrder,
+		}, nil
 	}
 }
 
 func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
-	result := readProgress{watermark: c.watermark, hasWatermark: c.hasWatermark}
+	result := readProgress{
+		watermark:    c.watermark,
+		hasWatermark: c.hasWatermark,
+	}
 	result.needsMoreInput = feedback.boundaryDDL != nil && (!c.hasWatermark || feedback.boundaryDDL.GetCommitTs() > c.watermark)
 	if !feedback.hasWatermark {
 		return result, nil
@@ -211,7 +240,10 @@ func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (read
 	}
 	feedback.data.record.refs.Add(1)
 	result.watermark, result.hasWatermark = c.watermark, true
-	result.control = &readControl{watermark: feedback.watermark, records: []*ack{feedback.data.record}}
+	result.control = &readControl{
+		watermark: feedback.watermark,
+		records:   []*ack{feedback.data.record},
+	}
 	return result, nil
 }
 
@@ -219,15 +251,19 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	counts := make(map[int32]int, len(c.records))
-	messageIDs := make(map[int32]pulsar.MessageID, len(c.records))
-	for partitionID, records := range c.records {
-		count := 0
-		for _, record := range records {
-			refs := record.refs.Load()
+	type pulsarCommit struct {
+		partition *pulsarPartition
+		count     int
+		messageID pulsar.MessageID
+	}
+	var commits []pulsarCommit
+	for _, partition := range c.partitions {
+		partition.mu.Lock()
+		var count int
+		for _, record := range partition.records {
+			refs := record.ack.refs.Load()
 			if refs < 0 {
-				c.mu.Unlock()
+				partition.mu.Unlock()
 				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
 			}
 			if refs != 0 {
@@ -235,29 +271,31 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 			}
 			count++
 		}
-		if count == 0 {
-			continue
+		if count != 0 {
+			commits = append(commits, pulsarCommit{
+				partition: partition,
+				count:     count,
+				messageID: partition.records[count-1].messageID,
+			})
 		}
-		counts[partitionID] = count
-		messageIDs[partitionID] = c.messageIDs[records[count-1]]
+		partition.mu.Unlock()
 	}
-	c.mu.Unlock()
-	for partitionID, count := range counts {
+	for _, commit := range commits {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		if err := c.consumer.AckIDCumulative(messageIDs[partitionID]); err != nil {
+		if err := c.consumer.AckIDCumulative(commit.messageID); err != nil {
 			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
 		}
-		c.mu.Lock()
-		records := c.records[partitionID]
-		for _, record := range records[:count] {
-			c.memory.confirm(record)
-			delete(c.messageIDs, record)
+		partition := commit.partition
+		partition.mu.Lock()
+		records := partition.records
+		for _, record := range records[:commit.count] {
+			c.memory.confirm(record.ack)
 		}
-		clear(records[:count])
-		c.records[partitionID] = records[count:]
-		c.mu.Unlock()
+		clear(records[:commit.count])
+		partition.records = records[commit.count:]
+		partition.mu.Unlock()
 	}
 	return nil
 }

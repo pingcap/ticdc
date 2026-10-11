@@ -110,7 +110,10 @@ func newCommand() *cobra.Command {
 }
 
 func start(ctx context.Context, options *options) (err error) {
-	if err := logger.InitLogger(&logger.Config{Level: options.logLevel, File: options.logFile}); err != nil {
+	if err := logger.InitLogger(&logger.Config{
+		Level: options.logLevel,
+		File:  options.logFile,
+	}); err != nil {
 		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
 	}
 	version.LogVersionInfo("consumer")
@@ -162,7 +165,11 @@ func start(ctx context.Context, options *options) (err error) {
 		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
 		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-		profileServer = &http.Server{Addr: profileAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		profileServer = &http.Server{
+			Addr:              profileAddress,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 		c.wg.Go(func() {
 			if err := profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
@@ -174,7 +181,7 @@ func start(ctx context.Context, options *options) (err error) {
 		c.wg.Go(func() { cancel(c.assembler.decoder.decode(ctx, input)) })
 	}
 	c.wg.Go(func() { cancel(c.confirm(ctx)) })
-	c.wg.Go(func() { cancel(c.executeDDL(ctx)) })
+	c.wg.Go(func() { cancel(c.writer.executeDDL(ctx)) })
 	c.wg.Go(func() {
 		defer close(results)
 		cancel(c.read(ctx, results))

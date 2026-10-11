@@ -40,9 +40,32 @@ const (
 	progressLogInterval = 5 * time.Second
 )
 
+func (w *writer) executeDDL(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case result := <-w.ddlJobs:
+			if err := w.writeDDL(ctx, result); err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case w.ddlDone <- struct{}{}:
+			}
+			select {
+			case w.completed <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
 type writer struct {
 	downstream        sink.Sink
 	memory            *memoryUsage
+	completed         chan<- struct{}
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
 	ddlInFlight       *writeEvent
@@ -129,6 +152,14 @@ func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
 }
 
 func (w *writer) flushDDL(ctx context.Context) error {
+	if w.ddlInFlight != nil {
+		select {
+		case <-w.ddlDone:
+			w.ddlInFlight = nil
+			w.progressChanged = true
+		default:
+		}
+	}
 	for w.ddlInFlight == nil && len(w.pendingDDL) != 0 {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -137,7 +168,12 @@ func (w *writer) flushDDL(ctx context.Context) error {
 		ddl := result.ddl
 		// Failover can resend an old DDL after a newer one. Query is part of
 		// its identity because split DDLs can share the timestamp and table.
-		key := ddlKey{commitTs: ddl.GetCommitTs(), schema: ddl.SchemaName, table: ddl.TableName, query: ddl.Query}
+		key := ddlKey{
+			commitTs: ddl.GetCommitTs(),
+			schema:   ddl.SchemaName,
+			table:    ddl.TableName,
+			query:    ddl.Query,
+		}
 		if w.ddlWrites[key] || key.commitTs < w.writtenBefore {
 			// No DDL is in flight, so the original write has succeeded.
 			if result.onFlush != nil {
@@ -199,7 +235,10 @@ func (w *writer) flushDML(ctx context.Context) error {
 			}
 		}
 		blocked := make(map[int64]bool)
-		rows, bytes := 0, int64(0)
+		var (
+			rows  int
+			bytes int64
+		)
 		items := make([]*writeEvent, 0, len(w.pendingDML))
 		tables := make(map[int64]*writeEvent)
 		for _, item := range w.pendingDML {
@@ -239,7 +278,11 @@ func (w *writer) flushDML(ctx context.Context) error {
 				return err
 			}
 		}
-		batch := &writeBatch{items: items, bytes: bytes, done: make(chan struct{})}
+		batch := &writeBatch{
+			items: items,
+			bytes: bytes,
+			done:  make(chan struct{}),
+		}
 		for _, item := range batch.items {
 			filtered, err := w.filterRows(ctx, item.dml, batch)
 			if err != nil {
@@ -293,7 +336,7 @@ func (w *writer) flushDML(ctx context.Context) error {
 					w.memory.release(batch.bytes)
 					close(batch.done)
 					select {
-					case w.memory.completed <- struct{}{}:
+					case w.completed <- struct{}{}:
 					default:
 					}
 				}
@@ -416,7 +459,7 @@ func (w *writer) advanceWatermarks() {
 	}
 	w.writtenBefore = max(w.writtenBefore, before)
 	// Retire identities only after input progress and all earlier writes pass.
-	released := int64(0)
+	var released int64
 	for key := range w.mutations {
 		if key.commitTs < w.writtenBefore {
 			released += int64(len(key.handle) + 192)
@@ -440,7 +483,10 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 		return dml, nil
 	}
 	keep := make([]bool, 0, dml.Len())
-	kept, physicalRows := 0, 0
+	var (
+		kept         int
+		physicalRows int
+	)
 	dml.Rewind()
 	defer dml.Rewind()
 	for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
@@ -462,7 +508,12 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 		}
 		retain := true
 		if len(handle) != 0 {
-			key := mutationKey{tableID: dml.PhysicalTableID, commitTs: dml.CommitTs, rowType: row.RowType, handle: string(handle)}
+			key := mutationKey{
+				tableID:  dml.PhysicalTableID,
+				commitTs: dml.CommitTs,
+				rowType:  row.RowType,
+				handle:   string(handle),
+			}
 			if previous, exists := w.mutations[key]; exists {
 				if previous != nil && previous != batch {
 					if err := w.waitBatch(ctx, previous); err != nil {
@@ -500,7 +551,7 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 	filtered.Rows = chunk.NewChunkWithCapacity(dml.TableInfo.GetFieldSlice(), physicalRows)
 	filtered.AddPostFlushFunc(dml.PostFlush)
 	filtered.AddPostEnqueueFunc(dml.PostEnqueue)
-	physicalOffset := 0
+	var physicalOffset int
 	for index, retain := range keep {
 		width := 1
 		if dml.RowTypes[physicalOffset] == common.RowTypeUpdate {
