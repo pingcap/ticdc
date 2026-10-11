@@ -1776,6 +1776,74 @@ func TestClaimCheckChecksumWithTimeZone(t *testing.T) {
 	}
 }
 
+func TestChecksumAfterColumnTypeChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelperWithTimeZone(t, time.UTC)
+	defer helper.Close()
+	helper.DDL2Event(`create table test.checksum_order (
+		id int primary key, c1 smallint, c2 int, unique index idx(c1, c2))`)
+	ddl := helper.DDL2Event("alter table test.checksum_order modify column c1 smallint unsigned default 2345")
+	dml, _ := helper.DML2UpdateEvent("test", "checksum_order",
+		"insert into test.checksum_order values (1, 23, 59)",
+		"update test.checksum_order set c1 = 2345 where id = 1")
+	columns := dml.TableInfo.GetColumns()
+	require.Greater(t, columns[1].ID, columns[2].ID)
+	row, ok := dml.GetNextRow()
+	require.True(t, ok)
+	checksum := func(row chunk.Row) uint32 {
+		data := rowcodec.RowData{}
+		for _, i := range []int{0, 2, 1} {
+			column := columns[i]
+			datum := row.GetDatum(i, &column.FieldType)
+			data.Cols = append(data.Cols, rowcodec.ColData{ColumnInfo: column, Datum: &datum})
+		}
+		value, err := data.Checksum(time.UTC)
+		require.NoError(t, err)
+		return value
+	}
+	event := &commonEvent.RowEvent{
+		PhysicalTableID: dml.PhysicalTableID, StartTs: dml.StartTs, CommitTs: dml.CommitTs,
+		TableInfo: dml.TableInfo, Event: row, ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Checksum: &integrity.Checksum{Current: checksum(row.Row), Previous: checksum(row.PreRow)},
+	}
+	for _, format := range []common.EncodingFormatType{common.EncodingFormatJSON, common.EncodingFormatAvro} {
+		t.Run(string(format), func(t *testing.T) {
+			cfg := common.NewConfig(config.ProtocolSimple)
+			cfg.EncodingFormat = format
+			cfg.EnableRowChecksum = true
+			ctx := context.Background()
+			enc, err := NewEncoder(cfg, nil)
+			require.NoError(t, err)
+			dec, err := NewDecoder(ctx, cfg, nil)
+			require.NoError(t, err)
+			message, err := enc.EncodeDDLEvent(ddl)
+			require.NoError(t, err)
+			dec.AddKeyValue(message.Key, message.Value)
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
+			decodedDDL := dec.NextDDLEvent()
+			decodedColumns := decodedDDL.TableInfo.GetColumns()
+			require.Equal(t, []string{"id", "c2", "c1"}, []string{
+				decodedColumns[0].Name.O, decodedColumns[1].Name.O, decodedColumns[2].Name.O,
+			})
+			require.Equal(t, []string{"id", "c1", "c2"}, []string{columns[0].Name.O, columns[1].Name.O, columns[2].Name.O})
+			require.NoError(t, enc.AppendRowChangedEvent(ctx, "", event))
+			messages := enc.Build()
+			require.Len(t, messages, 1)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
+			messageType, hasNext = dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+			decoded := dec.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(decoded.PostFlush)
+			decodedRow, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, event.Checksum, decodedRow.Checksum)
+			common.CompareRow(t, row, dml.TableInfo, decodedRow, decoded.TableInfo)
+		})
+	}
+}
+
 func TestLargeMessageHandleKeyOnly(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	mock.MatchExpectationsInOrder(false)

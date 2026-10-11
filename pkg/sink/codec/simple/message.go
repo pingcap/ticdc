@@ -16,6 +16,8 @@ package simple
 import (
 	"encoding/base64"
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"time"
 
@@ -217,6 +219,12 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 		}
 	}
 
+	// The consumer calculates checksums in schema order, which must follow column IDs.
+	// TableInfo is shared with the row chunks, so sort a copy of its column slice.
+	colInfos = slices.Clone(colInfos)
+	sort.Slice(colInfos, func(i, j int) bool {
+		return colInfos[i].ID < colInfos[j].ID
+	})
 	columns := make([]*columnSchema, 0, len(colInfos))
 	for _, col := range colInfos {
 		colSchema := newColumnSchema(col)
