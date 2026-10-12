@@ -71,12 +71,15 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			require.NoError(t, err)
 			schemas := &schemaUsage{memory: input.memory}
 			decoder := newDecoderGroup(schemas, nil)
+			t.Cleanup(decoder.close)
 			a, err := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, schemas, decoder)
 			require.NoError(t, err)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
 			}
-			decoder.start(ctx, g)
+			g.Go(func() error {
+				return decoder.start(ctx)
+			})
 			// The topic limit can grow while this reader keeps the original URI.
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
 			require.NoError(t, err)
@@ -211,9 +214,12 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	}()
 	schemas := &schemaUsage{memory: memory}
 	decoder := newDecoderGroup(schemas, nil)
+	t.Cleanup(decoder.close)
 	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, schemas, decoder)
 	require.NoError(t, err)
-	decoder.start(ctx, g)
+	g.Go(func() error {
+		return decoder.start(ctx)
+	})
 	r := &pulsarReader{memory: memory}
 	var records []*ack
 	for _, table := range []string{"a", "b"} {

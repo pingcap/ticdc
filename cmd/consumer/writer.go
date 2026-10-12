@@ -42,7 +42,7 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}, progressTick <-chan time.Time) (*writer, error) {
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}) (*writer, error) {
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
@@ -56,22 +56,22 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		return nil, err
 	}
 	return &writer{
-		downstream:   downstream,
-		memory:       progress.memory,
-		progress:     progress,
-		completed:    completed,
-		mutations:    make(map[mutationKey]*writeBatch),
-		progressTick: progressTick,
-		ddlJobs:      make(chan *writeEvent, 1),
-		ddlDone:      make(chan struct{}, 1),
+		downstream: downstream,
+		memory:     progress.memory,
+		progress:   progress,
+		completed:  completed,
+		mutations:  make(map[mutationKey]*writeBatch),
+		ddlJobs:    make(chan *writeEvent, 1),
+		ddlDone:    make(chan struct{}, 1),
 	}, nil
 }
 
-func (w *writer) start(ctx context.Context, g *errgroup.Group) {
-	g.Go(func() error {
+func (w *writer) start(ctx context.Context) error {
+	w.g, ctx = errgroup.WithContext(ctx)
+	w.g.Go(func() error {
 		return w.executeDDL(ctx)
 	})
-	g.Go(func() error {
+	w.g.Go(func() error {
 		err := w.downstream.Run(ctx)
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
@@ -81,6 +81,17 @@ func (w *writer) start(ctx context.Context, g *errgroup.Group) {
 		}
 		return errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
 	})
+	// Report cancellation before close joins tasks blocked on sink queues.
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+func (w *writer) close() {
+	// Close also wakes sinks whose input channel is blocked while idle.
+	w.downstream.Close()
+	if w.g != nil {
+		_ = w.g.Wait()
+	}
 }
 
 func (w *writer) executeDDL(ctx context.Context) error {
@@ -106,6 +117,7 @@ func (w *writer) executeDDL(ctx context.Context) error {
 }
 
 type writer struct {
+	g                 *errgroup.Group
 	downstream        sink.Sink
 	memory            *memoryUsage
 	progress          *inputProgress
@@ -126,7 +138,6 @@ type writer struct {
 	pendingWatermarks []*writeEvent
 	watermark         uint64
 	progressChanged   bool
-	progressTick      <-chan time.Time
 }
 type writeBatch struct {
 	items   []*writeEvent
@@ -440,6 +451,8 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 }
 
 func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
+	ticker := time.NewTicker(progressLogInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -447,7 +460,7 @@ func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 		case <-batch.done:
 			w.finishBatches()
 			return nil
-		case <-w.progressTick:
+		case <-ticker.C:
 			log.Info("consumer waiting for batch",
 				zap.Int64("receivedInputs", w.progress.received.Load()), zap.Int64("decodedRows", w.decodedRows),
 				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.progress.confirmed.Load()),

@@ -28,6 +28,7 @@ import (
 // Protocol cursors and schema updates remain with the assembler. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
+	g         *errgroup.Group
 	input     chan *decodeTask
 	workers   int
 	memory    *memoryUsage
@@ -77,11 +78,21 @@ func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	}
 }
 
-func (d *decoderGroup) start(ctx context.Context, g *errgroup.Group) {
+func (d *decoderGroup) start(ctx context.Context) error {
+	d.g, ctx = errgroup.WithContext(ctx)
 	for range d.workers {
-		g.Go(func() error {
+		d.g.Go(func() error {
 			return d.decodeRows(ctx)
 		})
+	}
+	// The caller cancels shared input resources before close joins workers.
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+func (d *decoderGroup) close() {
+	if d.g != nil {
+		_ = d.g.Wait()
 	}
 }
 

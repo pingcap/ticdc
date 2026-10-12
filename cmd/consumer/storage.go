@@ -154,7 +154,7 @@ func (c *storageReader) readFile(ctx context.Context, path string, limit int64) 
 	}
 	defer func() {
 		if err := reader.Close(); err != nil {
-			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(errors.WrapError(errors.ErrExternalStorageAPI, err, "close Storage file")))
+			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(err))
 		}
 	}()
 	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
@@ -519,7 +519,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, tab
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
-			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(errors.WrapError(errors.ErrExternalStorageAPI, err, "close Storage DML file")))
+			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(err))
 		}
 	}()
 	size, err := file.GetFileSize()

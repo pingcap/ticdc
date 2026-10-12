@@ -53,6 +53,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				input:     make(chan *decodeTask, 8),
 				workers:   2,
 			}
+			t.Cleanup(d.close)
 			a := &assembler{
 				memory:    memory,
 				schemas:   schemas,
@@ -85,7 +86,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					completed:  completed,
 				},
 			}
-			d.start(ctx, g)
+			g.Go(func() error {
+				return d.start(ctx)
+			})
 			record, err := progress.newAck(ctx, 4096, nil)
 			require.NoError(t, err)
 			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}

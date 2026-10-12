@@ -17,28 +17,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/pingcap/log"
-	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/ticdc/pkg/logger"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 const profileAddress = "127.0.0.1:6060"
@@ -111,97 +101,19 @@ func newCommand() *cobra.Command {
 }
 
 func start(ctx context.Context, options *options) (err error) {
-	if err := logger.InitLogger(&logger.Config{
-		Level: options.logLevel,
-		File:  options.logFile,
-	}); err != nil {
-		return errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
-	}
-	version.LogVersionInfo("consumer")
-
-	upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
-	if err != nil {
-		return err
-	}
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return err
-	}
-	if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
-		return err
-	}
-	consumerID := options.consumerID
-	if source != sourceStorage && strings.TrimSpace(consumerID) == "" {
-		consumerID = "ticdc_consumer_" + uuid.NewString()
-	}
-	replicaConfig := config.GetDefaultReplicaConfig()
-	if options.configFile != "" {
-		if err := cmdutil.StrictDecodeFile(options.configFile, "consumer", replicaConfig); err != nil {
-			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
-		}
-		if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-			return errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
-		}
-	}
-	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
-
-	var (
-		c             *consumer
-		profileServer *http.Server
-	)
 	ctx, cancel := context.WithCancel(ctx)
-	g, ctx := errgroup.WithContext(ctx)
+	defer cancel()
+	c, err := newConsumer(ctx, options)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		cancel()
-		if c == nil {
-			return
-		}
-		if profileServer != nil {
-			if closeErr := profileServer.Close(); closeErr != nil {
-				log.Warn("consumer profiling server close failed", zap.Error(closeErr))
-			}
-		}
-		// Close also wakes sinks whose input channel is blocked while idle.
-		c.writer.downstream.Close()
-		if taskErr := g.Wait(); taskErr != nil {
-			err = taskErr
-		}
-		c.reader.Close()
-		if c.upstreamDB != nil {
-			if closeErr := c.upstreamDB.Close(); closeErr != nil {
-				log.Warn("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
-			}
+		if stopErr := c.stop(); stopErr != nil {
+			err = stopErr
 		}
 	}()
-	c, err = newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
-	if err != nil {
-		return err
-	}
-	if options.enableProfiling {
-		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
-		if err != nil {
-			return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
-		}
-		mux := http.NewServeMux()
-		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-		profileServer = &http.Server{
-			Addr:              profileAddress,
-			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		g.Go(func() error {
-			if err := profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling")
-			}
-			return nil
-		})
-	}
-	c.consume(ctx, g)
-	return nil
+	return c.consume(ctx)
 }
 
 func parseRequiredURI(name, rawURI string) (*url.URL, error) {
