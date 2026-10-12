@@ -129,6 +129,7 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 		return append(events, row)
 	}
 
+<<<<<<< HEAD
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
 		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
 		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
@@ -140,5 +141,19 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 	log.Panic("append event with smaller commit ts",
 		zap.Int64("tableID", row.GetTableID()),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
+=======
+	last := events[len(events)-1]
+	lastRowTypeCount := len(last.RowTypes)
+	rowRowTypeCount := len(row.RowTypes)
+	last.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+	last.RowTypes = append(last.RowTypes, row.RowTypes...)
+	last.RowKeys = appendOptionalDMLValues(last.RowKeys, row.RowKeys, lastRowTypeCount, rowRowTypeCount)
+	// Checksums follow logical DML rows; an update occupies two physical row slots.
+	last.Checksum = appendOptionalDMLValues(last.Checksum, row.Checksum, int(last.Length), int(row.Length))
+	last.Length += row.Length
+	last.ApproximateSize += row.ApproximateSize
+	last.PostTxnEnqueued = append(last.PostTxnEnqueued, row.PostTxnEnqueued...)
+	last.PostTxnFlushed = append(last.PostTxnFlushed, row.PostTxnFlushed...)
+>>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 	return events
 }

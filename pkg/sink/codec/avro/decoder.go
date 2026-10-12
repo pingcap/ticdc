@@ -214,8 +214,11 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-			return nil
+		if err = common.VerifyChecksum(event, d.upstreamTiDB, nil, nil); err != nil {
+			log.Panic("verify row checksum failed",
+				zap.String("schema", event.TableInfo.GetSchemaName()),
+				zap.String("table", event.TableInfo.GetTableName()),
+				zap.Uint64("commitTs", event.GetCommitTs()), zap.Error(err))
 		}
 	}
 
@@ -250,6 +253,136 @@ func assembleEvent(
 	if !ok {
 		return nil, errors.New("schema fields should be a map")
 	}
+<<<<<<< HEAD
+=======
+
+	columns, data, err := avroData2Columns(valueMap, fields)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	beforeMap, hasBefore, err := extractBeforeValueMap(valueMap)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var beforeData map[string]any
+	if hasBefore {
+		_, beforeData, err = avroData2Columns(beforeMap, fields)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		// Recover TIME precision from the before image when the new value is NULL.
+		for _, column := range columns {
+			if duration, ok := beforeData[column.Name.O].(types.Duration); ok && data[column.Name.O] == nil {
+				column.SetDecimal(duration.Fsp)
+			}
+		}
+	}
+
+	// Without a before image, represent an update as a keyed delete followed
+	// by an insert. Both operations stay in one event for downstream batching.
+	updateWithoutBefore := !isDelete && !hasBefore && valueMap[tidbOp] == updateOperation
+	var deleteData map[string]any
+	if updateWithoutBefore {
+		if len(keyMap) == 0 {
+			return nil, errors.ErrCodecDecode.GenWithStack("update without before value requires a handle key")
+		}
+		deleteData = make(map[string]any, len(keyMap))
+		for name, keyValue := range keyMap {
+			value, ok := data[name]
+			if !ok || value == nil || keyValue == nil {
+				return nil, errors.ErrCodecDecode.GenWithStack("update without before value has an invalid handle column: %s", name)
+			}
+			// Handle-key changes are split upstream, so the after image
+			// contains the same key, already converted to the chunk type.
+			deleteData[name] = value
+		}
+	}
+
+	schemaName, tableName := schemaAndTableName(schema)
+
+	var commitTs int64
+	if hasValue {
+		o, ok := valueMap[tidbCommitTs]
+		if !ok {
+			return nil, errors.ErrCodecDecode.GenWithStack("commit ts not found")
+		}
+		commitTs = o.(int64)
+	}
+
+	event := new(commonEvent.DMLEvent)
+	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	event.StartTs = uint64(commitTs)
+	event.CommitTs = uint64(commitTs)
+	event.PhysicalTableID = event.TableInfo.TableName.TableID
+	event.Rows = chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	event.AddPostFlushFunc(func() {
+		event.Rows.Destroy(chunk.InitialCapacity, event.TableInfo.GetFieldSlice())
+	})
+	event.Length++
+	if isDelete {
+		if hasValue {
+			if !hasBefore {
+				return nil, errors.ErrCodecDecode.GenWithStack("before value not found for delete event")
+			}
+			common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
+		} else {
+			common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		}
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+	} else if hasBefore {
+		common.AppendRow2Chunk(beforeData, event.TableInfo.GetColumns(), event.Rows)
+		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
+	} else {
+		if updateWithoutBefore {
+			common.AppendRow2Chunk(deleteData, event.TableInfo.GetColumns(), event.Rows)
+			event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+			event.Length++
+		}
+		common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+	}
+	return event, nil
+}
+
+func isAvroExtensionField(name string) bool {
+	switch name {
+	case tidbOp, tidbCommitTs, tidbPhysicalTime, tidbRowLevelChecksum,
+		tidbChecksumVersion, tidbCorrupted, ticdcBefore:
+		return true
+	default:
+		return false
+	}
+}
+
+func extractBeforeValueMap(valueMap map[string]any) (map[string]any, bool, error) {
+	rawBefore, ok := valueMap[ticdcBefore]
+	if !ok || rawBefore == nil {
+		return nil, false, nil
+	}
+
+	beforeUnion, ok := rawBefore.(map[string]any)
+	if !ok {
+		return nil, false, errors.ErrCodecDecode.GenWithStack("before value should be a map")
+	}
+	for unionName, value := range beforeUnion {
+		if unionName == "null" || value == nil {
+			return nil, false, nil
+		}
+		before, ok := value.(map[string]any)
+		if !ok {
+			return nil, false, errors.ErrCodecDecode.GenWithStack("before record should be a map")
+		}
+		return before, true, nil
+	}
+	return nil, false, nil
+}
+
+func avroData2Columns(
+	valueMap map[string]any, fields []any,
+) ([]*timodel.ColumnInfo, map[string]any, error) {
+>>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 	columns := make([]*timodel.ColumnInfo, 0, len(valueMap))
 	data := make(map[string]any, 0)
 	// fields is ordered by the column id, so iterate over it to build columns
@@ -301,6 +434,12 @@ func assembleEvent(
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
+		switch value := value.(type) {
+		case types.Time:
+			tiCol.SetDecimal(value.Fsp())
+		case types.Duration:
+			tiCol.SetDecimal(value.Fsp)
+		}
 		columns = append(columns, tiCol)
 	}
 
@@ -467,13 +606,14 @@ func getColumnValue(
 			value = types.NewDecFromFloatForTest(v)
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.MaxFsp)
+		// Fractional precision is preserved in the Avro string and affects the checksum.
+		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		value = val
 	case mysql.TypeDuration:
-		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.MaxFsp)
+		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}

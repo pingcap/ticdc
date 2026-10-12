@@ -278,7 +278,18 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
+<<<<<<< HEAD
 		ChangefeedID:             info.ChangefeedID,
 		PerformanceMode:          util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                  info.StartTs,
@@ -300,6 +311,32 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		TimeZone:                 GetGlobalServerConfig().TZ,
 		Consistent:               info.Config.Consistent,
 		EnableTableAcrossNodes:   util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+=======
+		ChangefeedID:                  info.ChangefeedID,
+		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
+		StartTS:                       info.StartTs,
+		TargetTS:                      info.TargetTs,
+		SinkURI:                       info.SinkURI,
+		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:                    sinkConfig,
+		Filter:                        info.Config.Filter,
+		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
+		EventCollectorBatchCount:      info.Config.EventCollectorBatchCount,
+		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
+		Epoch:                         info.Epoch,
+		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
+		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
+		TimeZone:                      GetGlobalServerConfig().TZ,
+		Consistent:                    info.Config.Consistent,
+		EnableTableAcrossNodes:        util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+>>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 		// other fields are not necessary for dispatcherManager
 	}
 }

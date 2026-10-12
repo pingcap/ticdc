@@ -472,6 +472,30 @@ func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
 	})
 }
 
+<<<<<<< HEAD
+=======
+func TestMessageWithPartitionCheckRejectsNilEvent(t *testing.T) {
+	w := &writer{}
+	message := codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return nil
+	})
+	checked := w.messageWithPartitionCheck(message, 1, 27)
+	require.PanicsWithValue(t, "DML message decoded to nil event", func() {
+		util.DMLMessagesToEvents([]*codeccommon.DMLMessage{checked})
+	})
+}
+
+func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		},
+	)
+	messageData.AttachDMLMessage(message)
+	return message
+}
+
+>>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 type singleDMLDecoder struct {
 	message  *codeccommon.DMLMessage
 	consumed bool
