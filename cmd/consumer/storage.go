@@ -37,6 +37,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -261,29 +262,28 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 }
 
 func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) error {
-	ctx, cancel := context.WithCancelCause(ctx)
-	var wg sync.WaitGroup
-	defer cancel(nil)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	g, ctx := errgroup.WithContext(ctx)
 	workers := min(8, len(paths))
 	for worker := range workers {
-		wg.Go(func() {
+		g.Go(func() error {
 			for index := worker; index < len(paths) && ctx.Err() == nil; index += workers {
 				path := paths[index]
 				data, err := c.readFile(ctx, path.path, maxRecordBytes)
 				if err != nil {
-					cancel(err)
-					return
+					return err
 				}
 				path.index, err = cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
 				if err != nil {
-					cancel(err)
-					return
+					return err
 				}
 			}
+			return context.Cause(ctx)
 		})
 	}
-	wg.Wait()
-	return context.Cause(ctx)
+	return g.Wait()
 }
 
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {

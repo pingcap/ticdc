@@ -42,6 +42,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestKafkaReaderSmallMessageLimit(t *testing.T) {
@@ -57,26 +58,25 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 	} {
 		t.Run(query, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
+			g, ctx := errgroup.WithContext(ctx)
+			defer func() {
+				cancel()
+				_ = g.Wait()
+			}()
 			upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: query + "&max-message-bytes=262144"}
 			input, err := newKafkaReader(ctx, upstreamURI, "small-message-limit", &inputProgress{memory: &memoryUsage{}}, config.GetDefaultReplicaConfig(), nil)
 			require.NoError(t, err)
 			t.Cleanup(input.Close)
 			decoding, err := newDecodeConfig(upstreamURI, "UTC", config.GetDefaultReplicaConfig(), nil)
 			require.NoError(t, err)
-			a, err := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, &schemaUsage{memory: input.memory}, nil)
+			schemas := &schemaUsage{memory: input.memory}
+			decoder := newDecoderGroup(schemas, nil)
+			a, err := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, schemas, decoder)
 			require.NoError(t, err)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
 			}
-			var wg sync.WaitGroup
-			defer wg.Wait()
-			defer cancel()
-			for range a.decoder.workers {
-				wg.Go(func() {
-					_ = a.decoder.decode(ctx)
-				})
-			}
+			decoder.start(ctx, g)
 			// The topic limit can grow while this reader keeps the original URI.
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
 			require.NoError(t, err)
@@ -204,16 +204,16 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
 	ctx, cancel := context.WithCancel(t.Context())
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	defer cancel()
-	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
+	g, ctx := errgroup.WithContext(ctx)
+	defer func() {
+		cancel()
+		_ = g.Wait()
+	}()
+	schemas := &schemaUsage{memory: memory}
+	decoder := newDecoderGroup(schemas, nil)
+	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, schemas, decoder)
 	require.NoError(t, err)
-	for range a.decoder.workers {
-		wg.Go(func() {
-			_ = a.decoder.decode(ctx)
-		})
-	}
+	decoder.start(ctx, g)
 	r := &pulsarReader{memory: memory}
 	var records []*ack
 	for _, table := range []string{"a", "b"} {
@@ -273,7 +273,7 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			t.Cleanup(input.Close)
 			decoding, err := newDecodeConfig(upstreamURI, "UTC", replicaConfig, nil)
 			require.NoError(t, err)
-			_, err = newAssembler(t.Context(), decoding, nil, replicaConfig, memory, schemas, nil)
+			_, err = newAssembler(t.Context(), decoding, nil, replicaConfig, memory, schemas, newDecoderGroup(schemas, nil))
 			require.NoError(t, err)
 		})
 	}
@@ -339,7 +339,7 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 			a, err := newAssembler(ctx, &decodeConfig{
 				codec:  codecCommon.NewConfig(config.ProtocolCsv),
 				format: rowFormat,
-			}, nil, replicaConfig, memory, schemas, nil)
+			}, nil, replicaConfig, memory, schemas, newDecoderGroup(schemas, nil))
 			require.NoError(t, err)
 			w := &writer{
 				memory:  memory,
@@ -618,7 +618,8 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	}
 	decoding, err := newDecodeConfig(&url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), nil)
 	require.NoError(t, err)
-	a, err := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
+	schemas := &schemaUsage{memory: memory}
+	a, err := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, schemas, newDecoderGroup(schemas, nil))
 	require.NoError(t, err)
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)

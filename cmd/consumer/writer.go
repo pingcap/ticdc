@@ -26,9 +26,13 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -37,6 +41,47 @@ const (
 	maxInFlightEvents = 4096
 	maxInFlightBytes  = 32 << 20
 )
+
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}, progressTick <-chan time.Time) (*writer, error) {
+	replicaConfig.Sink.TiDBSourceID = 1
+	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
+	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
+		ChangefeedID:           changefeedID,
+		SinkURI:                downstreamURI,
+		SinkConfig:             replicaConfig.Sink,
+		CaseSensitive:          putil.GetOrZero(replicaConfig.CaseSensitive),
+		EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
+	}, changefeedID, common.DefaultKeyspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return &writer{
+		downstream:   downstream,
+		memory:       progress.memory,
+		progress:     progress,
+		completed:    completed,
+		mutations:    make(map[mutationKey]*writeBatch),
+		progressTick: progressTick,
+		ddlJobs:      make(chan *writeEvent, 1),
+		ddlDone:      make(chan struct{}, 1),
+	}, nil
+}
+
+func (w *writer) start(ctx context.Context, g *errgroup.Group) {
+	g.Go(func() error {
+		return w.executeDDL(ctx)
+	})
+	g.Go(func() error {
+		err := w.downstream.Run(ctx)
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		return errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
+	})
+}
 
 func (w *writer) executeDDL(ctx context.Context) error {
 	for {

@@ -20,17 +20,15 @@ import (
 	"database/sql"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -39,8 +37,8 @@ const (
 )
 
 type consumer struct {
-	wg           sync.WaitGroup
 	reader       reader
+	decoder      *decoderGroup
 	assembler    *assembler
 	writer       *writer
 	upstreamDB   *sql.DB
@@ -93,51 +91,48 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 			}
 		}
 	}
-	assembler, err := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, completed)
-	if err != nil {
-		return nil, err
-	}
-	replicaConfig.Sink.TiDBSourceID = 1
-	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	target, err := sink.New(ctx, &config.ChangefeedConfig{
-		ChangefeedID:           changefeedID,
-		SinkURI:                downstreamURI,
-		SinkConfig:             replicaConfig.Sink,
-		CaseSensitive:          putil.GetOrZero(replicaConfig.CaseSensitive),
-		EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
-	}, changefeedID, common.DefaultKeyspaceID)
+	decoder := newDecoderGroup(schemas, completed)
+	assembler, err := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, decoder)
 	if err != nil {
 		return nil, err
 	}
 	progressTick := time.Tick(progressLogInterval)
+	writer, err := newWriter(ctx, downstreamURI, replicaConfig, progress, completed, progressTick)
+	if err != nil {
+		return nil, err
+	}
 	return &consumer{
 		reader:       reader,
+		decoder:      decoder,
 		assembler:    assembler,
+		writer:       writer,
 		upstreamDB:   upstreamDB,
 		progress:     progress,
 		completed:    completed,
 		confirmable:  confirmable,
 		progressTick: progressTick,
-		writer: &writer{
-			downstream:   target,
-			memory:       memory,
-			progress:     progress,
-			completed:    completed,
-			mutations:    make(map[mutationKey]*writeBatch),
-			progressTick: progressTick,
-			ddlJobs:      make(chan *writeEvent, 1),
-			ddlDone:      make(chan struct{}, 1),
-		},
 	}, nil
 }
 
-func (c *consumer) stop() {
-	c.reader.Close()
-	if c.upstreamDB != nil {
-		if closeErr := c.upstreamDB.Close(); closeErr != nil {
-			log.Warn("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
-		}
-	}
+func (c *consumer) consume(ctx context.Context, g *errgroup.Group) {
+	results := make(chan *writeEvent, 64)
+	writeDone := make(chan struct{})
+	c.writer.start(ctx, g)
+	c.decoder.start(ctx, g)
+	g.Go(func() error {
+		return c.confirm(ctx)
+	})
+	g.Go(func() error {
+		defer close(results)
+		return c.read(ctx, results)
+	})
+	g.Go(func() error {
+		defer close(writeDone)
+		return c.write(ctx, results)
+	})
+	<-ctx.Done()
+	// Stop dispatching before the caller closes the sink.
+	<-writeDone
 }
 
 func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {

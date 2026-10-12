@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -39,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const profileAddress = "127.0.0.1:6060"
@@ -149,25 +149,33 @@ func start(ctx context.Context, options *options) (err error) {
 		c             *consumer
 		profileServer *http.Server
 	)
-	ctx, cancel := context.WithCancelCause(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	defer func() {
-		cancel(err)
+		cancel()
 		if c == nil {
 			return
 		}
 		if profileServer != nil {
 			if closeErr := profileServer.Close(); closeErr != nil {
-				log.Warn("consumer profiling server close failed", zap.Error(errors.WrapError(errors.ErrInternalCheckFailed, closeErr, "close consumer profiling server")))
+				log.Warn("consumer profiling server close failed", zap.Error(closeErr))
 			}
 		}
 		// Close also wakes sinks whose input channel is blocked while idle.
 		c.writer.downstream.Close()
-		c.wg.Wait()
-		c.stop()
+		if taskErr := g.Wait(); taskErr != nil {
+			err = taskErr
+		}
+		c.reader.Close()
+		if c.upstreamDB != nil {
+			if closeErr := c.upstreamDB.Close(); closeErr != nil {
+				log.Warn("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
+			}
+		}
 	}()
 	c, err = newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
 	if err != nil {
-		return cmp.Or(context.Cause(ctx), err)
+		return err
 	}
 	if options.enableProfiling {
 		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
@@ -185,39 +193,15 @@ func start(ctx context.Context, options *options) (err error) {
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
 		}
-		c.wg.Go(func() {
+		g.Go(func() error {
 			if err := profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				cancel(errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling"))
+				return errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling")
 			}
+			return nil
 		})
 	}
-	results := make(chan *writeEvent, 64)
-	for range c.assembler.decoder.workers {
-		c.wg.Go(func() {
-			cancel(c.assembler.decoder.decode(ctx))
-		})
-	}
-	c.wg.Go(func() {
-		cancel(c.confirm(ctx))
-	})
-	c.wg.Go(func() {
-		cancel(c.writer.executeDDL(ctx))
-	})
-	c.wg.Go(func() {
-		defer close(results)
-		cancel(c.read(ctx, results))
-	})
-	c.wg.Go(func() {
-		if err := c.writer.downstream.Run(ctx); err != nil {
-			cancel(err)
-			return
-		}
-		if ctx.Err() == nil {
-			cancel(errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly"))
-		}
-	})
-	err = c.write(ctx, results)
-	return cmp.Or(context.Cause(ctx), err)
+	c.consume(ctx, g)
+	return nil
 }
 
 func parseRequiredURI(name, rawURI string) (*url.URL, error) {

@@ -30,19 +30,23 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 	for name, mergeRows := range map[string]bool{"messages": false, "rows": true} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
-			ctx, cancelWorkers := context.WithCancelCause(ctx)
+			g, ctx := errgroup.WithContext(ctx)
+			defer func() {
+				cancel()
+				_ = g.Wait()
+			}()
 			memory := &memoryUsage{}
 			progress := &inputProgress{memory: memory}
 			schemas := &schemaUsage{memory: memory}
 			completed := make(chan struct{}, 1)
-			g := &decoderGroup{
+			d := &decoderGroup{
 				memory:    memory,
 				schemas:   schemas,
 				completed: completed,
@@ -52,7 +56,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			a := &assembler{
 				memory:    memory,
 				schemas:   schemas,
-				decoder:   g,
+				decoder:   d,
 				tables:    make(map[[2]string]*common.TableInfo),
 				mergeRows: mergeRows,
 			}
@@ -81,13 +85,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					completed:  completed,
 				},
 			}
-			defer c.wg.Wait()
-			defer cancelWorkers(nil)
-			for range g.workers {
-				c.wg.Go(func() {
-					cancelWorkers(g.decode(ctx))
-				})
-			}
+			d.start(ctx, g)
 			record, err := progress.newAck(ctx, 4096, nil)
 			require.NoError(t, err)
 			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}

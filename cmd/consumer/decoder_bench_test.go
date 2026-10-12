@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/pingcap/log"
@@ -33,23 +32,22 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 )
 
 func BenchmarkDecoderGroupCSV(b *testing.B) {
 	for _, tables := range []int{1, 100} {
 		b.Run(strconv.Itoa(tables), func(b *testing.B) {
-			ctx, cancel := context.WithCancelCause(b.Context())
-			var wg sync.WaitGroup
-			defer wg.Wait()
-			defer cancel(nil)
+			ctx, cancel := context.WithCancel(b.Context())
+			g, ctx := errgroup.WithContext(ctx)
+			defer func() {
+				cancel()
+				_ = g.Wait()
+			}()
 			memory := &memoryUsage{}
 			progress := &inputProgress{memory: memory}
-			g := newDecoderGroup(&schemaUsage{memory: memory}, nil)
-			for range g.workers {
-				wg.Go(func() {
-					cancel(g.decode(ctx))
-				})
-			}
+			d := newDecoderGroup(&schemaUsage{memory: memory}, nil)
+			d.start(ctx, g)
 			messages := make([]*codecCommon.DMLMessage, tables)
 			metadata := make([]*common.TableInfo, tables)
 			cfg := &codecCommon.Config{
@@ -103,7 +101,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 						retainedBytes: 128,
 					}
 					tasks[i] = task
-					if err := g.submit(ctx, task); err != nil {
+					if err := d.submit(ctx, task); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -132,10 +130,12 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 		b.Run("workload="+workload, func(b *testing.B) {
 			for _, queue := range []string{"table", "shared"} {
 				b.Run("queue="+queue, func(b *testing.B) {
-					ctx, cancel := context.WithCancelCause(b.Context())
-					var wg sync.WaitGroup
-					defer wg.Wait()
-					defer cancel(nil)
+					ctx, cancel := context.WithCancel(b.Context())
+					g, ctx := errgroup.WithContext(ctx)
+					defer func() {
+						cancel()
+						_ = g.Wait()
+					}()
 					memory := &memoryUsage{}
 					progress := &inputProgress{memory: memory}
 					cfg := codecCommon.NewConfig(config.ProtocolCanalJSON)
@@ -173,21 +173,22 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						}
 						decoder.NextDMLMessage().ToDMLEvent().PostFlush()
 					}
-					g := newDecoderGroup(&schemaUsage{memory: memory}, nil)
-					groups := make([]*decoderGroup, g.workers)
+					d := newDecoderGroup(&schemaUsage{memory: memory}, nil)
+					groups := make([]*decoderGroup, d.workers)
 					for i := range groups {
-						groups[i] = g
+						groups[i] = d
 						if queue == "table" {
 							groups[i] = &decoderGroup{
 								input:   make(chan *decodeTask, 64),
+								workers: 1,
 								memory:  memory,
-								schemas: g.schemas,
+								schemas: d.schemas,
 							}
 						}
-						worker := groups[i]
-						wg.Go(func() {
-							cancel(worker.decode(ctx))
-						})
+						if queue != "table" && i != 0 {
+							continue
+						}
+						groups[i].start(ctx, g)
 					}
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"golang.org/x/sync/errgroup"
 )
 
 // Protocol cursors and schema updates remain with the assembler. Workers only
@@ -56,7 +57,7 @@ func newDecoderGroup(schemas *schemaUsage, completed chan<- struct{}) *decoderGr
 	}
 }
 
-func (g *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
+func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -64,30 +65,38 @@ func (g *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	// Conversion can finish out of order. The assembler joins results in table
 	// order before allowing controls or writes to pass them.
 	select {
-	case g.input <- task:
+	case d.input <- task:
 		return nil
 	default:
 	}
 	select {
-	case g.input <- task:
+	case d.input <- task:
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
 }
 
-func (g *decoderGroup) decode(ctx context.Context) error {
+func (d *decoderGroup) start(ctx context.Context, g *errgroup.Group) {
+	for range d.workers {
+		g.Go(func() error {
+			return d.decodeRows(ctx)
+		})
+	}
+}
+
+func (d *decoderGroup) decodeRows(ctx context.Context) error {
 	for {
 		var task *decodeTask
 		select {
-		case task = <-g.input:
+		case task = <-d.input:
 		default:
 			// Buffered work only takes the input-channel lock. A blocking
 			// receive also listens for cancellation when the queue is idle.
 			select {
 			case <-ctx.Done():
 				return context.Cause(ctx)
-			case task = <-g.input:
+			case task = <-d.input:
 			}
 		}
 		if err := context.Cause(ctx); err != nil {
@@ -106,22 +115,22 @@ func (g *decoderGroup) decode(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		if err := g.schemas.retain(ctx, dml.TableInfo); err != nil {
+		if err := d.schemas.retain(ctx, dml.TableInfo); err != nil {
 			return err
 		}
 		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
-		if err := g.memory.reserve(ctx, bytes); err != nil {
+		if err := d.memory.reserve(ctx, bytes); err != nil {
 			return err
 		}
 		dml.AddPostFlushFunc(func() {
-			g.schemas.release(dml.TableInfo)
+			d.schemas.release(dml.TableInfo)
 		})
 		task.dml, task.bytes = dml, bytes
 		task.record.decoded(task.retainedBytes)
 		task.message, task.record, task.table = nil, nil, nil
 		close(task.done)
 		select {
-		case g.completed <- struct{}{}:
+		case d.completed <- struct{}{}:
 		default:
 		}
 	}
