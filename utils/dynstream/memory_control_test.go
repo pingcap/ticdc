@@ -127,8 +127,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 1,
 		queueTime: time.Now(),
 	}
-	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
-	require.True(t, ok)
+	accepted, appended := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(1), path1.areaMemStat.totalPendingSize.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
@@ -140,8 +141,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -153,8 +155,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	require.True(t, accepted)
+	require.False(t, appended)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -171,8 +174,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(22), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -204,13 +208,54 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(42), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 4, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, normalEvent3.timestamp, back.timestamp)
 	require.False(t, path1.areaMemStat.paused.Load())
+}
+
+func TestAreaMemStatAppendDropEventUpdatesPendingSize(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		maxPendingSize:   10,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	mc.addPathToArea(path, settings, make(chan Feedback[int, string, any], 1))
+
+	dropEvent := &mockEvent{id: 3, path: path.path}
+	handler := &mockHandler{dropEvent: dropEvent}
+
+	accepted, appended := path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 1, path: path.path},
+		eventSize: 15,
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+
+	accepted, appended = path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 2, path: path.path},
+		eventSize: 7,
+		eventType: EventType{Droppable: true},
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+	require.Equal(t, int64(22), path.pendingSize.Load())
+	require.Equal(t, int64(22), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, 2, path.pendingQueue.Length())
+
+	_, ok := path.popEvent()
+	require.True(t, ok)
+	event, ok := path.popEvent()
+	require.True(t, ok)
+	require.Same(t, dropEvent, event.event)
+	require.Equal(t, 7, event.eventSize)
+	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
 }
 
 func TestSetAreaSettings(t *testing.T) {
