@@ -37,10 +37,10 @@ func TestMemoryReleasesSharedSchema(t *testing.T) {
 		ID: 1, Name: ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
 	})
-	require.NoError(t, schemas.retain(t.Context(), table))
+	schemas.retain(table)
 	bytes := memory.used()
 	require.Positive(t, bytes)
-	require.NoError(t, schemas.retain(t.Context(), table))
+	schemas.retain(table)
 	require.Equal(t, bytes, memory.used())
 	schemas.release(table)
 	require.Equal(t, bytes, memory.used())
@@ -79,9 +79,7 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 		}
 	}
 	a := &assembler{memory: w.memory, mergeRows: true}
-	prepared, err := a.prepare(t.Context(), w.pendingDML)
-	require.NoError(t, err)
-	w.pendingDML = prepared
+	w.pendingDML = a.prepare(w.pendingDML)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var first *event.DMLEvent
@@ -108,7 +106,7 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 	first.PostFlush()
 	require.NoError(t, w.flushDML(t.Context()))
 	require.Equal(t, 4, callbacks)
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 201, hasWatermark: true})
 	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
@@ -121,7 +119,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *field}},
 	})
 	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
-	require.NoError(t, w.memory.reserve(t.Context(), 2*batchBytes))
+	w.memory.reserve(2 * batchBytes)
 	callbacks := 0
 	for index, rowType := range []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert} {
 		id := int64(index/2 + 1)
@@ -138,9 +136,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml, bytes: batchBytes / 2})
 	}
 	a := &assembler{memory: w.memory, mergeRows: true, sortCSVRows: true}
-	prepared, err := a.prepare(t.Context(), w.pendingDML)
-	require.NoError(t, err)
-	w.pendingDML = prepared
+	w.pendingDML = a.prepare(w.pendingDML)
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	gomock.InOrder(
 		downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
@@ -162,7 +158,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 	require.Equal(t, 4, callbacks)
 	require.Empty(t, w.pendingDML)
 	require.Empty(t, w.inFlight)
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 101, hasWatermark: true})
 	w.finishBatches()
 	require.Zero(t, w.memory.used())
 }
@@ -184,8 +180,7 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 		items = append(items, &writeEvent{watermark: commitTs, hasWatermark: true})
 	}
 	a := &assembler{memory: &memoryUsage{}, mergeRows: true, sortCSVRows: true}
-	prepared, err := a.prepare(t.Context(), items)
-	require.NoError(t, err)
+	prepared := a.prepare(items)
 	require.Len(t, prepared, 4)
 	for index, commitTs := range []uint64{100, 200} {
 		result := prepared[index*2]

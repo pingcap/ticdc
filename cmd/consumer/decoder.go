@@ -126,13 +126,9 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		if err := d.schemas.retain(ctx, dml.TableInfo); err != nil {
-			return err
-		}
+		d.schemas.retain(dml.TableInfo)
 		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
-		if err := d.memory.reserve(ctx, bytes); err != nil {
-			return err
-		}
+		d.memory.reserve(bytes)
 		dml.AddPostFlushFunc(func() {
 			d.schemas.release(dml.TableInfo)
 		})

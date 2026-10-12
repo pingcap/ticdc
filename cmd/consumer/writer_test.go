@@ -63,12 +63,12 @@ func TestWriterReplayBoundary(t *testing.T) {
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
 		require.NoError(t, w.flushDML(t.Context()))
 		require.Equal(t, 1, callbacks)
-		require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 100, hasWatermark: true}))
+		w.consume(&writeEvent{watermark: 100, hasWatermark: true})
 		w.finishBatches()
 	}
 	require.Equal(t, []int64{1, 2, 3}, handles)
 	require.Len(t, w.mutations, 3)
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 101, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 101, hasWatermark: true})
 	w.finishBatches()
 	require.Empty(t, w.mutations)
 	require.Zero(t, w.memory.bytes.Load())
@@ -88,8 +88,8 @@ func TestWriterWatermarksFollowWrites(t *testing.T) {
 		memory: &memoryUsage{}, inFlight: []*writeBatch{batch}, inFlightEvents: 1,
 		mutations: map[mutationKey]*writeBatch{first: batch, second: nil},
 	}
-	require.NoError(t, w.memory.reserve(t.Context(), int64(len(first.handle)+len(second.handle)+384)))
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 20, hasWatermark: true}))
+	w.memory.reserve(int64(len(first.handle) + len(second.handle) + 384))
+	w.consume(&writeEvent{watermark: 20, hasWatermark: true})
 	w.finishBatches()
 	require.Contains(t, w.mutations, first)
 	require.Contains(t, w.mutations, second)
@@ -114,8 +114,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		memory:  memory,
 		schemas: &schemaUsage{memory: memory},
 	}
-	record, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
+	record := progress.newAck(128, nil)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
 	downstream := mock.NewMockSink(gomock.NewController(t))
@@ -129,7 +128,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		dml.Rows.AppendInt64(0, 1)
 		dml.RowTypes = []common.RowType{common.RowTypeInsert}
 		dml.Length = 1
-		require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, record, nil))
+		buffer.queueDML(&writeEvent{dml: dml}, record, nil)
 		result := buffer.nextReady(100)
 		w.pendingDML = append(w.pendingDML, result)
 	}
@@ -169,7 +168,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 	memory := &memoryUsage{}
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
 	input := &storageReader{memory: memory}
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 90, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 90, hasWatermark: true})
 	// A table move can replay the INSERT after a later UPDATE is durable.
 	for index, commitTs := range []uint64{100, 200, 100, 200} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, commitTs-1, commitTs, table)
@@ -185,7 +184,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		dml.AddPostFlushFunc(func() {
 			callbacks++
 		})
-		require.NoError(t, w.consume(t.Context(), &writeEvent{dml: dml}))
+		w.consume(&writeEvent{dml: dml})
 		require.NoError(t, w.flushDML(t.Context()))
 		w.finishBatches()
 		require.NoError(t, input.Confirm(t.Context()))
@@ -203,7 +202,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 			require.Nil(t, progress.control)
 		}
 	}
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 201, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 201, hasWatermark: true})
 	w.finishBatches()
 	require.NoError(t, input.Confirm(t.Context()))
 	require.Empty(t, w.mutations)
@@ -306,10 +305,9 @@ func TestWriterDDLReplay(t *testing.T) {
 	}
 	w.downstream = downstream
 	for index, ddl := range []*event.DDLEvent{truncate, drop, truncate, first, second, first} {
-		record, err := progress.newAck(ctx, 128, nil)
-		require.NoError(t, err)
-		require.NoError(t, a.queueDDL(ctx, ddl, record))
-		require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
+		record := progress.newAck(128, nil)
+		a.queueDDL(ddl, record)
+		w.consume(a.nextReady(ddl.GetCommitTs()))
 		record.decoded(128)
 		require.NoError(t, w.flushDML(ctx))
 		if index == 2 || index == 5 {
@@ -322,10 +320,9 @@ func TestWriterDDLReplay(t *testing.T) {
 		job := <-w.ddlJobs
 		var duplicate *ack
 		if index == 0 {
-			duplicate, err = progress.newAck(ctx, 128, nil)
-			require.NoError(t, err)
-			require.NoError(t, a.queueDDL(ctx, ddl, duplicate))
-			require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
+			duplicate = progress.newAck(128, nil)
+			a.queueDDL(ddl, duplicate)
+			w.consume(a.nextReady(ddl.GetCommitTs()))
 			duplicate.decoded(128)
 			require.NoError(t, w.flushDML(ctx))
 			require.EqualValues(t, 1, duplicate.refs.Load(), "a replay must wait for the original write")
@@ -345,17 +342,16 @@ func TestWriterDDLReplay(t *testing.T) {
 	// Equality stays protected by the replay identity. Once progress passes it,
 	// the identity is retired and the old input is rejected by writtenBefore.
 	checkpoint := false
-	require.NoError(t, w.consume(ctx, &writeEvent{
+	w.consume(&writeEvent{
 		watermark:    300,
 		hasWatermark: true,
 		onFlush: func() {
 			checkpoint = true
 		},
-	}))
-	record, err := progress.newAck(ctx, 128, nil)
-	require.NoError(t, err)
-	require.NoError(t, a.queueDDL(ctx, first, record))
-	require.NoError(t, w.consume(ctx, a.nextReady(300)))
+	})
+	record := progress.newAck(128, nil)
+	a.queueDDL(first, record)
+	w.consume(a.nextReady(300))
 	record.decoded(128)
 	require.NoError(t, w.flushDML(ctx))
 	require.True(t, checkpoint, "retiring the last replay must unblock the watermark")
@@ -363,13 +359,12 @@ func TestWriterDDLReplay(t *testing.T) {
 	require.Zero(t, record.refs.Load())
 	record.confirm()
 	require.Positive(t, memory.used())
-	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 301, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 301, hasWatermark: true})
 	require.NoError(t, w.flushDML(ctx))
 	require.Zero(t, memory.used())
-	record, err = progress.newAck(ctx, 128, nil)
-	require.NoError(t, err)
-	require.NoError(t, a.queueDDL(ctx, truncate, record))
-	require.NoError(t, w.consume(ctx, a.nextReady(301)))
+	record = progress.newAck(128, nil)
+	a.queueDDL(truncate, record)
+	w.consume(a.nextReady(301))
 	record.decoded(128)
 	require.NoError(t, w.flushDML(ctx))
 	require.Empty(t, w.ddlJobs)
@@ -436,9 +431,9 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 		cancel()
 		wg.Wait()
 	}()
-	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[0], sequential: true}))
+	w.consume(&writeEvent{dml: events[0], sequential: true})
 	require.NoError(t, w.flushDML(ctx))
-	require.NoError(t, w.consume(ctx, &writeEvent{ddl: ddl}))
+	w.consume(&writeEvent{ddl: ddl})
 	require.NoError(t, w.flushDML(ctx))
 	select {
 	case <-ddlEntered:
@@ -453,22 +448,22 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 		t.Fatal("DDL did not start after its affected write completed")
 	}
 	replayConfirmed := false
-	require.NoError(t, w.consume(ctx, &writeEvent{
+	w.consume(&writeEvent{
 		ddl: ddl,
 		onFlush: func() {
 			replayConfirmed = true
 		},
-	}))
-	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[1], sequential: true}))
-	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[2], sequential: true}))
+	})
+	w.consume(&writeEvent{dml: events[1], sequential: true})
+	w.consume(&writeEvent{dml: events[2], sequential: true})
 	checkpoint := false
-	require.NoError(t, w.consume(ctx, &writeEvent{
+	w.consume(&writeEvent{
 		hasWatermark: true,
 		watermark:    15,
 		onFlush: func() {
 			checkpoint = true
 		},
-	}))
+	})
 	require.NoError(t, w.flushDML(ctx))
 	select {
 	case <-independent:

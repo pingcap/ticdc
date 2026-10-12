@@ -18,10 +18,12 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,6 +44,14 @@ import (
 const (
 	maxMemoryBytes      = 1 << 30
 	progressLogInterval = 5 * time.Second
+)
+
+type sourceType string
+
+const (
+	sourceKafka   sourceType = "kafka"
+	sourcePulsar  sourceType = "pulsar"
+	sourceStorage sourceType = "storage"
 )
 
 type consumer struct {
@@ -138,6 +148,35 @@ func newConsumer(ctx context.Context, options *options) (c *consumer, err error)
 	}, nil
 }
 
+func parseRequiredURI(name, rawURI string) (*url.URL, error) {
+	if rawURI == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " is required")
+	}
+	uri, err := url.Parse(rawURI)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, putil.MaskSensitiveDataInURLError(err), "invalid "+name)
+	}
+	uri.Scheme = strings.ToLower(uri.Scheme)
+	if uri.Scheme == "" {
+		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " must include a URI scheme")
+	}
+	return uri, nil
+}
+
+func sourceTypeFromURI(uri *url.URL) (sourceType, error) {
+	switch uri.Scheme {
+	case config.KafkaScheme, config.KafkaSSLScheme:
+		return sourceKafka, nil
+	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
+		return sourcePulsar, nil
+	case config.FileScheme, config.S3Scheme, config.GCSScheme, config.GSScheme,
+		config.AzblobScheme, config.AzureScheme:
+		return sourceStorage, nil
+	default:
+		return "", errors.ErrInvalidReplicaConfig.FastGenByArgs("unsupported upstream-uri scheme " + uri.Scheme)
+	}
+}
+
 func loadReplicaConfig(configFile string) (*config.ReplicaConfig, error) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if configFile == "" {
@@ -150,6 +189,89 @@ func loadReplicaConfig(configFile string) (*config.ReplicaConfig, error) {
 		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
 	}
 	return replicaConfig, nil
+}
+
+// Return logical stream IDs with the reader so decoder initialization does not
+// depend on transport-specific reader fields. An empty list uses one decoder.
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32, error) {
+	source, err := sourceTypeFromURI(upstreamURI)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch source {
+	case sourceKafka:
+		reader, err := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		if err != nil {
+			return nil, nil, err
+		}
+		return reader, slices.Collect(maps.Keys(reader.partitions)), nil
+	case sourcePulsar:
+		reader, err := newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+		return reader, nil, err
+	default:
+		reader, err := newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+		return reader, nil, err
+	}
+}
+
+// Resolve transport-specific defaults and requirements before constructing the assembler.
+func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) (*decodeConfig, error) {
+	source, err := sourceTypeFromURI(upstreamURI)
+	if err != nil {
+		return nil, err
+	}
+	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
+	switch source {
+	case sourcePulsar:
+		protocolName = cmp.Or(protocolName, putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json")
+	case sourceStorage:
+		protocolName = putil.GetOrZero(replicaConfig.Sink.Protocol)
+	}
+	protocol, err := config.ParseSinkProtocolFromString(protocolName)
+	if err != nil {
+		return nil, err
+	}
+	codecConfig := codecCommon.NewConfig(protocol)
+	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
+		return nil, err
+	}
+	switch source {
+	case sourceStorage:
+		if protocol == config.ProtocolCanalJSON {
+			codecConfig.EnableTiDBExtension = true
+		}
+	default:
+		switch protocol {
+		case config.ProtocolCanalJSON, config.ProtocolDebezium:
+			if !codecConfig.EnableTiDBExtension {
+				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
+			}
+		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
+			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
+				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension and avro-enable-watermark must be true")
+			}
+			if codecConfig.AvroConfluentSchemaRegistry == "" {
+				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
+			}
+		}
+	}
+	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
+	if err != nil {
+		return nil, err
+	}
+	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
+		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
+	}
+	format := messageFormat
+	if source == sourceStorage {
+		format = rowFormat
+	}
+	return &decodeConfig{
+		codec:   codecConfig,
+		format:  format,
+		topic:   strings.Trim(upstreamURI.Path, "/"),
+		streams: streams,
+	}, nil
 }
 
 func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) (*sql.DB, error) {
@@ -284,7 +406,7 @@ func (c *consumer) next(ctx context.Context) (*writeEvent, error) {
 		if result := a.next(); result != nil {
 			return result, nil
 		}
-		decoded := a.decodePending(ctx)
+		decoded := a.decodePending()
 		if decoded == nil {
 			feedback := a.feedback()
 			progress, err := c.reader.Advance(ctx, feedback)
@@ -369,7 +491,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 			}
 			items, err = c.assembler.assemble(ctx, results, result)
 		case <-c.completed:
-			items, err = c.assembler.collectDecoded(ctx)
+			items = c.assembler.collectDecoded()
 		case <-ticker.C:
 			log.Info("consumer progress", zap.Int64("receivedInputs", progress.received.Load()),
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
@@ -382,9 +504,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 			return err
 		}
 		for _, item := range items {
-			if err := c.writer.consume(ctx, item); err != nil {
-				return err
-			}
+			c.writer.consume(item)
 		}
 		if err := c.writer.flushDML(ctx); err != nil {
 			return err
@@ -403,80 +523,4 @@ func (c *consumer) confirm(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-// Resolve transport-specific defaults and requirements before constructing the assembler.
-func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) (*decodeConfig, error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, err
-	}
-	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
-	switch source {
-	case sourcePulsar:
-		protocolName = cmp.Or(protocolName, putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json")
-	case sourceStorage:
-		protocolName = putil.GetOrZero(replicaConfig.Sink.Protocol)
-	}
-	protocol, err := config.ParseSinkProtocolFromString(protocolName)
-	if err != nil {
-		return nil, err
-	}
-	switch source {
-	case sourceKafka:
-		switch protocol {
-		case config.ProtocolOpen, config.ProtocolCanalJSON, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium, config.ProtocolDebeziumAvro:
-		default:
-			return nil, errors.ErrKafkaInvalidConfig.FastGenByArgs("unsupported Kafka protocol " + protocol.String())
-		}
-	case sourcePulsar:
-		if protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar consumer requires canal-json")
-		}
-	case sourceStorage:
-		if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
-		}
-	}
-	codecConfig := codecCommon.NewConfig(protocol)
-	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
-	}
-	switch source {
-	case sourceStorage:
-		if protocol == config.ProtocolCanalJSON {
-			codecConfig.EnableTiDBExtension = true
-		}
-	default:
-		switch protocol {
-		case config.ProtocolCanalJSON, config.ProtocolDebezium:
-			if !codecConfig.EnableTiDBExtension {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
-			}
-		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
-			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension and avro-enable-watermark must be true")
-			}
-			if codecConfig.AvroConfluentSchemaRegistry == "" {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
-			}
-		}
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		return nil, err
-	}
-	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
-		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
-	}
-	format := messageFormat
-	if source == sourceStorage {
-		format = rowFormat
-	}
-	return &decodeConfig{
-		codec:   codecConfig,
-		format:  format,
-		topic:   strings.Trim(upstreamURI.Path, "/"),
-		streams: streams,
-	}, nil
 }

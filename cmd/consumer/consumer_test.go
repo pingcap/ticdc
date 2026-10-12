@@ -224,8 +224,7 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	var records []*ack
 	for _, table := range []string{"a", "b"} {
 		value := []byte(`{"version":1,"database":"test","table":"` + table + `","tableID":1,"type":"INSERT","commitTs":101,"schemaVersion":100,"data":{"id":"1"}}`)
-		record, err := progress.newAck(t.Context(), int64(len(value)+256), nil)
-		require.NoError(t, err)
+		record := progress.newAck(int64(len(value)+256), nil)
 		records = append(records, record)
 		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}) {
 			require.NoError(t, err)
@@ -236,8 +235,7 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	}
 	for index, table := range []string{"a", "b"} {
 		value := []byte(`{"version":1,"type":"BOOTSTRAP","commitTs":100,"tableSchema":{"schema":"test","table":"` + table + `","tableID":1,"version":100,"columns":[{"name":"id","dataType":{"mysqlType":"bigint","charset":"binary","collate":"binary","length":20}}]}}`)
-		record, err := progress.newAck(t.Context(), int64(len(value)+256), nil)
-		require.NoError(t, err)
+		record := progress.newAck(int64(len(value)+256), nil)
 		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}) {
 			require.NoError(t, err)
 			progress, err := r.Advance(t.Context(), result.feedback)
@@ -382,7 +380,7 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 				}
 				item := a.nextReady(0)
 				require.NotNil(t, item)
-				require.NoError(t, w.consume(ctx, item))
+				w.consume(item)
 			}
 			table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
 			dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 0, 15, table)
@@ -394,7 +392,7 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 				dml.PostFlush()
 			})
 			w.downstream = downstream
-			require.NoError(t, w.consume(ctx, &writeEvent{dml: dml}))
+			w.consume(&writeEvent{dml: dml})
 			for _, name := range []string{"b", "a"} {
 				require.NoError(t, w.flushDML(ctx))
 				require.Len(t, w.ddlJobs, 1, "independent DDL must not form a cycle with a fenced row")
@@ -462,8 +460,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			for offset, ddl := range input {
 				message, err := encoder.EncodeDDLEvent(ddl)
 				require.NoError(t, err)
-				record, err := progress.newAck(t.Context(), int64(len(message.Key)+len(message.Value)+128), nil)
-				require.NoError(t, err)
+				record := progress.newAck(int64(len(message.Key)+len(message.Value)+128), nil)
 				r.partitions[partitionID].records = append(r.partitions[partitionID].records, kafkaRecord{
 					ack:    record,
 					offset: int64(offset),
@@ -475,8 +472,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 					require.NoError(t, c.accept(t.Context(), result, progress))
 				}
 			}
-			record, err := progress.newAck(t.Context(), int64(len(watermark.Key)+len(watermark.Value)+128), nil)
-			require.NoError(t, err)
+			record := progress.newAck(int64(len(watermark.Key)+len(watermark.Value)+128), nil)
 			r.partitions[partitionID].records = append(r.partitions[partitionID].records, kafkaRecord{
 				ack:    record,
 				offset: int64(len(input)),
@@ -532,10 +528,9 @@ func TestReaderDDLNormalization(t *testing.T) {
 		memory:  memory,
 		schemas: &schemaUsage{memory: memory},
 	}
-	first, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
+	first := progress.newAck(128, nil)
 	ddl := &event.DDLEvent{Type: byte(timodel.ActionAddColumn), SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
-	require.NoError(t, buffer.queueDDL(t.Context(), ddl, first))
+	buffer.queueDDL(ddl, first)
 	result := buffer.nextReady(9)
 	require.Nil(t, result)
 	first.refs.Add(-1)
@@ -629,8 +624,7 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	require.NoError(t, err)
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
-		record, err := progress.newAck(t.Context(), int64(len(value)+256), nil)
-		require.NoError(t, err)
+		record := progress.newAck(int64(len(value)+256), nil)
 		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
 			progress, err := r.Advance(t.Context(), result.feedback)
@@ -659,8 +653,7 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN z INT","_tidb":{"commitTs":200}}`,
 	}
 	for _, query := range queries {
-		record, err := progress.newAck(t.Context(), int64(len(query)+256), nil)
-		require.NoError(t, err)
+		record := progress.newAck(int64(len(query)+256), nil)
 		for result, err := range a.decode(t.Context(), &readData{value: []byte(query), record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
 			progress, err := r.Advance(t.Context(), result.feedback)
@@ -727,10 +720,8 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 func TestInputCompletionAcrossBatches(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
-	file, err := progress.newAck(t.Context(), 256, nil)
-	require.NoError(t, err)
-	later, err := progress.newAck(t.Context(), 256, nil)
-	require.NoError(t, err)
+	file := progress.newAck(256, nil)
+	later := progress.newAck(256, nil)
 	later.refs.Add(-1)
 	file.refs.Add(2)
 	firstDML, secondDML := &event.DMLEvent{}, &event.DMLEvent{}
@@ -770,8 +761,7 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
-	record, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
+	record := progress.newAck(128, nil)
 	input := &storageReader{memory: memory, records: []*ack{record}}
 	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 10}}}, done: make(chan struct{})}
 	w := &writer{
@@ -809,9 +799,8 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 		memory:  memory,
 		schemas: &schemaUsage{memory: memory},
 	}
-	record, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
-	require.NoError(t, buffer.queueDML(t.Context(), &writeEvent{dml: dml}, record, nil))
+	record := progress.newAck(128, nil)
+	buffer.queueDML(&writeEvent{dml: dml}, record, nil)
 	record.refs.Add(-1)
 	result := buffer.nextReady(10)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
@@ -820,7 +809,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 		dml.PostFlush()
 	})
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
-	require.NoError(t, w.consume(t.Context(), result))
+	w.consume(result)
 	require.Len(t, w.pendingDML, 1)
 	require.NoError(t, w.flushDML(t.Context()))
 	require.Empty(t, w.pendingDML)
@@ -838,7 +827,7 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, dml, filtered)
 	// A true topic-wide complete watermark retains the MQ replay cutoff.
-	require.NoError(t, w.consume(t.Context(), &writeEvent{watermark: 20, hasWatermark: true}))
+	w.consume(&writeEvent{watermark: 20, hasWatermark: true})
 	w.finishBatches()
 	filtered, err = w.filterRows(t.Context(), dml, &writeBatch{})
 	require.NoError(t, err)
@@ -849,9 +838,8 @@ func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
 	c := &consumer{progress: progress}
-	record, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
-	require.NoError(t, memory.reserve(t.Context(), maxMemoryBytes-128))
+	record := progress.newAck(128, nil)
+	memory.reserve(maxMemoryBytes - 128)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, c.waitMemory(ctx), context.Canceled)
@@ -879,10 +867,9 @@ func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	require.Zero(t, memory.used())
 	// Caches can fill the budget without leaving any input to finish. Reading
 	// must resume even when confirming the last input keeps usage at the limit.
-	require.NoError(t, memory.reserve(ctx, maxMemoryBytes))
+	memory.reserve(maxMemoryBytes)
 	require.NoError(t, c.waitMemory(ctx))
-	record, err = progress.newAck(ctx, 128, nil)
-	require.NoError(t, err)
+	record = progress.newAck(128, nil)
 	wg.Go(func() {
 		done <- c.waitMemory(ctx)
 	})
@@ -901,21 +888,20 @@ func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 }
 
 func TestOversizedInputCanComplete(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
-	record, err := progress.newAck(ctx, maxMemoryBytes+(64<<20), nil)
-	require.NoError(t, err)
+	record := progress.newAck(maxMemoryBytes+(64<<20), nil)
 	require.Greater(t, memory.used(), int64(maxMemoryBytes))
-	require.NoError(t, memory.reserve(ctx, 1024))
+	memory.reserve(1024)
 	record.decoded(256)
 	require.Zero(t, record.refs.Load())
 	record.confirm()
 	memory.release(1024)
 	require.Zero(t, memory.used())
-	cancel()
-	require.ErrorIs(t, memory.reserve(ctx, 1), context.Canceled)
+	require.Panics(t, func() {
+		memory.reserve(-1)
+	})
+	require.Zero(t, memory.used())
 }
 
 func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
@@ -1107,8 +1093,8 @@ func TestOrderedReaderKeepsInputOrderAndDDLBoundary(t *testing.T) {
 	require.Nil(t, buffer.nextReady(0))
 	buffer.pendingDML = nil
 	firstDDL, secondDDL := &event.DDLEvent{FinishedTs: 20}, &event.DDLEvent{FinishedTs: 10}
-	require.NoError(t, buffer.queueDDL(t.Context(), firstDDL, &ack{}))
-	require.NoError(t, buffer.queueDDL(t.Context(), secondDDL, &ack{}))
+	buffer.queueDDL(firstDDL, &ack{})
+	buffer.queueDDL(secondDDL, &ack{})
 	require.Same(t, firstDDL, buffer.nextReady(^uint64(0)).ddl)
 	require.Same(t, secondDDL, buffer.nextReady(^uint64(0)).ddl)
 }
@@ -1129,8 +1115,8 @@ func TestReaderDDLArrivalOrder(t *testing.T) {
 	}
 	ddlA := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 300}
 	ddlB := &event.DDLEvent{SchemaName: "test", TableName: "b", FinishedTs: 200}
-	require.NoError(t, buffer.queueDDL(t.Context(), ddlA, &ack{}))
-	require.NoError(t, buffer.queueDDL(t.Context(), ddlB, &ack{}))
+	buffer.queueDDL(ddlA, &ack{})
+	buffer.queueDDL(ddlB, &ack{})
 	// Prioritize the head's associated rows and execute it immediately. Every
 	// later DDL still fences its own post-DDL rows.
 	require.Same(t, beforeA, buffer.nextReady(300).dml)
@@ -1185,7 +1171,7 @@ func TestDDLScope(t *testing.T) {
 		}
 		ddl = &event.DDLEvent{SchemaName: "test", TableName: "unseen", Type: byte(action), Query: query}
 		require.NoError(t, setDDLTableNames(ddl))
-		require.NoError(t, assembly.queueDDL(t.Context(), ddl, &ack{}))
+		assembly.queueDDL(ddl, &ack{})
 		require.True(t, ddlBlocksTable(ddl, a))
 		require.True(t, ddlBlocksTable(ddl, c))
 		require.False(t, ddlBlocksTable(ddl, b))
@@ -1216,8 +1202,7 @@ func TestDDLScope(t *testing.T) {
 func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
-	record, err := progress.newAck(t.Context(), 128, nil)
-	require.NoError(t, err)
+	record := progress.newAck(128, nil)
 	input := &storageReader{memory: memory, records: []*ack{record}}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("t")})
 	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan struct{})}
@@ -1229,10 +1214,11 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	w := &writer{downstream: downstream, memory: memory, inFlight: []*writeBatch{batch}, inFlightEvents: len(batch.items)}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.ErrorIs(t, w.consume(ctx, result), context.Canceled)
+	w.consume(result)
+	require.ErrorIs(t, w.writeDDL(ctx, result), context.Canceled)
 	require.EqualValues(t, 1, record.refs.Load())
 	close(batch.done)
-	require.ErrorIs(t, input.Confirm(ctx), context.Canceled)
+	require.NoError(t, input.Confirm(ctx))
 	require.Len(t, input.records, 1)
 	require.EqualValues(t, 128, memory.bytes.Load())
 }

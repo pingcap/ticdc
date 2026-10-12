@@ -89,10 +89,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			tasks := make([]*decodeTask, batchRows)
 			b.ReportAllocs()
 			for b.Loop() {
-				record, err := progress.newAck(ctx, 128, nil)
-				if err != nil {
-					b.Fatal(err)
-				}
+				record := progress.newAck(128, nil)
 				for i := range tasks {
 					id := i % tables
 					task := &decodeTask{
@@ -199,10 +196,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()
 					for b.Loop() {
-						record, err := progress.newAck(ctx, 128, nil)
-						if err != nil {
-							b.Fatal(err)
-						}
+						record := progress.newAck(128, nil)
 						for i := range tasks {
 							id := i % len(values)
 							if workload == "skewed" {

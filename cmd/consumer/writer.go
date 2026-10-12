@@ -163,10 +163,7 @@ type ddlKey struct {
 	query    string
 }
 
-func (w *writer) consume(ctx context.Context, result *writeEvent) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
+func (w *writer) consume(result *writeEvent) {
 	if result.dml != nil {
 		w.pendingDML = append(w.pendingDML, result)
 		w.decodedRows += int64(result.dml.Len())
@@ -186,7 +183,6 @@ func (w *writer) consume(ctx context.Context, result *writeEvent) error {
 			w.progressChanged = true
 		}
 	}
-	return nil
 }
 
 func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
@@ -253,9 +249,7 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			}
 		}
 		bytes := int64(len(key.schema) + len(key.table) + len(key.query) + 192)
-		if err := w.memory.reserve(ctx, bytes); err != nil {
-			return err
-		}
+		w.memory.reserve(bytes)
 		select {
 		case <-ctx.Done():
 			w.memory.release(bytes)
@@ -381,9 +375,7 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 		if filtered != item.dml {
 			// The original chunk stays alive through its decoder callbacks.
 			copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
-			if err := w.memory.reserve(ctx, copyBytes); err != nil {
-				return err
-			}
+			w.memory.reserve(copyBytes)
 			batch.bytes += copyBytes
 		}
 		batch.events = append(batch.events, filtered)
@@ -397,9 +389,6 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 }
 
 func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
 	w.inFlight = append(w.inFlight, batch)
 	w.inFlightBytes += batch.bytes
 	w.inFlightEvents += len(batch.items)
@@ -611,9 +600,7 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 				retain = false
 			default:
 				bytes := int64(len(key.handle) + 192)
-				if err := w.memory.reserve(ctx, bytes); err != nil {
-					return nil, err
-				}
+				w.memory.reserve(bytes)
 				w.mutations[key] = batch
 				batch.keys = append(batch.keys, key)
 			}

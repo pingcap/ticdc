@@ -14,11 +14,7 @@
 
 package main
 
-import (
-	"context"
-
-	"github.com/uber-go/atomic"
-)
+import "github.com/uber-go/atomic"
 
 type inputProgress struct {
 	memory    *memoryUsage
@@ -35,10 +31,8 @@ type ack struct {
 	done     chan<- struct{}
 }
 
-func (p *inputProgress) newAck(ctx context.Context, bytes int64, done chan<- struct{}) (*ack, error) {
-	if err := p.memory.reserve(ctx, bytes); err != nil {
-		return nil, err
-	}
+func (p *inputProgress) newAck(bytes int64, done chan<- struct{}) *ack {
+	p.memory.reserve(bytes)
 	record := &ack{
 		progress: p,
 		done:     done,
@@ -47,7 +41,7 @@ func (p *inputProgress) newAck(ctx context.Context, bytes int64, done chan<- str
 	record.refs.Store(1)
 	record.decodes.Store(1)
 	p.received.Inc()
-	return record, nil
+	return record
 }
 
 func (a *ack) release() {
@@ -65,12 +59,9 @@ func (a *ack) retainDecode() {
 	a.refs.Inc()
 }
 
-func (a *ack) retain(ctx context.Context, bytes int64) error {
-	if err := a.progress.memory.reserve(ctx, bytes); err != nil {
-		return err
-	}
+func (a *ack) retain(bytes int64) {
+	a.progress.memory.reserve(bytes)
 	a.memory.Add(bytes)
-	return nil
 }
 
 func (a *ack) decoded(retainedBytes int64) {

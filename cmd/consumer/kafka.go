@@ -217,9 +217,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 				partition.polled = append(partition.polled, record)
 				bytes += int64(len(record.Key) + len(record.Value) + 128)
 			}
-			if err := c.memory.reserve(ctx, bytes); err != nil {
-				return nil, err
-			}
+			c.memory.reserve(bytes)
 			continue
 		}
 		partition := c.partitions[partitionID]
@@ -234,10 +232,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		partition.sequence = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
 		c.memory.release(bytes)
-		state, err := c.progress.newAck(ctx, bytes, c.confirmable)
-		if err != nil {
-			return nil, err
-		}
+		state := c.progress.newAck(bytes, c.confirmable)
 		partition.mu.Lock()
 		partition.records = append(partition.records, kafkaRecord{
 			ack:    state,
@@ -279,9 +274,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 			partition.ddlTs = ddl.GetCommitTs()
 			c.receivedDDL(data.stream, ddl.GetCommitTs())
 			if data.stream != 0 {
-				if err := c.memory.reserve(ctx, 128); err != nil {
-					return result, err
-				}
+				c.memory.reserve(128)
 				data.record.refs.Add(1)
 				copies := c.ddlCopies[ddl.GetCommitTs()]
 				if copies == nil {
@@ -295,9 +288,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 		if feedback.hasWatermark {
 			partition.watermark = max(partition.watermark, feedback.watermark)
 			partition.hasWatermark = true
-			if err := c.memory.reserve(ctx, 128); err != nil {
-				return result, err
-			}
+			c.memory.reserve(128)
 			data.record.refs.Add(1)
 			c.controls = append(c.controls, &readControl{
 				watermark: feedback.watermark,

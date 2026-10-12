@@ -207,10 +207,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		}
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
-		record, err := c.progress.newAck(ctx, size, c.confirmable)
-		if err != nil {
-			return nil, err
-		}
+		record := c.progress.newAck(size, c.confirmable)
 		partition.mu.Lock()
 		partition.records = append(partition.records, pulsarRecord{
 			ack:       record,
@@ -228,7 +225,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 	}
 }
 
-func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
+func (c *pulsarReader) Advance(_ context.Context, feedback readFeedback) (readProgress, error) {
 	result := readProgress{
 		watermark:    c.watermark,
 		hasWatermark: c.hasWatermark,
@@ -239,9 +236,7 @@ func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (read
 	}
 	c.watermark = max(c.watermark, feedback.watermark)
 	c.hasWatermark = true
-	if err := c.memory.reserve(ctx, 128); err != nil {
-		return result, err
-	}
+	c.memory.reserve(128)
 	feedback.data.record.refs.Add(1)
 	result.watermark, result.hasWatermark = c.watermark, true
 	result.control = &readControl{
@@ -252,9 +247,6 @@ func (c *pulsarReader) Advance(ctx context.Context, feedback readFeedback) (read
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
 	for _, partition := range c.partitions {
 		partition.mu.Lock()
 		var count int

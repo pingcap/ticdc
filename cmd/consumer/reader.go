@@ -16,13 +16,9 @@ package main
 
 import (
 	"context"
-	"maps"
-	"net/url"
-	"slices"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 )
 
 // Read and Advance have one caller. Confirm may run concurrently.
@@ -107,27 +103,4 @@ type readControl struct {
 // Readers own the positions behind a proof and publish when it is reached.
 type readBoundary struct {
 	reached bool
-}
-
-// Return logical stream IDs with the reader so decoder initialization does not
-// depend on transport-specific reader fields. An empty list uses one decoder.
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32, error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, nil, err
-	}
-	switch source {
-	case sourceKafka:
-		reader, err := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
-		if err != nil {
-			return nil, nil, err
-		}
-		return reader, slices.Collect(maps.Keys(reader.partitions)), nil
-	case sourcePulsar:
-		reader, err := newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
-		return reader, nil, err
-	default:
-		reader, err := newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
-		return reader, nil, err
-	}
 }

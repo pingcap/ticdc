@@ -89,8 +89,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			g.Go(func() error {
 				return d.start(ctx)
 			})
-			record, err := progress.newAck(ctx, 4096, nil)
-			require.NoError(t, err)
+			record := progress.newAck(4096, nil)
 			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}
 			r := &pulsarReader{memory: memory}
 			release := make(chan struct{})
@@ -127,8 +126,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					dml.RowTypes, dml.Length = []common.RowType{common.RowTypeInsert}, 1
 					return dml
 				})
-				result, err := a.decodeMessage(ctx, data, message, record)
-				require.NoError(t, err)
+				result := a.decodeMessage(data, message, record)
 				progress, err := r.Advance(ctx, result.feedback)
 				require.NoError(t, err)
 				require.NoError(t, a.accept(ctx, result, progress))
@@ -147,7 +145,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			items, err := a.assemble(ctx, nil, watermark)
 			require.NoError(t, err)
 			for _, item := range items {
-				require.NoError(t, c.writer.consume(ctx, item))
+				c.writer.consume(item)
 			}
 			require.NoError(t, c.writer.flushDML(ctx))
 			require.Equal(t, []string{"b"}, written)
@@ -164,10 +162,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			}
 			require.EqualValues(t, 128, record.memory.Load())
 			require.Greater(t, record.refs.Load(), int64(0))
-			items, err = a.collectDecoded(ctx)
-			require.NoError(t, err)
+			items = a.collectDecoded()
 			for _, item := range items {
-				require.NoError(t, c.writer.consume(ctx, item))
+				c.writer.consume(item)
 			}
 			require.NoError(t, c.writer.flushDML(ctx))
 			require.Equal(t, []string{"b", "a", "a"}, written)
@@ -194,10 +191,9 @@ func TestDecodingDDLScope(t *testing.T) {
 				memory:  &memoryUsage{},
 				ddlJobs: make(chan *writeEvent, 1),
 			}
-			items, err := a.collectDecoded(t.Context())
-			require.NoError(t, err)
+			items := a.collectDecoded()
 			for _, item := range items {
-				require.NoError(t, w.consume(t.Context(), item))
+				w.consume(item)
 			}
 			require.NoError(t, w.flushDML(t.Context()))
 			if name == "b" {

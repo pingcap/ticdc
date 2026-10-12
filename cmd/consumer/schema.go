@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -33,15 +32,15 @@ type schemaMemory struct {
 }
 
 // Count shared metadata once across pipeline events and reader/decoder caches.
-func (s *schemaUsage) retain(ctx context.Context, table *common.TableInfo) error {
+func (s *schemaUsage) retain(table *common.TableInfo) {
 	if table == nil {
-		return nil
+		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if schema := s.tables[table]; schema != nil {
 		schema.refs++
-		return nil
+		return
 	}
 	// The budget is an estimate. Serializing metadata here allocates large JSON
 	// buffers and repeats whenever the last pipeline reference is released.
@@ -58,9 +57,7 @@ func (s *schemaUsage) retain(ctx context.Context, table *common.TableInfo) error
 	for _, index := range table.GetIndices() {
 		bytes += int64(256 + len(index.Name.O) + len(index.Columns)*64)
 	}
-	if err := s.memory.reserve(ctx, bytes); err != nil {
-		return err
-	}
+	s.memory.reserve(bytes)
 	if s.tables == nil {
 		s.tables = make(map[*common.TableInfo]*schemaMemory)
 	}
@@ -68,7 +65,6 @@ func (s *schemaUsage) retain(ctx context.Context, table *common.TableInfo) error
 		refs:  1,
 		bytes: bytes,
 	}
-	return nil
 }
 
 func (s *schemaUsage) release(table *common.TableInfo) {

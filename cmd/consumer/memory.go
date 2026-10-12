@@ -15,11 +15,11 @@
 package main
 
 import (
-	"context"
 	"sync"
 
-	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/log"
 	"github.com/uber-go/atomic"
+	"go.uber.org/zap"
 )
 
 type memoryUsage struct {
@@ -38,15 +38,11 @@ func (m *memoryUsage) used() int64 {
 	return bytes
 }
 
-func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
+func (m *memoryUsage) reserve(bytes int64) {
 	if bytes < 0 {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("consumer allocation has a negative size")
-	}
-	if err := context.Cause(ctx); err != nil {
-		return err
+		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))
 	}
 	m.bytes.Add(bytes)
-	return nil
 }
 
 // Subscribe before checking an admission condition to avoid missing a release.

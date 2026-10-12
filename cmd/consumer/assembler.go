@@ -66,12 +66,12 @@ collect:
 			break collect
 		}
 	}
-	return a.collectDecoded(ctx)
+	return a.collectDecoded(), nil
 }
 
 // Join conversion results in table order. A slow table does not hold up other
 // tables, but controls cannot pass unfinished conversions in their scope.
-func (a *assembler) collectDecoded(ctx context.Context) ([]*writeEvent, error) {
+func (a *assembler) collectDecoded() []*writeEvent {
 	var (
 		items           []*writeEvent
 		blockedRows     []*writeEvent
@@ -129,7 +129,7 @@ func (a *assembler) collectDecoded(ctx context.Context) ([]*writeEvent, error) {
 	}
 	clear(a.decoding[len(remaining):])
 	a.decoding = remaining
-	return a.prepare(ctx, items)
+	return a.prepare(items)
 }
 
 type writeEvent struct {
@@ -145,9 +145,9 @@ type writeEvent struct {
 	proofPending bool
 }
 
-func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeEvent, error) {
+func (a *assembler) prepare(items []*writeEvent) []*writeEvent {
 	if !a.mergeRows {
-		return items, nil
+		return items
 	}
 	// A control event bounds sorting; no row crosses a DDL or watermark.
 	for start := 0; start < len(items); {
@@ -208,9 +208,7 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 		}
 		// Original chunks remain live through their flush callbacks. Account for
 		// the merged copy separately before allocating it.
-		if err := a.memory.reserve(ctx, bytes); err != nil {
-			return nil, err
-		}
+		a.memory.reserve(bytes)
 		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
 		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
 		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
@@ -252,7 +250,7 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 		remaining = remaining[end:]
 	}
 	clear(items[len(prepared):])
-	return prepared, nil
+	return prepared
 }
 
 type decodeStream struct {
@@ -262,7 +260,7 @@ type decodeStream struct {
 }
 
 // Simple retains versioned metadata independently of events awaiting writes.
-func (p *decodeStream) cacheSchemas(ctx context.Context, ddl *event.DDLEvent, schemas *schemaUsage) error {
+func (p *decodeStream) cacheSchemas(ddl *event.DDLEvent, schemas *schemaUsage) {
 	for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
 		if table == nil {
 			continue
@@ -280,13 +278,10 @@ func (p *decodeStream) cacheSchemas(ctx context.Context, ddl *event.DDLEvent, sc
 		if previous == table {
 			continue
 		}
-		if err := schemas.retain(ctx, table); err != nil {
-			return err
-		}
+		schemas.retain(table)
 		schemas.release(previous)
 		versions[table.UpdateTS] = table
 	}
-	return nil
 }
 
 // assembler decodes logical inputs and arranges events for downstream writes.
@@ -323,12 +318,10 @@ type assembler struct {
 	waitingKnown      bool
 }
 
-func (a *assembler) queueDML(ctx context.Context, item *writeEvent, record *ack, boundary *readBoundary) error {
+func (a *assembler) queueDML(item *writeEvent, record *ack, boundary *readBoundary) {
 	dml := item.dml
 	bytes := int64(256)
-	if err := a.memory.reserve(ctx, bytes); err != nil {
-		return err
-	}
+	a.memory.reserve(bytes)
 	record.refs.Inc()
 	dml.AddPostFlushFunc(record.release)
 	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
@@ -354,7 +347,6 @@ func (a *assembler) queueDML(ctx context.Context, item *writeEvent, record *ack,
 	if a.waitingKnown && dml.CommitTs <= a.waitingWatermark {
 		a.waitingCount++
 	}
-	return nil
 }
 
 func setDDLTableNames(ddl *event.DDLEvent) error {
@@ -405,20 +397,16 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 	return nil
 }
 
-func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *ack) error {
+func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) {
 	a.scanInvalid = true
 	if a.waitingKnown && ddl.GetCommitTs() <= a.waitingWatermark {
 		a.waitingCount++
 	}
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-	if err := a.memory.reserve(ctx, bytes); err != nil {
-		return err
-	}
+	a.memory.reserve(bytes)
 	tables := append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...)
 	for _, table := range tables {
-		if err := a.schemas.retain(ctx, table); err != nil {
-			return err
-		}
+		a.schemas.retain(table)
 	}
 	record.refs.Add(1)
 	a.pendingDDL = append(a.pendingDDL, &writeEvent{
@@ -431,7 +419,6 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 			record.release()
 		},
 	})
-	return nil
 }
 
 func (a *assembler) nextReady(watermark uint64) *writeEvent {
@@ -771,7 +758,7 @@ type decodedData struct {
 
 func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
 	if data.control == nil && !data.groupEnd && data.ddl == nil && data.format == messageFormat {
-		return a.decodeMessages(ctx, data)
+		return a.decodeMessages(data)
 	}
 	return func(yield func(decodedData, error) bool) {
 		if data.control != nil || data.groupEnd {
@@ -833,10 +820,7 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 		// Row decoders retain parsed records alongside the encoded file until
 		// the input is exhausted. Include their scratch space in its lifetime.
 		bytes := int64(len(data.value))*3 + 256
-		if err := data.record.retain(ctx, bytes); err != nil {
-			yield(decodedData{}, err)
-			return
-		}
+		data.record.retain(bytes)
 		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
@@ -858,7 +842,7 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 
 // Decode at most one row before yielding to event selection. A nil iterator
 // means the assembler needs a new input; an exhausted input yields no facts.
-func (a *assembler) decodePending(ctx context.Context) iter.Seq2[decodedData, error] {
+func (a *assembler) decodePending() iter.Seq2[decodedData, error] {
 	if a.current == nil {
 		return nil
 	}
@@ -879,14 +863,13 @@ func (a *assembler) decodePending(ctx context.Context) iter.Seq2[decodedData, er
 				yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message"))
 				return
 			}
-			result, err := a.decodeMessage(ctx, data, message, data.record)
-			yield(result, err)
+			yield(a.decodeMessage(data, message, data.record), nil)
 			return
 		}
 	}
 }
 
-func (a *assembler) decodeMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, record *ack) (decodedData, error) {
+func (a *assembler) decodeMessage(data *readData, message *codecCommon.DMLMessage, record *ack) decodedData {
 	tableID := message.TableID
 	if data.format == rowFormat {
 		tableID = data.group.tableID
@@ -901,9 +884,7 @@ func (a *assembler) decodeMessage(ctx context.Context, data *readData, message *
 				TableID: tableID,
 			},
 		}
-		if err := a.memory.reserve(ctx, int64(512+len(message.Schema)+len(message.Table))); err != nil {
-			return decodedData{}, err
-		}
+		a.memory.reserve(int64(512 + len(message.Schema) + len(message.Table)))
 		a.tables[name] = table
 	}
 	return decodedData{
@@ -919,7 +900,7 @@ func (a *assembler) decodeMessage(ctx context.Context, data *readData, message *
 		},
 		message: message,
 		record:  record,
-	}, nil
+	}
 }
 
 func (a *assembler) decodeDDL(data *readData, ddl *event.DDLEvent) (decodedData, error) {
@@ -958,15 +939,11 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 			dml:      dml,
 			decoding: task,
 		}
-		if err := a.queueDML(ctx, item, result.record, data.dmlBoundary); err != nil {
-			return err
-		}
+		a.queueDML(item, result.record, data.dmlBoundary)
 		return a.decoder.submit(ctx, task)
 	}
 	if ddl := result.feedback.ddl; ddl != nil {
-		if err := a.queueDDL(ctx, ddl, data.record); err != nil {
-			return err
-		}
+		a.queueDDL(ddl, data.record)
 		a.pendingDDL[len(a.pendingDDL)-1].boundary = data.ddlBoundary
 		if data.ddlOrder == commitOrder {
 			slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
@@ -977,7 +954,7 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 	return nil
 }
 
-func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, stream *decodeStream, decoder *simple.Decoder, yield func(decodedData, error) bool) bool {
+func (a *assembler) decodeCachedMessages(data *readData, stream *decodeStream, decoder *simple.Decoder, yield func(decodedData, error) bool) bool {
 	for _, message := range decoder.GetCachedMessages() {
 		cached := stream.cachedRecords[message]
 		if cached == nil {
@@ -985,12 +962,7 @@ func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, st
 			return false
 		}
 		delete(stream.cachedRecords, message)
-		result, err := a.decodeMessage(ctx, data, message, cached)
-		if err != nil {
-			yield(decodedData{}, err)
-			return false
-		}
-		if !yield(result, nil) {
+		if !yield(a.decodeMessage(data, message, cached), nil) {
 			return false
 		}
 		cached.decoded(data.retainedBytes)
@@ -998,7 +970,7 @@ func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, st
 	return true
 }
 
-func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
+func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error] {
 	return func(yield func(decodedData, error) bool) {
 		p := a.streams[data.stream]
 		if p == nil {
@@ -1009,10 +981,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 		// Captured protocol data remains live while conversion jobs run. Account
 		// once per input, not once per derived row in a batched message.
 		bytes := int64(len(data.key)+len(data.value))*3 + 256
-		if err := record.retain(ctx, bytes); err != nil {
-			yield(decodedData{}, err)
-			return
-		}
+		record.retain(bytes)
 		p.decoder.AddKeyValue(data.key, data.value)
 		for {
 			messageType, hasNext := p.decoder.HasNext()
@@ -1035,12 +1004,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 					p.cachedRecords[decoder.PendingDMLMessage] = record
 					continue
 				}
-				result, err := a.decodeMessage(ctx, data, message, record)
-				if err != nil {
-					yield(decodedData{}, err)
-					return
-				}
-				if !yield(result, nil) {
+				if !yield(a.decodeMessage(data, message, record), nil) {
 					return
 				}
 			case codecCommon.MessageTypeDDL:
@@ -1050,11 +1014,8 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 					return
 				}
 				if decoder, ok := p.decoder.(*simple.Decoder); ok {
-					if err := p.cacheSchemas(ctx, ddl, a.schemas); err != nil {
-						yield(decodedData{}, err)
-						return
-					}
-					if !a.decodeCachedMessages(ctx, data, p, decoder, yield) {
+					p.cacheSchemas(ddl, a.schemas)
+					if !a.decodeCachedMessages(data, p, decoder, yield) {
 						return
 					}
 				}

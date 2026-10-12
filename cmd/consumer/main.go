@@ -17,29 +17,17 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
 
 const profileAddress = "127.0.0.1:6060"
-
-type sourceType string
-
-const (
-	sourceKafka   sourceType = "kafka"
-	sourcePulsar  sourceType = "pulsar"
-	sourceStorage sourceType = "storage"
-)
 
 type options struct {
 	upstreamURI     string
@@ -114,33 +102,4 @@ func start(ctx context.Context, options *options) (err error) {
 		}
 	}()
 	return c.consume(ctx)
-}
-
-func parseRequiredURI(name, rawURI string) (*url.URL, error) {
-	if rawURI == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " is required")
-	}
-	uri, err := url.Parse(rawURI)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, putil.MaskSensitiveDataInURLError(err), "invalid "+name)
-	}
-	uri.Scheme = strings.ToLower(uri.Scheme)
-	if uri.Scheme == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " must include a URI scheme")
-	}
-	return uri, nil
-}
-
-func sourceTypeFromURI(uri *url.URL) (sourceType, error) {
-	switch uri.Scheme {
-	case config.KafkaScheme, config.KafkaSSLScheme:
-		return sourceKafka, nil
-	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return sourcePulsar, nil
-	case config.FileScheme, config.S3Scheme, config.GCSScheme, config.GSScheme,
-		config.AzblobScheme, config.AzureScheme:
-		return sourceStorage, nil
-	default:
-		return "", errors.ErrInvalidReplicaConfig.FastGenByArgs("unsupported upstream-uri scheme " + uri.Scheme)
-	}
 }
