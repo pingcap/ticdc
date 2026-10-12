@@ -8,7 +8,11 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/DATA-DOG/go-sqlmock v1.5.0
+<<<<<<< HEAD
 	github.com/IBM/sarama v1.41.2
+=======
+	github.com/IBM/sarama v1.61.1
+>>>>>>> 1e9d47156 (kafka: upgrade Sarama to v1.61.1 to fix message ordering (#6514))
 	github.com/KimMachineGun/automemlimit v0.2.4
 	github.com/agiledragon/gomonkey/v2 v2.11.0
 	github.com/apache/pulsar-client-go v0.13.0
@@ -44,12 +48,21 @@ require (
 	github.com/integralist/go-findroot v0.0.0-20160518114804-ac90681525dc
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/json-iterator/go v1.1.12
+<<<<<<< HEAD
 	github.com/klauspost/compress v1.18.6
 	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.9.1
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
 	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
+=======
+	github.com/klauspost/compress v1.20.1
+	github.com/linkedin/goavro/v2 v2.14.0
+	github.com/mailru/easyjson v0.9.1
+	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
+	github.com/pierrec/lz4/v4 v4.1.31
+	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
+>>>>>>> 1e9d47156 (kafka: upgrade Sarama to v1.61.1 to fix message ordering (#6514))
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260608025309-50b863799195
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
