@@ -310,9 +310,6 @@ func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64,
 		metrics.SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
 	}()
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		if s.resolvedTs.Load() >= ts {
 			return nil
 		}
@@ -367,9 +364,6 @@ func (s *schemaStore) Name() string {
 // acquireKeyspaceSchemaStore returns a store with its lifecycle read lock held.
 // The caller must call store.release when it no longer accesses the store.
 func (s *schemaStore) acquireKeyspaceSchemaStore(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	s.keyspaceLocker.RLock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	if ok && !store.acquire() {
