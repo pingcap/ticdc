@@ -201,6 +201,7 @@ func (s *bootstrapSchemaStoreForTest) Run(ctx context.Context) error { return ni
 func (s *bootstrapSchemaStoreForTest) Close(ctx context.Context) error { return nil }
 
 func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	snapTs uint64,
 	filter filter.Filter,
@@ -209,6 +210,7 @@ func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
 }
 
 func (s *bootstrapSchemaStoreForTest) RegisterTable(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	startTs uint64,
@@ -224,6 +226,7 @@ func (s *bootstrapSchemaStoreForTest) UnregisterTable(
 }
 
 func (s *bootstrapSchemaStoreForTest) GetTableInfo(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	ts uint64,

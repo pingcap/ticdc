@@ -2543,11 +2543,11 @@ type schemaStoreWithErr struct {
 	getTableInfoError error
 }
 
-func (s *schemaStoreWithErr) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (s *schemaStoreWithErr) GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if s.getTableInfoError != nil {
 		return nil, s.getTableInfoError
 	}
-	return s.mockSchemaStore.GetTableInfo(keyspaceMeta, tableID, ts)
+	return s.mockSchemaStore.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
 }
 
 func TestGetTableInfo4Txn(t *testing.T) {
@@ -2574,7 +2574,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	// Case 1: Success
 	t.Run("Success", func(t *testing.T) {
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		info, err := scanner.getTableInfo4Txn(context.Background(), disp, tableID, ts)
 		require.NoError(t, err)
 		require.NotNil(t, info)
 		require.Equal(t, ddlEvent.TableInfo, info)
@@ -2586,7 +2586,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		disp.isRemoved.Store(true)
 		defer disp.isRemoved.Store(false) // reset state
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		info, err := scanner.getTableInfo4Txn(context.Background(), disp, tableID, ts)
 		require.NoError(t, err)
 		require.Nil(t, info)
 	})
@@ -2595,7 +2595,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	t.Run("TableDeleted", func(t *testing.T) {
 		schemaStore.getTableInfoError = &schemastore.TableDeletedError{}
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		info, err := scanner.getTableInfo4Txn(context.Background(), disp, tableID, ts)
 		require.NoError(t, err)
 		require.Nil(t, info)
 	})
@@ -2605,7 +2605,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 		otherErr := errors.New("other error")
 		schemaStore.getTableInfoError = otherErr
 
-		info, err := scanner.getTableInfo4Txn(disp, tableID, ts)
+		info, err := scanner.getTableInfo4Txn(context.Background(), disp, tableID, ts)
 		require.Error(t, err)
 		require.Equal(t, otherErr, err)
 		require.Nil(t, info)
