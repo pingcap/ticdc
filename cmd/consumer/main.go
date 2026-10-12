@@ -70,10 +70,11 @@ func main() {
 	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Error("consumer exited with error", zap.Error(err))
 		_, _ = fmt.Fprintln(os.Stderr, err)
-	} else if ctx.Err() != nil {
+	case ctx.Err() != nil:
 		log.Info("consumer stopped")
 	}
 	_ = log.Sync()
@@ -144,16 +145,30 @@ func start(ctx context.Context, options *options) (err error) {
 	}
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
 
+	var (
+		c             *consumer
+		profileServer *http.Server
+	)
 	ctx, cancel := context.WithCancelCause(ctx)
-	c, err := newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
-	if err != nil {
+	defer func() {
 		cancel(err)
+		if c == nil {
+			return
+		}
+		if profileServer != nil {
+			if closeErr := profileServer.Close(); closeErr != nil {
+				log.Warn("consumer profiling server close failed", zap.Error(errors.WrapError(errors.ErrInternalCheckFailed, closeErr, "close consumer profiling server")))
+			}
+		}
+		// Close also wakes sinks whose input channel is blocked while idle.
+		c.writer.downstream.Close()
+		c.wg.Wait()
+		c.stop()
+	}()
+	c, err = newConsumer(ctx, upstreamURI, options.downstreamURI, consumerID, options.timezone, replicaConfig)
+	if err != nil {
 		return cmp.Or(context.Cause(ctx), err)
 	}
-	var profileServer *http.Server
-	defer func() {
-		err = c.stop(cancel, profileServer, err)
-	}()
 	if options.enableProfiling {
 		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", profileAddress)
 		if err != nil {

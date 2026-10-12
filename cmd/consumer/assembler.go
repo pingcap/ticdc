@@ -109,16 +109,16 @@ func (a *assembler) collectDecoded(ctx context.Context) ([]*writeEvent, error) {
 			}
 		}
 		if !ready {
-			if item.dml != nil {
-				if blockedTables == nil {
-					blockedTables = make(map[int64]bool)
-				}
-				blockedTables[item.dml.PhysicalTableID] = true
-				blockedRows = append(blockedRows, item)
-			} else {
-				blockedControls = append(blockedControls, item)
-			}
 			remaining = append(remaining, item)
+			if item.dml == nil {
+				blockedControls = append(blockedControls, item)
+				continue
+			}
+			if blockedTables == nil {
+				blockedTables = make(map[int64]bool)
+			}
+			blockedTables[item.dml.PhysicalTableID] = true
+			blockedRows = append(blockedRows, item)
 			continue
 		}
 		if task := item.decoding; task != nil {
@@ -223,21 +223,21 @@ func (a *assembler) prepare(ctx context.Context, items []*writeEvent) ([]*writeE
 				if len(dml.RowKeys) == 0 {
 					dml.RowKeys = make([][]byte, dml.Rows.NumRows()-len(part.RowTypes))
 				}
-				if len(part.RowKeys) == 0 {
-					dml.RowKeys = append(dml.RowKeys, make([][]byte, len(part.RowTypes))...)
-				} else {
-					dml.RowKeys = append(dml.RowKeys, part.RowKeys...)
+				keys := part.RowKeys
+				if len(keys) == 0 {
+					keys = make([][]byte, len(part.RowTypes))
 				}
+				dml.RowKeys = append(dml.RowKeys, keys...)
 			}
 			if len(dml.Checksum) != 0 || len(part.Checksum) != 0 {
 				if len(dml.Checksum) == 0 {
 					dml.Checksum = make([]*integrity.Checksum, dml.Length)
 				}
-				if len(part.Checksum) == 0 {
-					dml.Checksum = append(dml.Checksum, make([]*integrity.Checksum, part.Length)...)
-				} else {
-					dml.Checksum = append(dml.Checksum, part.Checksum...)
+				checksums := part.Checksum
+				if len(checksums) == 0 {
+					checksums = make([]*integrity.Checksum, part.Length)
 				}
+				dml.Checksum = append(dml.Checksum, checksums...)
 			}
 			dml.Length += part.Length
 			dml.ApproximateSize += part.ApproximateSize
@@ -261,12 +261,39 @@ type decodeStream struct {
 	schemas       map[string]map[uint64]*common.TableInfo
 }
 
+// Simple retains versioned metadata independently of events awaiting writes.
+func (p *decodeStream) cacheSchemas(ctx context.Context, ddl *event.DDLEvent, schemas *schemaUsage) error {
+	for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
+		if table == nil {
+			continue
+		}
+		name := common.QuoteSchema(table.GetSchemaName(), table.GetTableName())
+		versions := p.schemas[name]
+		if versions == nil {
+			if p.schemas == nil {
+				p.schemas = make(map[string]map[uint64]*common.TableInfo)
+			}
+			versions = make(map[uint64]*common.TableInfo)
+			p.schemas[name] = versions
+		}
+		previous := versions[table.UpdateTS]
+		if previous == table {
+			continue
+		}
+		if err := schemas.retain(ctx, table); err != nil {
+			return err
+		}
+		schemas.release(previous)
+		versions[table.UpdateTS] = table
+	}
+	return nil
+}
+
 // assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
 	memory            *memoryUsage
 	schemas           *schemaUsage
 	codecConfig       *codecCommon.Config
-	upstreamDB        *sql.DB
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
 	decoder           *decoderGroup
@@ -412,141 +439,153 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	if len(a.pendingDDL) != 0 {
 		head = a.pendingDDL[0]
 	}
-	var headReady bool
-	if head != nil {
-		var early bool
-		switch timodel.ActionType(head.ddl.Type) {
-		case timodel.ActionCreateSchema:
-			early = true
-		case timodel.ActionCreateTable:
-			blocked := head.ddl.GetBlockedTables()
-			early = blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal && (len(blocked.TableIDs) == 0 || (len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID)) && len(head.ddl.GetBlockedTableNames()) == 0
+	headReady := head != nil && ddlReady(head, watermark)
+	a.prepareScan(watermark, head, headReady)
+	if headReady {
+		if result := a.drainDDL(head, watermark); result != nil {
+			return result
 		}
-		headReady = head.ddl.GetCommitTs() <= watermark || early || (head.boundary != nil && head.boundary.reached)
 	}
+	return a.nextDML(watermark)
+}
+
+func ddlReady(item *writeEvent, watermark uint64) bool {
+	if item.ddl.GetCommitTs() <= watermark || (item.boundary != nil && item.boundary.reached) {
+		return true
+	}
+	switch timodel.ActionType(item.ddl.Type) {
+	case timodel.ActionCreateSchema:
+		return true
+	case timodel.ActionCreateTable:
+		blocked := item.ddl.GetBlockedTables()
+		return blocked != nil && blocked.InfluenceType == event.InfluenceTypeNormal &&
+			(len(blocked.TableIDs) == 0 || (len(blocked.TableIDs) == 1 && blocked.TableIDs[0] == common.DDLSpanTableID)) &&
+			len(item.ddl.GetBlockedTableNames()) == 0
+	default:
+		return false
+	}
+}
+
+func (a *assembler) prepareScan(watermark uint64, head *writeEvent, headReady bool) {
 	reset := a.scanInvalid || a.scanWatermark != watermark || a.scanDDL != head || a.scanDDLReady != headReady || a.scanIndex > len(a.pendingDML)
 	for boundary := range a.scanBoundaries {
 		reset = reset || boundary.reached
 	}
-	if reset {
-		a.scanIndex, a.priorityIndex, a.scanBlocked = 0, 0, nil
-		clear(a.scanBoundaries)
-		a.scanInvalid = false
-	}
 	a.scanWatermark, a.scanDDL, a.scanDDLReady = watermark, head, headReady
-	readyIndex := -1
-	var priority bool
-	if headReady {
-		ready := true
-		for index := a.priorityIndex; index < len(a.pendingDML); index++ {
-			pending := a.pendingDML[index]
-			if pending != nil {
-				if pending.dml.CommitTs <= head.ddl.GetCommitTs() && ddlBlocksTable(head.ddl, pending.dml) {
-					ready = false
-					a.priorityIndex = index
-					if pending.boundary != nil && !pending.boundary.reached {
-						if a.scanBoundaries == nil {
-							a.scanBoundaries = make(map[*readBoundary]bool)
-						}
-						a.scanBoundaries[pending.boundary] = true
-					}
-					if (pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
-						return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending.dml)
-					}) {
-						readyIndex = index
-						priority = true
-					}
-					break
-				}
-			}
+	if !reset {
+		return
+	}
+	a.scanIndex, a.priorityIndex, a.scanBlocked = 0, 0, nil
+	clear(a.scanBoundaries)
+	a.scanInvalid = false
+}
+
+// Drain the first preceding row in the DDL scope, or emit the DDL when no such
+// row remains. Independent tables can still progress through nextDML.
+func (a *assembler) drainDDL(head *writeEvent, watermark uint64) *writeEvent {
+	for index := a.priorityIndex; index < len(a.pendingDML); index++ {
+		pending := a.pendingDML[index]
+		if pending == nil || pending.dml.CommitTs > head.ddl.GetCommitTs() || !ddlBlocksTable(head.ddl, pending.dml) {
+			continue
 		}
+		a.priorityIndex = index
+		if pending.boundary != nil && !pending.boundary.reached {
+			if a.scanBoundaries == nil {
+				a.scanBoundaries = make(map[*readBoundary]bool)
+			}
+			a.scanBoundaries[pending.boundary] = true
+		}
+		if (pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+			return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending.dml)
+		}) {
+			a.priorityIndex = max(a.priorityIndex, index+1)
+			return a.popDML(index)
+		}
+		return nil
+	}
+	if a.waitingKnown && head.ddl.GetCommitTs() <= a.waitingWatermark {
+		a.waitingCount--
+	}
+	a.pendingDDL[0] = nil
+	a.pendingDDL = a.pendingDDL[1:]
+	return head
+}
+
+func (a *assembler) nextDML(watermark uint64) *writeEvent {
+	for a.scanIndex < len(a.pendingDML) {
+		index := a.scanIndex
+		a.scanIndex++
+		result := a.pendingDML[index]
+		if result == nil {
+			continue
+		}
+		tableID := result.dml.PhysicalTableID
+		if ts, ok := a.scanBlocked[tableID]; ok && ts <= result.dml.CommitTs {
+			continue
+		}
+		// Every queued DDL fences its own post-DDL rows.
+		ready := (result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+			return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result.dml)
+		})
 		if ready {
-			if a.waitingKnown && head.ddl.GetCommitTs() <= a.waitingWatermark {
-				a.waitingCount--
-			}
-			a.pendingDDL[0] = nil
-			a.pendingDDL = a.pendingDDL[1:]
-			return head
+			return a.popDML(index)
 		}
-	}
-	if readyIndex < 0 {
-		for a.scanIndex < len(a.pendingDML) {
-			index := a.scanIndex
-			a.scanIndex++
-			result := a.pendingDML[index]
-			if result == nil {
-				continue
+		// A later row must not overtake an earlier row waiting for its proof.
+		if result.boundary != nil && !result.boundary.reached {
+			if a.scanBoundaries == nil {
+				a.scanBoundaries = make(map[*readBoundary]bool)
 			}
-			tableID := result.dml.PhysicalTableID
-			if ts, ok := a.scanBlocked[tableID]; ok && ts <= result.dml.CommitTs {
-				continue
-			}
-			// Every queued DDL fences its own post-DDL rows.
-			ready := (result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
-				return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result.dml)
-			})
-			if ready {
-				readyIndex = index
-				break
-			}
-			// A later row must not overtake an earlier row waiting for its proof.
-			if result.boundary != nil && !result.boundary.reached {
-				if a.scanBoundaries == nil {
-					a.scanBoundaries = make(map[*readBoundary]bool)
-				}
-				a.scanBoundaries[result.boundary] = true
-			}
-			if result.boundary == nil && !result.proofPending {
-				result.proofPending = true
-				a.unproven = append(a.unproven, result)
-				a.unprovenCount++
-			}
-			if a.scanBlocked == nil {
-				a.scanBlocked = make(map[int64]uint64)
-			}
-			if ts, ok := a.scanBlocked[tableID]; !ok || result.dml.CommitTs < ts {
-				a.scanBlocked[tableID] = result.dml.CommitTs
-			}
+			a.scanBoundaries[result.boundary] = true
 		}
-	}
-	if readyIndex >= 0 {
-		result := a.pendingDML[readyIndex]
-		if a.waitingKnown && result.dml.CommitTs <= a.waitingWatermark {
-			a.waitingCount--
+		if result.boundary == nil && !result.proofPending {
+			result.proofPending = true
+			a.unproven = append(a.unproven, result)
+			a.unprovenCount++
 		}
-		if priority {
-			a.priorityIndex = max(a.priorityIndex, readyIndex+1)
+		if a.scanBlocked == nil {
+			a.scanBlocked = make(map[int64]uint64)
 		}
-		if result.proofPending {
-			result.proofPending = false
-			a.unprovenCount--
-			if a.unprovenCount == 0 {
-				clear(a.unproven)
-				a.unproven = a.unproven[:0]
-			}
+		if ts, ok := a.scanBlocked[tableID]; !ok || result.dml.CommitTs < ts {
+			a.scanBlocked[tableID] = result.dml.CommitTs
 		}
-		a.pendingDML[readyIndex] = nil
-		a.holes++
-		for len(a.pendingDML) != 0 && a.pendingDML[0] == nil {
-			a.pendingDML = a.pendingDML[1:]
-			a.scanIndex = max(0, a.scanIndex-1)
-			a.priorityIndex = max(0, a.priorityIndex-1)
-			a.holes--
-		}
-		if a.holes > 256 && a.holes*2 > len(a.pendingDML) {
-			remaining := a.pendingDML[:0]
-			for _, item := range a.pendingDML {
-				if item != nil {
-					remaining = append(remaining, item)
-				}
-			}
-			clear(a.pendingDML[len(remaining):])
-			a.pendingDML = remaining
-			a.holes, a.scanInvalid = 0, true
-		}
-		return result
 	}
 	return nil
+}
+
+func (a *assembler) popDML(index int) *writeEvent {
+	result := a.pendingDML[index]
+	if a.waitingKnown && result.dml.CommitTs <= a.waitingWatermark {
+		a.waitingCount--
+	}
+	if result.proofPending {
+		result.proofPending = false
+		a.unprovenCount--
+		if a.unprovenCount == 0 {
+			clear(a.unproven)
+			a.unproven = a.unproven[:0]
+		}
+	}
+	a.pendingDML[index] = nil
+	a.holes++
+	for len(a.pendingDML) != 0 && a.pendingDML[0] == nil {
+		a.pendingDML = a.pendingDML[1:]
+		a.scanIndex = max(0, a.scanIndex-1)
+		a.priorityIndex = max(0, a.priorityIndex-1)
+		a.holes--
+	}
+	if a.holes <= 256 || a.holes*2 <= len(a.pendingDML) {
+		return result
+	}
+	remaining := a.pendingDML[:0]
+	for _, item := range a.pendingDML {
+		if item != nil {
+			remaining = append(remaining, item)
+		}
+	}
+	clear(a.pendingDML[len(remaining):])
+	a.pendingDML = remaining
+	a.holes, a.scanInvalid = 0, true
+	return result
 }
 
 func (a *assembler) hasPendingThrough(watermark uint64) bool {
@@ -598,7 +637,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, completed chan<- struct{}) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, completed chan<- struct{}) (*assembler, error) {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -616,7 +655,7 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		// Constructors reset protocol table-ID allocation. Create all cursors
 		// before parsing inputs or starting concurrent row conversion.
 		for _, id := range ids {
-			decoder, err := codec.NewEventDecoder(ctx, int(id), decoding.codec, decoding.topic, decoding.upstreamDB)
+			decoder, err := codec.NewEventDecoder(ctx, int(id), decoding.codec, decoding.topic, upstreamDB)
 			if err != nil {
 				return nil, err
 			}
@@ -627,7 +666,6 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		memory:      memory,
 		schemas:     schemas,
 		codecConfig: decoding.codec,
-		upstreamDB:  decoding.upstreamDB,
 		selectors:   selectors,
 		streams:     streams,
 		decoder:     newDecoderGroup(schemas, completed),
@@ -722,11 +760,10 @@ func (a *assembler) applyProgress(progress readProgress) {
 }
 
 type decodeConfig struct {
-	codec      *codecCommon.Config
-	format     readFormat
-	topic      string
-	upstreamDB *sql.DB
-	streams    []int32
+	codec   *codecCommon.Config
+	format  readFormat
+	topic   string
+	streams []int32
 }
 
 // decodedData carries decoded facts and the row conversion input. The consumer
@@ -824,23 +861,33 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 	}
 }
 
-func (a *assembler) decodeRows(ctx context.Context) (decodedData, error) {
-	data := a.current
-	for {
-		messageType, hasNext := a.currentDecoder.HasNext()
-		if !hasNext {
-			data.record.decoded(data.retainedBytes)
-			a.current, a.currentDecoder = nil, nil
-			return decodedData{}, nil
+// Decode at most one row before yielding to event selection. A nil iterator
+// means the assembler needs a new input; an exhausted input yields no facts.
+func (a *assembler) decodePending(ctx context.Context) iter.Seq2[decodedData, error] {
+	if a.current == nil {
+		return nil
+	}
+	return func(yield func(decodedData, error) bool) {
+		data := a.current
+		for {
+			messageType, hasNext := a.currentDecoder.HasNext()
+			if !hasNext {
+				data.record.decoded(data.retainedBytes)
+				a.current, a.currentDecoder = nil, nil
+				return
+			}
+			if messageType != codecCommon.MessageTypeRow {
+				continue
+			}
+			message := a.currentDecoder.NextDMLMessage()
+			if message == nil {
+				yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message"))
+				return
+			}
+			result, err := a.decodeMessage(ctx, data, message, data.record)
+			yield(result, err)
+			return
 		}
-		if messageType != codecCommon.MessageTypeRow {
-			continue
-		}
-		message := a.currentDecoder.NextDMLMessage()
-		if message == nil {
-			return decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
-		}
-		return a.decodeMessage(ctx, data, message, data.record)
 	}
 }
 
@@ -935,6 +982,28 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 	return nil
 }
 
+func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, stream *decodeStream, decoder *simple.Decoder) iter.Seq2[decodedData, error] {
+	return func(yield func(decodedData, error) bool) {
+		for _, message := range decoder.GetCachedMessages() {
+			cached := stream.cachedRecords[message]
+			if cached == nil {
+				yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
+				return
+			}
+			delete(stream.cachedRecords, message)
+			result, err := a.decodeMessage(ctx, data, message, cached)
+			if err != nil {
+				yield(decodedData{}, err)
+				return
+			}
+			if !yield(result, nil) {
+				return
+			}
+			cached.decoded(data.retainedBytes)
+		}
+	}
+}
+
 func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
 	return func(yield func(decodedData, error) bool) {
 		p := a.streams[data.stream]
@@ -987,46 +1056,17 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 					return
 				}
 				if decoder, ok := p.decoder.(*simple.Decoder); ok {
-					// Simple retains versioned metadata in its decoder. Count that
-					// ownership independently of the events currently being written.
-					for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
-						if table == nil {
-							continue
-						}
-						name := common.QuoteSchema(table.GetSchemaName(), table.GetTableName())
-						versions := p.schemas[name]
-						if versions == nil {
-							if p.schemas == nil {
-								p.schemas = make(map[string]map[uint64]*common.TableInfo)
-							}
-							versions = make(map[uint64]*common.TableInfo)
-							p.schemas[name] = versions
-						}
-						if previous := versions[table.UpdateTS]; previous != table {
-							if err := a.schemas.retain(ctx, table); err != nil {
-								yield(decodedData{}, err)
-								return
-							}
-							a.schemas.release(previous)
-							versions[table.UpdateTS] = table
-						}
+					if err := p.cacheSchemas(ctx, ddl, a.schemas); err != nil {
+						yield(decodedData{}, err)
+						return
 					}
-					for _, message := range decoder.GetCachedMessages() {
-						cached := p.cachedRecords[message]
-						if cached == nil {
-							yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
+					for result, err := range a.decodeCachedMessages(ctx, data, p, decoder) {
+						if !yield(result, err) {
 							return
 						}
-						delete(p.cachedRecords, message)
-						result, err := a.decodeMessage(ctx, data, message, cached)
 						if err != nil {
-							yield(decodedData{}, err)
 							return
 						}
-						if !yield(result, nil) {
-							return
-						}
-						cached.decoded(data.retainedBytes)
 					}
 				}
 				if ddl.Query == "" {

@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -34,16 +33,21 @@ import (
 	"go.uber.org/zap"
 )
 
-const maxMemoryBytes = 1 << 30
+const (
+	maxMemoryBytes      = 1 << 30
+	progressLogInterval = 5 * time.Second
+)
 
 type consumer struct {
-	wg          sync.WaitGroup
-	reader      reader
-	assembler   *assembler
-	writer      *writer
-	progress    *inputProgress
-	completed   chan struct{}
-	confirmable chan struct{}
+	wg           sync.WaitGroup
+	reader       reader
+	assembler    *assembler
+	writer       *writer
+	upstreamDB   *sql.DB
+	progress     *inputProgress
+	completed    chan struct{}
+	confirmable  chan struct{}
+	progressTick <-chan time.Time
 }
 
 func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consumerID, timezone string, replicaConfig *config.ReplicaConfig) (c *consumer, err error) {
@@ -52,34 +56,44 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 	schemas := &schemaUsage{memory: memory}
 	completed := make(chan struct{}, 1)
 	confirmable := make(chan struct{}, 1)
-	reader, err := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
+	reader, streams, err := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
 	if err != nil {
 		return nil, err
 	}
-	var decoding *decodeConfig
+	var upstreamDB *sql.DB
 	defer func() {
 		if c != nil {
 			return
 		}
-		if closeErr := reader.Close(); closeErr != nil {
-			log.Error("consumer reader close failed", zap.Error(closeErr))
-		}
-		if decoding != nil && decoding.upstreamDB != nil {
-			if closeErr := decoding.upstreamDB.Close(); closeErr != nil {
-				log.Error("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
+		reader.Close()
+		if upstreamDB != nil {
+			if closeErr := upstreamDB.Close(); closeErr != nil {
+				log.Warn("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
 			}
 		}
 	}()
-	decoding, err = newDecodeConfig(ctx, upstreamURI, timezone, replicaConfig)
+	decoding, err := newDecodeConfig(upstreamURI, timezone, replicaConfig, streams)
 	if err != nil {
 		return nil, err
 	}
-	if reader, ok := reader.(*kafkaReader); ok {
-		for id := range reader.partitions {
-			decoding.streams = append(decoding.streams, id)
+	switch upstreamURI.Scheme {
+	case config.KafkaScheme, config.KafkaSSLScheme:
+		if dsn := upstreamURI.Query().Get("upstream-tidb-dsn"); dsn != "" {
+			upstreamDB, err = sql.Open("mysql", dsn)
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "open consumer upstream TiDB")
+			}
+			upstreamDB.SetMaxOpenConns(10)
+			upstreamDB.SetMaxIdleConns(10)
+			upstreamDB.SetConnMaxLifetime(10 * time.Minute)
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := upstreamDB.PingContext(ctx); err != nil {
+				return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
+			}
 		}
 	}
-	assembler, err := newAssembler(ctx, decoding, replicaConfig, memory, schemas, completed)
+	assembler, err := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, completed)
 	if err != nil {
 		return nil, err
 	}
@@ -95,51 +109,35 @@ func newConsumer(ctx context.Context, upstreamURI *url.URL, downstreamURI, consu
 	if err != nil {
 		return nil, err
 	}
+	progressTick := time.Tick(progressLogInterval)
 	return &consumer{
-		reader:      reader,
-		assembler:   assembler,
-		progress:    progress,
-		completed:   completed,
-		confirmable: confirmable,
+		reader:       reader,
+		assembler:    assembler,
+		upstreamDB:   upstreamDB,
+		progress:     progress,
+		completed:    completed,
+		confirmable:  confirmable,
+		progressTick: progressTick,
 		writer: &writer{
 			downstream:   target,
 			memory:       memory,
 			progress:     progress,
 			completed:    completed,
 			mutations:    make(map[mutationKey]*writeBatch),
-			progressTick: time.Tick(progressLogInterval),
+			progressTick: progressTick,
 			ddlJobs:      make(chan *writeEvent, 1),
 			ddlDone:      make(chan struct{}, 1),
 		},
 	}, nil
 }
 
-func (c *consumer) stop(cancel context.CancelCauseFunc, profileServer *http.Server, err error) error {
-	cancel(err)
-	if profileServer != nil {
-		if closeErr := profileServer.Close(); closeErr != nil {
-			log.Error("consumer profiling server close failed", zap.Error(closeErr))
+func (c *consumer) stop() {
+	c.reader.Close()
+	if c.upstreamDB != nil {
+		if closeErr := c.upstreamDB.Close(); closeErr != nil {
+			log.Warn("consumer upstream database close failed", zap.Error(errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")))
 		}
 	}
-	// Close also wakes sinks whose input channel is blocked while idle.
-	c.writer.downstream.Close()
-	c.wg.Wait()
-	if closeErr := c.reader.Close(); closeErr != nil {
-		if err != nil {
-			log.Error("consumer reader close failed", zap.Error(closeErr))
-		}
-		err = cmp.Or(err, closeErr)
-	}
-	if c.assembler.upstreamDB != nil {
-		if closeErr := c.assembler.upstreamDB.Close(); closeErr != nil {
-			closeErr = errors.WrapError(errors.ErrMySQLConnectionError, closeErr, "close consumer upstream TiDB")
-			if err != nil {
-				log.Error("consumer upstream database close failed", zap.Error(closeErr))
-			}
-			err = cmp.Or(err, closeErr)
-		}
-	}
-	return err
 }
 
 func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
@@ -169,47 +167,35 @@ func (c *consumer) next(ctx context.Context) (*writeEvent, error) {
 		if result := a.next(); result != nil {
 			return result, nil
 		}
-		if a.current != nil {
-			result, err := a.decodeRows(ctx)
+		decoded := a.decodePending(ctx)
+		if decoded == nil {
+			feedback := a.feedback()
+			progress, err := c.reader.Advance(ctx, feedback)
 			if err != nil {
 				return nil, err
 			}
-			if result.message != nil {
-				progress, err := c.reader.Advance(ctx, result.feedback)
-				if err != nil {
-					return nil, err
-				}
-				if err := a.accept(ctx, result, progress); err != nil {
+			a.advance(feedback, progress)
+			if progress.control != nil || (progress.boundary != nil && progress.boundary.reached) {
+				continue
+			}
+			if result := a.next(); result != nil {
+				return result, nil
+			}
+			if !progress.needsMoreInput && !a.needsMoreInput() {
+				if err := c.waitMemory(ctx); err != nil {
 					return nil, err
 				}
 			}
-			continue
-		}
-		feedback := a.feedback()
-		progress, err := c.reader.Advance(ctx, feedback)
-		if err != nil {
-			return nil, err
-		}
-		a.advance(feedback, progress)
-		if progress.control != nil || (progress.boundary != nil && progress.boundary.reached) {
-			continue
-		}
-		if result := a.next(); result != nil {
-			return result, nil
-		}
-		if !progress.needsMoreInput && !a.needsMoreInput() {
-			if err := c.waitMemory(ctx); err != nil {
+			data, err := c.reader.Read(ctx)
+			if err != nil {
 				return nil, err
 			}
+			if data == nil {
+				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
+			}
+			decoded = a.decode(ctx, data)
 		}
-		data, err := c.reader.Read(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if data == nil {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
-		}
-		for result, err := range a.decode(ctx, data) {
+		for result, err := range decoded {
 			if err != nil {
 				return nil, err
 			}
@@ -265,7 +251,7 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 			items, err = c.assembler.assemble(ctx, results, result)
 		case <-c.completed:
 			items, err = c.assembler.collectDecoded(ctx)
-		case <-c.writer.progressTick:
+		case <-c.progressTick:
 			log.Info("consumer progress", zap.Int64("receivedInputs", progress.received.Load()),
 				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
 				zap.Int64("completedInputs", progress.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
@@ -301,7 +287,7 @@ func (c *consumer) confirm(ctx context.Context) error {
 }
 
 // Resolve transport-specific defaults and requirements before constructing the assembler.
-func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig) (decoding *decodeConfig, err error) {
+func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) (*decodeConfig, error) {
 	source, err := sourceTypeFromURI(upstreamURI)
 	if err != nil {
 		return nil, err
@@ -337,7 +323,12 @@ func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string,
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		return nil, err
 	}
-	if source != sourceStorage {
+	switch source {
+	case sourceStorage:
+		if protocol == config.ProtocolCanalJSON {
+			codecConfig.EnableTiDBExtension = true
+		}
+	default:
 		switch protocol {
 		case config.ProtocolCanalJSON, config.ProtocolDebezium:
 			if !codecConfig.EnableTiDBExtension {
@@ -351,8 +342,6 @@ func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string,
 				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
 			}
 		}
-	} else if protocol == config.ProtocolCanalJSON {
-		codecConfig.EnableTiDBExtension = true
 	}
 	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
 	if err != nil {
@@ -361,31 +350,14 @@ func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string,
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
 		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
 	}
-	var db *sql.DB
-	if source == sourceKafka && upstreamURI.Query().Get("upstream-tidb-dsn") != "" {
-		db, err = sql.Open("mysql", upstreamURI.Query().Get("upstream-tidb-dsn"))
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "open consumer upstream TiDB")
-		}
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(10 * time.Minute)
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = db.PingContext(ctx)
-		cancel()
-		if err != nil {
-			_ = db.Close()
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
-		}
-	}
 	format := messageFormat
 	if source == sourceStorage {
 		format = rowFormat
 	}
 	return &decodeConfig{
-		codec:      codecConfig,
-		format:     format,
-		topic:      strings.Trim(upstreamURI.Path, "/"),
-		upstreamDB: db,
+		codec:   codecConfig,
+		format:  format,
+		topic:   strings.Trim(upstreamURI.Path, "/"),
+		streams: streams,
 	}, nil
 }

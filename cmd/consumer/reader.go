@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"maps"
 	"net/url"
+	"slices"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -29,7 +31,7 @@ type reader interface {
 	Read(ctx context.Context) (*readData, error)
 	Advance(ctx context.Context, feedback readFeedback) (readProgress, error)
 	Confirm(ctx context.Context) error
-	Close() error
+	Close()
 }
 
 type readOrder uint8
@@ -107,17 +109,25 @@ type readBoundary struct {
 	reached bool
 }
 
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, error) {
+// Return logical stream IDs with the reader so decoder initialization does not
+// depend on transport-specific reader fields. An empty list uses one decoder.
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32, error) {
 	source, err := sourceTypeFromURI(upstreamURI)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch source {
 	case sourceKafka:
-		return newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		reader, err := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		if err != nil {
+			return nil, nil, err
+		}
+		return reader, slices.Collect(maps.Keys(reader.partitions)), nil
 	case sourcePulsar:
-		return newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+		reader, err := newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+		return reader, nil, err
 	default:
-		return newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+		reader, err := newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+		return reader, nil, err
 	}
 }

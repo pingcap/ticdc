@@ -32,13 +32,10 @@ import (
 )
 
 const (
-	batchRows           = 1024
-	batchBytes          = 2 << 20
-	maxInFlightEvents   = 4096
-	maxInFlightBytes    = 32 << 20
-	maxRecordBytes      = 16 << 20
-	maxRecords          = 64 << 10
-	progressLogInterval = 5 * time.Second
+	batchRows         = 1024
+	batchBytes        = 2 << 20
+	maxInFlightEvents = 4096
+	maxInFlightBytes  = 32 << 20
 )
 
 func (w *writer) executeDDL(ctx context.Context) error {
@@ -236,129 +233,15 @@ func (w *writer) flushDML(ctx context.Context) error {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		clear(active)
-		clear(blocked)
-		clear(tables)
-		for _, batch := range w.inFlight {
-			for _, item := range batch.items {
-				active[item.dml.PhysicalTableID] = item
-			}
-		}
-		var (
-			rows  int
-			bytes int64
-			end   int
-		)
-		items := make([]*writeEvent, 0, min(batchRows, len(w.pendingDML)))
-		for index, item := range w.pendingDML {
-			id := item.dml.PhysicalTableID
-			if blocked[id] {
-				continue
-			}
-			fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
-			if fenced || slices.ContainsFunc(w.pendingDDL, func(control *writeEvent) bool {
-				return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
-			}) {
-				blocked[id] = true
-				continue
-			}
-			if earlier := active[id]; earlier != nil && (earlier.sequential || item.sequential || !sameTableSchema(earlier.dml.TableInfo, item.dml.TableInfo)) {
-				blocked[id] = true
-				continue
-			}
-			if previous := tables[item.dml.PhysicalTableID]; previous != nil &&
-				(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
-				blocked[id] = true
-				continue
-			}
-			tables[item.dml.PhysicalTableID] = item
-			rows += int(item.dml.Len())
-			bytes += item.bytes
-			items = append(items, item)
-			end = index + 1
-			if rows >= batchRows || bytes >= batchBytes {
-				break
-			}
-		}
-		if len(items) == 0 {
+		batch, end := w.selectBatch(active, blocked, tables)
+		if batch == nil {
 			break
 		}
-		for len(w.inFlight) != 0 && (w.inFlightEvents+len(items) > maxInFlightEvents || w.inFlightBytes+bytes > maxInFlightBytes) {
-			if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
-				return err
-			}
-		}
-		batch := &writeBatch{
-			items:  items,
-			events: make([]*event.DMLEvent, 0, len(items)),
-			bytes:  bytes,
-			done:   make(chan struct{}),
-		}
-		for _, item := range batch.items {
-			filtered, err := w.filterRows(ctx, item.dml, batch)
-			if err != nil {
-				return err
-			}
-			if filtered == nil {
-				batch.dropped = append(batch.dropped, item.dml)
-				continue
-			}
-			if filtered != item.dml {
-				// The original chunk stays alive through its decoder callbacks.
-				copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
-				if err := w.memory.reserve(ctx, copyBytes); err != nil {
-					return err
-				}
-				batch.bytes += copyBytes
-			}
-			batch.events = append(batch.events, filtered)
-		}
-		for len(w.inFlight) != 0 && w.inFlightBytes+batch.bytes > maxInFlightBytes {
-			if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
-				return err
-			}
-		}
-		if err := context.Cause(ctx); err != nil {
+		if err := w.prepareBatch(ctx, batch); err != nil {
 			return err
 		}
-		w.inFlight = append(w.inFlight, batch)
-		w.inFlightBytes += batch.bytes
-		w.inFlightEvents += len(batch.items)
-		if end == len(items) {
-			// The common case consumes a prefix without moving the backlog.
-			clear(w.pendingDML[:end])
-			w.pendingDML = w.pendingDML[end:]
-		} else {
-			remaining, selected := w.pendingDML[:0], 0
-			for _, item := range w.pendingDML {
-				if selected < len(items) && item == items[selected] {
-					selected++
-					continue
-				}
-				remaining = append(remaining, item)
-			}
-			clear(w.pendingDML[len(remaining):])
-			w.pendingDML = remaining
-		}
-		if len(batch.events) == 0 {
-			close(batch.done)
-		}
-		for _, dml := range batch.events {
-			if err := context.Cause(ctx); err != nil {
-				return err
-			}
-			var flushed atomic.Bool
-			dml.AddPostFlushFunc(func() {
-				if flushed.CAS(false, true) && batch.flushed.Add(1) == int64(len(batch.events)) {
-					w.memory.release(batch.bytes)
-					close(batch.done)
-					select {
-					case w.completed <- struct{}{}:
-					default:
-					}
-				}
-			})
-			w.downstream.AddDMLEvent(dml)
+		if err := w.submitBatch(ctx, batch, end); err != nil {
+			return err
 		}
 		w.finishBatches()
 	}
@@ -366,6 +249,145 @@ func (w *writer) flushDML(ctx context.Context) error {
 		w.pendingDML = pending[:0]
 	}
 	return w.flushDDL(ctx)
+}
+
+func (w *writer) selectBatch(active map[int64]*writeEvent, blocked map[int64]bool, tables map[int64]*writeEvent) (*writeBatch, int) {
+	clear(active)
+	clear(blocked)
+	clear(tables)
+	for _, batch := range w.inFlight {
+		for _, item := range batch.items {
+			active[item.dml.PhysicalTableID] = item
+		}
+	}
+	var (
+		rows  int
+		bytes int64
+		end   int
+	)
+	items := make([]*writeEvent, 0, min(batchRows, len(w.pendingDML)))
+	for index, item := range w.pendingDML {
+		id := item.dml.PhysicalTableID
+		if blocked[id] {
+			continue
+		}
+		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
+		if fenced || slices.ContainsFunc(w.pendingDDL, func(control *writeEvent) bool {
+			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
+		}) {
+			blocked[id] = true
+			continue
+		}
+		if earlier := active[id]; earlier != nil && (earlier.sequential || item.sequential || !sameTableSchema(earlier.dml.TableInfo, item.dml.TableInfo)) {
+			blocked[id] = true
+			continue
+		}
+		if previous := tables[id]; previous != nil &&
+			(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
+			blocked[id] = true
+			continue
+		}
+		tables[id] = item
+		rows += int(item.dml.Len())
+		bytes += item.bytes
+		items = append(items, item)
+		end = index + 1
+		if rows >= batchRows || bytes >= batchBytes {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return nil, 0
+	}
+	return &writeBatch{
+		items:  items,
+		events: make([]*event.DMLEvent, 0, len(items)),
+		bytes:  bytes,
+		done:   make(chan struct{}),
+	}, end
+}
+
+func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
+	for len(w.inFlight) != 0 && (w.inFlightEvents+len(batch.items) > maxInFlightEvents || w.inFlightBytes+batch.bytes > maxInFlightBytes) {
+		if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
+			return err
+		}
+	}
+	for _, item := range batch.items {
+		filtered, err := w.filterRows(ctx, item.dml, batch)
+		if err != nil {
+			return err
+		}
+		if filtered == nil {
+			batch.dropped = append(batch.dropped, item.dml)
+			continue
+		}
+		if filtered != item.dml {
+			// The original chunk stays alive through its decoder callbacks.
+			copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
+			if err := w.memory.reserve(ctx, copyBytes); err != nil {
+				return err
+			}
+			batch.bytes += copyBytes
+		}
+		batch.events = append(batch.events, filtered)
+	}
+	for len(w.inFlight) != 0 && w.inFlightBytes+batch.bytes > maxInFlightBytes {
+		if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	w.inFlight = append(w.inFlight, batch)
+	w.inFlightBytes += batch.bytes
+	w.inFlightEvents += len(batch.items)
+	w.removeDML(batch.items, end)
+	if len(batch.events) == 0 {
+		close(batch.done)
+	}
+	for _, dml := range batch.events {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		var flushed atomic.Bool
+		dml.AddPostFlushFunc(func() {
+			if flushed.CAS(false, true) && batch.flushed.Add(1) == int64(len(batch.events)) {
+				w.memory.release(batch.bytes)
+				close(batch.done)
+				select {
+				case w.completed <- struct{}{}:
+				default:
+				}
+			}
+		})
+		w.downstream.AddDMLEvent(dml)
+	}
+	return nil
+}
+
+func (w *writer) removeDML(items []*writeEvent, end int) {
+	if end == len(items) {
+		// The common case consumes a prefix without moving the backlog.
+		clear(w.pendingDML[:end])
+		w.pendingDML = w.pendingDML[end:]
+		return
+	}
+	remaining, selected := w.pendingDML[:0], 0
+	for _, item := range w.pendingDML {
+		if selected < len(items) && item == items[selected] {
+			selected++
+			continue
+		}
+		remaining = append(remaining, item)
+	}
+	clear(w.pendingDML[len(remaining):])
+	w.pendingDML = remaining
 }
 
 func sameTableSchema(a, b *common.TableInfo) bool {
@@ -523,14 +545,15 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 				rowType:  row.RowType,
 				handle:   string(handle),
 			}
-			if previous, exists := w.mutations[key]; exists {
+			switch previous, exists := w.mutations[key]; {
+			case exists:
 				if previous != nil && previous != batch {
 					if err := w.waitBatch(ctx, previous); err != nil {
 						return nil, err
 					}
 				}
 				retain = false
-			} else {
+			default:
 				bytes := int64(len(key.handle) + 192)
 				if err := w.memory.reserve(ctx, bytes); err != nil {
 					return nil, err

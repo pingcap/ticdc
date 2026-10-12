@@ -293,8 +293,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 	return nil
 }
 
-func (c *pulsarReader) Close() error {
+func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
-	return nil
 }

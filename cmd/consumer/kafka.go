@@ -226,10 +226,9 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		queue := partition.polled
 		record := queue[0]
 		queue[0] = nil
-		if len(queue) == 1 {
+		partition.polled = queue[1:]
+		if len(partition.polled) == 0 {
 			partition.polled = nil
-		} else {
-			partition.polled = queue[1:]
 		}
 		c.readSequence++
 		partition.sequence = c.readSequence
@@ -614,10 +613,11 @@ func (c *kafkaReader) limitReads() {
 			continue
 		}
 		partitions := map[string][]int32{c.topic: {partitionID}}
-		if pause {
+		switch {
+		case pause:
 			c.client.PauseFetchPartitions(partitions)
 			c.pausedPartitions++
-		} else {
+		default:
 			c.client.ResumeFetchPartitions(partitions)
 			c.pausedPartitions--
 		}
@@ -646,7 +646,6 @@ func (c *kafkaReader) nextPartition() int32 {
 	return selected
 }
 
-func (c *kafkaReader) Close() error {
+func (c *kafkaReader) Close() {
 	c.client.Close()
-	return nil
 }

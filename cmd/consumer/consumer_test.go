@@ -61,12 +61,10 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: query + "&max-message-bytes=262144"}
 			input, err := newKafkaReader(ctx, upstreamURI, "small-message-limit", &inputProgress{memory: &memoryUsage{}}, config.GetDefaultReplicaConfig(), nil)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, input.Close())
-			})
-			decoding, err := newDecodeConfig(ctx, upstreamURI, "UTC", config.GetDefaultReplicaConfig())
+			t.Cleanup(input.Close)
+			decoding, err := newDecodeConfig(upstreamURI, "UTC", config.GetDefaultReplicaConfig(), nil)
 			require.NoError(t, err)
-			a, err := newAssembler(ctx, decoding, config.GetDefaultReplicaConfig(), input.memory, &schemaUsage{memory: input.memory}, nil)
+			a, err := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, &schemaUsage{memory: input.memory}, nil)
 			require.NoError(t, err)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
@@ -119,9 +117,7 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	t.Cleanup(cluster.Close)
 	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, topic, &inputProgress{memory: &memoryUsage{}}, config.GetDefaultReplicaConfig(), nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, r.Close())
-	})
+	t.Cleanup(r.Close)
 	require.NoError(t, r.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("a")}, &kgo.Record{Topic: topic, Value: []byte("b")}).FirstErr())
 	first, err := r.Read(ctx)
 	require.NoError(t, err)
@@ -211,7 +207,7 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer cancel()
-	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
+	a, err := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
 	require.NoError(t, err)
 	for range a.decoder.workers {
 		wg.Go(func() {
@@ -274,12 +270,10 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			schemas := &schemaUsage{memory: memory}
 			input, err := newStorageReader(t.Context(), upstreamURI, replicaConfig, progress, schemas, nil)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, input.Close())
-			})
-			decoding, err := newDecodeConfig(t.Context(), upstreamURI, "UTC", replicaConfig)
+			t.Cleanup(input.Close)
+			decoding, err := newDecodeConfig(upstreamURI, "UTC", replicaConfig, nil)
 			require.NoError(t, err)
-			_, err = newAssembler(t.Context(), decoding, replicaConfig, memory, schemas, nil)
+			_, err = newAssembler(t.Context(), decoding, nil, replicaConfig, memory, schemas, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -296,9 +290,7 @@ func TestStorageReaderStreamsFileRanges(t *testing.T) {
 			memory := &memoryUsage{}
 			r, err := newStorageReader(ctx, &url.URL{Scheme: "file", Path: t.TempDir()}, replicaConfig, &inputProgress{memory: memory}, &schemaUsage{memory: memory}, nil)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, r.Close())
-			})
+			t.Cleanup(r.Close)
 			schema := &cloudstorage.SchemaFile{Schema: "test", Table: "t", TableVersion: 1}
 			require.NoError(t, r.storage.WriteFile(ctx, schema.Path(false, 0), schema.Marshal()))
 			key := cloudstorage.DMLPathKey{SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t", TableVersion: 1}}
@@ -343,13 +335,11 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 			schemas := &schemaUsage{memory: memory}
 			r, err := newStorageReader(ctx, &url.URL{Scheme: "file", Path: t.TempDir()}, replicaConfig, progress, schemas, nil)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, r.Close())
-			})
+			t.Cleanup(r.Close)
 			a, err := newAssembler(ctx, &decodeConfig{
 				codec:  codecCommon.NewConfig(config.ProtocolCsv),
 				format: rowFormat,
-			}, replicaConfig, memory, schemas, nil)
+			}, nil, replicaConfig, memory, schemas, nil)
 			require.NoError(t, err)
 			w := &writer{
 				memory:  memory,
@@ -626,9 +616,9 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	r := &pulsarReader{
 		memory: memory,
 	}
-	decoding, err := newDecodeConfig(t.Context(), &url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig())
+	decoding, err := newDecodeConfig(&url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), nil)
 	require.NoError(t, err)
-	a, err := newAssembler(t.Context(), decoding, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
+	a, err := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, &schemaUsage{memory: memory}, nil)
 	require.NoError(t, err)
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
@@ -984,9 +974,7 @@ func TestKafkaInputBoundaryIsFixed(t *testing.T) {
 	).FirstErr())
 	r, err := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, "input-boundary", &inputProgress{memory: &memoryUsage{}}, config.GetDefaultReplicaConfig(), nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, r.Close())
-	})
+	t.Cleanup(r.Close)
 	boundary, err := r.capture(ctx, nil, 0)
 	require.NoError(t, err)
 	require.False(t, boundary.reached)

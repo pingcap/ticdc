@@ -39,7 +39,11 @@ import (
 	"go.uber.org/zap"
 )
 
-const storageScanInterval = 2 * time.Second
+const (
+	storageScanInterval = 2 * time.Second
+	maxRecordBytes      = 16 << 20
+	maxRecords          = 64 << 10
+)
 
 type storageMetadata struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
@@ -139,7 +143,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 	return c, nil
 }
 
-func (c *storageReader) readFile(ctx context.Context, path string, limit int64) (data []byte, err error) {
+func (c *storageReader) readFile(ctx context.Context, path string, limit int64) ([]byte, error) {
 	if limit <= 0 {
 		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer has no buffer capacity for a Storage file")
 	}
@@ -148,11 +152,11 @@ func (c *storageReader) readFile(ctx context.Context, path string, limit int64) 
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage file")
 	}
 	defer func() {
-		if closeErr := reader.Close(); closeErr != nil && err == nil {
-			err = errors.WrapError(errors.ErrExternalStorageAPI, closeErr, "close Storage file")
+		if err := reader.Close(); err != nil {
+			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(errors.WrapError(errors.ErrExternalStorageAPI, err, "close Storage file")))
 		}
 	}()
-	data, err = io.ReadAll(io.LimitReader(reader, limit+1))
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
 	}
@@ -325,76 +329,18 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 				// The metadata checkpoint covers every file in the completed scan.
 				return &readData{control: &readControl{watermark: c.checkpoint}}, nil
 			}
-			if c.scanned {
-				select {
-				case <-ctx.Done():
-					return nil, context.Cause(ctx)
-				case <-time.After(storageScanInterval):
-				}
-			}
-			c.scanned = true
-			exists, err := c.storage.FileExists(ctx, "metadata")
-			if err != nil {
-				return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
-			}
-			if exists {
-				data, err := c.readFile(ctx, "metadata", maxRecordBytes)
-				if err != nil {
-					return nil, err
-				}
-				var metadata storageMetadata
-				if err := json.Unmarshal(data, &metadata); err != nil {
-					return nil, errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
-				}
-				c.checkpoint = max(c.checkpoint, metadata.CheckpointTs)
-			}
-			files, err := c.scanFiles(ctx)
-			if err != nil {
+			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
-			}
-			keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
-			for _, key := range keys {
-				if key.IsSchemaFileDMLPathKey() {
-					if err := c.memory.reserve(ctx, 256); err != nil {
-						return nil, err
-					}
-					c.inputs = append(c.inputs, storageInput{key: key})
-					continue
-				}
-				var sortBeforeWrite bool
-				for indexKey := range files[key] {
-					sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
-				}
-				for indexKey, span := range files[key] {
-					if err := c.memory.reserve(ctx, 256); err != nil {
-						return nil, err
-					}
-					c.inputs = append(c.inputs, storageInput{
-						key: key,
-						index: cloudstorage.FileIndex{
-							FileIndexKey: indexKey,
-							Idx:          span.start,
-						},
-						end:  span.end,
-						sort: sortBeforeWrite,
-					})
-				}
-				if err := c.memory.reserve(ctx, 256); err != nil {
-					return nil, err
-				}
-				c.inputs = append(c.inputs, storageInput{
-					key:      key,
-					groupEnd: true,
-				})
 			}
 			continue
 		}
 		input := c.inputs[0]
 		key := input.key
 		tableKey := key.GetKey()
-		if input.index.Idx < input.end && key.TableVersion >= c.ddlWatermarks[tableKey] {
+		switch {
+		case input.index.Idx < input.end && key.TableVersion >= c.ddlWatermarks[tableKey]:
 			c.inputs[0].index.Idx++
-		} else {
+		default:
 			c.inputs[0] = storageInput{}
 			c.inputs = c.inputs[1:]
 			c.memory.release(256)
@@ -422,37 +368,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			schema.table = table
 		}
 		if key.IsSchemaFileDMLPathKey() {
-			size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
-			record, err := c.progress.newAck(ctx, size, c.confirmable)
-			if err != nil {
-				return nil, err
-			}
-			c.mu.Lock()
-			c.records = append(c.records, record)
-			c.mu.Unlock()
-			// Reuse the cached table instead of reconstructing its columns again.
-			scope := event.InfluenceTypeNormal
-			if schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView {
-				scope = event.InfluenceTypeAll
-			} else if schema.file.Table == "" {
-				scope = event.InfluenceTypeDB
-			}
-			ddl := &event.DDLEvent{
-				TableInfo:     table,
-				FinishedTs:    schema.file.TableVersion,
-				Type:          schema.file.Type,
-				Query:         schema.file.Query,
-				SchemaName:    schema.file.Schema,
-				TableName:     schema.file.Table,
-				BlockedTables: &event.InfluencedTables{InfluenceType: scope},
-			}
-			return &readData{
-				table:         table,
-				ddl:           ddl,
-				record:        record,
-				retainedBytes: 256,
-				ddlBoundary:   &readBoundary{reached: true},
-			}, nil
+			return c.readDDL(ctx, key, schema)
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -490,59 +406,157 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 				groupEnd: true,
 			}, nil
 		}
-		path := key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
-		file, err := c.storage.Open(ctx, path, nil)
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
-		}
-		size, err := file.GetFileSize()
-		if err != nil {
-			_ = file.Close()
-			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
-		}
-		if size < 0 {
-			_ = file.Close()
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
-		}
-		record, err := c.progress.newAck(ctx, size+256, c.confirmable)
-		if err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-		data := make([]byte, size)
-		_, readErr := io.ReadFull(file, data)
-		var extra [1]byte
-		if readErr == nil {
-			_, extraErr := io.ReadFull(file, extra[:])
-			if extraErr != io.EOF {
-				if extraErr != nil {
-					readErr = extraErr
-				} else {
-					readErr = errors.ErrExternalStorageAPI.FastGenByArgs("Storage DML file size changed while reading")
-				}
-			}
-		}
-		closeErr := file.Close()
-		if readErr != nil {
-			return nil, errors.WrapError(errors.ErrExternalStorageAPI, readErr, "read Storage DML file")
-		}
-		if closeErr != nil {
-			return nil, errors.WrapError(errors.ErrExternalStorageAPI, closeErr, "close Storage DML file")
-		}
-		c.mu.Lock()
-		c.records = append(c.records, record)
-		c.mu.Unlock()
-		c.fileIndices[key][input.index.FileIndexKey] = input.index.Idx
-		return &readData{
-			format:        rowFormat,
-			value:         data,
-			table:         table,
-			group:         c.group,
-			record:        record,
-			retainedBytes: 256,
-			dmlBoundary:   c.group.boundary,
-		}, nil
+		return c.readDMLFile(ctx, input, table)
 	}
+}
+
+func (c *storageReader) scanInputs(ctx context.Context) error {
+	if c.scanned {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-time.After(storageScanInterval):
+		}
+	}
+	c.scanned = true
+	exists, err := c.storage.FileExists(ctx, "metadata")
+	if err != nil {
+		return errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
+	}
+	if exists {
+		data, err := c.readFile(ctx, "metadata", maxRecordBytes)
+		if err != nil {
+			return err
+		}
+		var metadata storageMetadata
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
+		}
+		c.checkpoint = max(c.checkpoint, metadata.CheckpointTs)
+	}
+	files, err := c.scanFiles(ctx)
+	if err != nil {
+		return err
+	}
+	keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
+	for _, key := range keys {
+		if key.IsSchemaFileDMLPathKey() {
+			if err := c.memory.reserve(ctx, 256); err != nil {
+				return err
+			}
+			c.inputs = append(c.inputs, storageInput{key: key})
+			continue
+		}
+		var sortBeforeWrite bool
+		for indexKey := range files[key] {
+			sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
+		}
+		for indexKey, span := range files[key] {
+			if err := c.memory.reserve(ctx, 256); err != nil {
+				return err
+			}
+			c.inputs = append(c.inputs, storageInput{
+				key: key,
+				index: cloudstorage.FileIndex{
+					FileIndexKey: indexKey,
+					Idx:          span.start,
+				},
+				end:  span.end,
+				sort: sortBeforeWrite,
+			})
+		}
+		if err := c.memory.reserve(ctx, 256); err != nil {
+			return err
+		}
+		c.inputs = append(c.inputs, storageInput{
+			key:      key,
+			groupEnd: true,
+		})
+	}
+	return nil
+}
+
+func (c *storageReader) readDDL(ctx context.Context, key cloudstorage.DMLPathKey, schema *storageSchema) (*readData, error) {
+	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
+	record, err := c.progress.newAck(ctx, size, c.confirmable)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.records = append(c.records, record)
+	c.mu.Unlock()
+	scope := event.InfluenceTypeNormal
+	switch {
+	case schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView:
+		scope = event.InfluenceTypeAll
+	case schema.file.Table == "":
+		scope = event.InfluenceTypeDB
+	}
+	// Reuse the cached table instead of reconstructing its columns again.
+	ddl := &event.DDLEvent{
+		TableInfo:     schema.table,
+		FinishedTs:    schema.file.TableVersion,
+		Type:          schema.file.Type,
+		Query:         schema.file.Query,
+		SchemaName:    schema.file.Schema,
+		TableName:     schema.file.Table,
+		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
+	}
+	return &readData{
+		table:         schema.table,
+		ddl:           ddl,
+		record:        record,
+		retainedBytes: 256,
+		ddlBoundary:   &readBoundary{reached: true},
+	}, nil
+}
+
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, table *common.TableInfo) (*readData, error) {
+	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
+	file, err := c.storage.Open(ctx, path, nil)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(errors.WrapError(errors.ErrExternalStorageAPI, err, "close Storage DML file")))
+		}
+	}()
+	size, err := file.GetFileSize()
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
+	}
+	if size < 0 {
+		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
+	}
+	record, err := c.progress.newAck(ctx, size+256, c.confirmable)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(file, data); err != nil {
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
+	}
+	var extra [1]byte
+	if _, err := io.ReadFull(file, extra[:]); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.ErrExternalStorageAPI.FastGenByArgs("Storage DML file size changed while reading")
+		}
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
+	}
+	c.mu.Lock()
+	c.records = append(c.records, record)
+	c.mu.Unlock()
+	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
+	return &readData{
+		format:        rowFormat,
+		value:         data,
+		table:         table,
+		group:         c.group,
+		record:        record,
+		retainedBytes: 256,
+		dmlBoundary:   c.group.boundary,
+	}, nil
 }
 
 func (c *storageReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
@@ -605,7 +619,6 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) Close() error {
+func (c *storageReader) Close() {
 	c.storage.Close()
-	return nil
 }
