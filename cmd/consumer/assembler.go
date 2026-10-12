@@ -576,14 +576,9 @@ func (a *assembler) popDML(index int) *writeEvent {
 	if a.holes <= 256 || a.holes*2 <= len(a.pendingDML) {
 		return result
 	}
-	remaining := a.pendingDML[:0]
-	for _, item := range a.pendingDML {
-		if item != nil {
-			remaining = append(remaining, item)
-		}
-	}
-	clear(a.pendingDML[len(remaining):])
-	a.pendingDML = remaining
+	a.pendingDML = slices.DeleteFunc(a.pendingDML, func(item *writeEvent) bool {
+		return item == nil
+	})
 	a.holes, a.scanInvalid = 0, true
 	return result
 }
@@ -982,26 +977,25 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 	return nil
 }
 
-func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, stream *decodeStream, decoder *simple.Decoder) iter.Seq2[decodedData, error] {
-	return func(yield func(decodedData, error) bool) {
-		for _, message := range decoder.GetCachedMessages() {
-			cached := stream.cachedRecords[message]
-			if cached == nil {
-				yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
-				return
-			}
-			delete(stream.cachedRecords, message)
-			result, err := a.decodeMessage(ctx, data, message, cached)
-			if err != nil {
-				yield(decodedData{}, err)
-				return
-			}
-			if !yield(result, nil) {
-				return
-			}
-			cached.decoded(data.retainedBytes)
+func (a *assembler) decodeCachedMessages(ctx context.Context, data *readData, stream *decodeStream, decoder *simple.Decoder, yield func(decodedData, error) bool) bool {
+	for _, message := range decoder.GetCachedMessages() {
+		cached := stream.cachedRecords[message]
+		if cached == nil {
+			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
+			return false
 		}
+		delete(stream.cachedRecords, message)
+		result, err := a.decodeMessage(ctx, data, message, cached)
+		if err != nil {
+			yield(decodedData{}, err)
+			return false
+		}
+		if !yield(result, nil) {
+			return false
+		}
+		cached.decoded(data.retainedBytes)
 	}
+	return true
 }
 
 func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
@@ -1060,13 +1054,8 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 						yield(decodedData{}, err)
 						return
 					}
-					for result, err := range a.decodeCachedMessages(ctx, data, p, decoder) {
-						if !yield(result, err) {
-							return
-						}
-						if err != nil {
-							return
-						}
+					if !a.decodeCachedMessages(ctx, data, p, decoder, yield) {
+						return
 					}
 				}
 				if ddl.Query == "" {

@@ -378,16 +378,14 @@ func (w *writer) removeDML(items []*writeEvent, end int) {
 		w.pendingDML = w.pendingDML[end:]
 		return
 	}
-	remaining, selected := w.pendingDML[:0], 0
-	for _, item := range w.pendingDML {
-		if selected < len(items) && item == items[selected] {
-			selected++
-			continue
+	var selected int
+	w.pendingDML = slices.DeleteFunc(w.pendingDML, func(item *writeEvent) bool {
+		if selected == len(items) || item != items[selected] {
+			return false
 		}
-		remaining = append(remaining, item)
-	}
-	clear(w.pendingDML[len(remaining):])
-	w.pendingDML = remaining
+		selected++
+		return true
+	})
 }
 
 func sameTableSchema(a, b *common.TableInfo) bool {
