@@ -809,14 +809,6 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 			data.record.decoded(data.retainedBytes)
 			return
 		}
-		if data.format != rowFormat {
-			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an unknown input format"))
-			return
-		}
-		if data.table == nil || data.group == nil {
-			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("row input has no table metadata or group"))
-			return
-		}
 		// Row decoders retain parsed records alongside the encoded file until
 		// the input is exhausted. Include their scratch space in its lifetime.
 		bytes := int64(len(data.value))*3 + 256
@@ -832,9 +824,6 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 		case config.ProtocolCanalJSON:
 			a.currentDecoder = canal.NewTxnDecoder(a.codecConfig)
 			a.currentDecoder.AddKeyValue(data.key, data.value)
-		default:
-			yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("protocol cannot decode rows with external table metadata"))
-			return
 		}
 		a.current = data
 	}
@@ -859,10 +848,6 @@ func (a *assembler) decodePending() iter.Seq2[decodedData, error] {
 				continue
 			}
 			message := a.currentDecoder.NextDMLMessage()
-			if message == nil {
-				yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message"))
-				return
-			}
 			yield(a.decodeMessage(data, message, data.record), nil)
 			return
 		}
@@ -957,10 +942,6 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 func (a *assembler) decodeCachedMessages(data *readData, stream *decodeStream, decoder *simple.Decoder, yield func(decodedData, error) bool) bool {
 	for _, message := range decoder.GetCachedMessages() {
 		cached := stream.cachedRecords[message]
-		if cached == nil {
-			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
-			return false
-		}
 		delete(stream.cachedRecords, message)
 		if !yield(a.decodeMessage(data, message, cached), nil) {
 			return false
@@ -973,10 +954,6 @@ func (a *assembler) decodeCachedMessages(data *readData, stream *decodeStream, d
 func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error] {
 	return func(yield func(decodedData, error) bool) {
 		p := a.streams[data.stream]
-		if p == nil {
-			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("input stream has no initialized decoder"))
-			return
-		}
 		record := data.record
 		// Captured protocol data remains live while conversion jobs run. Account
 		// once per input, not once per derived row in a batched message.
@@ -992,11 +969,7 @@ func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error]
 			case codecCommon.MessageTypeRow:
 				message := p.decoder.NextDMLMessage()
 				if message == nil {
-					decoder, ok := p.decoder.(*simple.Decoder)
-					if !ok {
-						yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message"))
-						return
-					}
+					decoder := p.decoder.(*simple.Decoder)
 					record.retainDecode()
 					if p.cachedRecords == nil {
 						p.cachedRecords = make(map[*codecCommon.DMLMessage]*ack)
@@ -1009,21 +982,13 @@ func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error]
 				}
 			case codecCommon.MessageTypeDDL:
 				ddl := p.decoder.NextDDLEvent()
-				if ddl == nil {
-					yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DDL event"))
-					return
-				}
 				if decoder, ok := p.decoder.(*simple.Decoder); ok {
 					p.cacheSchemas(ddl, a.schemas)
 					if !a.decodeCachedMessages(data, p, decoder, yield) {
 						return
 					}
 				}
-				if ddl.Query == "" {
-					if a.codecConfig.Protocol != config.ProtocolSimple {
-						yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("DDL query is empty"))
-						return
-					}
+				if a.codecConfig.Protocol == config.ProtocolSimple && ddl.Query == "" {
 					continue
 				}
 				result, err := a.decodeDDL(data, ddl)
@@ -1043,9 +1008,6 @@ func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error]
 				}}, nil) {
 					return
 				}
-			default:
-				yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type"))
-				return
 			}
 		}
 		if !yield(decodedData{feedback: readFeedback{

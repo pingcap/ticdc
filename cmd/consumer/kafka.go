@@ -63,7 +63,6 @@ type kafkaPartition struct {
 
 type kafkaReader struct {
 	router                *eventrouter.EventRouter
-	protocol              config.Protocol
 	ddlCopies             map[uint64]map[int32][]*ack
 	controls              []*readControl
 	watermark             uint64
@@ -159,11 +158,8 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	}
 	partitions := make(map[int32]*kafkaPartition, len(topicMetadata.Partitions))
 	for partitionID := range topicMetadata.Partitions {
-		start, hasStart := starts[topic][partitionID]
-		end, hasEnd := ends[topic][partitionID]
-		if !hasStart || !hasEnd || start.Offset < 0 || end.Offset < start.Offset {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka initial offsets are missing or invalid")
-		}
+		start := starts[topic][partitionID]
+		end := ends[topic][partitionID]
 		position := committed[topic][partitionID].At
 		if position < start.Offset || position > end.Offset {
 			position = start.Offset
@@ -184,7 +180,6 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		confirmable: confirmable,
 		partitions:  partitions,
 		router:      router,
-		protocol:    protocol,
 		ddlCopies:   make(map[uint64]map[int32][]*ack),
 	}, nil
 }
@@ -210,10 +205,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 			var bytes int64
 			for iterator := fetches.RecordIter(); !iterator.Done(); {
 				record := iterator.Next()
-				partition, ok := c.partitions[record.Partition]
-				if !ok {
-					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
-				}
+				partition := c.partitions[record.Partition]
 				partition.polled = append(partition.polled, record)
 				bytes += int64(len(record.Key) + len(record.Value) + 128)
 			}
@@ -261,16 +253,10 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 	var result readProgress
 	progressChanged := feedback.hasWatermark
 	if data := feedback.data; data != nil {
-		partition, ok := c.partitions[data.stream]
-		if !ok {
-			return result, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka record belongs to an unknown partition")
-		}
+		partition := c.partitions[data.stream]
 		progressChanged = progressChanged || partition.needsMoreInput != feedback.needsMoreInput
 		partition.needsMoreInput = feedback.needsMoreInput
 		if ddl := feedback.ddl; ddl != nil {
-			if c.protocol == config.ProtocolCanalJSON && data.stream != 0 {
-				return result, errors.ErrCodecDecode.FastGenByArgs("Canal JSON DDL must come from partition 0")
-			}
 			partition.ddlTs = ddl.GetCommitTs()
 			c.receivedDDL(data.stream, ddl.GetCommitTs())
 			if data.stream != 0 {
@@ -349,11 +335,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 	partitions := []int32{0}
 	var commitTs uint64
 	if feedback.boundaryDDL != nil {
-		var err error
-		partitions, err = c.ddlPartitions(feedback.boundaryDDL)
-		if err != nil {
-			return result, err
-		}
+		partitions = c.ddlPartitions(feedback.boundaryDDL)
 		if partitions != nil && !slices.Contains(partitions, int32(0)) {
 			partitions = append(partitions, 0)
 		}
@@ -388,10 +370,10 @@ func (c *kafkaReader) globalWatermark() (uint64, bool) {
 
 // A nil selection conservatively covers every partition. Table dispatch uses
 // logical names, including both sides of rename/exchange and physical partitions.
-func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) ([]int32, error) {
+func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) []int32 {
 	if c.router == nil || ddl.SchemaName == "" || ddl.TableName == "" ||
 		(ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType != event.InfluenceTypeNormal) {
-		return nil, nil
+		return nil
 	}
 	names := []event.SchemaTableName{{
 		SchemaName: ddl.SchemaName,
@@ -415,25 +397,25 @@ func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) ([]int32, error) {
 	var partitions []int32
 	for _, name := range names {
 		if name.SchemaName == "" || name.TableName == "" {
-			return nil, nil
+			return nil
 		}
 		generator := c.router.GetPartitionGenerator(name.SchemaName, name.TableName)
 		switch generator.(type) {
 		case *routing.TablePartitionGenerator:
 		default:
 			// Index/column values can place a table's rows in any partition.
-			return nil, nil
+			return nil
 		}
 		table := common.NewTableInfo4Decoder(name.SchemaName, &timodel.TableInfo{Name: ast.NewCIStr(name.TableName)})
 		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(c.partitions)), table, ddl.GetCommitTs())
 		if err != nil {
-			return nil, err
+			log.Panic("Kafka table partition generation failed", zap.String("schema", name.SchemaName), zap.String("table", name.TableName), zap.Error(err))
 		}
 		if !slices.Contains(partitions, partitionID) {
 			partitions = append(partitions, partitionID)
 		}
 	}
-	return partitions, nil
+	return partitions
 }
 
 // Capture once after candidate events have been read. New arrivals cannot
@@ -453,7 +435,6 @@ func (c *kafkaReader) capture(ctx context.Context, partitionIDs []int32, commitT
 		topic.Partitions = append(topic.Partitions, partition)
 	}
 	req.Topics = append(req.Topics, topic)
-	var received int
 	for _, shard := range c.client.RequestSharded(ctx, req) {
 		if shard.Err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, shard.Err, "get input boundary", c.topic)
@@ -463,22 +444,9 @@ func (c *kafkaReader) capture(ctx context.Context, partitionIDs []int32, commitT
 				if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
 				}
-				if partition.Offset < 0 {
-					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary has a negative offset")
-				}
-				state := c.partitions[partition.Partition]
-				if state == nil || (partitionIDs != nil && !slices.Contains(partitionIDs, partition.Partition)) {
-					return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary contains an unexpected partition")
-				}
-				if state.target < 0 {
-					received++
-				}
-				state.target = partition.Offset
+				c.partitions[partition.Partition].target = partition.Offset
 			}
 		}
-	}
-	if received != len(topic.Partitions) {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Kafka boundary is missing a partition")
 	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
@@ -493,7 +461,7 @@ func (c *kafkaReader) receivedDDL(partitionID int32, commitTs uint64) {
 	if commitTs == 0 || c.boundary == nil || c.boundary.reached || c.boundaryDDL != commitTs {
 		return
 	}
-	if partition := c.partitions[partitionID]; partition != nil && partition.target >= 0 {
+	if partition := c.partitions[partitionID]; partition.target >= 0 {
 		// All pre-DDL rows in this partition precede its local broadcast copy.
 		partition.target = partition.position
 	}
@@ -535,12 +503,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 		inputs := partition.records
 		var count int
 		for _, record := range inputs {
-			refs := record.ack.refs.Load()
-			if refs < 0 {
-				partition.mu.Unlock()
-				return errors.ErrInternalCheckFailed.FastGenByArgs("Kafka input completed more than once")
-			}
-			if refs != 0 {
+			if record.ack.refs.Load() != 0 {
 				break
 			}
 			count++

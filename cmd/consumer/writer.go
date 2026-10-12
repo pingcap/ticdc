@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/uber-go/atomic"
@@ -79,7 +78,8 @@ func (w *writer) start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return errors.ErrInternalCheckFailed.FastGenByArgs("downstream sink stopped unexpectedly")
+		log.Panic("consumer downstream sink stopped unexpectedly")
+		return nil
 	})
 	// Report cancellation before close joins tasks blocked on sink queues.
 	<-ctx.Done()

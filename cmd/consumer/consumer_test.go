@@ -284,7 +284,7 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 }
 
 func TestStorageReaderStreamsFileRanges(t *testing.T) {
-	for name, end := range map[string]uint64{"completeGroup": 2, "largeBacklog": maxRecords + 1} {
+	for name, end := range map[string]uint64{"completeGroup": 2, "largeBacklog": (64 << 10) + 1} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
@@ -435,7 +435,6 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 		r := &kafkaReader{
 			client:     client,
 			memory:     memory,
-			protocol:   config.ProtocolOpen,
 			partitions: make(map[int32]*kafkaPartition),
 			ddlCopies:  make(map[uint64]map[int32][]*ack),
 		}
@@ -1184,18 +1183,15 @@ func TestDDLScope(t *testing.T) {
 	input.router = router
 	partitionID, _, err := input.router.GetPartitionGenerator("test", "a").GeneratePartitionIndexAndKey(nil, 4, tableA, 10)
 	require.NoError(t, err)
-	selected, err := input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
-	require.NoError(t, err)
+	selected := input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
 	require.Equal(t, []int32{partitionID}, selected)
-	selected, err = input.ddlPartitions(&event.DDLEvent{SchemaName: "test"})
-	require.NoError(t, err)
+	selected = input.ddlPartitions(&event.DDLEvent{SchemaName: "test"})
 	require.Nil(t, selected)
 	sinkConfig := config.GetDefaultReplicaConfig().Sink
 	sinkConfig.DispatchRules = []*config.DispatchRule{{Matcher: []string{"*.*"}, PartitionRule: "index-value"}}
 	input.router, err = eventrouter.NewEventRouter(sinkConfig, true, "test", false, false)
 	require.NoError(t, err)
-	selected, err = input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
-	require.NoError(t, err)
+	selected = input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
 	require.Nil(t, selected)
 }
 

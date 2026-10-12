@@ -18,10 +18,11 @@ import (
 	"context"
 	"runtime"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -114,8 +115,8 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 			return err
 		}
 		dml := task.message.ToDMLEvent()
-		if dml == nil || dml.TableInfo == nil || dml.Rows == nil || dml.Len() == 0 {
-			return errors.ErrCodecDecode.FastGenByArgs("DML cannot be materialized into nonempty rows with table metadata")
+		if dml == nil {
+			log.Panic("consumer DML conversion failed", zap.String("schema", task.message.Schema), zap.String("table", task.message.Table), zap.Uint64("commitTs", task.message.GetCommitTs()))
 		}
 		if task.table != nil {
 			dml.PhysicalTableID = task.tableID

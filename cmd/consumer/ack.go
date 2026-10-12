@@ -14,7 +14,11 @@
 
 package main
 
-import "github.com/uber-go/atomic"
+import (
+	"github.com/pingcap/log"
+	"github.com/uber-go/atomic"
+	"go.uber.org/zap"
+)
 
 type inputProgress struct {
 	memory    *memoryUsage
@@ -45,7 +49,11 @@ func (p *inputProgress) newAck(bytes int64, done chan<- struct{}) *ack {
 }
 
 func (a *ack) release() {
-	if a.refs.Add(-1) == 0 {
+	refs := a.refs.Dec()
+	if refs < 0 {
+		log.Panic("consumer input completed more than once", zap.Int64("refs", refs))
+	}
+	if refs == 0 {
 		select {
 		case a.done <- struct{}{}:
 		default:

@@ -155,9 +155,6 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "discover Pulsar partitions")
 	}
-	if len(topics) == 0 {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar topic has an invalid partition count")
-	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
 		Topic:                             topic,
 		SubscriptionName:                  consumerID,
@@ -197,14 +194,8 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
-	case message, ok := <-c.consumer.Chan():
-		if !ok {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar reader stopped unexpectedly")
-		}
+	case message := <-c.consumer.Chan():
 		partition := c.partitions[message.Topic()]
-		if partition == nil {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar message belongs to an unknown partition")
-		}
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
 		record := c.progress.newAck(size, c.confirmable)
@@ -251,12 +242,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		partition.mu.Lock()
 		var count int
 		for _, record := range partition.records {
-			refs := record.ack.refs.Load()
-			if refs < 0 {
-				partition.mu.Unlock()
-				return errors.ErrInternalCheckFailed.FastGenByArgs("Pulsar input completed more than once")
-			}
-			if refs != 0 {
+			if record.ack.refs.Load() != 0 {
 				break
 			}
 			count++

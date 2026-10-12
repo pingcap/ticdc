@@ -385,9 +385,6 @@ func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
 		if err != nil {
 			return err
 		}
-		if result == nil {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
-		}
 		select {
 		case results <- result:
 		case <-ctx.Done():
@@ -428,9 +425,6 @@ func (c *consumer) next(ctx context.Context) (*writeEvent, error) {
 			data, err := c.reader.Read(ctx)
 			if err != nil {
 				return nil, err
-			}
-			if data == nil {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
 			}
 			decoded = a.decode(ctx, data)
 		}

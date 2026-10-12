@@ -40,11 +40,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	storageScanInterval = 2 * time.Second
-	maxRecordBytes      = 16 << 20
-	maxRecords          = 64 << 10
-)
+const storageScanInterval = 2 * time.Second
 
 type storageMetadata struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
@@ -144,10 +140,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 	return c, nil
 }
 
-func (c *storageReader) readFile(ctx context.Context, path string, limit int64) ([]byte, error) {
-	if limit <= 0 {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("consumer has no buffer capacity for a Storage file")
-	}
+func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, error) {
 	reader, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage file")
@@ -157,12 +150,9 @@ func (c *storageReader) readFile(ctx context.Context, path string, limit int64) 
 			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(err))
 		}
 	}()
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage file exceeds the consumer buffer limit")
 	}
 	return data, nil
 }
@@ -226,18 +216,12 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		key, index := path.key, path.index
 		indices := c.fileIndices[key]
 		if indices == nil {
-			if len(c.fileIndices) >= maxRecords {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage path cache exceeds its count limit")
-			}
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
 			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
 			c.memory.reserve(bytes)
 		}
 		if _, known := indices[index.FileIndexKey]; !known {
-			if len(indices) >= maxRecords {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage index cache exceeds its resource limit")
-			}
 			indices[index.FileIndexKey] = 0
 			bytes := int64(len(index.DispatcherID) + 128)
 			c.memory.reserve(bytes)
@@ -267,7 +251,7 @@ func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) 
 		g.Go(func() error {
 			for index := worker; index < len(paths) && ctx.Err() == nil; index += workers {
 				path := paths[index]
-				data, err := c.readFile(ctx, path.path, maxRecordBytes)
+				data, err := c.readFile(ctx, path.path)
 				if err != nil {
 					return err
 				}
@@ -288,7 +272,7 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 		return key, false, nil
 	}
-	data, err := c.readFile(ctx, path, maxRecordBytes)
+	data, err := c.readFile(ctx, path)
 	if err != nil {
 		return key, false, err
 	}
@@ -341,7 +325,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
-			return nil, errors.ErrCodecDecode.FastGenByArgs("Storage DML file has no matching schema")
+			log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 		}
 		if key.IsSchemaFileDMLPathKey() && (schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey]) {
 			continue
@@ -369,9 +353,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		tableID := c.tableIDs[idKey]
 		if tableID == 0 {
-			if len(c.tableIDs) >= maxRecords {
-				return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage table identity cache exceeds its count limit")
-			}
 			c.memory.reserve(int64(len(key.Schema) + len(key.Table) + 128))
 			c.nextTableID++
 			tableID = c.nextTableID
@@ -414,7 +395,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err, "check Storage metadata")
 	}
 	if exists {
-		data, err := c.readFile(ctx, "metadata", maxRecordBytes)
+		data, err := c.readFile(ctx, "metadata")
 		if err != nil {
 			return err
 		}
@@ -507,19 +488,9 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, tab
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
-	if size < 0 {
-		return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
-	}
 	record := c.progress.newAck(size+256, c.confirmable)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(file, data); err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
-	}
-	var extra [1]byte
-	if _, err := io.ReadFull(file, extra[:]); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.ErrExternalStorageAPI.FastGenByArgs("Storage DML file size changed while reading")
-		}
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	c.mu.Lock()
@@ -551,9 +522,6 @@ func (c *storageReader) Advance(_ context.Context, feedback readFeedback) (readP
 		key := common.QuoteSchema(data.table.GetSchemaName(), data.table.GetTableName())
 		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], data.table.UpdateTS)
 		if ddl.Type == byte(timodel.ActionRenameTable) {
-			if len(ddl.BlockedTableNames) == 0 {
-				return readProgress{}, errors.ErrCodecDecode.FastGenByArgs("Storage rename DDL has no old table")
-			}
 			old := ddl.BlockedTableNames[0]
 			oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
 			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], data.table.UpdateTS)
@@ -576,11 +544,7 @@ func (c *storageReader) Confirm(_ context.Context) error {
 	defer c.mu.Unlock()
 	var count int
 	for _, record := range c.records {
-		refs := record.refs.Load()
-		if refs < 0 {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("Storage input completed more than once")
-		}
-		if refs != 0 {
+		if record.refs.Load() != 0 {
 			break
 		}
 		record.confirm()
