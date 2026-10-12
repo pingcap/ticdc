@@ -47,7 +47,7 @@ func TestWriterReplayBoundary(t *testing.T) {
 		}
 		dml.PostFlush()
 	}).Times(2)
-	w := &writer{downstream: downstream, memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
+	w := &writer{downstream: downstream, memory: newMemoryUsage(), mutations: make(map[mutationKey]*writeBatch)}
 	for _, ids := range [][]int64{{1, 2, 1, 2}, {1, 2}, {1, 3, 2}} {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 99, 100, table)
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), len(ids))
@@ -85,7 +85,7 @@ func TestWriterWatermarksFollowWrites(t *testing.T) {
 		keys:  []mutationKey{first}, done: make(chan struct{}),
 	}
 	w := &writer{
-		memory: &memoryUsage{}, inFlight: []*writeBatch{batch}, inFlightEvents: 1,
+		memory: newMemoryUsage(), inFlight: []*writeBatch{batch}, inFlightEvents: 1,
 		mutations: map[mutationKey]*writeBatch{first: batch, second: nil},
 	}
 	w.memory.reserve(int64(len(first.handle) + len(second.handle) + 384))
@@ -108,11 +108,11 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field}},
 	})
-	memory := &memoryUsage{}
-	progress := &inputProgress{memory: memory}
+	memory := newMemoryUsage()
+	progress := newInputProgress(memory)
 	buffer := &assembler{
 		memory:  memory,
-		schemas: &schemaUsage{memory: memory},
+		schemas: newSchemaUsage(memory),
 	}
 	record := progress.newAck(128, nil)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
@@ -165,7 +165,7 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		}
 		dml.PostFlush()
 	}).Times(2)
-	memory := &memoryUsage{}
+	memory := newMemoryUsage()
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
 	input := &storageReader{memory: memory}
 	w.consume(&writeEvent{watermark: 90, hasWatermark: true})
@@ -225,7 +225,7 @@ func TestWriterReplayPreservesUpdateRows(t *testing.T) {
 	}
 	dml.Length = 2
 	batch := &writeBatch{}
-	w := &writer{memory: &memoryUsage{}, mutations: map[mutationKey]*writeBatch{
+	w := &writer{memory: newMemoryUsage(), mutations: map[mutationKey]*writeBatch{
 		{tableID: 1, commitTs: 100, rowType: common.RowTypeUpdate, handle: string([]byte{1, '1'})}: nil,
 	}}
 	callbacks := 0
@@ -270,7 +270,7 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 	other := &writeBatch{items: []*writeEvent{{dml: b}}, done: make(chan struct{})}
 	control := &writeEvent{ddl: ddl}
 	w := &writer{
-		downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: a}},
+		downstream: downstream, memory: newMemoryUsage(), pendingDML: []*writeEvent{{dml: a}},
 		inFlight: []*writeBatch{other}, inFlightEvents: 1,
 		pendingDDL: []*writeEvent{control}, ddlJobs: make(chan *writeEvent, 1),
 	}
@@ -287,11 +287,11 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 
 func TestWriterDDLReplay(t *testing.T) {
 	ctx := t.Context()
-	memory := &memoryUsage{}
-	progress := &inputProgress{memory: memory}
+	memory := newMemoryUsage()
+	progress := newInputProgress(memory)
 	a := &assembler{
 		memory:  memory,
-		schemas: &schemaUsage{memory: memory},
+		schemas: newSchemaUsage(memory),
 	}
 	w := &writer{memory: memory, ddlJobs: make(chan *writeEvent, 1)}
 	truncate := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 100, Query: "TRUNCATE TABLE `test`.`table_3`"}
@@ -376,7 +376,7 @@ func TestWriterDDLReplay(t *testing.T) {
 func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	memory := &memoryUsage{}
+	memory := newMemoryUsage()
 	completed := make(chan struct{}, 1)
 	var events []*event.DMLEvent
 	for index, table := range []string{"a", "a", "b"} {
@@ -522,7 +522,7 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 			dml.PostFlush()
 		}),
 	)
-	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
+	w := &writer{downstream: downstream, memory: newMemoryUsage(), pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
 	require.ErrorIs(t, w.flushDML(ctx), context.Canceled)
 	require.Len(t, w.inFlight, 1)
 	require.Len(t, w.inFlight[0].items, 1)

@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
@@ -67,46 +66,32 @@ type consumer struct {
 	confirmable   chan struct{}
 }
 
-func newConsumer(ctx context.Context, options *options) (c *consumer, err error) {
+func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	if err := logger.InitLogger(&logger.Config{
 		Level: options.logLevel,
 		File:  options.logFile,
 	}); err != nil {
-		return nil, errors.WrapError(errors.ErrInternalCheckFailed, err, "initialize consumer logger")
+		log.Panic("consumer logger initialization failed", zap.Error(err))
 	}
 	version.LogVersionInfo("consumer")
 
-	upstreamURI, err := parseRequiredURI("upstream-uri", options.upstreamURI)
-	if err != nil {
-		return nil, err
-	}
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := parseRequiredURI("downstream-uri", options.downstreamURI); err != nil {
-		return nil, err
-	}
+	upstreamURI := parseRequiredURI("upstream-uri", options.upstreamURI)
+	source := sourceTypeFromURI(upstreamURI)
 	consumerID := options.consumerID
 	if source != sourceStorage && strings.TrimSpace(consumerID) == "" {
 		consumerID = "ticdc_consumer_" + uuid.NewString()
 	}
-	replicaConfig, err := loadReplicaConfig(options.configFile)
-	if err != nil {
-		return nil, err
-	}
+	replicaConfig := loadReplicaConfig(options.configFile)
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
 
-	memory := &memoryUsage{}
-	progress := &inputProgress{memory: memory}
-	schemas := &schemaUsage{memory: memory}
+	memory := newMemoryUsage()
+	progress := newInputProgress(memory)
+	schemas := newSchemaUsage(memory)
 	completed := make(chan struct{}, 1)
 	confirmable := make(chan struct{}, 1)
-	reader, streams, err := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
-	if err != nil {
-		return nil, err
-	}
-	var upstreamDB *sql.DB
+	reader, streams := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
+	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig, streams)
+	upstreamDB := newUpstreamDB(ctx, upstreamURI)
 	defer func() {
 		if c != nil {
 			return
@@ -118,23 +103,9 @@ func newConsumer(ctx context.Context, options *options) (c *consumer, err error)
 			}
 		}
 	}()
-	decoding, err := newDecodeConfig(upstreamURI, options.timezone, replicaConfig, streams)
-	if err != nil {
-		return nil, err
-	}
-	upstreamDB, err = newUpstreamDB(ctx, upstreamURI)
-	if err != nil {
-		return nil, err
-	}
 	decoder := newDecoderGroup(schemas, completed)
-	assembler, err := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, decoder)
-	if err != nil {
-		return nil, err
-	}
-	writer, err := newWriter(ctx, options.downstreamURI, replicaConfig, progress, completed)
-	if err != nil {
-		return nil, err
-	}
+	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, decoder)
+	writer := newWriter(ctx, options.downstreamURI, replicaConfig, progress, completed)
 	return &consumer{
 		reader:        reader,
 		decoder:       decoder,
@@ -145,81 +116,69 @@ func newConsumer(ctx context.Context, options *options) (c *consumer, err error)
 		progress:      progress,
 		completed:     completed,
 		confirmable:   confirmable,
-	}, nil
+	}
 }
 
-func parseRequiredURI(name, rawURI string) (*url.URL, error) {
+func parseRequiredURI(name, rawURI string) *url.URL {
 	if rawURI == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " is required")
+		log.Panic("consumer URI is required", zap.String("option", name))
 	}
 	uri, err := url.Parse(rawURI)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, putil.MaskSensitiveDataInURLError(err), "invalid "+name)
+		log.Panic("consumer URI parsing failed", zap.String("option", name), zap.Error(putil.MaskSensitiveDataInURLError(err)))
 	}
 	uri.Scheme = strings.ToLower(uri.Scheme)
 	if uri.Scheme == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs(name + " must include a URI scheme")
+		log.Panic("consumer URI must include a scheme", zap.String("option", name))
 	}
-	return uri, nil
+	return uri
 }
 
-func sourceTypeFromURI(uri *url.URL) (sourceType, error) {
+func sourceTypeFromURI(uri *url.URL) sourceType {
 	switch uri.Scheme {
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return sourceKafka, nil
+		return sourceKafka
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return sourcePulsar, nil
+		return sourcePulsar
 	case config.FileScheme, config.S3Scheme, config.GCSScheme, config.GSScheme,
 		config.AzblobScheme, config.AzureScheme:
-		return sourceStorage, nil
-	default:
-		return "", errors.ErrInvalidReplicaConfig.FastGenByArgs("unsupported upstream-uri scheme " + uri.Scheme)
+		return sourceStorage
 	}
+	log.Panic("consumer upstream scheme is unsupported", zap.String("scheme", uri.Scheme))
+	return ""
 }
 
-func loadReplicaConfig(configFile string) (*config.ReplicaConfig, error) {
+func loadReplicaConfig(configFile string) *config.ReplicaConfig {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if configFile == "" {
-		return replicaConfig, nil
+		return replicaConfig
 	}
 	if err := cmdutil.StrictDecodeFile(configFile, "consumer", replicaConfig); err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err, "decode consumer config")
+		log.Panic("consumer configuration loading failed", zap.String("configFile", configFile), zap.Error(err))
 	}
 	if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-		return nil, errors.WrapError(errors.ErrInvalidReplicaConfig, err, "verify consumer filter rules")
+		log.Panic("consumer filter rules are invalid", zap.Error(err))
 	}
-	return replicaConfig, nil
+	return replicaConfig
 }
 
 // Return logical stream IDs with the reader so decoder initialization does not
 // depend on transport-specific reader fields. An empty list uses one decoder.
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32, error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, nil, err
-	}
-	switch source {
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32) {
+	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		reader, err := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
-		if err != nil {
-			return nil, nil, err
-		}
-		return reader, slices.Collect(maps.Keys(reader.partitions)), nil
+		reader := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		return reader, slices.Collect(maps.Keys(reader.partitions))
 	case sourcePulsar:
-		reader, err := newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
-		return reader, nil, err
+		return newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable), nil
 	default:
-		reader, err := newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
-		return reader, nil, err
+		return newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable), nil
 	}
 }
 
 // Resolve transport-specific defaults and requirements before constructing the assembler.
-func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) (*decodeConfig, error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, err
-	}
+func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) *decodeConfig {
+	source := sourceTypeFromURI(upstreamURI)
 	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
 	switch source {
 	case sourcePulsar:
@@ -229,11 +188,11 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 	}
 	protocol, err := config.ParseSinkProtocolFromString(protocolName)
 	if err != nil {
-		return nil, err
+		log.Panic("consumer protocol is invalid", zap.Error(err))
 	}
 	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
+		log.Panic("consumer codec configuration is invalid", zap.Error(err))
 	}
 	switch source {
 	case sourceStorage:
@@ -244,23 +203,23 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 		switch protocol {
 		case config.ProtocolCanalJSON, config.ProtocolDebezium:
 			if !codecConfig.EnableTiDBExtension {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
+				log.Panic("consumer requires TiDB protocol extensions", zap.String("protocol", protocol.String()))
 			}
 		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
 			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension and avro-enable-watermark must be true")
+				log.Panic("consumer requires TiDB protocol extensions and Avro watermarks", zap.String("protocol", protocol.String()))
 			}
 			if codecConfig.AvroConfluentSchemaRegistry == "" {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
+				log.Panic("consumer requires an Avro schema registry")
 			}
 		}
 	}
 	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
 	if err != nil {
-		return nil, err
+		log.Panic("consumer time zone is invalid", zap.Error(err))
 	}
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
-		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
+		log.Panic("consumer requires Debezium schemas")
 	}
 	format := messageFormat
 	if source == sourceStorage {
@@ -271,20 +230,20 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 		format:  format,
 		topic:   strings.Trim(upstreamURI.Path, "/"),
 		streams: streams,
-	}, nil
+	}
 }
 
-func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) (*sql.DB, error) {
+func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
 	if upstreamURI.Scheme != config.KafkaScheme && upstreamURI.Scheme != config.KafkaSSLScheme {
-		return nil, nil
+		return nil
 	}
 	dsn := upstreamURI.Query().Get("upstream-tidb-dsn")
 	if dsn == "" {
-		return nil, nil
+		return nil
 	}
 	upstreamDB, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "open consumer upstream TiDB")
+		log.Panic("consumer upstream database open failed", zap.Error(err))
 	}
 	defer func() {
 		if err == nil {
@@ -300,9 +259,9 @@ func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) (*sql.DB, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err = upstreamDB.PingContext(ctx); err != nil {
-		return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
+		log.Panic("consumer upstream database connection failed", zap.Error(err))
 	}
-	return upstreamDB, nil
+	return upstreamDB
 }
 
 func newProfileServer(enabled bool) *http.Server {
@@ -322,16 +281,13 @@ func newProfileServer(enabled bool) *http.Server {
 	}
 }
 
-func (c *consumer) consume(ctx context.Context) error {
+func (c *consumer) consume(ctx context.Context) {
 	c.g, ctx = errgroup.WithContext(ctx)
 	if c.profileServer != nil {
-		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", c.profileServer.Addr)
-		if err != nil {
-			return errors.WrapError(errors.ErrInternalCheckFailed, err, "listen for consumer profiling")
-		}
 		c.g.Go(func() error {
-			if err := c.profileServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return errors.WrapError(errors.ErrInternalCheckFailed, err, "serve consumer profiling")
+			if err := c.profileServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("consumer profiling server failed", zap.Error(err))
+				return err
 			}
 			return nil
 		})
@@ -358,16 +314,15 @@ func (c *consumer) consume(ctx context.Context) error {
 	<-ctx.Done()
 	// Stop dispatching before the caller closes the sink.
 	<-writeDone
-	return nil
 }
 
-func (c *consumer) stop() error {
+func (c *consumer) stop() {
 	if c.profileServer != nil {
 		if closeErr := c.profileServer.Close(); closeErr != nil {
 			log.Warn("consumer profiling server close failed", zap.Error(closeErr))
 		}
 	}
-	err := c.g.Wait()
+	_ = c.g.Wait()
 	c.writer.close()
 	c.decoder.close()
 	c.reader.Close()
@@ -376,13 +331,15 @@ func (c *consumer) stop() error {
 			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
 		}
 	}
-	return err
 }
 
 func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
 	for ctx.Err() == nil {
 		result, err := c.next(ctx)
 		if err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer read failed", zap.Error(err))
+			}
 			return err
 		}
 		select {
@@ -495,12 +452,18 @@ func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error 
 			continue
 		}
 		if err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer event assembly failed", zap.Error(err))
+			}
 			return err
 		}
 		for _, item := range items {
 			c.writer.consume(item)
 		}
 		if err := c.writer.flushDML(ctx); err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer DML submission failed", zap.Error(err))
+			}
 			return err
 		}
 	}
@@ -513,6 +476,9 @@ func (c *consumer) confirm(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-c.confirmable:
 			if err := c.reader.Confirm(ctx); err != nil {
+				if ctx.Err() == nil {
+					log.Error("consumer input confirmation failed", zap.Error(err))
+				}
 				return err
 			}
 		}

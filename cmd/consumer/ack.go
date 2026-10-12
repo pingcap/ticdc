@@ -26,6 +26,12 @@ type inputProgress struct {
 	confirmed atomic.Int64
 }
 
+func newInputProgress(memory *memoryUsage) *inputProgress {
+	return &inputProgress{
+		memory: memory,
+	}
+}
+
 // An input can be confirmed after decoding and downstream writes release all refs.
 type ack struct {
 	refs     atomic.Int64

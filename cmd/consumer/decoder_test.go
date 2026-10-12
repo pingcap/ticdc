@@ -42,9 +42,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				cancel()
 				_ = g.Wait()
 			}()
-			memory := &memoryUsage{}
-			progress := &inputProgress{memory: memory}
-			schemas := &schemaUsage{memory: memory}
+			memory := newMemoryUsage()
+			progress := newInputProgress(memory)
+			schemas := newSchemaUsage(memory)
 			completed := make(chan struct{}, 1)
 			d := &decoderGroup{
 				memory:    memory,
@@ -188,7 +188,7 @@ func TestDecodingDDLScope(t *testing.T) {
 			ddl := &writeEvent{ddl: &event.DDLEvent{SchemaName: "test", TableName: name, FinishedTs: 20, Type: byte(timodel.ActionAddColumn)}}
 			a := &assembler{decoding: []*writeEvent{pending, ddl}}
 			w := &writer{
-				memory:  &memoryUsage{},
+				memory:  newMemoryUsage(),
 				ddlJobs: make(chan *writeEvent, 1),
 			}
 			items := a.collectDecoded()

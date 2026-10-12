@@ -25,7 +25,7 @@ func BenchmarkKafkaReadScheduling(b *testing.B) {
 	for _, count := range []int{4, 64} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
 			c := &kafkaReader{
-				memory:     &memoryUsage{},
+				memory:     newMemoryUsage(),
 				partitions: make(map[int32]*kafkaPartition, count),
 			}
 			for id := range count {

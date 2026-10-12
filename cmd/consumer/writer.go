@@ -41,7 +41,7 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}) (*writer, error) {
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}) *writer {
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
@@ -52,7 +52,7 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		EnableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}, changefeedID, common.DefaultKeyspaceID)
 	if err != nil {
-		return nil, err
+		log.Panic("consumer downstream sink initialization failed", zap.Error(err))
 	}
 	return &writer{
 		downstream: downstream,
@@ -62,7 +62,7 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		mutations:  make(map[mutationKey]*writeBatch),
 		ddlJobs:    make(chan *writeEvent, 1),
 		ddlDone:    make(chan struct{}, 1),
-	}, nil
+	}
 }
 
 func (w *writer) start(ctx context.Context) error {
@@ -76,6 +76,7 @@ func (w *writer) start(ctx context.Context) error {
 			return context.Cause(ctx)
 		}
 		if err != nil {
+			log.Error("consumer downstream sink failed", zap.Error(err))
 			return err
 		}
 		log.Panic("consumer downstream sink stopped unexpectedly")
@@ -101,6 +102,9 @@ func (w *writer) executeDDL(ctx context.Context) error {
 			return context.Cause(ctx)
 		case result := <-w.ddlJobs:
 			if err := w.writeDDL(ctx, result); err != nil {
+				if ctx.Err() == nil {
+					log.Error("consumer DDL write failed", zap.String("schema", result.ddl.SchemaName), zap.String("table", result.ddl.TableName), zap.Uint64("commitTs", result.ddl.GetCommitTs()), zap.Error(err))
+				}
 				return err
 			}
 			select {

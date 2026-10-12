@@ -30,6 +30,10 @@ type memoryUsage struct {
 	changed       chan struct{}
 }
 
+func newMemoryUsage() *memoryUsage {
+	return &memoryUsage{}
+}
+
 func (m *memoryUsage) used() int64 {
 	bytes := m.bytes.Load()
 	if m.externalBytes != nil {

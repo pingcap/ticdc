@@ -59,7 +59,7 @@ func BenchmarkWriterBacklog(b *testing.B) {
 			}).AnyTimes()
 			w := &writer{
 				downstream: downstream,
-				memory:     &memoryUsage{},
+				memory:     newMemoryUsage(),
 			}
 			pending := make([]*writeEvent, count)
 			b.ReportAllocs()

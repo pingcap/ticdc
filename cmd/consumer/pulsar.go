@@ -53,19 +53,19 @@ type pulsarReader struct {
 	hasWatermark bool
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, confirmable chan<- struct{}) (reader *pulsarReader, err error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, confirmable chan<- struct{}) (reader *pulsarReader) {
 	if err := context.Cause(ctx); err != nil {
-		return nil, err
+		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
 	}
 	if upstreamURI.Host == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("pulsar upstream-uri must include an endpoint")
+		log.Panic("Pulsar upstream URI must include an endpoint")
 	}
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if topic == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("pulsar upstream-uri must include a topic")
+		log.Panic("Pulsar upstream URI must include a topic")
 	}
 	if strings.Contains(topic, ",") {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("cdc_consumer accepts one Pulsar topic")
+		log.Panic("consumer accepts one Pulsar topic", zap.String("topic", topic))
 	}
 	query := upstreamURI.Query()
 	pulsarConfig := config.PulsarConfig{}
@@ -91,7 +91,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		MemoryLimitBytes:      64 << 20,
 	}
 	if (clientOptions.TLSCertificateFile == "") != (clientOptions.TLSKeyFilePath == "") {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar TLS certificate and key must be configured together")
+		log.Panic("Pulsar TLS certificate and key must be configured together")
 	}
 	oauth2 := config.OAuth2{}
 	if pulsarConfig.OAuth2 != nil {
@@ -110,7 +110,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	certificate := cmp.Or(query.Get("auth-tls-certificate-path"), putil.GetOrZero(pulsarConfig.AuthTLSCertificatePath))
 	key := cmp.Or(query.Get("auth-tls-private-key-path"), putil.GetOrZero(pulsarConfig.AuthTLSPrivateKeyPath))
 	if (certificate == "") != (key == "") {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar authentication certificate and key must be configured together")
+		log.Panic("Pulsar authentication certificate and key must be configured together")
 	}
 	useOAuth2 := oauth2.OAuth2IssuerURL != "" || oauth2.OAuth2ClientID != "" || oauth2.OAuth2PrivateKey != "" || oauth2.OAuth2Audience != "" || oauth2.OAuth2Scope != ""
 	var authCount int
@@ -120,7 +120,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		}
 	}
 	if authCount > 1 {
-		return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("configure only one Pulsar authentication method")
+		log.Panic("configure only one Pulsar authentication method")
 	}
 	switch {
 	case token != "":
@@ -131,20 +131,21 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		clientOptions.Authentication = pulsar.NewAuthenticationTLS(certificate, key)
 	case useOAuth2:
 		if oauth2.OAuth2IssuerURL == "" || oauth2.OAuth2ClientID == "" || oauth2.OAuth2PrivateKey == "" || oauth2.OAuth2Audience == "" {
-			return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar OAuth2 requires issuer, client ID, private key and audience")
+			log.Panic("Pulsar OAuth2 requires issuer, client ID, private key and audience")
 		}
-		clientOptions.Authentication, err = auth.NewAuthenticationOAuth2WithParams(map[string]string{
+		authentication, err := auth.NewAuthenticationOAuth2WithParams(map[string]string{
 			auth.ConfigParamType: auth.ConfigParamTypeClientCredentials, auth.ConfigParamIssuerURL: oauth2.OAuth2IssuerURL,
 			auth.ConfigParamClientID: oauth2.OAuth2ClientID, auth.ConfigParamKeyFile: oauth2.OAuth2PrivateKey,
 			auth.ConfigParamAudience: oauth2.OAuth2Audience, auth.ConfigParamScope: oauth2.OAuth2Scope,
 		})
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "initialize Pulsar OAuth2 authentication")
+			log.Panic("Pulsar OAuth2 authentication initialization failed", zap.Error(err))
 		}
+		clientOptions.Authentication = authentication
 	}
 	client, err := pulsar.NewClient(clientOptions)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "create Pulsar client")
+		log.Panic("Pulsar client initialization failed", zap.Error(err))
 	}
 	defer func() {
 		if reader == nil {
@@ -153,7 +154,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	}()
 	topics, err := client.TopicPartitions(topic)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "discover Pulsar partitions")
+		log.Panic("Pulsar partition discovery failed", zap.String("topic", topic), zap.Error(err))
 	}
 	consumer, err := client.Subscribe(pulsar.ConsumerOptions{
 		Topic:                             topic,
@@ -167,7 +168,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		MaxPendingChunkedMessage:          1,
 	})
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "subscribe to Pulsar topic")
+		log.Panic("Pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
 	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
 	// scale down under the client memory limit; oversized messages may exceed it.
@@ -187,7 +188,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		confirmable: confirmable,
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
-	return c, nil
+	return c
 }
 
 func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {

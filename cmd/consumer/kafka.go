@@ -81,24 +81,24 @@ type kafkaReader struct {
 	boundaryDDL           uint64
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, progress *inputProgress, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader, err error) {
+func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, progress *inputProgress, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("kafka upstream-uri must include an endpoint")
+		log.Panic("Kafka upstream URI must include an endpoint")
 	}
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if topic == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("kafka upstream-uri must include a topic")
+		log.Panic("Kafka upstream URI must include a topic")
 	}
 	if strings.Contains(topic, ",") {
-		return nil, errors.ErrKafkaInvalidConfig.FastGenByArgs("cdc_consumer accepts one Kafka topic")
+		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
 	}
 	protocol, err := config.ParseSinkProtocolFromString(cmp.Or(upstreamURI.Query().Get(config.ProtocolKey), "open-protocol"))
 	if err != nil {
-		return nil, err
+		log.Panic("Kafka protocol is invalid", zap.Error(err))
 	}
 	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive), topic, false, protocol == config.ProtocolAvro)
 	if err != nil {
-		return nil, err
+		log.Panic("Kafka event routing configuration is invalid", zap.Error(err))
 	}
 	kafkaOptions := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(upstreamURI.Host, ",")...),
@@ -117,7 +117,7 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	}
 	client, err := kgo.NewClient(kafkaOptions...)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		log.Panic("Kafka client initialization failed", zap.Error(err))
 	}
 	defer func() {
 		if reader == nil {
@@ -128,33 +128,30 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	admin := kadm.NewClient(client)
 	metadata, err := admin.Metadata(ctx, topic)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get metadata", topic)
+		log.Panic("Kafka topic metadata lookup failed", zap.String("topic", topic), zap.Error(err))
 	}
 	topicMetadata, ok := metadata.Topics[topic]
 	if !ok || topicMetadata.Err != nil || len(topicMetadata.Partitions) == 0 {
-		if ok && topicMetadata.Err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, topicMetadata.Err, "get metadata", topic)
-		}
-		return nil, errors.ErrKafkaAdminAPI.GenWithStackByArgs("get metadata", topic)
+		log.Panic("Kafka topic metadata is unavailable", zap.String("topic", topic), zap.Error(topicMetadata.Err), zap.Int("partitionCount", len(topicMetadata.Partitions)))
 	}
 
 	committed, err := admin.FetchOffsetsForTopics(ctx, consumerID, topic)
 	if err != nil && !errors.Is(err, kerr.GroupIDNotFound) {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get consumer offsets", topic)
+		log.Panic("Kafka consumer offsets lookup failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
 	starts, err := admin.ListStartOffsets(ctx, topic)
 	if err == nil {
 		err = starts.Error()
 	}
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get start offsets", topic)
+		log.Panic("Kafka start offsets lookup failed", zap.String("topic", topic), zap.Error(err))
 	}
 	ends, err := admin.ListEndOffsets(ctx, topic)
 	if err == nil {
 		err = ends.Error()
 	}
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get end offsets", topic)
+		log.Panic("Kafka end offsets lookup failed", zap.String("topic", topic), zap.Error(err))
 	}
 	partitions := make(map[int32]*kafkaPartition, len(topicMetadata.Partitions))
 	for partitionID := range topicMetadata.Partitions {
@@ -181,7 +178,7 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		partitions:  partitions,
 		router:      router,
 		ddlCopies:   make(map[uint64]map[int32][]*ack),
-	}, nil
+	}
 }
 
 func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {

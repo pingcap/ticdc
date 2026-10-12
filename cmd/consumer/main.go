@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -43,22 +42,10 @@ type options struct {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	command := newCommand()
-	err := command.ExecuteContext(ctx)
-	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
-		err = nil
-	}
-	switch {
-	case err != nil:
-		log.Error("consumer exited with error", zap.Error(err))
-		_, _ = fmt.Fprintln(os.Stderr, err)
-	case ctx.Err() != nil:
-		log.Info("consumer stopped")
+	if err := newCommand().ExecuteContext(ctx); err != nil {
+		log.Error("consumer command failed", zap.Error(err))
 	}
 	_ = log.Sync()
-	if err != nil {
-		os.Exit(1)
-	}
 }
 
 func newCommand() *cobra.Command {
@@ -69,8 +56,8 @@ func newCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			return start(command.Context(), options)
+		Run: func(command *cobra.Command, _ []string) {
+			start(command.Context(), options)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -88,18 +75,10 @@ func newCommand() *cobra.Command {
 	return command
 }
 
-func start(ctx context.Context, options *options) (err error) {
+func start(ctx context.Context, options *options) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	c, err := newConsumer(ctx, options)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		cancel()
-		if stopErr := c.stop(); stopErr != nil {
-			err = stopErr
-		}
-	}()
-	return c.consume(ctx)
+	c := newConsumer(ctx, options)
+	c.consume(ctx)
+	cancel()
+	c.stop()
 }

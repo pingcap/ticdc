@@ -100,26 +100,26 @@ type storageReader struct {
 	scanned        bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (*storageReader, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
+		log.Panic("file upstream URI must include a path")
 	}
 	if upstreamURI.Scheme != config.FileScheme && upstreamURI.Host == "" {
-		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("object storage upstream-uri must include a bucket")
+		log.Panic("object storage upstream URI must include a bucket")
 	}
 	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
-		return nil, err
+		log.Panic("Storage configuration is invalid", zap.Error(err))
 	}
 	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
 	if err != nil {
-		return nil, err
+		log.Panic("Storage protocol is invalid", zap.Error(err))
 	}
 	if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-		return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
+		log.Panic("Storage consumer requires CSV or Canal JSON", zap.String("protocol", protocol.String()))
 	}
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {
-		return nil, err
+		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
 
 	c := &storageReader{
@@ -137,7 +137,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		tableIDs:       make(map[storageTableKey]int64),
 	}
 	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
-	return c, nil
+	return c
 }
 
 func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, error) {

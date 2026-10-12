@@ -25,8 +25,8 @@ import (
 )
 
 func BenchmarkMemoryAccounting(b *testing.B) {
-	memory := &memoryUsage{}
-	schemas := &schemaUsage{memory: memory}
+	memory := newMemoryUsage()
+	schemas := newSchemaUsage(memory)
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID:      1,
 		Name:    ast.NewCIStr("t"),

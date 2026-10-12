@@ -31,8 +31,8 @@ import (
 )
 
 func TestMemoryReleasesSharedSchema(t *testing.T) {
-	memory := &memoryUsage{}
-	schemas := &schemaUsage{memory: memory}
+	memory := newMemoryUsage()
+	schemas := newSchemaUsage(memory)
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID: 1, Name: ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
@@ -58,7 +58,7 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 			{ID: 2, Name: ast.NewCIStr("uk"), Offset: 1, State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
 		},
 	})
-	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
+	w := &writer{memory: newMemoryUsage(), mutations: make(map[mutationKey]*writeBatch)}
 	callbacks := 0
 	for _, commitTs := range []uint64{100, 200} {
 		for id := int64(1); id <= 2; id++ {
@@ -118,7 +118,7 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *field}},
 	})
-	w := &writer{memory: &memoryUsage{}, mutations: make(map[mutationKey]*writeBatch)}
+	w := &writer{memory: newMemoryUsage(), mutations: make(map[mutationKey]*writeBatch)}
 	w.memory.reserve(2 * batchBytes)
 	callbacks := 0
 	for index, rowType := range []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert} {
@@ -179,7 +179,7 @@ func TestAssemblerPreservesControlBoundaries(t *testing.T) {
 		}
 		items = append(items, &writeEvent{watermark: commitTs, hasWatermark: true})
 	}
-	a := &assembler{memory: &memoryUsage{}, mergeRows: true, sortCSVRows: true}
+	a := &assembler{memory: newMemoryUsage(), mergeRows: true, sortCSVRows: true}
 	prepared := a.prepare(items)
 	require.Len(t, prepared, 4)
 	for index, commitTs := range []uint64{100, 200} {

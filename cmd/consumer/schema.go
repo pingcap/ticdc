@@ -26,6 +26,13 @@ type schemaUsage struct {
 	tables map[*common.TableInfo]*schemaMemory
 }
 
+func newSchemaUsage(memory *memoryUsage) *schemaUsage {
+	return &schemaUsage{
+		memory: memory,
+		tables: make(map[*common.TableInfo]*schemaMemory),
+	}
+}
+
 type schemaMemory struct {
 	refs  int
 	bytes int64
@@ -58,9 +65,6 @@ func (s *schemaUsage) retain(table *common.TableInfo) {
 		bytes += int64(256 + len(index.Name.O) + len(index.Columns)*64)
 	}
 	s.memory.reserve(bytes)
-	if s.tables == nil {
-		s.tables = make(map[*common.TableInfo]*schemaMemory)
-	}
 	s.tables[table] = &schemaMemory{
 		refs:  1,
 		bytes: bytes,

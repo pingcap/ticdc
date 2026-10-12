@@ -44,9 +44,9 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 				cancel()
 				_ = g.Wait()
 			}()
-			memory := &memoryUsage{}
-			progress := &inputProgress{memory: memory}
-			d := newDecoderGroup(&schemaUsage{memory: memory}, nil)
+			memory := newMemoryUsage()
+			progress := newInputProgress(memory)
+			d := newDecoderGroup(newSchemaUsage(memory), nil)
 			b.Cleanup(d.close)
 			g.Go(func() error {
 				return d.start(ctx)
@@ -136,8 +136,8 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						cancel()
 						_ = g.Wait()
 					}()
-					memory := &memoryUsage{}
-					progress := &inputProgress{memory: memory}
+					memory := newMemoryUsage()
+					progress := newInputProgress(memory)
 					cfg := codecCommon.NewConfig(config.ProtocolCanalJSON)
 					cfg.EnableTiDBExtension = true
 					decoder, err := canal.NewDecoder(ctx, cfg, nil)
@@ -173,7 +173,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						}
 						decoder.NextDMLMessage().ToDMLEvent().PostFlush()
 					}
-					d := newDecoderGroup(&schemaUsage{memory: memory}, nil)
+					d := newDecoderGroup(newSchemaUsage(memory), nil)
 					groups := make([]*decoderGroup, d.workers)
 					for i := range groups {
 						groups[i] = d

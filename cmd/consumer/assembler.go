@@ -21,6 +21,7 @@ import (
 	"iter"
 	"slices"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -37,6 +38,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 )
 
 func (a *assembler) assemble(ctx context.Context, results <-chan *writeEvent, result *writeEvent) ([]*writeEvent, error) {
@@ -619,13 +621,13 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, decoder *decoderGroup) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, decoder *decoderGroup) *assembler {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
 		selectors, err = columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
-			return nil, err
+			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
 		}
 	}
 	streams := make(map[int32]*decodeStream)
@@ -639,7 +641,7 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.D
 		for _, id := range ids {
 			decoder, err := codec.NewEventDecoder(ctx, int(id), decoding.codec, decoding.topic, upstreamDB)
 			if err != nil {
-				return nil, err
+				log.Panic("consumer event decoder initialization failed", zap.String("protocol", decoding.codec.Protocol.String()), zap.Error(err))
 			}
 			streams[id] = &decodeStream{decoder: decoder}
 		}
@@ -654,7 +656,7 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.D
 		tables:      make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
-	}, nil
+	}
 }
 
 func (a *assembler) next() *writeEvent {
