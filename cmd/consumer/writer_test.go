@@ -57,7 +57,9 @@ func TestWriterReplayBoundary(t *testing.T) {
 		}
 		dml.Length = int32(len(ids))
 		callbacks := 0
-		dml.AddPostFlushFunc(func() { callbacks++ })
+		dml.AddPostFlushFunc(func() {
+			callbacks++
+		})
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
 		require.NoError(t, w.flushDML(t.Context()))
 		require.Equal(t, 1, callbacks)
@@ -109,16 +111,17 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
 	buffer := &assembler{
-		memory:   memory,
-		progress: progress,
-		schemas:  &schemaUsage{memory: memory},
+		memory:  memory,
+		schemas: &schemaUsage{memory: memory},
 	}
-	record, err := buffer.progress.newAck(t.Context(), 128, nil)
+	record, err := progress.newAck(t.Context(), 128, nil)
 	require.NoError(t, err)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
 	downstream := mock.NewMockSink(gomock.NewController(t))
-	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) { retained = dml })
+	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(dml *event.DMLEvent) {
+		retained = dml
+	})
 	w := &writer{downstream: downstream, memory: memory, mutations: make(map[mutationKey]*writeBatch)}
 	for range 2 {
 		dml := event.NewDMLEvent(common.NewDispatcherID(), 1, 99, 100, table)
@@ -179,7 +182,9 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		}
 		dml.Length = 1
 		callbacks := 0
-		dml.AddPostFlushFunc(func() { callbacks++ })
+		dml.AddPostFlushFunc(func() {
+			callbacks++
+		})
 		require.NoError(t, w.consume(t.Context(), &writeEvent{dml: dml}))
 		require.NoError(t, w.flushDML(t.Context()))
 		w.finishBatches()
@@ -225,7 +230,9 @@ func TestWriterReplayPreservesUpdateRows(t *testing.T) {
 		{tableID: 1, commitTs: 100, rowType: common.RowTypeUpdate, handle: string([]byte{1, '1'})}: nil,
 	}}
 	callbacks := 0
-	dml.AddPostFlushFunc(func() { callbacks++ })
+	dml.AddPostFlushFunc(func() {
+		callbacks++
+	})
 	filtered, err := w.filterRows(t.Context(), dml, batch)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, filtered.Len())
@@ -258,7 +265,9 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 	}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "a", FinishedTs: 20}
 	downstream := mock.NewMockSink(gomock.NewController(t))
-	downstream.EXPECT().AddDMLEvent(a).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
+	downstream.EXPECT().AddDMLEvent(a).Do(func(dml *event.DMLEvent) {
+		dml.PostFlush()
+	})
 	other := &writeBatch{items: []*writeEvent{{dml: b}}, done: make(chan struct{})}
 	control := &writeEvent{ddl: ddl}
 	w := &writer{
@@ -282,9 +291,8 @@ func TestWriterDDLReplay(t *testing.T) {
 	memory := &memoryUsage{}
 	progress := &inputProgress{memory: memory}
 	a := &assembler{
-		memory:   memory,
-		progress: progress,
-		schemas:  &schemaUsage{memory: memory},
+		memory:  memory,
+		schemas: &schemaUsage{memory: memory},
 	}
 	w := &writer{memory: memory, ddlJobs: make(chan *writeEvent, 1)}
 	truncate := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 100, Query: "TRUNCATE TABLE `test`.`table_3`"}
@@ -337,7 +345,13 @@ func TestWriterDDLReplay(t *testing.T) {
 	// Equality stays protected by the replay identity. Once progress passes it,
 	// the identity is retired and the old input is rejected by writtenBefore.
 	checkpoint := false
-	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 300, hasWatermark: true, onFlush: func() { checkpoint = true }}))
+	require.NoError(t, w.consume(ctx, &writeEvent{
+		watermark:    300,
+		hasWatermark: true,
+		onFlush: func() {
+			checkpoint = true
+		},
+	}))
 	record, err := progress.newAck(ctx, 128, nil)
 	require.NoError(t, err)
 	require.NoError(t, a.queueDDL(ctx, first, record))
@@ -389,8 +403,13 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 	ddlEntered, releaseDDL, independent := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	downstream.EXPECT().AddDMLEvent(events[0])
-	downstream.EXPECT().AddDMLEvent(events[2]).Do(func(dml *event.DMLEvent) { close(independent); dml.PostFlush() })
-	downstream.EXPECT().AddDMLEvent(events[1]).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
+	downstream.EXPECT().AddDMLEvent(events[2]).Do(func(dml *event.DMLEvent) {
+		close(independent)
+		dml.PostFlush()
+	})
+	downstream.EXPECT().AddDMLEvent(events[1]).Do(func(dml *event.DMLEvent) {
+		dml.PostFlush()
+	})
 	downstream.EXPECT().FlushDMLBeforeBlock(ddl).Return(nil)
 	downstream.EXPECT().WriteBlockEvent(ddl).DoAndReturn(func(*event.DDLEvent) error {
 		close(ddlEntered)
@@ -410,8 +429,13 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 		ddlDone:    make(chan struct{}, 1),
 	}
 	var wg sync.WaitGroup
-	wg.Go(func() { _ = w.executeDDL(ctx) })
-	defer func() { cancel(); wg.Wait() }()
+	wg.Go(func() {
+		_ = w.executeDDL(ctx)
+	})
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[0], sequential: true}))
 	require.NoError(t, w.flushDML(ctx))
 	require.NoError(t, w.consume(ctx, &writeEvent{ddl: ddl}))
@@ -429,11 +453,22 @@ func TestWriterDDLDoesNotBlockIndependentTables(t *testing.T) {
 		t.Fatal("DDL did not start after its affected write completed")
 	}
 	replayConfirmed := false
-	require.NoError(t, w.consume(ctx, &writeEvent{ddl: ddl, onFlush: func() { replayConfirmed = true }}))
+	require.NoError(t, w.consume(ctx, &writeEvent{
+		ddl: ddl,
+		onFlush: func() {
+			replayConfirmed = true
+		},
+	}))
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[1], sequential: true}))
 	require.NoError(t, w.consume(ctx, &writeEvent{dml: events[2], sequential: true}))
 	checkpoint := false
-	require.NoError(t, w.consume(ctx, &writeEvent{hasWatermark: true, watermark: 15, onFlush: func() { checkpoint = true }}))
+	require.NoError(t, w.consume(ctx, &writeEvent{
+		hasWatermark: true,
+		watermark:    15,
+		onFlush: func() {
+			checkpoint = true
+		},
+	}))
 	require.NoError(t, w.flushDML(ctx))
 	select {
 	case <-independent:
@@ -485,8 +520,12 @@ func TestWriterSeparatesUnversionedSchemas(t *testing.T) {
 	defer cancel()
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	gomock.InOrder(
-		downstream.EXPECT().AddDMLEvent(first).Do(func(*event.DMLEvent) { cancel() }),
-		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) { dml.PostFlush() }),
+		downstream.EXPECT().AddDMLEvent(first).Do(func(*event.DMLEvent) {
+			cancel()
+		}),
+		downstream.EXPECT().AddDMLEvent(second).Do(func(dml *event.DMLEvent) {
+			dml.PostFlush()
+		}),
 	)
 	w := &writer{downstream: downstream, memory: &memoryUsage{}, pendingDML: []*writeEvent{{dml: first}, {dml: second}}}
 	require.ErrorIs(t, w.flushDML(ctx), context.Canceled)

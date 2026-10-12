@@ -174,7 +174,9 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	}
 	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
 	// scale down under the client memory limit; oversized messages may exceed it.
-	progress.memory.externalBytes = func() int64 { return clientOptions.MemoryLimitBytes }
+	progress.memory.externalBytes = func() int64 {
+		return clientOptions.MemoryLimitBytes
+	}
 	partitions := make(map[string]*pulsarPartition, len(topics))
 	for _, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{}

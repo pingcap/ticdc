@@ -51,7 +51,6 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			}
 			a := &assembler{
 				memory:    memory,
-				progress:  progress,
 				schemas:   schemas,
 				decoder:   g,
 				tables:    make(map[[2]string]*common.TableInfo),
@@ -85,7 +84,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			defer c.wg.Wait()
 			defer cancelWorkers(nil)
 			for range g.workers {
-				c.wg.Go(func() { cancelWorkers(g.decode(ctx)) })
+				c.wg.Go(func() {
+					cancelWorkers(g.decode(ctx))
+				})
 			}
 			record, err := progress.newAck(ctx, 4096, nil)
 			require.NoError(t, err)
@@ -125,7 +126,11 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					dml.RowTypes, dml.Length = []common.RowType{common.RowTypeInsert}, 1
 					return dml
 				})
-				require.NoError(t, a.assembleMessage(ctx, data, message, record, r))
+				result, err := a.decodeMessage(ctx, data, message, record)
+				require.NoError(t, err)
+				progress, err := r.Advance(ctx, result.feedback)
+				require.NoError(t, err)
+				require.NoError(t, a.accept(ctx, result, progress))
 				a.decoding = append(a.decoding, a.nextReady(0))
 			}
 			record.decoded(128)

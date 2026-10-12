@@ -46,7 +46,9 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			progress := &inputProgress{memory: memory}
 			g := newDecoderGroup(&schemaUsage{memory: memory}, nil)
 			for range g.workers {
-				wg.Go(func() { cancel(g.decode(ctx)) })
+				wg.Go(func() {
+					cancel(g.decode(ctx))
+				})
 			}
 			messages := make([]*codecCommon.DMLMessage, tables)
 			metadata := make([]*common.TableInfo, tables)
@@ -183,7 +185,9 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 							}
 						}
 						worker := groups[i]
-						wg.Go(func() { cancel(worker.decode(ctx)) })
+						wg.Go(func() {
+							cancel(worker.decode(ctx))
+						})
 					}
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()

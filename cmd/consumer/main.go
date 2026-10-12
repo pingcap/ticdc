@@ -178,10 +178,16 @@ func start(ctx context.Context, options *options) (err error) {
 	}
 	results := make(chan *writeEvent, 64)
 	for range c.assembler.decoder.workers {
-		c.wg.Go(func() { cancel(c.assembler.decoder.decode(ctx)) })
+		c.wg.Go(func() {
+			cancel(c.assembler.decoder.decode(ctx))
+		})
 	}
-	c.wg.Go(func() { cancel(c.confirm(ctx)) })
-	c.wg.Go(func() { cancel(c.writer.executeDDL(ctx)) })
+	c.wg.Go(func() {
+		cancel(c.confirm(ctx))
+	})
+	c.wg.Go(func() {
+		cancel(c.writer.executeDDL(ctx))
+	})
 	c.wg.Go(func() {
 		defer close(results)
 		cancel(c.read(ctx, results))

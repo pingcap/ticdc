@@ -113,7 +113,9 @@ func (g *decoderGroup) decode(ctx context.Context) error {
 		if err := g.memory.reserve(ctx, bytes); err != nil {
 			return err
 		}
-		dml.AddPostFlushFunc(func() { g.schemas.release(dml.TableInfo) })
+		dml.AddPostFlushFunc(func() {
+			g.schemas.release(dml.TableInfo)
+		})
 		task.dml, task.bytes = dml, bytes
 		task.record.decoded(task.retainedBytes)
 		task.message, task.record, task.table = nil, nil, nil

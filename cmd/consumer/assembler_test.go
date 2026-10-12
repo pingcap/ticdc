@@ -72,7 +72,9 @@ func TestAssemblerCSVTransactionBatches(t *testing.T) {
 				dml.Rows.AppendRow(chunk.MutRowFromValues(id, 3-id).ToRow())
 				dml.RowTypes, dml.Length = []common.RowType{common.RowTypeDelete, common.RowTypeInsert}, 2
 			}
-			dml.AddPostFlushFunc(func() { callbacks++ })
+			dml.AddPostFlushFunc(func() {
+				callbacks++
+			})
 			w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml})
 		}
 	}
@@ -130,7 +132,9 @@ func TestAssemblerCSVDeletesBeforeInsertsAcrossBatches(t *testing.T) {
 		dml.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
 		dml.Rows.AppendInt64(0, id)
 		dml.RowTypes, dml.Length = []common.RowType{rowType}, 1
-		dml.AddPostFlushFunc(func() { callbacks++ })
+		dml.AddPostFlushFunc(func() {
+			callbacks++
+		})
 		w.pendingDML = append(w.pendingDML, &writeEvent{dml: dml, bytes: batchBytes / 2})
 	}
 	a := &assembler{memory: w.memory, mergeRows: true, sortCSVRows: true}
@@ -206,23 +210,36 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	unrelated := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 5}}
 	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}, sortCSVRows: true}
 	r := &storageReader{checkpoint: 20, scanned: true}
-	err := a.decode(t.Context(), &readData{group: group, groupEnd: true}, r)
-	require.NoError(t, err)
+	for result, err := range a.decode(t.Context(), &readData{group: group, groupEnd: true}) {
+		require.NoError(t, err)
+		progress, err := r.Advance(t.Context(), result.feedback)
+		require.NoError(t, err)
+		require.NoError(t, a.accept(t.Context(), result, progress))
+	}
+	c := &consumer{
+		reader:    r,
+		assembler: a,
+	}
 	for _, expected := range []*writeEvent{third, second, first} {
-		result, err := a.next(t.Context(), r)
+		result, err := c.next(t.Context())
 		require.NoError(t, err)
 		require.Same(t, expected, result)
 	}
 	data, err := r.Read(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, data.control)
-	require.NoError(t, a.decode(t.Context(), data, r))
+	for result, err := range a.decode(t.Context(), data) {
+		require.NoError(t, err)
+		progress, err := r.Advance(t.Context(), result.feedback)
+		require.NoError(t, err)
+		require.NoError(t, a.accept(t.Context(), result, progress))
+	}
 	// The completed scan's checkpoint also covers the earlier table.
 	unrelated.boundary = &readBoundary{reached: true}
-	result, err := a.next(t.Context(), r)
+	result, err := c.next(t.Context())
 	require.NoError(t, err)
 	require.Same(t, unrelated, result)
-	result, err = a.next(t.Context(), r)
+	result, err = c.next(t.Context())
 	require.NoError(t, err)
 	require.True(t, result.hasWatermark)
 	require.EqualValues(t, 20, result.watermark)

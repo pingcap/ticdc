@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"iter"
 	"slices"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -37,8 +38,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
-
-const maxMemoryBytes = 1 << 30
 
 func (a *assembler) assemble(ctx context.Context, results <-chan *writeEvent, result *writeEvent) ([]*writeEvent, error) {
 	var (
@@ -265,7 +264,6 @@ type decodeStream struct {
 // assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
 	memory            *memoryUsage
-	progress          *inputProgress
 	schemas           *schemaUsage
 	codecConfig       *codecCommon.Config
 	upstreamDB        *sql.DB
@@ -600,7 +598,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, completed chan<- struct{}) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, completed chan<- struct{}) (*assembler, error) {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -626,8 +624,7 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		}
 	}
 	return &assembler{
-		memory:      progress.memory,
-		progress:    progress,
+		memory:      memory,
 		schemas:     schemas,
 		codecConfig: decoding.codec,
 		upstreamDB:  decoding.upstreamDB,
@@ -640,116 +637,66 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 	}, nil
 }
 
-func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error) {
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return nil, err
-		}
-		if result := a.nextReady(a.watermark); result != nil {
-			return result, nil
-		}
-		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
-			result := a.pendingWatermarks[0]
-			a.pendingWatermarks[0] = nil
-			a.pendingWatermarks = a.pendingWatermarks[1:]
-			return result, nil
-		}
-		if a.current != nil {
-			if err := a.decodeRows(ctx, reader); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		feedback := readFeedback{}
-		var control *writeEvent
-		for _, pending := range a.pendingDDL {
-			if pending.boundary == nil && pending.ddl.GetCommitTs() > a.watermark {
-				feedback.boundaryDDL, control = pending.ddl, pending
-				break
-			}
-		}
-		feedback.pendingDML = a.unprovenCount
-		progress, err := reader.Advance(ctx, feedback)
-		if err != nil {
-			return nil, err
-		}
-		a.applyProgress(progress)
-		if progress.control != nil {
-			continue
-		}
-		if progress.boundary != nil {
-			// Only candidates decoded before this proof was captured may use it.
-			if control != nil {
-				control.boundary = progress.boundary
-			}
-			for _, pending := range a.unproven {
-				if pending.proofPending {
-					pending.boundary = progress.boundary
-					pending.proofPending = false
-				}
-			}
-			clear(a.unproven)
-			a.unproven = a.unproven[:0]
-			a.unprovenCount = 0
-			a.scanInvalid = true
-			if progress.boundary.reached {
-				continue
-			}
-		}
-		if result := a.nextReady(a.watermark); result != nil {
-			return result, nil
-		}
-		if len(a.pendingWatermarks) != 0 && !a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
-			continue
-		}
-		needsMoreInput := progress.needsMoreInput
-		for boundary := range a.scanBoundaries {
-			needsMoreInput = needsMoreInput || !boundary.reached
-		}
-		for _, stream := range a.streams {
-			needsMoreInput = needsMoreInput || len(stream.cachedRecords) != 0
-		}
-		if !needsMoreInput {
-			if err := a.waitMemory(ctx); err != nil {
-				return nil, err
-			}
-		}
-		data, err := reader.Read(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if data == nil {
-			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an empty result")
-		}
-		if err := a.decode(ctx, data, reader); err != nil {
-			return nil, err
-		}
+func (a *assembler) next() *writeEvent {
+	if result := a.nextReady(a.watermark); result != nil {
+		return result
 	}
+	if len(a.pendingWatermarks) == 0 || a.hasPendingThrough(a.pendingWatermarks[0].watermark) {
+		return nil
+	}
+	result := a.pendingWatermarks[0]
+	a.pendingWatermarks[0] = nil
+	a.pendingWatermarks = a.pendingWatermarks[1:]
+	return result
 }
 
-// Backpressure applies to new independent inputs. Retained caches alone must
-// not prevent reading, and unfinished input boundaries bypass this wait.
-func (a *assembler) waitMemory(ctx context.Context) error {
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if a.memory.used() < maxMemoryBytes || a.progress.received.Load() == a.progress.confirmed.Load() {
-			return nil
-		}
-		changed := a.memory.changes()
-		// Subscribe before rechecking: a concurrent release either satisfies the
-		// admission condition or closes changed.
-		if a.memory.used() < maxMemoryBytes || a.progress.received.Load() == a.progress.confirmed.Load() {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
+func (a *assembler) feedback() readFeedback {
+	feedback := readFeedback{pendingDML: a.unprovenCount}
+	for _, pending := range a.pendingDDL {
+		if pending.boundary == nil && pending.ddl.GetCommitTs() > a.watermark {
+			feedback.boundaryDDL = pending.ddl
+			break
 		}
 	}
+	return feedback
+}
+
+func (a *assembler) advance(feedback readFeedback, progress readProgress) {
+	a.applyProgress(progress)
+	if progress.control != nil || progress.boundary == nil {
+		return
+	}
+	for _, pending := range a.pendingDDL {
+		if pending.ddl == feedback.boundaryDDL {
+			pending.boundary = progress.boundary
+			break
+		}
+	}
+	// Only candidates decoded before this proof was captured may use it.
+	for _, pending := range a.unproven {
+		if pending.proofPending {
+			pending.boundary = progress.boundary
+			pending.proofPending = false
+		}
+	}
+	clear(a.unproven)
+	a.unproven = a.unproven[:0]
+	a.unprovenCount = 0
+	a.scanInvalid = true
+}
+
+func (a *assembler) needsMoreInput() bool {
+	for boundary := range a.scanBoundaries {
+		if !boundary.reached {
+			return true
+		}
+	}
+	for _, stream := range a.streams {
+		if len(stream.cachedRecords) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *assembler) applyProgress(progress readProgress) {
@@ -774,104 +721,130 @@ func (a *assembler) applyProgress(progress readProgress) {
 	}
 }
 
-func (a *assembler) decode(ctx context.Context, data *readData, reader reader) error {
-	if data.control != nil || data.groupEnd {
-		a.scanInvalid = true
-		if data.control == nil && data.group.order == commitOrder {
-			start := slices.IndexFunc(a.pendingDML, func(item *writeEvent) bool { return item != nil && item.boundary == data.group.boundary })
-			if start >= 0 {
-				end := start
-				for end < len(a.pendingDML) && a.pendingDML[end].boundary == data.group.boundary {
-					end++
-				}
-				slices.SortStableFunc(a.pendingDML[start:end], func(first, second *writeEvent) int {
-					order := cmp.Compare(first.dml.CommitTs, second.dml.CommitTs)
-					if order != 0 || !a.sortCSVRows {
-						return order
-					}
-					return cmp.Compare(first.dml.RowTypes[0], second.dml.RowTypes[0])
+type decodeConfig struct {
+	codec      *codecCommon.Config
+	format     readFormat
+	topic      string
+	upstreamDB *sql.DB
+	streams    []int32
+}
+
+// decodedData carries decoded facts and the row conversion input. The consumer
+// exchanges the facts for reading progress before the assembler queues effects.
+type decodedData struct {
+	feedback readFeedback
+	message  *codecCommon.DMLMessage
+	record   *ack
+}
+
+func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
+	if data.control == nil && !data.groupEnd && data.ddl == nil && data.format == messageFormat {
+		return a.decodeMessages(ctx, data)
+	}
+	return func(yield func(decodedData, error) bool) {
+		if data.control != nil || data.groupEnd {
+			a.scanInvalid = true
+			if data.control == nil && data.group.order == commitOrder {
+				start := slices.IndexFunc(a.pendingDML, func(item *writeEvent) bool {
+					return item != nil && item.boundary == data.group.boundary
 				})
+				if start >= 0 {
+					end := start
+					for end < len(a.pendingDML) && a.pendingDML[end].boundary == data.group.boundary {
+						end++
+					}
+					slices.SortStableFunc(a.pendingDML[start:end], func(first, second *writeEvent) int {
+						order := cmp.Compare(first.dml.CommitTs, second.dml.CommitTs)
+						if order != 0 || !a.sortCSVRows {
+							return order
+						}
+						return cmp.Compare(first.dml.RowTypes[0], second.dml.RowTypes[0])
+					})
+				}
 			}
+			yield(decodedData{
+				feedback: readFeedback{
+					data:    data,
+					decoded: true,
+				},
+			}, nil)
+			return
 		}
-		progress, err := reader.Advance(ctx, readFeedback{
-			data:    data,
-			decoded: true,
-		})
-		if err != nil {
-			return err
+		if data.ddl != nil {
+			result, err := a.decodeDDL(data, data.ddl)
+			if err != nil {
+				yield(decodedData{}, err)
+				return
+			}
+			if !yield(result, nil) {
+				return
+			}
+			if !yield(decodedData{
+				feedback: readFeedback{
+					data:    data,
+					decoded: true,
+				},
+			}, nil) {
+				return
+			}
+			data.record.decoded(data.retainedBytes)
+			return
 		}
-		a.applyProgress(progress)
-		return nil
-	}
-	if data.ddl != nil {
-		if err := a.assembleDDL(ctx, data, data.ddl, reader); err != nil {
-			return err
+		if data.format != rowFormat {
+			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an unknown input format"))
+			return
 		}
-		progress, err := reader.Advance(ctx, readFeedback{
-			data:    data,
-			decoded: true,
-		})
-		if err != nil {
-			return err
-		}
-		a.applyProgress(progress)
-		data.record.decoded(data.retainedBytes)
-		return nil
-	}
-	switch data.format {
-	case rowFormat:
 		if data.table == nil || data.group == nil {
-			return errors.ErrInternalCheckFailed.FastGenByArgs("row input has no table metadata or group")
+			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("row input has no table metadata or group"))
+			return
 		}
 		// Row decoders retain parsed records alongside the encoded file until
 		// the input is exhausted. Include their scratch space in its lifetime.
 		bytes := int64(len(data.value))*3 + 256
 		if err := data.record.retain(ctx, bytes); err != nil {
-			return err
+			yield(decodedData{}, err)
+			return
 		}
 		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
 			if err != nil {
-				return errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder")
+				yield(decodedData{}, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
+				return
 			}
 			a.currentDecoder = decoder
 		case config.ProtocolCanalJSON:
 			a.currentDecoder = canal.NewTxnDecoder(a.codecConfig)
 			a.currentDecoder.AddKeyValue(data.key, data.value)
 		default:
-			return errors.ErrCodecDecode.FastGenByArgs("protocol cannot decode rows with external table metadata")
+			yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("protocol cannot decode rows with external table metadata"))
+			return
 		}
 		a.current = data
-		return nil
-	case messageFormat:
-		return a.decodeMessages(ctx, data, reader)
-	default:
-		return errors.ErrInternalCheckFailed.FastGenByArgs("reader returned an unknown input format")
 	}
 }
 
-func (a *assembler) decodeRows(ctx context.Context, reader reader) error {
+func (a *assembler) decodeRows(ctx context.Context) (decodedData, error) {
 	data := a.current
 	for {
 		messageType, hasNext := a.currentDecoder.HasNext()
 		if !hasNext {
 			data.record.decoded(data.retainedBytes)
 			a.current, a.currentDecoder = nil, nil
-			return nil
+			return decodedData{}, nil
 		}
 		if messageType != codecCommon.MessageTypeRow {
 			continue
 		}
 		message := a.currentDecoder.NextDMLMessage()
 		if message == nil {
-			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
+			return decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
 		}
-		return a.assembleMessage(ctx, data, message, data.record, reader)
+		return a.decodeMessage(ctx, data, message, data.record)
 	}
 }
 
-func (a *assembler) assembleMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, record *ack, reader reader) error {
+func (a *assembler) decodeMessage(ctx context.Context, data *readData, message *codecCommon.DMLMessage, record *ack) (decodedData, error) {
 	tableID := message.TableID
 	if data.format == rowFormat {
 		tableID = data.group.tableID
@@ -887,188 +860,211 @@ func (a *assembler) assembleMessage(ctx context.Context, data *readData, message
 			},
 		}
 		if err := a.memory.reserve(ctx, int64(512+len(message.Schema)+len(message.Table))); err != nil {
-			return err
+			return decodedData{}, err
 		}
 		a.tables[name] = table
 	}
-	dml := &event.DMLEvent{
-		PhysicalTableID: tableID,
-		CommitTs:        message.GetCommitTs(),
-		TableInfo:       table,
-		Length:          1,
-		RowTypes:        []common.RowType{message.RowType},
-	}
-	progress, err := reader.Advance(ctx, readFeedback{
-		data: data,
-		dml:  dml,
-	})
-	if err != nil {
-		return err
-	}
-	a.applyProgress(progress)
-	if progress.skip {
-		return nil
-	}
-	task := &decodeTask{
-		message:       message,
-		record:        record,
-		done:          make(chan struct{}),
-		table:         data.table,
-		tableID:       tableID,
-		retainedBytes: data.retainedBytes,
-	}
-	item := &writeEvent{
-		dml:      dml,
-		decoding: task,
-	}
-	if err := a.queueDML(ctx, item, record, data.dmlBoundary); err != nil {
-		return err
-	}
-	return a.decoder.submit(ctx, task)
+	return decodedData{
+		feedback: readFeedback{
+			data: data,
+			dml: &event.DMLEvent{
+				PhysicalTableID: tableID,
+				CommitTs:        message.GetCommitTs(),
+				TableInfo:       table,
+				Length:          1,
+				RowTypes:        []common.RowType{message.RowType},
+			},
+		},
+		message: message,
+		record:  record,
+	}, nil
 }
 
-func (a *assembler) assembleDDL(ctx context.Context, data *readData, ddl *event.DDLEvent, reader reader) error {
+func (a *assembler) decodeDDL(data *readData, ddl *event.DDLEvent) (decodedData, error) {
 	if err := setDDLTableNames(ddl); err != nil {
-		return err
+		return decodedData{}, err
 	}
 	var needsMoreInput bool
 	if stream := a.streams[data.stream]; stream != nil {
 		needsMoreInput = len(stream.cachedRecords) != 0
 	}
-	progress, err := reader.Advance(ctx, readFeedback{
-		data:           data,
-		ddl:            ddl,
-		needsMoreInput: needsMoreInput,
-	})
-	if err != nil {
-		return err
-	}
+	return decodedData{
+		feedback: readFeedback{
+			data:           data,
+			ddl:            ddl,
+			needsMoreInput: needsMoreInput,
+		},
+	}, nil
+}
+
+func (a *assembler) accept(ctx context.Context, result decodedData, progress readProgress) error {
 	a.applyProgress(progress)
 	if progress.skip {
 		return nil
 	}
-	if err := a.queueDDL(ctx, ddl, data.record); err != nil {
-		return err
+	data := result.feedback.data
+	if dml := result.feedback.dml; dml != nil {
+		task := &decodeTask{
+			message:       result.message,
+			record:        result.record,
+			done:          make(chan struct{}),
+			table:         data.table,
+			tableID:       dml.PhysicalTableID,
+			retainedBytes: data.retainedBytes,
+		}
+		item := &writeEvent{
+			dml:      dml,
+			decoding: task,
+		}
+		if err := a.queueDML(ctx, item, result.record, data.dmlBoundary); err != nil {
+			return err
+		}
+		return a.decoder.submit(ctx, task)
 	}
-	a.pendingDDL[len(a.pendingDDL)-1].boundary = data.ddlBoundary
-	if data.ddlOrder == commitOrder {
-		slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
-			return cmp.Compare(first.ddl.GetCommitTs(), second.ddl.GetCommitTs())
-		})
+	if ddl := result.feedback.ddl; ddl != nil {
+		if err := a.queueDDL(ctx, ddl, data.record); err != nil {
+			return err
+		}
+		a.pendingDDL[len(a.pendingDDL)-1].boundary = data.ddlBoundary
+		if data.ddlOrder == commitOrder {
+			slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
+				return cmp.Compare(first.ddl.GetCommitTs(), second.ddl.GetCommitTs())
+			})
+		}
 	}
 	return nil
 }
 
-func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader reader) error {
-	p := a.streams[data.stream]
-	if p == nil {
-		return errors.ErrInternalCheckFailed.FastGenByArgs("input stream has no initialized decoder")
-	}
-	record := data.record
-	// Captured protocol data remains live while conversion jobs run. Account
-	// once per input, not once per derived row in a batched message.
-	bytes := int64(len(data.key)+len(data.value))*3 + 256
-	if err := record.retain(ctx, bytes); err != nil {
-		return err
-	}
-	p.decoder.AddKeyValue(data.key, data.value)
-	for {
-		messageType, hasNext := p.decoder.HasNext()
-		if !hasNext {
-			break
+func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq2[decodedData, error] {
+	return func(yield func(decodedData, error) bool) {
+		p := a.streams[data.stream]
+		if p == nil {
+			yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("input stream has no initialized decoder"))
+			return
 		}
-		switch messageType {
-		case codecCommon.MessageTypeRow:
-			message := p.decoder.NextDMLMessage()
-			if message == nil {
-				decoder, ok := p.decoder.(*simple.Decoder)
-				if !ok {
-					return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message")
-				}
-				record.retainDecode()
-				if p.cachedRecords == nil {
-					p.cachedRecords = make(map[*codecCommon.DMLMessage]*ack)
-				}
-				p.cachedRecords[decoder.PendingDMLMessage] = record
-				continue
-			}
-			if err := a.assembleMessage(ctx, data, message, record, reader); err != nil {
-				return err
-			}
-		case codecCommon.MessageTypeDDL:
-			ddl := p.decoder.NextDDLEvent()
-			if ddl == nil {
-				return errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DDL event")
-			}
-			if decoder, ok := p.decoder.(*simple.Decoder); ok {
-				// Simple retains versioned metadata in its decoder. Count that
-				// ownership independently of the events currently being written.
-				for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
-					if table == nil {
-						continue
-					}
-					name := common.QuoteSchema(table.GetSchemaName(), table.GetTableName())
-					versions := p.schemas[name]
-					if versions == nil {
-						if p.schemas == nil {
-							p.schemas = make(map[string]map[uint64]*common.TableInfo)
-						}
-						versions = make(map[uint64]*common.TableInfo)
-						p.schemas[name] = versions
-					}
-					if previous := versions[table.UpdateTS]; previous != table {
-						if err := a.schemas.retain(ctx, table); err != nil {
-							return err
-						}
-						a.schemas.release(previous)
-						versions[table.UpdateTS] = table
-					}
-				}
-				for _, message := range decoder.GetCachedMessages() {
-					cached := p.cachedRecords[message]
-					if cached == nil {
-						return errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input")
-					}
-					delete(p.cachedRecords, message)
-					if err := a.assembleMessage(ctx, data, message, cached, reader); err != nil {
-						return err
-					}
-					cached.decoded(data.retainedBytes)
-				}
-			}
-			if ddl.Query == "" {
-				if a.codecConfig.Protocol != config.ProtocolSimple {
-					return errors.ErrCodecDecode.FastGenByArgs("DDL query is empty")
-				}
-				continue
-			}
-			if err := a.assembleDDL(ctx, data, ddl, reader); err != nil {
-				return err
-			}
-		case codecCommon.MessageTypeResolved:
-			progress, err := reader.Advance(ctx, readFeedback{
-				data:           data,
-				watermark:      p.decoder.NextResolvedEvent(),
-				hasWatermark:   true,
-				needsMoreInput: len(p.cachedRecords) != 0,
-			})
-			if err != nil {
-				return err
-			}
-			a.applyProgress(progress)
-		default:
-			return errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type")
+		record := data.record
+		// Captured protocol data remains live while conversion jobs run. Account
+		// once per input, not once per derived row in a batched message.
+		bytes := int64(len(data.key)+len(data.value))*3 + 256
+		if err := record.retain(ctx, bytes); err != nil {
+			yield(decodedData{}, err)
+			return
 		}
+		p.decoder.AddKeyValue(data.key, data.value)
+		for {
+			messageType, hasNext := p.decoder.HasNext()
+			if !hasNext {
+				break
+			}
+			switch messageType {
+			case codecCommon.MessageTypeRow:
+				message := p.decoder.NextDMLMessage()
+				if message == nil {
+					decoder, ok := p.decoder.(*simple.Decoder)
+					if !ok {
+						yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DML message"))
+						return
+					}
+					record.retainDecode()
+					if p.cachedRecords == nil {
+						p.cachedRecords = make(map[*codecCommon.DMLMessage]*ack)
+					}
+					p.cachedRecords[decoder.PendingDMLMessage] = record
+					continue
+				}
+				result, err := a.decodeMessage(ctx, data, message, record)
+				if err != nil {
+					yield(decodedData{}, err)
+					return
+				}
+				if !yield(result, nil) {
+					return
+				}
+			case codecCommon.MessageTypeDDL:
+				ddl := p.decoder.NextDDLEvent()
+				if ddl == nil {
+					yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an empty DDL event"))
+					return
+				}
+				if decoder, ok := p.decoder.(*simple.Decoder); ok {
+					// Simple retains versioned metadata in its decoder. Count that
+					// ownership independently of the events currently being written.
+					for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
+						if table == nil {
+							continue
+						}
+						name := common.QuoteSchema(table.GetSchemaName(), table.GetTableName())
+						versions := p.schemas[name]
+						if versions == nil {
+							if p.schemas == nil {
+								p.schemas = make(map[string]map[uint64]*common.TableInfo)
+							}
+							versions = make(map[uint64]*common.TableInfo)
+							p.schemas[name] = versions
+						}
+						if previous := versions[table.UpdateTS]; previous != table {
+							if err := a.schemas.retain(ctx, table); err != nil {
+								yield(decodedData{}, err)
+								return
+							}
+							a.schemas.release(previous)
+							versions[table.UpdateTS] = table
+						}
+					}
+					for _, message := range decoder.GetCachedMessages() {
+						cached := p.cachedRecords[message]
+						if cached == nil {
+							yield(decodedData{}, errors.ErrInternalCheckFailed.FastGenByArgs("Simple Protocol released a DML message without its input"))
+							return
+						}
+						delete(p.cachedRecords, message)
+						result, err := a.decodeMessage(ctx, data, message, cached)
+						if err != nil {
+							yield(decodedData{}, err)
+							return
+						}
+						if !yield(result, nil) {
+							return
+						}
+						cached.decoded(data.retainedBytes)
+					}
+				}
+				if ddl.Query == "" {
+					if a.codecConfig.Protocol != config.ProtocolSimple {
+						yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("DDL query is empty"))
+						return
+					}
+					continue
+				}
+				result, err := a.decodeDDL(data, ddl)
+				if err != nil {
+					yield(decodedData{}, err)
+					return
+				}
+				if !yield(result, nil) {
+					return
+				}
+			case codecCommon.MessageTypeResolved:
+				if !yield(decodedData{feedback: readFeedback{
+					data:           data,
+					watermark:      p.decoder.NextResolvedEvent(),
+					hasWatermark:   true,
+					needsMoreInput: len(p.cachedRecords) != 0,
+				}}, nil) {
+					return
+				}
+			default:
+				yield(decodedData{}, errors.ErrCodecDecode.FastGenByArgs("decoder returned an unknown message type"))
+				return
+			}
+		}
+		if !yield(decodedData{feedback: readFeedback{
+			data:           data,
+			decoded:        true,
+			needsMoreInput: len(p.cachedRecords) != 0,
+		}}, nil) {
+			return
+		}
+		record.decoded(data.retainedBytes)
 	}
-	progress, err := reader.Advance(ctx, readFeedback{
-		data:           data,
-		decoded:        true,
-		needsMoreInput: len(p.cachedRecords) != 0,
-	})
-	if err != nil {
-		return err
-	}
-	a.applyProgress(progress)
-	record.decoded(data.retainedBytes)
-	return nil
 }

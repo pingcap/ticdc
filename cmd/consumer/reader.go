@@ -15,19 +15,12 @@
 package main
 
 import (
-	"cmp"
 	"context"
-	"database/sql"
 	"net/url"
-	"strings"
-	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	putil "github.com/pingcap/ticdc/pkg/util"
 )
 
 // Read and Advance have one caller. Confirm may run concurrently.
@@ -114,130 +107,17 @@ type readBoundary struct {
 	reached bool
 }
 
-type decodeConfig struct {
-	codec      *codecCommon.Config
-	format     readFormat
-	topic      string
-	upstreamDB *sql.DB
-	streams    []int32
-}
-
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, *decodeConfig, error) {
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, error) {
 	source, err := sourceTypeFromURI(upstreamURI)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	var r reader
 	switch source {
 	case sourceKafka:
-		r, err = newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		return newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
 	case sourcePulsar:
-		r, err = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+		return newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
 	default:
-		r, err = newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+		return newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
 	}
-	if err != nil {
-		return nil, nil, err
-	}
-	decoding, err := newDecodeConfig(ctx, upstreamURI, timezone, replicaConfig)
-	if err != nil {
-		_ = r.Close()
-		return nil, nil, err
-	}
-	if r, ok := r.(*kafkaReader); ok {
-		for id := range r.partitions {
-			decoding.streams = append(decoding.streams, id)
-		}
-	}
-	return r, decoding, nil
-}
-
-// Resolve transport-specific defaults and requirements before constructing the assembler.
-func newDecodeConfig(ctx context.Context, upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig) (decoding *decodeConfig, err error) {
-	source, err := sourceTypeFromURI(upstreamURI)
-	if err != nil {
-		return nil, err
-	}
-	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
-	switch source {
-	case sourcePulsar:
-		protocolName = cmp.Or(protocolName, putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json")
-	case sourceStorage:
-		protocolName = putil.GetOrZero(replicaConfig.Sink.Protocol)
-	}
-	protocol, err := config.ParseSinkProtocolFromString(protocolName)
-	if err != nil {
-		return nil, err
-	}
-	switch source {
-	case sourceKafka:
-		switch protocol {
-		case config.ProtocolOpen, config.ProtocolCanalJSON, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium, config.ProtocolDebeziumAvro:
-		default:
-			return nil, errors.ErrKafkaInvalidConfig.FastGenByArgs("unsupported Kafka protocol " + protocol.String())
-		}
-	case sourcePulsar:
-		if protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrPulsarInvalidConfig.FastGenByArgs("Pulsar consumer requires canal-json")
-		}
-	case sourceStorage:
-		if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-			return nil, errors.ErrStorageSinkInvalidConfig.FastGenByArgs("Storage consumer requires csv or canal-json")
-		}
-	}
-	codecConfig := codecCommon.NewConfig(protocol)
-	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return nil, err
-	}
-	if source != sourceStorage {
-		switch protocol {
-		case config.ProtocolCanalJSON, config.ProtocolDebezium:
-			if !codecConfig.EnableTiDBExtension {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension must be true")
-			}
-		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
-			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("enable-tidb-extension and avro-enable-watermark must be true")
-			}
-			if codecConfig.AvroConfluentSchemaRegistry == "" {
-				return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("schema-registry is required")
-			}
-		}
-	} else if protocol == config.ProtocolCanalJSON {
-		codecConfig.EnableTiDBExtension = true
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		return nil, err
-	}
-	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
-		return nil, errors.ErrCodecInvalidConfig.FastGenByArgs("debezium-disable-schema must be false")
-	}
-	var db *sql.DB
-	if source == sourceKafka && upstreamURI.Query().Get("upstream-tidb-dsn") != "" {
-		db, err = sql.Open("mysql", upstreamURI.Query().Get("upstream-tidb-dsn"))
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "open consumer upstream TiDB")
-		}
-		db.SetMaxOpenConns(10)
-		db.SetMaxIdleConns(10)
-		db.SetConnMaxLifetime(10 * time.Minute)
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = db.PingContext(ctx)
-		cancel()
-		if err != nil {
-			_ = db.Close()
-			return nil, errors.WrapError(errors.ErrMySQLConnectionError, err, "ping consumer upstream TiDB")
-		}
-	}
-	format := messageFormat
-	if source == sourceStorage {
-		format = rowFormat
-	}
-	return &decodeConfig{
-		codec:      codecConfig,
-		format:     format,
-		topic:      strings.Trim(upstreamURI.Path, "/"),
-		upstreamDB: db,
-	}, nil
 }

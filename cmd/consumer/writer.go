@@ -193,7 +193,9 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			}
 		}
 		for _, batch := range w.inFlight {
-			if slices.ContainsFunc(batch.items, func(item *writeEvent) bool { return ddlBlocksTable(ddl, item.dml) }) {
+			if slices.ContainsFunc(batch.items, func(item *writeEvent) bool {
+				return ddlBlocksTable(ddl, item.dml)
+			}) {
 				return nil
 			}
 		}
