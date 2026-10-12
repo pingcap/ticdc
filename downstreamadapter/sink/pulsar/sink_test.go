@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -66,13 +67,17 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		statistics: statistics,
 		ctx:        ctx,
 	}
-	go pulsarSink.Run(ctx)
 	return pulsarSink, nil
 }
 
 func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	pulsarSink, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- pulsarSink.Run(ctx)
+	}()
 
 	var count atomic.Int64
 
@@ -132,6 +137,41 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+	pulsarSink.Close()
+}
+
+func TestPulsarSinkWriteGateBlocksDDLSend(t *testing.T) {
+	pulsarSink, err := newPulsarSinkForTest(t)
+	require.NoError(t, err)
+	defer pulsarSink.Close()
+	gate := writelease.NewGate()
+	pulsarSink.SetWriteGate(gate)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "create table t (id int primary key)",
+		FinishedTs: 1,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- pulsarSink.WriteBlockEvent(ddlEvent)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Pulsar DDL returned while the capture write gate was closed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.Empty(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents())
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, <-done)
+	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 }
 
 func TestPulsarSinkBatchConfig(t *testing.T) {

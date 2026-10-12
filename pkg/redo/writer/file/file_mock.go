@@ -8,6 +8,8 @@ import (
 	event "github.com/pingcap/ticdc/pkg/common/event"
 	mock "github.com/stretchr/testify/mock"
 
+	writelease "github.com/pingcap/ticdc/pkg/writelease"
+
 	writer "github.com/pingcap/ticdc/pkg/redo/writer"
 )
 
@@ -113,17 +115,22 @@ func (_m *mockFileWriter) SetTableSchemaStore(_a0 *event.TableSchemaStore) {
 	_m.Called(_a0)
 }
 
-// SyncWrite provides a mock function with given fields: _a0
-func (_m *mockFileWriter) SyncWrite(_a0 writer.RedoEvent) error {
-	ret := _m.Called(_a0)
+// SetWriteGate provides a mock function with given fields: _a0
+func (_m *mockFileWriter) SetWriteGate(_a0 *writelease.Gate) {
+	_m.Called(_a0)
+}
+
+// SyncWrite provides a mock function with given fields: ctx, _a1
+func (_m *mockFileWriter) SyncWrite(ctx context.Context, _a1 writer.RedoEvent) error {
+	ret := _m.Called(ctx, _a1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SyncWrite")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(writer.RedoEvent) error); ok {
-		r0 = rf(_a0)
+	if rf, ok := ret.Get(0).(func(context.Context, writer.RedoEvent) error); ok {
+		r0 = rf(ctx, _a1)
 	} else {
 		r0 = ret.Error(0)
 	}

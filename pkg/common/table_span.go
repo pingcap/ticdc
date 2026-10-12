@@ -25,10 +25,6 @@ type DataRange struct {
 	Span          *heartbeatpb.TableSpan
 	CommitTsStart uint64
 	CommitTsEnd   uint64
-
-	// LastScannedTxnStartTs is the start-ts of the last scanned DML event.
-	// it should less than the CommitTsStart
-	LastScannedTxnStartTs uint64
 }
 
 func NewDataRange(clusterID uint64, span *heartbeatpb.TableSpan, startTs, endTs uint64) *DataRange {
@@ -53,7 +49,9 @@ func (d *DataRange) String() string {
 }
 
 func (d *DataRange) Equal(other *DataRange) bool {
-	return d.Span.Equal(other.Span) && d.CommitTsStart == other.CommitTsStart && d.CommitTsEnd == other.CommitTsEnd
+	return d.Span.Equal(other.Span) &&
+		d.CommitTsStart == other.CommitTsStart &&
+		d.CommitTsEnd == other.CommitTsEnd
 }
 
 // Merge merges two DataRange, if the two DataRange have different Span, return nil.
