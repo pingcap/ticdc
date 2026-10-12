@@ -66,6 +66,7 @@ func (w *writer) executeDDL(ctx context.Context) error {
 type writer struct {
 	downstream        sink.Sink
 	memory            *memoryUsage
+	progress          *inputProgress
 	completed         chan<- struct{}
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
@@ -381,11 +382,11 @@ func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 			return nil
 		case <-w.progressTick:
 			log.Info("consumer waiting for batch",
-				zap.Int64("receivedInputs", w.memory.received.Load()), zap.Int64("decodedRows", w.decodedRows),
-				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.memory.confirmed.Load()),
+				zap.Int64("receivedInputs", w.progress.received.Load()), zap.Int64("decodedRows", w.decodedRows),
+				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.progress.confirmed.Load()),
 				zap.Int("pendingDMLCount", len(w.pendingDML)),
 				zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
-				zap.Int64("uncompletedInputs", w.memory.received.Load()-w.memory.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
+				zap.Int64("uncompletedInputs", w.progress.received.Load()-w.progress.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
 		}
 	}
 }

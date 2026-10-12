@@ -38,6 +38,8 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
+const maxMemoryBytes = 1 << 30
+
 func (a *assembler) assemble(ctx context.Context, results <-chan *writeEvent, result *writeEvent) ([]*writeEvent, error) {
 	var (
 		rows  int64
@@ -263,6 +265,8 @@ type decodeStream struct {
 // assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
 	memory            *memoryUsage
+	progress          *inputProgress
+	schemas           *schemaUsage
 	codecConfig       *codecCommon.Config
 	upstreamDB        *sql.DB
 	selectors         *columnselector.ColumnSelectors
@@ -387,7 +391,7 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 	}
 	tables := append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...)
 	for _, table := range tables {
-		if err := a.memory.retainSchema(ctx, table); err != nil {
+		if err := a.schemas.retain(ctx, table); err != nil {
 			return err
 		}
 	}
@@ -397,7 +401,7 @@ func (a *assembler) queueDDL(ctx context.Context, ddl *event.DDLEvent, record *a
 		bytes: bytes,
 		onFlush: func() {
 			for _, table := range tables {
-				a.memory.releaseSchema(table)
+				a.schemas.release(table)
 			}
 			record.release()
 		},
@@ -596,7 +600,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, memory *memoryUsage, completed chan<- struct{}) (*assembler, error) {
+func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, completed chan<- struct{}) (*assembler, error) {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -622,12 +626,14 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, replicaConfig *co
 		}
 	}
 	return &assembler{
-		memory:      memory,
+		memory:      progress.memory,
+		progress:    progress,
+		schemas:     schemas,
 		codecConfig: decoding.codec,
 		upstreamDB:  decoding.upstreamDB,
 		selectors:   selectors,
 		streams:     streams,
-		decoder:     newDecoderGroup(memory, completed),
+		decoder:     newDecoderGroup(schemas, completed),
 		tables:      make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
@@ -705,7 +711,7 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 			needsMoreInput = needsMoreInput || len(stream.cachedRecords) != 0
 		}
 		if !needsMoreInput {
-			if err := a.memory.wait(ctx); err != nil {
+			if err := a.waitMemory(ctx); err != nil {
 				return nil, err
 			}
 		}
@@ -718,6 +724,30 @@ func (a *assembler) next(ctx context.Context, reader reader) (*writeEvent, error
 		}
 		if err := a.decode(ctx, data, reader); err != nil {
 			return nil, err
+		}
+	}
+}
+
+// Backpressure applies to new independent inputs. Retained caches alone must
+// not prevent reading, and unfinished input boundaries bypass this wait.
+func (a *assembler) waitMemory(ctx context.Context) error {
+	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if a.memory.used() < maxMemoryBytes || a.progress.received.Load() == a.progress.confirmed.Load() {
+			return nil
+		}
+		changed := a.memory.changes()
+		// Subscribe before rechecking: a concurrent release either satisfies the
+		// admission condition or closes changed.
+		if a.memory.used() < maxMemoryBytes || a.progress.received.Load() == a.progress.confirmed.Load() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-changed:
 		}
 	}
 }
@@ -785,7 +815,7 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 			return err
 		}
 		a.applyProgress(progress)
-		a.memory.decoded(data.record, data.retainedBytes)
+		data.record.decoded(data.retainedBytes)
 		return nil
 	}
 	switch data.format {
@@ -796,7 +826,7 @@ func (a *assembler) decode(ctx context.Context, data *readData, reader reader) e
 		// Row decoders retain parsed records alongside the encoded file until
 		// the input is exhausted. Include their scratch space in its lifetime.
 		bytes := int64(len(data.value))*3 + 256
-		if err := a.memory.retainInput(ctx, data.record, bytes); err != nil {
+		if err := data.record.retain(ctx, bytes); err != nil {
 			return err
 		}
 		switch a.codecConfig.Protocol {
@@ -826,7 +856,7 @@ func (a *assembler) decodeRows(ctx context.Context, reader reader) error {
 	for {
 		messageType, hasNext := a.currentDecoder.HasNext()
 		if !hasNext {
-			a.memory.decoded(data.record, data.retainedBytes)
+			data.record.decoded(data.retainedBytes)
 			a.current, a.currentDecoder = nil, nil
 			return nil
 		}
@@ -938,7 +968,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 	// Captured protocol data remains live while conversion jobs run. Account
 	// once per input, not once per derived row in a batched message.
 	bytes := int64(len(data.key)+len(data.value))*3 + 256
-	if err := a.memory.retainInput(ctx, record, bytes); err != nil {
+	if err := record.retain(ctx, bytes); err != nil {
 		return err
 	}
 	p.decoder.AddKeyValue(data.key, data.value)
@@ -987,10 +1017,10 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 						p.schemas[name] = versions
 					}
 					if previous := versions[table.UpdateTS]; previous != table {
-						if err := a.memory.retainSchema(ctx, table); err != nil {
+						if err := a.schemas.retain(ctx, table); err != nil {
 							return err
 						}
-						a.memory.releaseSchema(previous)
+						a.schemas.release(previous)
 						versions[table.UpdateTS] = table
 					}
 				}
@@ -1003,7 +1033,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 					if err := a.assembleMessage(ctx, data, message, cached, reader); err != nil {
 						return err
 					}
-					a.memory.decoded(cached, data.retainedBytes)
+					cached.decoded(data.retainedBytes)
 				}
 			}
 			if ddl.Query == "" {
@@ -1039,6 +1069,6 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData, reader r
 		return err
 	}
 	a.applyProgress(progress)
-	a.memory.decoded(record, data.retainedBytes)
+	record.decoded(data.retainedBytes)
 	return nil
 }

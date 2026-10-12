@@ -39,15 +39,20 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			defer cancel()
 			ctx, cancelWorkers := context.WithCancelCause(ctx)
 			memory := &memoryUsage{}
+			progress := &inputProgress{memory: memory}
+			schemas := &schemaUsage{memory: memory}
 			completed := make(chan struct{}, 1)
 			g := &decoderGroup{
 				memory:    memory,
+				schemas:   schemas,
 				completed: completed,
 				input:     make(chan *decodeTask, 8),
 				workers:   2,
 			}
 			a := &assembler{
 				memory:    memory,
+				progress:  progress,
+				schemas:   schemas,
 				decoder:   g,
 				tables:    make(map[[2]string]*common.TableInfo),
 				mergeRows: mergeRows,
@@ -69,7 +74,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			}).Times(3)
 			c := &consumer{
 				assembler: a,
-				memory:    memory,
+				progress:  progress,
 				completed: completed,
 				writer: &writer{
 					memory:     memory,
@@ -82,7 +87,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			for range g.workers {
 				c.wg.Go(func() { cancelWorkers(g.decode(ctx)) })
 			}
-			record, err := memory.newAck(ctx, 4096, nil)
+			record, err := progress.newAck(ctx, 4096, nil)
 			require.NoError(t, err)
 			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}
 			r := &pulsarReader{memory: memory}
@@ -123,7 +128,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				require.NoError(t, a.assembleMessage(ctx, data, message, record, r))
 				a.decoding = append(a.decoding, a.nextReady(0))
 			}
-			memory.decoded(record, 128)
+			record.decoded(128)
 			select {
 			case <-a.decoding[2].decoding.done:
 			case <-ctx.Done():
@@ -167,7 +172,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			for _, table := range metadata {
 				require.Zero(t, table.UpdateTS)
 			}
-			memory.confirm(record)
+			record.confirm()
 		})
 	}
 }

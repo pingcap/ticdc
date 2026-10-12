@@ -27,26 +27,27 @@ import (
 func BenchmarkMemoryAccounting(b *testing.B) {
 	ctx := b.Context()
 	memory := &memoryUsage{}
+	schemas := &schemaUsage{memory: memory}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID:      1,
 		Name:    ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
 	})
-	if err := memory.retainSchema(ctx, table); err != nil {
+	if err := schemas.retain(ctx, table); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if err := memory.retainSchema(ctx, table); err != nil {
+			if err := schemas.retain(ctx, table); err != nil {
 				b.Fatal(err)
 			}
 			if err := memory.reserve(ctx, 1024); err != nil {
 				b.Fatal(err)
 			}
-			memory.releaseSchema(table)
+			schemas.release(table)
 			memory.release(1024)
 		}
 	})
-	memory.releaseSchema(table)
+	schemas.release(table)
 }

@@ -30,6 +30,7 @@ type decoderGroup struct {
 	input     chan *decodeTask
 	workers   int
 	memory    *memoryUsage
+	schemas   *schemaUsage
 	completed chan<- struct{}
 }
 
@@ -44,12 +45,13 @@ type decodeTask struct {
 	retainedBytes int64
 }
 
-func newDecoderGroup(memory *memoryUsage, completed chan<- struct{}) *decoderGroup {
+func newDecoderGroup(schemas *schemaUsage, completed chan<- struct{}) *decoderGroup {
 	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
 		input:     make(chan *decodeTask, workers*64),
 		workers:   workers,
-		memory:    memory,
+		memory:    schemas.memory,
+		schemas:   schemas,
 		completed: completed,
 	}
 }
@@ -104,16 +106,16 @@ func (g *decoderGroup) decode(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		if err := g.memory.retainSchema(ctx, dml.TableInfo); err != nil {
+		if err := g.schemas.retain(ctx, dml.TableInfo); err != nil {
 			return err
 		}
 		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
 		if err := g.memory.reserve(ctx, bytes); err != nil {
 			return err
 		}
-		dml.AddPostFlushFunc(func() { g.memory.releaseSchema(dml.TableInfo) })
+		dml.AddPostFlushFunc(func() { g.schemas.release(dml.TableInfo) })
 		task.dml, task.bytes = dml, bytes
-		g.memory.decoded(task.record, task.retainedBytes)
+		task.record.decoded(task.retainedBytes)
 		task.message, task.record, task.table = nil, nil, nil
 		close(task.done)
 		select {

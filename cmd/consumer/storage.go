@@ -82,6 +82,8 @@ type storageReader struct {
 	groupKey       cloudstorage.DMLPathKey
 	storage        storeapi.Storage
 	memory         *memoryUsage
+	progress       *inputProgress
+	schemaUsage    *schemaUsage
 	confirmable    chan<- struct{}
 	dateSeparator  config.DateSeparator
 	fileExtension  string
@@ -97,7 +99,7 @@ type storageReader struct {
 	scanned        bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (*storageReader, error) {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (*storageReader, error) {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("file upstream-uri must include a path")
 	}
@@ -121,7 +123,9 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 
 	c := &storageReader{
 		storage:        storage,
-		memory:         memory,
+		memory:         progress.memory,
+		progress:       progress,
+		schemaUsage:    schemas,
 		confirmable:    confirmable,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
@@ -175,7 +179,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 			delete(c.schemas, key)
 			c.memory.release(schema.bytes)
-			c.memory.releaseSchema(schema.table)
+			c.schemaUsage.release(schema.table)
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
@@ -412,14 +416,14 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		if table == nil {
 			table = schema.file.TableInfo()
 			table.UpdateTS = schema.file.TableVersion
-			if err := c.memory.retainSchema(ctx, table); err != nil {
+			if err := c.schemaUsage.retain(ctx, table); err != nil {
 				return nil, err
 			}
 			schema.table = table
 		}
 		if key.IsSchemaFileDMLPathKey() {
 			size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
-			record, err := c.memory.newAck(ctx, size, c.confirmable)
+			record, err := c.progress.newAck(ctx, size, c.confirmable)
 			if err != nil {
 				return nil, err
 			}
@@ -500,7 +504,7 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			_ = file.Close()
 			return nil, errors.ErrInternalCheckFailed.FastGenByArgs("Storage DML file has a negative size")
 		}
-		record, err := c.memory.newAck(ctx, size+256, c.confirmable)
+		record, err := c.progress.newAck(ctx, size+256, c.confirmable)
 		if err != nil {
 			_ = file.Close()
 			return nil, err
@@ -593,7 +597,7 @@ func (c *storageReader) Confirm(ctx context.Context) error {
 		if refs != 0 {
 			break
 		}
-		c.memory.confirm(record)
+		record.confirm()
 		count++
 	}
 	clear(c.records[:count])

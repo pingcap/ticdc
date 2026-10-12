@@ -43,7 +43,8 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			defer wg.Wait()
 			defer cancel(nil)
 			memory := &memoryUsage{}
-			g := newDecoderGroup(memory, nil)
+			progress := &inputProgress{memory: memory}
+			g := newDecoderGroup(&schemaUsage{memory: memory}, nil)
 			for range g.workers {
 				wg.Go(func() { cancel(g.decode(ctx)) })
 			}
@@ -85,7 +86,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			tasks := make([]*decodeTask, batchRows)
 			b.ReportAllocs()
 			for b.Loop() {
-				record, err := memory.newAck(ctx, 128, nil)
+				record, err := progress.newAck(ctx, 128, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -104,7 +105,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				memory.decoded(record, 128)
+				record.decoded(128)
 				for _, task := range tasks {
 					select {
 					case <-task.done:
@@ -114,7 +115,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 					task.dml.PostFlush()
 					memory.release(task.bytes)
 				}
-				memory.confirm(record)
+				record.confirm()
 			}
 		})
 	}
@@ -134,6 +135,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					defer wg.Wait()
 					defer cancel(nil)
 					memory := &memoryUsage{}
+					progress := &inputProgress{memory: memory}
 					cfg := codecCommon.NewConfig(config.ProtocolCanalJSON)
 					cfg.EnableTiDBExtension = true
 					decoder, err := canal.NewDecoder(ctx, cfg, nil)
@@ -169,14 +171,15 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						}
 						decoder.NextDMLMessage().ToDMLEvent().PostFlush()
 					}
-					g := newDecoderGroup(memory, nil)
+					g := newDecoderGroup(&schemaUsage{memory: memory}, nil)
 					groups := make([]*decoderGroup, g.workers)
 					for i := range groups {
 						groups[i] = g
 						if queue == "table" {
 							groups[i] = &decoderGroup{
-								input:  make(chan *decodeTask, 64),
-								memory: memory,
+								input:   make(chan *decodeTask, 64),
+								memory:  memory,
+								schemas: g.schemas,
 							}
 						}
 						worker := groups[i]
@@ -185,7 +188,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()
 					for b.Loop() {
-						record, err := memory.newAck(ctx, 128, nil)
+						record, err := progress.newAck(ctx, 128, nil)
 						if err != nil {
 							b.Fatal(err)
 						}
@@ -213,7 +216,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 								b.Fatal(err)
 							}
 						}
-						memory.decoded(record, 128)
+						record.decoded(128)
 						for _, task := range tasks {
 							select {
 							case <-task.done:
@@ -223,7 +226,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 							task.dml.PostFlush()
 							memory.release(task.bytes)
 						}
-						memory.confirm(record)
+						record.confirm()
 					}
 				})
 			}

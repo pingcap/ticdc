@@ -73,6 +73,7 @@ type kafkaReader struct {
 	client                *kgo.Client
 	topic                 string
 	memory                *memoryUsage
+	progress              *inputProgress
 	confirmable           chan<- struct{}
 	partitions            map[int32]*kafkaPartition
 	readSequence          uint64
@@ -81,7 +82,7 @@ type kafkaReader struct {
 	boundaryDDL           uint64
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader, err error) {
+func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, progress *inputProgress, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader, err error) {
 	if upstreamURI.Host == "" {
 		return nil, errors.ErrInvalidReplicaConfig.FastGenByArgs("kafka upstream-uri must include an endpoint")
 	}
@@ -173,12 +174,13 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		}
 	}
 
-	memory.externalBytes = client.BufferedFetchBytes
+	progress.memory.externalBytes = client.BufferedFetchBytes
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
 		client:      client,
 		topic:       topic,
-		memory:      memory,
+		memory:      progress.memory,
+		progress:    progress,
 		confirmable: confirmable,
 		partitions:  partitions,
 		router:      router,
@@ -233,7 +235,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		partition.sequence = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
 		c.memory.release(bytes)
-		state, err := c.memory.newAck(ctx, bytes, c.confirmable)
+		state, err := c.progress.newAck(ctx, bytes, c.confirmable)
 		if err != nil {
 			return nil, err
 		}
@@ -574,7 +576,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 		partition.mu.Lock()
 		inputs := partition.records
 		for _, record := range inputs[:count] {
-			c.memory.confirm(record.ack)
+			record.ack.confirm()
 		}
 		clear(inputs[:count])
 		partition.records = inputs[count:]

@@ -18,137 +18,16 @@ import (
 	"context"
 	"sync"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/uber-go/atomic"
 )
 
-const maxMemoryBytes = 1 << 30
-
 type memoryUsage struct {
 	bytes         atomic.Int64
-	received      atomic.Int64
-	confirmed     atomic.Int64
-	waiters       atomic.Int64
+	waiting       atomic.Bool
 	externalBytes func() int64
 	mu            sync.Mutex
 	changed       chan struct{}
-	schemas       map[*common.TableInfo]*schemaMemory
-}
-
-type schemaMemory struct {
-	refs  int
-	bytes int64
-}
-
-// Count shared metadata once across pipeline events and reader/decoder caches.
-func (m *memoryUsage) retainSchema(ctx context.Context, table *common.TableInfo) error {
-	if table == nil {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if schema := m.schemas[table]; schema != nil {
-		schema.refs++
-		return nil
-	}
-	// The budget is an estimate. Serializing metadata here allocates large JSON
-	// buffers and repeats whenever the last pipeline reference is released.
-	bytes := int64(1024 + len(table.GetSchemaName()) + len(table.GetTableName()))
-	for _, column := range table.GetColumns() {
-		bytes += int64(512 + len(column.Name.O) + len(column.Comment) + len(column.GeneratedExprString))
-		for _, value := range column.FieldType.GetElems() {
-			bytes += int64(16 + len(value))
-		}
-		if value, ok := column.DefaultValue.(string); ok {
-			bytes += int64(len(value))
-		}
-	}
-	for _, index := range table.GetIndices() {
-		bytes += int64(256 + len(index.Name.O) + len(index.Columns)*64)
-	}
-	if err := m.reserve(ctx, bytes); err != nil {
-		return err
-	}
-	if m.schemas == nil {
-		m.schemas = make(map[*common.TableInfo]*schemaMemory)
-	}
-	m.schemas[table] = &schemaMemory{
-		refs:  1,
-		bytes: bytes,
-	}
-	return nil
-}
-
-func (m *memoryUsage) releaseSchema(table *common.TableInfo) {
-	if table == nil {
-		return
-	}
-	m.mu.Lock()
-	schema := m.schemas[table]
-	schema.refs--
-	var bytes int64
-	if schema.refs == 0 {
-		bytes = schema.bytes
-		delete(m.schemas, table)
-	}
-	m.mu.Unlock()
-	m.release(bytes)
-}
-
-// An input can be confirmed after decoding and downstream writes release all refs.
-type ack struct {
-	refs    atomic.Int64
-	decodes atomic.Int64
-	memory  atomic.Int64
-	done    chan<- struct{}
-}
-
-func (a *ack) release() {
-	if a.refs.Add(-1) == 0 {
-		select {
-		case a.done <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// A decoding operation keeps both the input and its parsed contents alive.
-func (a *ack) retainDecode() {
-	a.decodes.Inc()
-	a.refs.Inc()
-}
-
-func (m *memoryUsage) retainInput(ctx context.Context, record *ack, bytes int64) error {
-	if err := m.reserve(ctx, bytes); err != nil {
-		return err
-	}
-	record.memory.Add(bytes)
-	return nil
-}
-
-func (m *memoryUsage) newAck(ctx context.Context, bytes int64, done chan<- struct{}) (*ack, error) {
-	if err := m.reserve(ctx, bytes); err != nil {
-		return nil, err
-	}
-	record := &ack{done: done}
-	record.memory.Store(bytes)
-	record.refs.Store(1)
-	record.decodes.Store(1)
-	m.received.Inc()
-	return record, nil
-}
-
-func (m *memoryUsage) confirm(record *ack) {
-	m.confirmed.Inc()
-	m.release(record.memory.Load())
-}
-
-func (m *memoryUsage) decoded(record *ack, retainedBytes int64) {
-	if record.decodes.Dec() == 0 {
-		m.release(record.memory.Swap(retainedBytes) - retainedBytes)
-	}
-	record.release()
 }
 
 func (m *memoryUsage) used() int64 {
@@ -170,39 +49,16 @@ func (m *memoryUsage) reserve(ctx context.Context, bytes int64) error {
 	return nil
 }
 
-// Wait before starting another independent input. The current input and any
-// unfinished ordering window must be able to finish even if they exceed the budget.
-func (m *memoryUsage) wait(ctx context.Context) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
+// Subscribe before checking an admission condition to avoid missing a release.
+// A release wakes every subscriber; callers decide whether to wait again.
+func (m *memoryUsage) changes() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.changed == nil {
+		m.changed = make(chan struct{})
 	}
-	if m.used() < maxMemoryBytes || m.received.Load() == m.confirmed.Load() {
-		return nil
-	}
-	// Register before checking the budget under the lock, so a concurrent
-	// release either makes that check pass or wakes the registered waiter.
-	m.waiters.Inc()
-	defer m.waiters.Dec()
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		m.mu.Lock()
-		if m.used() < maxMemoryBytes || m.received.Load() == m.confirmed.Load() {
-			m.mu.Unlock()
-			return nil
-		}
-		if m.changed == nil {
-			m.changed = make(chan struct{})
-		}
-		changed := m.changed
-		m.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
+	m.waiting.Store(true)
+	return m.changed
 }
 
 func (m *memoryUsage) release(bytes int64) {
@@ -210,7 +66,7 @@ func (m *memoryUsage) release(bytes int64) {
 		return
 	}
 	m.bytes.Add(-bytes)
-	if m.waiters.Load() == 0 {
+	if !m.waiting.Load() {
 		return
 	}
 	m.mu.Lock()
@@ -218,5 +74,6 @@ func (m *memoryUsage) release(bytes int64) {
 		close(m.changed)
 		m.changed = nil
 	}
+	m.waiting.Store(false)
 	m.mu.Unlock()
 }

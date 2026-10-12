@@ -32,18 +32,19 @@ import (
 
 func TestMemoryReleasesSharedSchema(t *testing.T) {
 	memory := &memoryUsage{}
+	schemas := &schemaUsage{memory: memory}
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID: 1, Name: ast.NewCIStr("t"),
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
 	})
-	require.NoError(t, memory.retainSchema(t.Context(), table))
+	require.NoError(t, schemas.retain(t.Context(), table))
 	bytes := memory.used()
 	require.Positive(t, bytes)
-	require.NoError(t, memory.retainSchema(t.Context(), table))
+	require.NoError(t, schemas.retain(t.Context(), table))
 	require.Equal(t, bytes, memory.used())
-	memory.releaseSchema(table)
+	schemas.release(table)
 	require.Equal(t, bytes, memory.used())
-	memory.releaseSchema(table)
+	schemas.release(table)
 	require.Zero(t, memory.used())
 }
 

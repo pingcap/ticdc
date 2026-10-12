@@ -46,13 +46,14 @@ type pulsarReader struct {
 	client       pulsar.Client
 	consumer     pulsar.Consumer
 	memory       *memoryUsage
+	progress     *inputProgress
 	partitions   map[string]*pulsarPartition
 	confirmable  chan<- struct{}
 	watermark    uint64
 	hasWatermark bool
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader, err error) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, confirmable chan<- struct{}) (reader *pulsarReader, err error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	}
 	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
 	// scale down under the client memory limit; oversized messages may exceed it.
-	memory.externalBytes = func() int64 { return clientOptions.MemoryLimitBytes }
+	progress.memory.externalBytes = func() int64 { return clientOptions.MemoryLimitBytes }
 	partitions := make(map[string]*pulsarPartition, len(topics))
 	for _, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{}
@@ -181,7 +182,8 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	c := &pulsarReader{
 		client:      client,
 		consumer:    consumer,
-		memory:      memory,
+		memory:      progress.memory,
+		progress:    progress,
 		partitions:  partitions,
 		confirmable: confirmable,
 	}
@@ -203,7 +205,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		}
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
-		record, err := c.memory.newAck(ctx, size, c.confirmable)
+		record, err := c.progress.newAck(ctx, size, c.confirmable)
 		if err != nil {
 			return nil, err
 		}
@@ -280,7 +282,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		partition.mu.Lock()
 		records := partition.records
 		for _, record := range records[:count] {
-			c.memory.confirm(record.ack)
+			record.ack.confirm()
 		}
 		clear(records[:count])
 		partition.records = records[count:]

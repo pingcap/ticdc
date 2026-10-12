@@ -122,7 +122,7 @@ type decodeConfig struct {
 	streams    []int32
 }
 
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader, *decodeConfig, error) {
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, *decodeConfig, error) {
 	source, err := sourceTypeFromURI(upstreamURI)
 	if err != nil {
 		return nil, nil, err
@@ -130,11 +130,11 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID, timezone s
 	var r reader
 	switch source {
 	case sourceKafka:
-		r, err = newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
+		r, err = newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
 	case sourcePulsar:
-		r, err = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
+		r, err = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
 	default:
-		r, err = newStorageReader(ctx, upstreamURI, replicaConfig, memory, confirmable)
+		r, err = newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
 	}
 	if err != nil {
 		return nil, nil, err

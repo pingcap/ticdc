@@ -107,8 +107,13 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field}},
 	})
 	memory := &memoryUsage{}
-	buffer := &assembler{memory: memory}
-	record, err := buffer.memory.newAck(t.Context(), 128, nil)
+	progress := &inputProgress{memory: memory}
+	buffer := &assembler{
+		memory:   memory,
+		progress: progress,
+		schemas:  &schemaUsage{memory: memory},
+	}
+	record, err := buffer.progress.newAck(t.Context(), 128, nil)
 	require.NoError(t, err)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
@@ -275,7 +280,12 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 func TestWriterDDLReplay(t *testing.T) {
 	ctx := t.Context()
 	memory := &memoryUsage{}
-	a := &assembler{memory: memory}
+	progress := &inputProgress{memory: memory}
+	a := &assembler{
+		memory:   memory,
+		progress: progress,
+		schemas:  &schemaUsage{memory: memory},
+	}
 	w := &writer{memory: memory, ddlJobs: make(chan *writeEvent, 1)}
 	truncate := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 100, Query: "TRUNCATE TABLE `test`.`table_3`"}
 	drop := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 200, Query: "DROP TABLE `test`.`table_3`"}
@@ -288,27 +298,27 @@ func TestWriterDDLReplay(t *testing.T) {
 	}
 	w.downstream = downstream
 	for index, ddl := range []*event.DDLEvent{truncate, drop, truncate, first, second, first} {
-		record, err := memory.newAck(ctx, 128, nil)
+		record, err := progress.newAck(ctx, 128, nil)
 		require.NoError(t, err)
 		require.NoError(t, a.queueDDL(ctx, ddl, record))
 		require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
-		memory.decoded(record, 128)
+		record.decoded(128)
 		require.NoError(t, w.flushDML(ctx))
 		if index == 2 || index == 5 {
 			require.Empty(t, w.ddlJobs, "a replay must not execute again")
 			require.Zero(t, record.refs.Load())
-			memory.confirm(record)
+			record.confirm()
 			continue
 		}
 		require.Len(t, w.ddlJobs, 1)
 		job := <-w.ddlJobs
 		var duplicate *ack
 		if index == 0 {
-			duplicate, err = memory.newAck(ctx, 128, nil)
+			duplicate, err = progress.newAck(ctx, 128, nil)
 			require.NoError(t, err)
 			require.NoError(t, a.queueDDL(ctx, ddl, duplicate))
 			require.NoError(t, w.consume(ctx, a.nextReady(ddl.GetCommitTs())))
-			memory.decoded(duplicate, 128)
+			duplicate.decoded(128)
 			require.NoError(t, w.flushDML(ctx))
 			require.EqualValues(t, 1, duplicate.refs.Load(), "a replay must wait for the original write")
 		}
@@ -318,39 +328,39 @@ func TestWriterDDLReplay(t *testing.T) {
 		require.NoError(t, w.flushDML(ctx))
 		require.Empty(t, w.ddlJobs)
 		require.Zero(t, record.refs.Load())
-		memory.confirm(record)
+		record.confirm()
 		if duplicate != nil {
 			require.Zero(t, duplicate.refs.Load())
-			memory.confirm(duplicate)
+			duplicate.confirm()
 		}
 	}
 	// Equality stays protected by the replay identity. Once progress passes it,
 	// the identity is retired and the old input is rejected by writtenBefore.
 	checkpoint := false
 	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 300, hasWatermark: true, onFlush: func() { checkpoint = true }}))
-	record, err := memory.newAck(ctx, 128, nil)
+	record, err := progress.newAck(ctx, 128, nil)
 	require.NoError(t, err)
 	require.NoError(t, a.queueDDL(ctx, first, record))
 	require.NoError(t, w.consume(ctx, a.nextReady(300)))
-	memory.decoded(record, 128)
+	record.decoded(128)
 	require.NoError(t, w.flushDML(ctx))
 	require.True(t, checkpoint, "retiring the last replay must unblock the watermark")
 	require.Empty(t, w.ddlJobs)
 	require.Zero(t, record.refs.Load())
-	memory.confirm(record)
+	record.confirm()
 	require.Positive(t, memory.used())
 	require.NoError(t, w.consume(ctx, &writeEvent{watermark: 301, hasWatermark: true}))
 	require.NoError(t, w.flushDML(ctx))
 	require.Zero(t, memory.used())
-	record, err = memory.newAck(ctx, 128, nil)
+	record, err = progress.newAck(ctx, 128, nil)
 	require.NoError(t, err)
 	require.NoError(t, a.queueDDL(ctx, truncate, record))
 	require.NoError(t, w.consume(ctx, a.nextReady(301)))
-	memory.decoded(record, 128)
+	record.decoded(128)
 	require.NoError(t, w.flushDML(ctx))
 	require.Empty(t, w.ddlJobs)
 	require.Zero(t, record.refs.Load())
-	memory.confirm(record)
+	record.confirm()
 	require.Zero(t, memory.used())
 }
 
