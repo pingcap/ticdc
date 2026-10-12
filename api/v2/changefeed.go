@@ -303,6 +303,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
+	if util.GetOrZero(cfg.Pause) {
+		info.State = config.StateStopped
+		info.BootstrapPending = new(true)
+	}
+
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
@@ -583,7 +588,7 @@ func CfInfoToAPIModel(
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-		replicaConfig.maskSensitiveData()
+		replicaConfig.omitSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
@@ -1013,7 +1018,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	updateCfConfig := &ChangefeedConfig{}
+	updateCfConfig := &struct {
+		ChangefeedConfig
+		ReplicaConfig json.RawMessage `json:"replica_config"`
+	}{}
 	if err = c.BindJSON(updateCfConfig); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
@@ -1030,9 +1038,16 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 		targetTsUpdated = true
 	}
-	if updateCfConfig.ReplicaConfig != nil {
+	if len(updateCfConfig.ReplicaConfig) != 0 && string(updateCfConfig.ReplicaConfig) != "null" {
 		configUpdated = true
-		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		// Apply supplied fields to a copy of the real configuration. API responses
+		// omit credentials, and explicit replacement values are always used literally.
+		replicaConfig := ToAPIReplicaConfig(oldCfInfo.Config)
+		if err := json.Unmarshal(updateCfConfig.ReplicaConfig, replicaConfig); err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
+		oldCfInfo.Config = replicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true

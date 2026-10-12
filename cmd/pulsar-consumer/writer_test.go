@@ -547,6 +547,10 @@ func (m fakePulsarMessage) Payload() []byte {
 	return m.payload
 }
 
+func (m fakePulsarMessage) IsNullValue() bool {
+	return false
+}
+
 func (m fakePulsarMessage) ID() pulsar.MessageID {
 	return nil
 }

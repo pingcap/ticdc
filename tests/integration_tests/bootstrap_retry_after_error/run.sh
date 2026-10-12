@@ -94,7 +94,10 @@ function run() {
 	# bootstrap round.
 	export GO_FAILPOINTS=''
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
+	# The coordinator is paused by the failpoint, so its changefeed API cannot
+	# serve the readiness check in run_cdc_server until the failpoint is removed.
+	# The bootstrap response and PID checks below verify that this node started.
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR" --skip-ready-check
 
 	ensure $MAX_RETRIES "check_node_change_triggers_bootstrap $WORK_DIR"
 	disable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED"

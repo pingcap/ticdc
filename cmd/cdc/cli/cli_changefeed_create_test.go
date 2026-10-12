@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -173,8 +174,19 @@ func TestChangefeedCreateCli(t *testing.T) {
 	f.changefeeds.EXPECT().VerifyTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{
 		IneligibleTables: []v2.TableName{{}},
 	}, nil)
-	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.ChangeFeedInfo{}, nil)
+	info := &v2.ChangeFeedInfo{
+		SinkURI: "kafka://user:uri-secret-sentinel@host/topic",
+		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
+			SASLPassword: new("password-sentinel"),
+		}}},
+	}
+	f.changefeeds.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(info, nil)
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
+	require.NotContains(t, output.String(), "sentinel")
+	require.Contains(t, output.String(), "******")
+	require.Equal(t, "password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
 
 	cmd = newCmdCreateChangefeed(f)
 	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
@@ -226,4 +238,33 @@ compression = "snappy"
 	err := o.completeReplicaCfg()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "consistent.compression")
+}
+
+func TestCreateChangefeedPauseFromToml(t *testing.T) {
+	for _, option := range []string{"", "pause = false", "pause = true"} {
+		t.Run(option, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "changefeed.toml")
+			require.NoError(t, os.WriteFile(path, []byte(option+"\n[filter]\nrules = ['test.*']\n"), 0o600))
+			common := newChangefeedCommonOptions()
+			common.configFile = path
+			common.sinkURI = "blackhole://"
+			o := newCreateChangefeedOptions(common)
+			require.NoError(t, o.completeReplicaCfg())
+			request := o.getChangefeedConfig()
+			if option == "" {
+				require.Nil(t, request.Pause)
+			} else {
+				require.NotNil(t, request.Pause)
+				require.Equal(t, option == "pause = true", *request.Pause)
+			}
+			// Preserve omitted versus explicit false through JSON as well as TOML.
+			data, err := json.Marshal(request)
+			require.NoError(t, err)
+			var decoded v2.ChangefeedConfig
+			require.NoError(t, json.Unmarshal(data, &decoded))
+			require.Equal(t, request.Pause, decoded.Pause)
+			// The create-only option must not become a runtime replica setting.
+			require.Nil(t, request.ReplicaConfig.ToInternalReplicaConfig().Pause)
+		})
+	}
 }
