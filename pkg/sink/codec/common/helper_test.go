@@ -61,8 +61,10 @@ func TestQueryRowChecksumQueryErrors(t *testing.T) {
 			case "other unsupported function":
 				query.WillReturnError(&mysqlDriver.MySQLError{Number: mysql.ErrNotSupportedYet, Message: "another unsupported feature"})
 			default:
-				query.WillReturnError(&mysqlDriver.MySQLError{Number: mysql.ErrNotSupportedYet,
-					Message: "FUNCTION tidb_row_checksum can only be used as a select field in a fast point plan"})
+				query.WillReturnError(&mysqlDriver.MySQLError{
+					Number:  mysql.ErrNotSupportedYet,
+					Message: "FUNCTION tidb_row_checksum can only be used as a select field in a fast point plan",
+				})
 				mock.ExpectQuery("select @@session.time_zone").
 					WillReturnRows(sqlmock.NewRows([]string{"time_zone"}).AddRow("SYSTEM"))
 				mock.ExpectExec("set @@session.time_zone = '+00:00'").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -112,8 +114,10 @@ func TestQueryRowChecksumDuringReorganization(t *testing.T) {
 			}{{"set @@tidb_snapshot=100", 20}, {"set @@tidb_snapshot=99", 10}} {
 				mock.ExpectExec(snapshot.statement).WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectQuery("select tidb_row_checksum() from test.tp_int2 where id = 1").
-					WillReturnError(&mysqlDriver.MySQLError{Number: mysql.ErrNotSupportedYet,
-						Message: "FUNCTION tidb_row_checksum can only be used as a select field in a fast point plan"})
+					WillReturnError(&mysqlDriver.MySQLError{
+						Number:  mysql.ErrNotSupportedYet,
+						Message: "FUNCTION tidb_row_checksum can only be used as a select field in a fast point plan",
+					})
 				mock.ExpectQuery("select @@session.time_zone").
 					WillReturnRows(sqlmock.NewRows([]string{"time_zone"}).AddRow("+08:00"))
 				mock.ExpectExec("set @@session.time_zone = '+00:00'").WillReturnResult(sqlmock.NewResult(0, 0))
