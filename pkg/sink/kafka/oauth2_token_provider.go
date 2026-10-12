@@ -19,6 +19,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -68,7 +69,7 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 
 	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, util.MaskSensitiveDataInURLError(err))
 	}
 
 	cfg := clientcredentials.Config{
@@ -79,6 +80,6 @@ func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvid
 		Scopes:         o.SASL.OAuth2.Scopes,
 	}
 	return &tokenProvider{
-		tokenSource: cfg.TokenSource(ctx),
+		tokenSource: &redactedOAuthTokenSource{TokenSource: cfg.TokenSource(ctx)},
 	}, nil
 }
