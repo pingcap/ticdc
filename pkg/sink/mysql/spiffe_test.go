@@ -70,17 +70,61 @@ func TestParseSPIFFEIDPattern(t *testing.T) {
 				"spiffe://example.org/v1/prod/123/ns/tidb/server/extra",
 			},
 		},
+		{
+			name:    "wildcard in middle",
+			pattern: "spiffe://example.org/v1/*/tidb",
+			matches: []string{
+				"spiffe://example.org/v1/prod/tidb",
+				"spiffe://example.org/v1/staging/tidb",
+			},
+			notMatch: []string{
+				"spiffe://example.org/v1/prod/other",
+				"spiffe://example.org/v2/prod/tidb",
+				"spiffe://example.org/v1/tidb",
+				"spiffe://example.org/v1/prod/extra/tidb",
+			},
+		},
+		{
+			name:    "multiple wildcards",
+			pattern: "spiffe://example.org/v1/*/*",
+			matches: []string{
+				"spiffe://example.org/v1/prod/tidb",
+				"spiffe://example.org/v1/staging/ticdc",
+			},
+			notMatch: []string{
+				"spiffe://other.example/v1/prod/tidb",
+				"spiffe://example.org/v2/prod/tidb",
+				"spiffe://example.org/v1/tidb",
+				"spiffe://example.org/v1/prod/tidb/server",
+			},
+		},
+		{
+			name:     "first path segment wildcard",
+			pattern:  "spiffe://example.org/*/tidb",
+			matches:  []string{"spiffe://example.org/prod/tidb"},
+			notMatch: []string{"spiffe://example.org/prod/ticdc"},
+		},
 		{name: "empty", pattern: "", wantError: true},
 		{name: "wrong scheme", pattern: "https://example.org/path", wantError: true},
 		{name: "uppercase scheme", pattern: "SPIFFE://example.org/path", wantError: true},
 		{name: "uppercase trust domain", pattern: "spiffe://EXAMPLE.org/path", wantError: true},
 		{name: "trust domain port", pattern: "spiffe://example.org:443/path", wantError: true},
 		{name: "percent encoding", pattern: "spiffe://example.org/%2Fpath", wantError: true},
-		{name: "wildcard in middle", pattern: "spiffe://example.org/v1/*/tidb", wantError: true},
+		{name: "encoded wildcard", pattern: "spiffe://example.org/v1/%2A/tidb", wantError: true},
+		{name: "encoded segment with wildcard", pattern: "spiffe://example.org/v1/%2F/*", wantError: true},
 		{name: "partial wildcard", pattern: "spiffe://example.org/v1/tidb/foo*", wantError: true},
-		{name: "multiple wildcards", pattern: "spiffe://example.org/v1/*/*", wantError: true},
+		{name: "mixed partial and whole wildcards", pattern: "spiffe://example.org/v1/foo*/*", wantError: true},
+		{name: "double star", pattern: "spiffe://example.org/v1/**/tidb", wantError: true},
+		{name: "wildcard trust domain", pattern: "spiffe://*/v1/*", wantError: true},
+		{name: "partial wildcard trust domain", pattern: "spiffe://*.example.org/v1/*", wantError: true},
+		{name: "empty segment with wildcard", pattern: "spiffe://example.org/v1//*/tidb", wantError: true},
+		{name: "dot segment with wildcard", pattern: "spiffe://example.org/v1/./*/tidb", wantError: true},
+		{name: "parent segment with wildcard", pattern: "spiffe://example.org/v1/../*/tidb", wantError: true},
 		{name: "trailing slash", pattern: "spiffe://example.org/v1/tidb/", wantError: true},
+		{name: "trailing slash with wildcard", pattern: "spiffe://example.org/v1/*/", wantError: true},
 		{name: "query", pattern: "spiffe://example.org/v1/tidb?x=y", wantError: true},
+		{name: "query with wildcard", pattern: "spiffe://example.org/v1/*?x=y", wantError: true},
+		{name: "fragment with wildcard", pattern: "spiffe://example.org/v1/*#tidb", wantError: true},
 	}
 
 	for _, tt := range tests {
@@ -140,7 +184,7 @@ func TestConfigureSPIFFETLSRejectsInvalidAndMixedInputs(t *testing.T) {
 		{
 			name: "malformed client pattern",
 			values: url.Values{
-				spiffeClientIDPatternKey: {"spiffe://example.org/v1/*/ticdc"},
+				spiffeClientIDPatternKey: {"spiffe://example.org/v1/ticdc*/*"},
 				spiffeServerIDPatternKey: {validServer},
 			},
 		},
@@ -207,11 +251,11 @@ func TestMatchingX509SVIDPickerFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	ca, caKey := newTestCA(t, "client-ca")
-	pattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/source/ns/ticdc/*")
+	pattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/*/ns/ticdc/*")
 	matchingOne := newTestSVID(t, ca, caKey,
 		"spiffe://example.org/v1/prod/source/ns/ticdc/one", 2)
 	matchingTwo := newTestSVID(t, ca, caKey,
-		"spiffe://example.org/v1/prod/source/ns/ticdc/two", 3)
+		"spiffe://example.org/v1/prod/other-source/ns/ticdc/two", 3)
 	other := newTestSVID(t, ca, caKey,
 		"spiffe://example.org/v1/prod/source/ns/other/one", 4)
 	picker := matchingX509SVIDPicker(pattern)
@@ -255,13 +299,13 @@ func TestSPIFFEClientTLSHandshakeAndRotation(t *testing.T) {
 	clientOne := newTestSVID(t, clientCA, clientCAKey,
 		"spiffe://example.org/v1/prod/source/ns/ticdc/one", 11)
 	clientTwo := newTestSVID(t, clientCA, clientCAKey,
-		"spiffe://example.org/v1/prod/source/ns/ticdc/two", 12)
+		"spiffe://example.org/v1/prod/other-source/ns/ticdc/two", 12)
 	invalidClient := newTestSVID(t, clientCA, clientCAKey,
 		"spiffe://example.org/v1/prod/source/ns/other/invalid", 13)
 	server := newTestSVID(t, serverCA, serverCAKey,
 		"spiffe://example.org/v1/prod/destination/ns/tidb/server", 21)
 	rotatedServer := newTestSVID(t, rotatedServerCA, rotatedServerCAKey,
-		"spiffe://example.org/v1/prod/destination/ns/tidb/server", 22)
+		"spiffe://example.org/v1/prod/other-destination/ns/tidb/server", 22)
 
 	clientSource := &testSPIFFESource{
 		svid: clientOne,
@@ -277,8 +321,8 @@ func TestSPIFFEClientTLSHandshakeAndRotation(t *testing.T) {
 				spiffeid.RequireTrustDomainFromString("example.org"), []*x509.Certificate{clientCA}),
 		},
 	}
-	clientPattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/source/ns/ticdc/*")
-	serverPattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/destination/ns/tidb/*")
+	clientPattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/*/ns/ticdc/*")
+	serverPattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/*/ns/tidb/*")
 	clientTLS, err := newSPIFFEClientTLSConfig(clientSource, clientPattern, serverPattern)
 	require.NoError(t, err)
 	serverTLS := tlsconfig.MTLSServerConfig(
@@ -320,7 +364,7 @@ func TestSPIFFEClientTLSRejectsUnexpectedServer(t *testing.T) {
 		"spiffe://example.org/v1/prod/source/ns/ticdc/one", 31)
 	clientPattern := requireSPIFFEPattern(t, "spiffe://example.org/v1/prod/source/ns/ticdc/*")
 	expectedServerPattern := requireSPIFFEPattern(t,
-		"spiffe://example.org/v1/prod/destination/ns/tidb/*")
+		"spiffe://example.org/v1/prod/*/ns/tidb/*")
 
 	for _, tt := range []struct {
 		name     string
@@ -333,6 +377,10 @@ func TestSPIFFEClientTLSRejectsUnexpectedServer(t *testing.T) {
 		{
 			name:     "wrong trust domain",
 			serverID: "spiffe://other.example/v1/prod/destination/ns/tidb/server",
+		},
+		{
+			name:     "wrong path depth",
+			serverID: "spiffe://example.org/v1/prod/destination/extra/ns/tidb/server",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
