@@ -60,16 +60,19 @@ credentials required by the downstream SQL account.
 
 ### Identity pattern policy
 
-A pattern is either an exact SPIFFE ID or a SPIFFE ID with one final `/*`
-segment. The wildcard matches exactly one nonempty path segment in the same
-trust domain. For example:
+A pattern is either an exact SPIFFE ID or a SPIFFE ID with one or more whole
+`*` path segments at any position. Each wildcard matches exactly one nonempty
+path segment in the same trust domain, with the same total number of segments.
+This follows TiDB's URI SAN wildcard matching policy. For example:
 
 | Pattern | Accepted | Rejected |
 | --- | --- | --- |
 | `spiffe://example.org/database/server` | That exact ID | `spiffe://example.org/database/other` |
 | `spiffe://example.org/ticdc/*` | `spiffe://example.org/ticdc/worker-1` | `spiffe://example.org/ticdc`, `spiffe://example.org/ticdc/worker-1/child`, IDs in other trust domains |
+| `spiffe://example.org/cluster/*/ns/database/pod/*` | `spiffe://example.org/cluster/prod-1/ns/database/pod/server-1` | IDs with another namespace, missing or extra path segments, or another trust domain |
 
-Partial, intermediate, or multiple wildcards are invalid. Invalid SPIFFE IDs,
+Partial wildcards such as `worker-*` and wildcards in the trust domain are
+invalid. Invalid SPIFFE IDs,
 including query strings and percent-encoded identity components, are rejected
 after decoding the sink URI parameter. URL encoding the entire parameter value
 for the outer sink URI, as in the example, is supported.
@@ -124,7 +127,7 @@ registration.
 
 Real Workload API and MySQL-handshake regression coverage remains applicable to
 this official source. Future dependency or implementation changes must preserve
-the exact single-segment wildcard policy; a general prefix authorizer can accept
+the whole-segment wildcard policy; a general prefix authorizer can accept
 a broader set of identities.
 
 The feature adds one watch stream per owned source and short read locks during

@@ -47,11 +47,11 @@ var (
 )
 
 type spiffeIDPattern struct {
-	raw         string
-	exact       spiffeid.ID
-	trustDomain spiffeid.TrustDomain
-	pathPrefix  string
-	wildcard    bool
+	raw          string
+	exact        spiffeid.ID
+	trustDomain  spiffeid.TrustDomain
+	pathSegments []string
+	wildcard     bool
 }
 
 func parseSPIFFEIDPattern(raw string) (spiffeIDPattern, error) {
@@ -68,24 +68,27 @@ func parseSPIFFEIDPattern(raw string) (spiffeIDPattern, error) {
 			raw:         raw,
 			exact:       id,
 			trustDomain: id.TrustDomain(),
-			pathPrefix:  id.Path(),
 		}, nil
 	}
 
-	if strings.Count(raw, "*") != 1 || !strings.HasSuffix(raw, "/*") {
-		return spiffeIDPattern{}, fmt.Errorf(
-			"invalid SPIFFE ID pattern %q: wildcard must be the single final path segment", raw)
+	segments := strings.Split(raw, "/")
+	for i, segment := range segments {
+		if strings.Contains(segment, "*") && (i < 3 || segment != "*") {
+			return spiffeIDPattern{}, errors.ErrMySQLInvalidConfig.GenWithStack(
+				"invalid SPIFFE ID pattern %q: wildcards must occupy whole path segments", raw)
+		}
 	}
 
-	prefixID, err := spiffeid.FromString(strings.TrimSuffix(raw, "/*"))
+	// Replace wildcard segments only for SPIFFE validation; retain them for matching.
+	id, err := spiffeid.FromString(strings.ReplaceAll(raw, "*", "wildcard"))
 	if err != nil {
-		return spiffeIDPattern{}, fmt.Errorf("invalid SPIFFE ID pattern %q: %w", raw, err)
+		return spiffeIDPattern{}, errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	return spiffeIDPattern{
-		raw:         raw,
-		trustDomain: prefixID.TrustDomain(),
-		pathPrefix:  prefixID.Path(),
-		wildcard:    true,
+		raw:          raw,
+		trustDomain:  id.TrustDomain(),
+		pathSegments: segments[3:],
+		wildcard:     true,
 	}, nil
 }
 
@@ -97,8 +100,22 @@ func (p spiffeIDPattern) matches(actual spiffeid.ID) bool {
 		return false
 	}
 
-	suffix := strings.TrimPrefix(actual.Path(), p.pathPrefix+"/")
-	return suffix != actual.Path() && suffix != "" && !strings.Contains(suffix, "/")
+	segments := strings.Split(actual.Path(), "/")[1:]
+	if len(segments) != len(p.pathSegments) {
+		return false
+	}
+	for i, segment := range p.pathSegments {
+		if segment == "*" {
+			if segments[i] == "" {
+				return false
+			}
+			continue
+		}
+		if segment != segments[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type spiffeX509Source interface {
