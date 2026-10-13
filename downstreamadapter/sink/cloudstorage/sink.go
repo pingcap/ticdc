@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
@@ -74,7 +75,8 @@ type sink struct {
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	// it's the same as the context passed into the Run method.
-	ctx context.Context
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
@@ -106,6 +108,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
+	keyspaceID uint32,
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
@@ -134,7 +137,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
 	defer func() {
 		if err != nil {
 			statistics.Close()
@@ -304,6 +307,9 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
+	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+		return err
+	}
 	return s.statistics.RecordDDLExecution(func() (string, error) {
 		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 		if err != nil {
@@ -311,6 +317,13 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 		}
 		return v.GetDDLType().String(), nil
 	})
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.dmlWriters != nil {
+		s.dmlWriters.setWriteGate(gate)
+	}
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
@@ -363,6 +376,9 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
+		}
+		if !writelease.CanWrite(s.writeGate) {
+			continue
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
@@ -434,6 +450,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	var isRemoveEmptyDirsRunning atomic.Bool
 	if isLocal {
 		ret = append(ret, func() {
+			if !writelease.CanWrite(s.writeGate) {
+				return
+			}
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -465,6 +484,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 
 	var isCleanupRunning atomic.Bool
 	ret = append(ret, func() {
+		if !writelease.CanWrite(s.writeGate) {
+			return
+		}
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -508,4 +530,12 @@ func (s *sink) Close() {
 	if s.storage != nil {
 		s.storage.Close()
 	}
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return s.cfg.FileSize
 }

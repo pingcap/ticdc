@@ -11,6 +11,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	common "github.com/pingcap/ticdc/pkg/common"
 	event "github.com/pingcap/ticdc/pkg/common/event"
+	writelease "github.com/pingcap/ticdc/pkg/writelease"
 )
 
 // MockSink is a mock of Sink interface.
@@ -58,6 +59,34 @@ func (m *MockSink) AddDMLEvent(event *event.DMLEvent) {
 func (mr *MockSinkMockRecorder) AddDMLEvent(event interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddDMLEvent", reflect.TypeOf((*MockSink)(nil).AddDMLEvent), event)
+}
+
+// BatchBytes mocks base method.
+func (m *MockSink) BatchBytes() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchBytes")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// BatchBytes indicates an expected call of BatchBytes.
+func (mr *MockSinkMockRecorder) BatchBytes() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchBytes", reflect.TypeOf((*MockSink)(nil).BatchBytes))
+}
+
+// BatchCount mocks base method.
+func (m *MockSink) BatchCount() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchCount")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// BatchCount indicates an expected call of BatchCount.
+func (mr *MockSinkMockRecorder) BatchCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchCount", reflect.TypeOf((*MockSink)(nil).BatchCount))
 }
 
 // Close mocks base method.
@@ -124,6 +153,18 @@ func (m *MockSink) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore)
 func (mr *MockSinkMockRecorder) SetTableSchemaStore(tableSchemaStore interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockSink)(nil).SetTableSchemaStore), tableSchemaStore)
+}
+
+// SetWriteGate mocks base method.
+func (m *MockSink) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockSinkMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockSink)(nil).SetWriteGate), gate)
 }
 
 // SinkType mocks base method.

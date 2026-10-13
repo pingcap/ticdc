@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -39,18 +40,18 @@ var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", co
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
 	dispatcher.EventDispatcher
-	startTs      uint64
-	id           common.DispatcherID
-	changefeedID common.ChangeFeedID
-	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
-	handleError  func(err error)
-	events       []dispatcher.DispatcherEvent
-	checkPointTs uint64
-	tableSpan    *heartbeatpb.TableSpan
+	startTs        uint64
+	id             common.DispatcherID
+	changefeedID   common.ChangeFeedID
+	handleEvents   func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError    func(err error)
+	events         []dispatcher.DispatcherEvent
+	checkPointTs   uint64
+	tableSpan      *heartbeatpb.TableSpan
+	lowLatencyMode bool
 
-	skipSyncpointAtStartTs        bool
-	router                        routing.Router
-	enableIgnoreUpdateOnlyColumns bool
+	skipSyncpointAtStartTs bool
+	router                 routing.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -86,6 +87,10 @@ func (m *mockDispatcher) GetId() common.DispatcherID {
 
 func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
+}
+
+func (m *mockDispatcher) IsLowLatencyMode() bool {
+	return m.lowLatencyMode
 }
 
 func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -152,10 +157,6 @@ func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 
 func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
-}
-
-func (m *mockDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
-	return m.enableIgnoreUpdateOnlyColumns
 }
 
 func (m *mockDispatcher) GetRouter() routing.Router {
@@ -1278,6 +1279,44 @@ func TestHandleBatchDataEvents(t *testing.T) {
 	}
 }
 
+func TestInjectResetDispatcherAfterBatchDataEvents(t *testing.T) {
+	failpointName := "github.com/pingcap/ticdc/downstreamadapter/eventcollector/InjectResetDispatcherAfterBatchDataEvents"
+	require.NoError(t, failpoint.Enable(failpointName, `1*return(true)`))
+	defer func() {
+		require.NoError(t, failpoint.Disable(failpointName))
+	}()
+
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, collector, nil)
+	stat.currentEpoch.Store(newDispatcherEpochState(1, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(100)
+	markSessionReceiving(stat.session, localServerID)
+
+	require.True(t, stat.handleBatchDataEvents([]dispatcher.DispatcherEvent{
+		{
+			From: &localServerID,
+			Event: &commonEvent.DMLEvent{
+				Seq:      2,
+				Epoch:    1,
+				CommitTs: 101,
+			},
+		},
+	}))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, collector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(2), stat.loadCurrentEpochState().epoch)
+	require.Equal(t, uint64(101), stat.loadCurrentEpochState().maxEventTs.Load())
+}
+
 func TestHandleSingleDataEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1649,6 +1688,15 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 	}
 }
 
+func TestDispatcherRequestsCarryLowLatencyMode(t *testing.T) {
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 100)
+	mockDisp.lowLatencyMode = true
+	stat := newDispatcherStatForTest(mockDisp, nil)
+
+	require.True(t, stat.session.newDispatcherRegisterRequest("local", false).LowLatencyMode)
+	require.True(t, stat.session.newDispatcherResetRequest("local", 100, 1).LowLatencyMode)
+}
+
 func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	t.Parallel()
 
@@ -1705,7 +1753,6 @@ func TestRegistrationEntrypoints(t *testing.T) {
 
 	// Create a mock dispatcher and event collector
 	mockDisp := newMockDispatcher(dispatcherID, 0)
-	mockDisp.enableIgnoreUpdateOnlyColumns = true
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
@@ -1720,7 +1767,6 @@ func TestRegistrationEntrypoints(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.False(t, req.OnlyReuse, "OnlyReuse should be false for local registration")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
-			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
@@ -1737,7 +1783,6 @@ func TestRegistrationEntrypoints(t *testing.T) {
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
-			require.True(t, req.EnableIgnoreUpdateOnlyColumns())
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}

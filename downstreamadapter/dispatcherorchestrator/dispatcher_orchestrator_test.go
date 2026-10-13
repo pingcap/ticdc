@@ -792,6 +792,8 @@ func TestValidateBootstrapNilRedoTriggerRejectsExistingRedoTrigger(t *testing.T)
 		dispatcher.NewSchemaIDToDispatchers(),
 		false,
 		false,
+		0,
+		0,
 		nil,
 		nil,
 	)

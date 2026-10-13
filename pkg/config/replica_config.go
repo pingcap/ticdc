@@ -32,6 +32,9 @@ import (
 )
 
 const (
+	PerformanceModeThroughput = "throughput"
+	PerformanceModeLowLatency = "low-latency"
+
 	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
 	minSyncPointInterval = time.Second * 30
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
@@ -39,9 +42,12 @@ const (
 	minChangeFeedErrorStuckDuration = time.Minute * 30
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
+
+	MaxEventCollectorBatchCount = 8192
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
+	PerformanceMode:    util.AddressOf(PerformanceModeThroughput),
 	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
 	CaseSensitive:      util.AddressOf(false),
 	CheckGCSafePoint:   util.AddressOf(true),
@@ -138,6 +144,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
+	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
 	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -171,6 +178,12 @@ type replicaConfig struct {
 	Integrity                    *integrity.Config   `toml:"integrity" json:"integrity"`
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
+
+	// these fields are used by the event collector dynamic stream to achieve better batch performance.
+	// it's not initialized in the defaultReplicaConfig by the purpose.
+	// if it's set, will override the default value which derived from the internal sink.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
@@ -257,6 +270,14 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	performanceMode := util.GetOrZero(c.PerformanceMode)
+	if performanceMode == "" {
+		c.PerformanceMode = util.AddressOf(PerformanceModeThroughput)
+	} else if performanceMode != PerformanceModeThroughput && performanceMode != PerformanceModeLowLatency {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("unknown performance mode: %s", performanceMode))
+	}
+
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck
@@ -342,7 +363,23 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 					minChangeFeedErrorStuckDuration.Seconds()))
 	}
 
+	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
+	}
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			"event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount,
+		)
+	}
+	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
+	}
 	return nil
+}
+
+func (c *ReplicaConfig) IsLowLatencyMode() bool {
+	return c != nil && util.GetOrZero(c.PerformanceMode) == PerformanceModeLowLatency
 }
 
 // FixScheduler adjusts scheduler to default value

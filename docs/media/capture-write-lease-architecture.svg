@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820">
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#356a8a"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a44a3f"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7a5c99"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#365f56"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #24312f; }
+    .title { font-size: 26px; font-weight: 700; }
+    .subtitle { font-size: 13px; fill: #655f55; }
+    .type { font-size: 9px; font-weight: 700; letter-spacing: 1.2px; fill: #746b5f; }
+    .node-title { font-size: 16px; font-weight: 700; }
+    .node-copy { font-size: 12px; fill: #4f5a57; }
+    .tech { font-size: 10px; font-weight: 700; fill: #746b5f; }
+    .edge-label { font-size: 10px; font-weight: 700; }
+    .callout { font-size: 13px; font-weight: 700; }
+    .legend { font-size: 11px; fill: #655f55; }
+  </style>
+  <rect width="1200" height="820" fill="#f7f2e8"/>
+
+  <text x="48" y="52" class="title">Figure 1: Two proofs protect every downstream mutation</text>
+  <text x="48" y="77" class="subtitle">P2P proves coordinator ownership; the local etcd proof preserves capture identity</text>
+  <rect x="966" y="34" width="186" height="42" rx="7" fill="#fffdf7" stroke="#8c7d68" stroke-dasharray="6 4"/>
+  <text x="982" y="51" class="type">WRITE SAFETY DESIGN</text>
+  <text x="982" y="68" font-size="11" font-weight="700">GATE AT TRANSPORT</text>
+
+  <rect data-graph-role="container" x="260" y="125" width="690" height="490" rx="12" fill="#fffdf7" fill-opacity="0.52" stroke="#8c7d68" stroke-width="1.5" stroke-dasharray="8 6"/>
+  <text x="282" y="152" class="type">SYSTEM BOUNDARY</text>
+  <text x="282" y="176" font-size="17" font-weight="700">TiCDC Cluster</text>
+
+  <path data-graph-role="edge" d="M 225 252 H 300" fill="none" stroke="#356a8a" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <path data-graph-role="edge" d="M 125 220 V 108 H 785 V 190" fill="none" stroke="#356a8a" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <path data-graph-role="edge" d="M 660 235 H 550" fill="none" stroke="#a44a3f" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <path data-graph-role="edge" d="M 550 285 H 660" fill="none" stroke="#a44a3f" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <path data-graph-role="edge" d="M 360 330 V 380 H 520 V 405" fill="none" stroke="#7a5c99" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-purple)"/>
+  <path data-graph-role="edge" d="M 690 405 V 350 H 500 V 330" fill="none" stroke="#7a5c99" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-purple)"/>
+  <path data-graph-role="edge" d="M 910 265 H 980" fill="none" stroke="#365f56" stroke-width="2.4" marker-end="url(#arrow-green)"/>
+
+  <rect data-graph-role="node" x="30" y="220" width="195" height="130" rx="8" fill="#fffdf7" stroke="#356a8a" stroke-width="1.8" stroke-dasharray="6 4"/>
+  <path data-graph-role="decoration" d="M 38 223 H 216 Q 222 223 222 230 V 341" fill="none" stroke="#356a8a" stroke-width="0.8" opacity="0.38"/>
+  <text x="44" y="239" class="type">EXTERNAL SYSTEM</text>
+  <text x="44" y="264" class="node-title">PD / etcd</text>
+  <text x="44" y="286" class="node-copy">One session lease per capture</text>
+  <text x="44" y="302" class="node-copy">Linearizable TTL checks</text>
+  <text x="213" y="340" text-anchor="end" class="tech">PD embedded etcd</text>
+
+  <rect data-graph-role="node" x="300" y="190" width="250" height="140" rx="8" fill="#fffdf7" stroke="#a44a3f" stroke-width="1.8"/>
+  <path data-graph-role="decoration" d="M 308 193 H 541 Q 547 193 547 200 V 321" fill="none" stroke="#a44a3f" stroke-width="0.8" opacity="0.38"/>
+  <text x="314" y="209" class="type">CONTAINER</text>
+  <text x="314" y="234" class="node-title">CDC-1 · Coordinator</text>
+  <text x="314" y="256" class="node-copy">Negotiates and grants P2P leases</text>
+  <text x="314" y="272" class="node-copy">Local writers use the same gate</text>
+  <text x="538" y="320" text-anchor="end" class="tech">TiCDC</text>
+
+  <rect data-graph-role="node" x="660" y="190" width="250" height="140" rx="8" fill="#fffdf7" stroke="#365f56" stroke-width="1.8"/>
+  <path data-graph-role="decoration" d="M 668 193 H 901 Q 907 193 907 200 V 321" fill="none" stroke="#365f56" stroke-width="0.8" opacity="0.38"/>
+  <text x="674" y="209" class="type">CONTAINER</text>
+  <text x="674" y="234" class="node-title">CDC-2 · Capture Writer</text>
+  <text x="674" y="256" class="node-copy">Wait before taking resources</text>
+  <text x="674" y="272" class="node-copy">Recheck before SQL / send / file</text>
+  <text x="898" y="320" text-anchor="end" class="tech">TiCDC transport gate</text>
+
+  <rect data-graph-role="node" x="480" y="405" width="250" height="120" rx="8" fill="#fffdf7" stroke="#7a5c99" stroke-width="1.8"/>
+  <path data-graph-role="decoration" d="M 488 408 H 721 Q 727 408 727 415 V 516" fill="none" stroke="#7a5c99" stroke-width="0.8" opacity="0.38"/>
+  <text x="494" y="424" class="type">CONTAINER</text>
+  <text x="494" y="449" class="node-title">CDC-3 · Remote Witness</text>
+  <text x="494" y="471" class="node-copy">Proves external round-trip for the</text>
+  <text x="494" y="487" class="node-copy">coordinator capture (1s attempt)</text>
+  <text x="718" y="515" text-anchor="end" class="tech">TiCDC</text>
+
+  <rect data-graph-role="node" x="980" y="220" width="190" height="130" rx="8" fill="#fffdf7" stroke="#365f56" stroke-width="1.8" stroke-dasharray="6 4"/>
+  <path data-graph-role="decoration" d="M 988 223 H 1161 Q 1167 223 1167 230 V 341" fill="none" stroke="#365f56" stroke-width="0.8" opacity="0.38"/>
+  <text x="994" y="239" class="type">EXTERNAL SYSTEM</text>
+  <text x="994" y="264" class="node-title">Downstream</text>
+  <text x="994" y="286" class="node-copy">MySQL · Kafka · Pulsar</text>
+  <text x="994" y="302" class="node-copy">Object Storage · Redo</text>
+  <text x="1158" y="340" text-anchor="end" class="tech">downstream systems</text>
+
+  <rect x="238" y="235" width="54" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="265" y="249" text-anchor="middle" class="edge-label" style="fill:#356a8a">TTL proof</text>
+  <rect x="482" y="89" width="116" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="540" y="103" text-anchor="middle" class="edge-label" style="fill:#356a8a">per-capture TTL proof</text>
+  <rect x="569" y="215" width="72" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="605" y="229" text-anchor="middle" class="edge-label" style="fill:#a44a3f">request / 500ms</text>
+  <rect x="574" y="287" width="62" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="605" y="301" text-anchor="middle" class="edge-label" style="fill:#a44a3f">grant / ≤5s</text>
+  <rect x="548" y="362" width="114" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="605" y="376" text-anchor="middle" class="edge-label" style="fill:#7a5c99">challenge / ACK</text>
+  <rect x="923" y="241" width="44" height="20" rx="5" fill="#f7f2e8" opacity="0.96"/>
+  <text x="945" y="255" text-anchor="middle" class="edge-label" style="fill:#365f56">write</text>
+
+  <rect x="300" y="550" width="610" height="38" rx="8" fill="#fff7ed" stroke="#d9a35b"/>
+  <text x="605" y="574" text-anchor="middle" font-size="12" font-weight="700" style="fill:#8f5a1e">Rolling upgrade: legacy/unknown node → P2P off; all compatible nodes → P2P on automatically</text>
+
+  <rect x="48" y="640" width="334" height="72" rx="10" fill="#ecfdf5" stroke="#86b89d"/>
+  <text x="68" y="668" class="callout" style="fill:#276749">ALLOW WRITE</text>
+  <text x="68" y="694" font-size="13">etcd fresh AND (P2P off OR fresh)</text>
+  <rect x="433" y="640" width="334" height="72" rx="10" fill="#fff7ed" stroke="#e2a85d"/>
+  <text x="453" y="668" class="callout" style="fill:#9a5b13">BLOCK NEW WRITES</text>
+  <text x="453" y="694" font-size="13">Required proof expires; process keeps renewing</text>
+  <rect x="818" y="640" width="334" height="72" rx="10" fill="#fef2f2" stroke="#d48c84"/>
+  <text x="838" y="668" class="callout" style="fill:#a44a3f">EXIT CAPTURE</text>
+  <text x="838" y="694" font-size="13">Session.Done or TTL &lt; 0 → local fence</text>
+
+  <line x1="55" y1="760" x2="89" y2="760" stroke="#356a8a" stroke-width="2.2"/>
+  <text x="99" y="764" class="legend">etcd proof</text>
+  <line x1="330" y1="760" x2="364" y2="760" stroke="#a44a3f" stroke-width="2.2"/>
+  <text x="374" y="764" class="legend">P2P lease</text>
+  <line x1="605" y1="760" x2="639" y2="760" stroke="#7a5c99" stroke-width="2.2"/>
+  <text x="649" y="764" class="legend">remote witness</text>
+  <line x1="880" y1="760" x2="914" y2="760" stroke="#365f56" stroke-width="2.2"/>
+  <text x="924" y="764" class="legend">downstream mutation</text>
+  <text x="48" y="800" class="subtitle">Fail closed on missing proof; exit only after confirmed identity loss.</text>
+</svg>

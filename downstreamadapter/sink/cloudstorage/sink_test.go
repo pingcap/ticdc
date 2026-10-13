@@ -47,7 +47,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs, common.DefaultKeyspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +285,16 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	require.Error(t, err)
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.Error(t, err)
+}
+
+func TestCloudStorageSinkBatchConfig(t *testing.T) {
+	sink := &sink{
+		cfg: &cloudstorage.Config{
+			FileSize: 2048,
+		},
+	}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, 2048, sink.BatchBytes())
 }
 
 func TestWriteDDLEvent(t *testing.T) {
@@ -727,7 +737,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
 	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())

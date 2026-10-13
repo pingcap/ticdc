@@ -187,7 +187,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLEvent()
+	decoded := decoder.NextDMLMessage().ToDMLEvent()
 	require.NotNil(t, decoded)
 	require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 	require.Len(t, decoded.RowTypes, 1)

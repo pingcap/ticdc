@@ -33,12 +33,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
 // confluent avro wire format, the first byte is always 0
 // https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
-const magicByte = uint8(0)
+const (
+	magicByte                    = uint8(0)
+	schemaRegistryRequestTimeout = 30 * time.Second
+)
 
 // confluentSchemaManager is used to register Avro Schemas to the confluent Registry server,
 // look up local cache according to the table's name, and fetch from the Registry
@@ -81,13 +85,20 @@ func NewConfluentSchemaManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	httpCli.SetTimeout(schemaRegistryRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schemaRegistryRequestTimeout)
+	defer cancel()
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
-		log.Error("Test connection to Schema Registry failed",
-			zap.String("registryURL", registryURL), zap.Error(err))
+		err = util.MaskSensitiveDataInURLError(err)
+		log.Error("Test connection to Schema Registry failed", zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
+			"Schema Registry connection check failed with HTTP status %d", resp.StatusCode)
+	}
 
 	text, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -96,16 +107,13 @@ func NewConfluentSchemaManager(
 	}
 
 	if string(text[:]) != "{}" {
-		log.Error("Unexpected response from Schema Registry", zap.ByteString("response", text))
+		log.Error("Unexpected response from Schema Registry", zap.Int("status", resp.StatusCode))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Unexpected response from Schema Registry",
 		)
 	}
 
-	log.Info(
-		"Successfully tested connectivity to Schema Registry",
-		zap.String("registryURL", registryURL),
-	)
+	log.Info("Successfully tested connectivity to Schema Registry")
 
 	return &confluentSchemaManager{
 		registryURL:  registryURL,
@@ -139,10 +147,11 @@ func (m *confluentSchemaManager) Register(
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
-	log.Info("Registering schema", zap.String("uri", uri), zap.ByteString("payload", payload))
+	log.Info("Registering schema", zap.ByteString("payload", payload))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
+		err = util.MaskSensitiveDataInURLError(err)
 		log.Error("Failed to NewRequestWithContext", zap.Error(err))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
@@ -171,11 +180,12 @@ func (m *confluentSchemaManager) Register(
 		log.Error(
 			"Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.String("uri", uri),
 			zap.ByteString("requestBody", payload),
 			zap.ByteString("responseBody", body),
 		)
-		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs()
+		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
+			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
+		)
 	}
 
 	var jsonResp registerResponse
@@ -194,7 +204,6 @@ func (m *confluentSchemaManager) Register(
 
 	log.Info("Registered schema successfully",
 		zap.Int("schemaID", jsonResp.SchemaID),
-		zap.String("uri", uri),
 		zap.ByteString("body", body))
 
 	id.confluentSchemaID = jsonResp.SchemaID
@@ -219,6 +228,7 @@ func (m *confluentSchemaManager) Lookup(
 
 	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
 	if err != nil {
+		err = util.MaskSensitiveDataInURLError(err)
 		log.Error("Error constructing request for Registry lookup", zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
@@ -243,7 +253,6 @@ func (m *confluentSchemaManager) Lookup(
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
 		log.Error("Failed to query schema from the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.String("uri", uri),
 			zap.ByteString("responseBody", body))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
@@ -355,6 +364,7 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaSubject)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", uri, nil)
 	if err != nil {
+		err = util.MaskSensitiveDataInURLError(err)
 		log.Error("Could not construct request for clearRegistry", zap.Error(err))
 		return errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
@@ -422,7 +432,12 @@ func httpRetry(
 
 	expBackoff := backoff.NewExponentialBackOff()
 	expBackoff.MaxInterval = time.Second * 30
+	expBackoff.MaxElapsedTime = schemaRegistryRequestTimeout
 	httpCli, err := httputil.NewClient(credential)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	}
+	httpCli.SetTimeout(schemaRegistryRequestTimeout)
 
 	if r.Body != nil {
 		data, err = io.ReadAll(r.Body)
@@ -439,13 +454,14 @@ func httpRetry(
 		}
 		resp, err = httpCli.Do(r)
 		if err != nil {
-			log.Warn("HTTP request failed", zap.String("msg", err.Error()))
+			err = util.MaskSensitiveDataInURLError(err)
+			log.Warn("HTTP request failed", zap.Error(err))
 			goto checkCtx
 		}
 
-		// retry 4xx codes like 409 & 422 has no meaning since it's non-recoverable
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 ||
-			(resp.StatusCode >= 400 && resp.StatusCode < 500) {
+		// Return HTTP responses to callers so they can report registry status
+		// codes. Retrying 5xx here can hide downstream failures indefinitely.
+		if resp.StatusCode >= 200 {
 			break
 		}
 		log.Warn("HTTP server returned with error", zap.Int("status", resp.StatusCode))
@@ -455,11 +471,24 @@ func httpRetry(
 	checkCtx:
 		select {
 		case <-ctx.Done():
-			return nil, errors.New("HTTP retry cancelled")
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, ctx.Err())
 		default:
 		}
 
-		time.Sleep(expBackoff.NextBackOff())
+		sleepTime := expBackoff.NextBackOff()
+		if sleepTime == backoff.Stop {
+			if err != nil {
+				return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+			}
+			return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("HTTP retry stopped")
+		}
+		timer := time.NewTimer(sleepTime)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, ctx.Err())
+		case <-timer.C:
+		}
 	}
 
 	return resp, nil
