@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -40,10 +41,14 @@ type trackingSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]struct{}
+	priorities    map[logpuller.SubscriptionID]cdcpb.ScanPriority
 }
 
 func newTrackingSubscriptionClient() *trackingSubscriptionClient {
-	return &trackingSubscriptionClient{subscriptions: make(map[logpuller.SubscriptionID]struct{})}
+	return &trackingSubscriptionClient{
+		subscriptions: make(map[logpuller.SubscriptionID]struct{}),
+		priorities:    make(map[logpuller.SubscriptionID]cdcpb.ScanPriority),
+	}
 }
 
 func (s *trackingSubscriptionClient) Name() string { return "trackingSubscriptionClient" }
@@ -64,16 +69,19 @@ func (s *trackingSubscriptionClient) Subscribe(
 	_ func(uint64),
 	_ int64,
 	_ bool,
+	priority cdcpb.ScanPriority,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[subID] = struct{}{}
+	s.priorities[subID] = priority
 }
 
 func (s *trackingSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptions, subID)
+	delete(s.priorities, subID)
 }
 
 func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bool {
@@ -81,6 +89,16 @@ func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bo
 	defer s.mu.Unlock()
 	_, ok := s.subscriptions[subID]
 	return ok
+}
+
+func (s *trackingSubscriptionClient) subscriptionPriorities() []cdcpb.ScanPriority {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	priorities := make([]cdcpb.ScanPriority, 0, len(s.priorities))
+	for _, priority := range s.priorities {
+		priorities = append(priorities, priority)
+	}
+	return priorities
 }
 
 func TestRemoveTombstoneKeyspace(t *testing.T) {
@@ -93,7 +111,16 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 	subClient := newTrackingSubscriptionClient()
 	fetcher := newDDLJobFetcher(storeCtx, subClient, nil, keyspaceID, nil, nil)
 	subID := subClient.AllocSubscriptionID()
-	subClient.Subscribe(subID, heartbeatpb.TableSpan{}, 0, nil, nil, 0, false)
+	subClient.Subscribe(
+		subID,
+		heartbeatpb.TableSpan{},
+		0,
+		nil,
+		nil,
+		0,
+		false,
+		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	)
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 
 	keyspaceStore := &keyspaceSchemaStore{

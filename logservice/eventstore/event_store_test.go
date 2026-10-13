@@ -26,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -129,6 +130,7 @@ func (s *mockSubscriptionClient) Subscribe(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	bdrMode bool,
+	scanPriority cdcpb.ScanPriority,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
