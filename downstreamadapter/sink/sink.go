@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 )
 
 type Sink interface {
@@ -42,10 +43,15 @@ type Sink interface {
 	// implementations are expected to call event.PostFlush().
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
+	// SetWriteGate installs the capture-wide write admission gate. Every sink
+	// must enforce it again at its actual downstream mutation boundary.
+	SetWriteGate(gate *writelease.Gate)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
 	Close()
 	Run(ctx context.Context) error
+	BatchCount() int
+	BatchBytes() int
 }
 
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {

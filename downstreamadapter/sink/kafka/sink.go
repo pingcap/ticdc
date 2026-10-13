@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -32,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -63,8 +65,9 @@ type sink struct {
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal *atomic.Bool
-	ctx      context.Context
+	isNormal  *atomic.Bool
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
 func (s *sink) SinkType() common.SinkType {
@@ -88,10 +91,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	options.Topic = topic
 
-	encoderConfig, err := helper.GetEncoderConfig(
-		changefeedID, uri, protocol, sinkConfig,
-		options.MaxMessageBytes, options.MaxBatchedBytes,
-	)
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
 	if err != nil {
 		return err
 	}
@@ -122,28 +122,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer adminClient.Close()
 
-	topics, err := adminClient.GetTopicsMeta([]string{topic}, false)
+	err = topicmanager.EnsureTopic(ctx, changefeedID, topic, options.DeriveTopicConfig(), adminClient)
 	if err != nil {
 		return err
-	}
-	if _, exists := topics[topic]; !exists {
-		topicConfig := options.DeriveTopicConfig()
-		if !topicConfig.AutoCreate {
-			return errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topic)
-		}
-		if err = topicConfig.ValidateReplicationFactor(adminClient); err != nil {
-			return err
-		}
-
-		// the topic is not created, only validate.
-		err = adminClient.CreateTopic(&kafka.TopicDetail{
-			Name:              topic,
-			NumPartitions:     topicConfig.PartitionNum,
-			ReplicationFactor: topicConfig.ReplicationFactor,
-		}, true)
-		if err != nil {
-			return err
-		}
 	}
 
 	_, err = codec.NewEventEncoder(ctx, encoderConfig, claimCheck)
@@ -246,6 +227,13 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.comp.claimCheck != nil {
+		s.comp.claimCheck.SetWriteGate(gate)
+	}
+}
+
 func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
@@ -315,6 +303,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
+			if err := writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+				return err
+			}
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return err
@@ -427,6 +418,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				return err
 			}
 			for _, message := range future.Messages {
+				if err = writelease.WaitForWrite(ctx, s.writeGate); err != nil {
+					return err
+				}
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
@@ -462,12 +456,18 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		codecCommon.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+			return err
+		}
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
 		partitionNum, err := s.comp.topicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
+			return err
+		}
+		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
 		ddlType := e.GetDDLType().String()
@@ -532,6 +532,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				continue
 			}
 			codecCommon.SetCheckpointMessageLogInfo(msg, ts)
+			if !writelease.CanWrite(s.writeGate) {
+				continue
+			}
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -543,6 +546,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
+				if !writelease.CanWrite(s.writeGate) {
+					continue
+				}
 				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 				if err != nil {
 					return err
@@ -553,6 +559,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return err
+					}
+					if !writelease.CanWrite(s.writeGate) {
+						break
 					}
 					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 					if err != nil {

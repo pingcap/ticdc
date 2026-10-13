@@ -194,6 +194,54 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
+// TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
+// explicit override and rejects values outside the supported range.
+func TestReplicaConfigValidateBatchConfig(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	assertBatchConfig := func(batchCount *int, batchBytes *int, wantErr string) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EventCollectorBatchCount = batchCount
+		cfg.EventCollectorBatchBytes = batchBytes
+
+		err := cfg.ValidateAndAdjust(sinkURI)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
+	}
+
+	assertBatchConfig(util.AddressOf(0), nil, "")
+	assertBatchConfig(nil, util.AddressOf(0), "")
+	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount), nil, "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount+1), nil, "event-collector-batch-count")
+	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
+	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
+}
+
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))

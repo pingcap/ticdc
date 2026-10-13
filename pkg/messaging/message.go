@@ -109,6 +109,7 @@ const (
 	TypeSetNodeLivenessRequest          IOType = 43
 	TypeSetNodeLivenessResponse         IOType = 44
 	TypeSetDispatcherDrainTargetRequest IOType = 45
+	TypeNodeHeartbeatResponse           IOType = 46
 )
 
 func (t IOType) String() string {
@@ -203,6 +204,8 @@ func (t IOType) String() string {
 		return "SetNodeLivenessResponse"
 	case TypeSetDispatcherDrainTargetRequest:
 		return "SetDispatcherDrainTargetRequest"
+	case TypeNodeHeartbeatResponse:
+		return "NodeHeartbeatResponse"
 	default:
 	}
 	return "Unknown"
@@ -248,6 +251,10 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
+func (r DispatcherRequest) IsLowLatencyMode() bool {
+	return r.LowLatencyMode
+}
+
 func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
 	return r.DispatcherRequest.FilterConfig
 }
@@ -291,10 +298,6 @@ func (r DispatcherRequest) GetEpoch() uint64 {
 
 func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
 	return r.OutputRawChangeEvent
-}
-
-func (r DispatcherRequest) EnableIgnoreUpdateOnlyColumns() bool {
-	return r.DispatcherRequest.EnableIgnoreUpdateOnlyColumns
 }
 
 func (r DispatcherRequest) GetTxnAtomicity() config.AtomicityLevel {
@@ -399,6 +402,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.SetNodeLivenessResponse{}
 	case TypeSetDispatcherDrainTargetRequest:
 		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
+	case TypeNodeHeartbeatResponse:
+		m = &heartbeatpb.NodeHeartbeatResponse{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -519,6 +524,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeSetNodeLivenessResponse
 	case *heartbeatpb.SetDispatcherDrainTargetRequest:
 		ioType = TypeSetDispatcherDrainTargetRequest
+	case *heartbeatpb.NodeHeartbeatResponse:
+		ioType = TypeNodeHeartbeatResponse
 	default:
 		panic("unknown io type")
 	}

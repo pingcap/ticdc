@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -39,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -144,13 +144,19 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+	// writeSink is the capture-write-gated view passed to dispatchers.
+	// sink remains the concrete implementation used for lifecycle and
+	// sink-specific recovery operations.
+	writeSink sink.Sink
 
 	// redo related
 	// redoEnabled is immutable and set to true if enabled.
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
-	redoSink  *redo.Sink
+	// redoSink is the capture-write-gated sink used by redo dispatchers and for
+	// lifecycle management.
+	redoSink sink.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -296,22 +302,12 @@ func NewDispatcherManager(
 		return nil, newWritePathClosedError()
 	}
 	manager.sink = createdSink
+	manager.writeSink = withCaptureWriteGate(ctx, createdSink)
 	manager.writePathMu.Unlock()
-
-	sinkType := manager.sink.SinkType()
-	if sinkType != common.KafkaSinkType {
-		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
-		if ignoreUpdateOnlyColumnsRuleCount > 0 {
-			log.Warn("ignore update only columns is configured but does not take effect for this sink",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Int("sinkType", int(sinkType)),
-				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
-		}
-	}
 
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
-	switch sinkType {
+	switch manager.sink.SinkType() {
 	case common.CloudStorageSinkType:
 		outputRawChangeEvent = manager.config.SinkConfig.CloudStorageConfig.GetOutputRawChangeEvent()
 	case common.KafkaSinkType:
@@ -326,9 +322,11 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, err
 	}
+	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		manager.config.IsLowLatencyMode(),
 		manager.config.TimeZone,
 		manager.config.BDRMode,
 		outputRawChangeEvent,
@@ -337,6 +335,8 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		batchCounts,
+		batchBytes,
 		router,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		blockStatusBufferSize,
@@ -417,17 +417,33 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
-func countIgnoreUpdateOnlyColumnsRules(filter *config.FilterConfig) int {
-	if filter == nil {
-		return 0
+func withCaptureWriteGate(ctx context.Context, inner sink.Sink) sink.Sink {
+	gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
+	if !ok {
+		return inner
 	}
-	count := 0
-	for _, rule := range filter.EventFilters {
-		if rule != nil && len(rule.IgnoreUpdateOnlyColumns) > 0 {
-			count++
-		}
+	return sink.WithWriteGate(ctx, inner, gate)
+}
+
+func (e *DispatcherManager) getWriteSink() sink.Sink {
+	if e.writeSink != nil {
+		return e.writeSink
 	}
-	return count
+	return e.sink
+}
+
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
+	var (
+		batchCount = s.BatchCount()
+		batchBytes = s.BatchBytes()
+	)
+	if e.config.EventCollectorBatchCount != nil {
+		batchCount = *e.config.EventCollectorBatchCount
+	}
+	if e.config.EventCollectorBatchBytes != nil {
+		batchBytes = *e.config.EventCollectorBatchBytes
+	}
+	return batchCount, batchBytes
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
@@ -596,7 +612,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			skipSyncpointAtStartTsList[idx],
 			skipDMLAsStartTs,
 			currentPdTs,
-			e.sink,
+			e.getWriteSink(),
 			e.sharedInfo,
 			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
@@ -984,7 +1000,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs will be set later after calculating real startTs
 		0,     // currentPDTs will be calculated later.
-		e.sink,
+		e.getWriteSink(),
 		e.sharedInfo,
 		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
@@ -1137,7 +1153,7 @@ func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
 	if e.writePathClosed.Load() {
 		return
 	}
-	e.sink.AddCheckpointTs(checkpointTs)
+	e.getWriteSink().AddCheckpointTs(checkpointTs)
 }
 
 func (e *DispatcherManager) finishClose() {

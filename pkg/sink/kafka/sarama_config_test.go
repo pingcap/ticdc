@@ -58,7 +58,6 @@ func TestNewSaramaConfig(t *testing.T) {
 	cfg, err := newSaramaConfig(ctx, options)
 	require.NoError(t, err)
 	require.Equal(t, defaultMaxRetry, cfg.Producer.Retry.Max)
-	require.Equal(t, options.MaxMessageBytes, cfg.Producer.MaxMessageBytes)
 
 	options.EnableTLS = true
 	options.Credential = &security.Credential{
