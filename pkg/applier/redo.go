@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/atomic"
@@ -64,7 +66,8 @@ type RedoApplier struct {
 	mysqlSink       *mysql.Sink
 	appliedDDLCount uint64
 
-	eventsGroup     map[commonType.TableID]*eventsGroup
+	eventsGroup     map[commonType.TableID]*cmdutil.EventsGroup
+	spillStore      *cmdutil.SpillStore
 	tableDDLTs      map[commonType.TableID]ddlTs
 	appliedLogCount uint64
 
@@ -76,7 +79,8 @@ func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
 		cfg:              cfg,
 		tableDDLTs:       make(map[commonType.TableID]ddlTs),
-		eventsGroup:      make(map[commonType.TableID]*eventsGroup),
+		eventsGroup:      make(map[commonType.TableID]*cmdutil.EventsGroup),
+		spillStore:       cmdutil.NewSpillStore(),
 		needRecoveryInfo: true,
 	}
 }
@@ -168,6 +172,11 @@ func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
+	defer func() {
+		if err := ra.spillStore.Cleanup(); err != nil {
+			log.Warn("cleanup redo spill store failed", zap.Error(err))
+		}
+	}()
 	checkpointTs, resolvedTs, version, err := ra.rd.ReadMeta(ctx)
 	if err != nil {
 		return err
@@ -247,12 +256,12 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 func (ra *RedoApplier) applyDDL(
 	ctx context.Context, ddl *commonEvent.RedoDDLEvent, checkpointTs uint64,
 ) error {
-	shouldSkip := func() bool {
+	shouldSkip := func() (bool, error) {
 		if ddl.DDL == nil {
 			// Note this could only happen when using old version of cdc, and the commit ts
 			// of the DDL should be equal to checkpoint ts or resolved ts.
 			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
-			return true
+			return true, nil
 		}
 
 		var tableDDLTs ddlTs
@@ -291,7 +300,7 @@ func (ra *RedoApplier) applyDDL(
 				tableDDLTs = ra.getTableDDLTs(commonType.DDLSpanTableID)
 			default:
 				log.Warn("ignore unsupport DDL", zap.String("ddl", ddl.DDL.Query))
-				return true
+				return true, nil
 			}
 		}
 		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
@@ -313,22 +322,31 @@ func (ra *RedoApplier) applyDDL(
 					dropTableIds = append(dropTableIds, ids...)
 				}
 				for _, dropTableId := range dropTableIds {
+					if group := ra.eventsGroup[dropTableId]; group != nil {
+						if err := group.Cleanup(); err != nil {
+							return false, err
+						}
+					}
 					delete(ra.eventsGroup, dropTableId)
 				}
 				log.Warn("drop table dml events", zap.Any("dropTableIds", dropTableIds))
 			}
-			return true
+			return true, nil
 		}
 		// compatible with old arch
 		if ra.needRecoveryInfo && ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 				log.Warn("ignore unsupported DDL", zap.String("ddl", ddl.DDL.Query))
-				return true
+				return true, nil
 			}
 		}
-		return false
+		return false, nil
 	}
-	if shouldSkip() {
+	skip, err := shouldSkip()
+	if err != nil {
+		return err
+	}
+	if skip {
 		return nil
 	}
 	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
@@ -352,14 +370,14 @@ func (ra *RedoApplier) applyRow(
 ) error {
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
-		ra.eventsGroup[tableID] = newEventsGroup(tableID)
+		ra.eventsGroup[tableID] = cmdutil.NewEventsGroup(0, tableID, ra.spillStore)
 	}
 
-	if row.Row.CommitTs < ra.eventsGroup[tableID].highWatermark {
+	if row.Row.CommitTs < ra.eventsGroup[tableID].HighWatermark {
 		log.Panic("commit ts of redo log regressed",
 			zap.Int64("tableID", tableID),
 			zap.Uint64("commitTs", row.Row.CommitTs),
-			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
+			zap.Any("resolvedTs", ra.eventsGroup[tableID].HighWatermark))
 	}
 
 	var tableDDLTs ddlTs
@@ -379,7 +397,16 @@ func (ra *RedoApplier) applyRow(
 		return nil
 	}
 
-	ra.eventsGroup[tableID].append(row.ToDMLEvent())
+	data, err := row.MarshalMsg(nil)
+	if err != nil {
+		return errors.WrapError(errors.ErrMarshalFailed, err)
+	}
+	message := newRedoDMLMessage(row)
+	messageData := codeccommon.NewDMLMessageDataWithRestorer(nil, data, redoDMLMessageRestorer)
+	messageData.AttachDMLMessage(message)
+	if err := ra.eventsGroup[tableID].AppendMessage(message); err != nil {
+		return err
+	}
 
 	ra.appliedLogCount++
 	return nil
@@ -393,13 +420,44 @@ func (ra *RedoApplier) waitTableFlush(
 		log.Warn("table id not found when flush dml events", zap.Any("tableID", tableID))
 		return nil
 	}
-	if group.highWatermark > rts {
+	if group.HighWatermark > rts {
 		log.Panic("resolved ts of redo log regressed",
-			zap.Any("oldResolvedTs", group.highWatermark),
+			zap.Any("oldResolvedTs", group.HighWatermark),
 			zap.Any("newResolvedTs", rts))
 	}
 
-	events := group.getEvents()
+	start := time.Now()
+	total := 0
+	for {
+		batch, hasMore, err := group.PrepareResolve(rts, ra.spillStore.ResolveLimit())
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			break
+		}
+		events := cmdutil.DMLMessagesToEvents(batch.Messages)
+		if err := ra.flushDMLBatch(ctx, events, rts); err != nil {
+			return err
+		}
+		total += len(events)
+		if err := batch.Ack(); err != nil {
+			return err
+		}
+		if !hasMore {
+			break
+		}
+	}
+	if total != 0 {
+		log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+	}
+	return nil
+}
+
+func (ra *RedoApplier) flushDMLBatch(
+	ctx context.Context, events []*commonEvent.DMLEvent, rts uint64,
+) error {
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -415,7 +473,6 @@ func (ra *RedoApplier) waitTableFlush(
 		ra.mysqlSink.AddDMLEvent(e)
 	}
 	// Make sure all events are flushed to downstream.
-	start := time.Now()
 	ticker := time.NewTicker(warnDuration)
 	defer ticker.Stop()
 	for {
@@ -423,8 +480,6 @@ func (ra *RedoApplier) waitTableFlush(
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events done", zap.Uint64("resolvedTs", rts),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time", zap.Uint64("resolvedTs", rts),
