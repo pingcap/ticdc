@@ -102,7 +102,7 @@ func (m *mockSchemaStore) SetResolvedTs(ts uint64) {
 	m.tableTriggerResolvedTs = ts
 }
 
-func (m *mockSchemaStore) GetTableInfo(_ context.Context, keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (m *mockSchemaStore) GetTableInfo(_ context.Context, _ common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if m.getTableInfoError != nil {
 		return nil, m.getTableInfoError
 	}
@@ -122,11 +122,11 @@ func (m *mockSchemaStore) GetTableInfo(_ context.Context, keyspaceMeta common.Ke
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.KeyspaceMeta, _ uint64, _ filter.Filter) ([]commonEvent.Table, error) {
 	return m.Tables, nil
 }
 
-func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
+func (m *mockSchemaStore) GetTableDDLEventState(_ common.KeyspaceMeta, _ int64) (schemastore.DDLEventState, error) {
 	if m.onGetTableDDLEventState != nil {
 		m.onGetTableDDLEventState()
 	}
