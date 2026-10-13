@@ -146,7 +146,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
+func TestCloseSchemaStoreGCKeeperRespectsContext(t *testing.T) {
 	originalConfig := config.GetGlobalServerConfig()
 	cfg := originalConfig.Clone()
 	cfg.AdvertiseAddr = "127.0.0.1:8300"
@@ -164,9 +164,13 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.ErrorIs(t, keeper.close(canceledCtx), context.Canceled)
+	require.ErrorIs(t,
+		closeSchemaStoreGCKeeper(canceledCtx, common.DefaultKeyspace.ID, keeper),
+		context.Canceled)
+	assertSchemaStoreBarrierTS(t, state, serviceID, 101)
 
-	require.NoError(t, closeSchemaStoreGCKeeper(common.DefaultKeyspace.ID, keeper))
+	require.NoError(t,
+		closeSchemaStoreGCKeeper(context.Background(), common.DefaultKeyspace.ID, keeper))
 	if kerneltype.IsClassic() {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
