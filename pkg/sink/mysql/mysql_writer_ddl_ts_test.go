@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,6 +71,62 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
 
 	return writer, db, mock
+}
+
+func TestSendDDLTsPreservesReplicationKeyLossRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		action model.ActionType
+		remove bool
+	}{
+		{model.ActionDropColumn, false},
+		{model.ActionDropPrimaryKey, false},
+		{model.ActionDropIndex, false},
+		{model.ActionModifyColumn, false},
+		{model.ActionMultiSchemaChange, false},
+		{model.ActionDropTable, true},
+		{model.ActionTruncateTable, true},
+		{model.ActionDropTablePartition, true},
+		{model.ActionTruncateTablePartition, true},
+		{model.ActionReorganizePartition, true},
+	} {
+		for _, physicalIDs := range [][]int64{{42}, {42, 43}} {
+			t.Run(fmt.Sprintf("%s/physical-tables=%d", tc.action, len(physicalIDs)), func(t *testing.T) {
+				writer, db, mock := newTestMysqlWriterForDDLTs(t)
+				defer db.Close()
+				blockedIDs := append(append([]int64{}, physicalIDs...), common.DDLSpanTableID)
+				event := &commonEvent.DDLEvent{
+					Type:       byte(tc.action),
+					FinishedTs: 120,
+					BlockedTables: &commonEvent.InfluencedTables{
+						InfluenceType: commonEvent.InfluenceTypeNormal,
+						TableIDs:      blockedIDs,
+					},
+					NeedDroppedTables: &commonEvent.InfluencedTables{
+						InfluenceType: commonEvent.InfluenceTypeNormal,
+						TableIDs:      physicalIDs,
+					},
+				}
+				mock.ExpectBegin()
+				mock.ExpectExec(insertItemQuery(blockedIDs, "default", "test/test", "120", "0", "0")).
+					WillReturnResult(sqlmock.NewResult(0, int64(len(blockedIDs))))
+				mock.ExpectCommit()
+				require.NoError(t, writer.SendDDLTsPre(event))
+
+				mock.ExpectBegin()
+				mock.ExpectExec(insertItemQuery(blockedIDs, "default", "test/test", "120", "1", "0")).
+					WillReturnResult(sqlmock.NewResult(0, int64(len(blockedIDs))))
+				if tc.remove {
+					mock.ExpectExec(dropItemQuery(physicalIDs, "default", "test/test")).
+						WillReturnResult(sqlmock.NewResult(0, int64(len(physicalIDs))))
+				}
+				mock.ExpectCommit()
+				require.NoError(t, writer.SendDDLTs(event))
+				// Metadata retention must not mutate the scheduling instruction.
+				require.Equal(t, physicalIDs, event.NeedDroppedTables.TableIDs)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	}
 }
 
 func newTestMockDBForDDLTs(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {

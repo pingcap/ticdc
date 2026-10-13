@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -32,6 +33,7 @@ var (
 type logWriter struct {
 	cfg           *writer.Config
 	backendWriter fileWriter
+	writeGate     *writelease.Gate
 }
 
 type dmlWriter struct {
@@ -78,6 +80,11 @@ func (l *logWriter) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchem
 	l.backendWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
+func (l *logWriter) SetWriteGate(gate *writelease.Gate) {
+	l.writeGate = gate
+	l.backendWriter.SetWriteGate(gate)
+}
+
 func (l *logWriter) Run(ctx context.Context) error {
 	return l.backendWriter.Run(ctx)
 }
@@ -117,7 +124,10 @@ func (l *ddlWriter) WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEve
 			zap.String("capture", l.cfg.CaptureID()))
 		return nil
 	}
-	if err := l.backendWriter.SyncWrite(event); err != nil {
+	if err := writelease.WaitForWrite(ctx, l.writeGate); err != nil {
+		return err
+	}
+	if err := l.backendWriter.SyncWrite(ctx, event); err != nil {
 		return errors.Trace(err)
 	}
 	return nil

@@ -20,6 +20,7 @@ stop_tidb_cluster
 rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 cleanup() {
+	stop_cdc_server_guards
 	stop_tidb_cluster
 }
 
@@ -53,7 +54,7 @@ curl -i -X POST \
 EOF
 
 start_tidb_cluster --workdir $WORK_DIR
-run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 cdc_cli_changefeed create -c test --sink-uri="kafka://127.0.0.1:9092/output_ticdc?protocol=debezium&kafka-version=2.4.0" --config "$CUR/changefeed.toml"
 
 cd $CUR
@@ -62,5 +63,7 @@ cd ../debezium01 && go run ./src --dir "$CUR/sql"
 if [ $? -ne 0 ]; then
 	exit 1
 fi
+
+check_cdc_server_guard --workdir "$WORK_DIR"
 
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
