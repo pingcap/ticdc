@@ -60,8 +60,8 @@ func TestColumnSelectorCaseSensitive(t *testing.T) {
 			Columns: []string{"*", "!payload"},
 		}},
 	}
-	payload := &model.ColumnInfo{Name: ast.NewCIStr("payload")}
-	id := &model.ColumnInfo{Name: ast.NewCIStr("id")}
+	payload := &model.ColumnInfo{Name: parser_model.NewCIStr("payload")}
+	id := &model.ColumnInfo{Name: parser_model.NewCIStr("id")}
 	for _, caseSensitive := range []bool{false, true} {
 		selectors, err := New(sinkConfig, caseSensitive)
 		require.NoError(t, err)
@@ -203,59 +203,3 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		}
 	}
 }
-<<<<<<< HEAD
-=======
-
-func TestVerifyTablesRequiresFullUniqueKey(t *testing.T) {
-	t.Parallel()
-
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
-		{
-			Matcher: []string{"test.t"},
-			Columns: []string{"a"},
-		},
-	}
-	selectors, err := New(replicaConfig.Sink, false)
-	require.NoError(t, err)
-
-	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
-		Name: ast.NewCIStr("t"),
-		Columns: []*model.ColumnInfo{
-			newColumnInfoForSelectorTest(1, "a", mysql.NotNullFlag),
-			newColumnInfoForSelectorTest(2, "b", mysql.NotNullFlag),
-		},
-		Indices: []*model.IndexInfo{
-			{
-				Name: ast.NewCIStr("uk_ab"),
-				Columns: []*model.IndexColumn{
-					{Name: ast.NewCIStr("a"), Offset: 0},
-					{Name: ast.NewCIStr("b"), Offset: 1},
-				},
-				Unique: true,
-				State:  model.StatePublic,
-			},
-		},
-	})
-
-	err = selectors.VerifyTables([]*commonType.TableInfo{tableInfo}, nil)
-	require.Error(t, err)
-	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
-
-	replicaConfig.Sink.ColumnSelectors[0].Columns = []string{"a", "b"}
-	selectors, err = New(replicaConfig.Sink, false)
-	require.NoError(t, err)
-	require.NoError(t, selectors.VerifyTables([]*commonType.TableInfo{tableInfo}, nil))
-}
-
-func newColumnInfoForSelectorTest(id int64, name string, flag uint) *model.ColumnInfo {
-	ft := types.NewFieldType(mysql.TypeLong)
-	ft.AddFlag(flag)
-	return &model.ColumnInfo{
-		ID:        id,
-		Name:      ast.NewCIStr(name),
-		FieldType: *ft,
-		State:     model.StatePublic,
-	}
-}
->>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))

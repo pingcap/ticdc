@@ -47,11 +47,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-<<<<<<< HEAD
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs)
-=======
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, false, true, cleanUpJobs, common.DefaultKeyspaceID)
->>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs, common.DefaultKeyspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -671,11 +667,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
-<<<<<<< HEAD
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
-=======
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, false, true, nil, common.DefaultKeyspaceID)
->>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
 	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())

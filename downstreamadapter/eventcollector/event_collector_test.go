@@ -73,8 +73,12 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-func (d *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
-	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
+func (m *mockEventDispatcher) IsLowLatencyMode() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

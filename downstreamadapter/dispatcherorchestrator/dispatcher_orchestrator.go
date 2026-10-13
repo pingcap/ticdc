@@ -210,7 +210,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		cfConfig := &config.ChangefeedConfig{}
 		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
 			log.Panic("failed to unmarshal changefeed config",
-				zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
+				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 		}
 		start := time.Now()
 		var initializingManager *dispatchermanager.DispatcherManager

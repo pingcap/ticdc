@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
@@ -73,10 +74,11 @@ type sink struct {
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	// it's the same as the context passed into the Run method.
-	ctx context.Context
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -86,14 +88,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-<<<<<<< HEAD
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
-=======
-	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
-		return err
-	}
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
->>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if err != nil {
 		return err
 	}
@@ -107,8 +102,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
+	keyspaceID uint32,
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
@@ -123,19 +119,9 @@ func New(
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
-<<<<<<< HEAD
-	// the last param maxMsgBytes is mainly to limit the size of a single message for
-	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
-=======
 	// Message size limits are mainly for MQ batch protocols. Cloud storage uses
 	// max int for both the final message limit and the batch threshold.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
-	if err != nil {
-		return nil, err
-	}
-	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
->>>>>>> 3adf129d5 (sink: honor top-level case sensitivity in sink rules (#6257))
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +129,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
 	defer func() {
 		if err != nil {
 			statistics.Close()
@@ -313,6 +299,9 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
+	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
+		return err
+	}
 	return s.statistics.RecordDDLExecution(func() (string, error) {
 		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 		if err != nil {
@@ -320,6 +309,13 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 		}
 		return v.GetDDLType().String(), nil
 	})
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.dmlWriters != nil {
+		s.dmlWriters.setWriteGate(gate)
+	}
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
@@ -372,6 +368,9 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
+		}
+		if !writelease.CanWrite(s.writeGate) {
+			continue
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
@@ -443,6 +442,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	var isRemoveEmptyDirsRunning atomic.Bool
 	if isLocal {
 		ret = append(ret, func() {
+			if !writelease.CanWrite(s.writeGate) {
+				return
+			}
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -474,6 +476,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 
 	var isCleanupRunning atomic.Bool
 	ret = append(ret, func() {
+		if !writelease.CanWrite(s.writeGate) {
+			return
+		}
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
