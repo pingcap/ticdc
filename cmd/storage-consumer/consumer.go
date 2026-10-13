@@ -62,7 +62,7 @@ type consumer struct {
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
 	columnSelectors *columnselector.ColumnSelectors
-	externalStorage storeapi.Storage
+	externalStorage storage.ExternalStorage
 	fileExtension   string
 	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
