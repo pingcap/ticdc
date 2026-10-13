@@ -58,7 +58,7 @@ const (
 type saramaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
 	// adminClient is used to get broker infos from broker.
-	adminClient ClusterAdminClient
+	adminClient AdminClient
 	brokers     map[int32]struct{}
 	registry    metrics.Registry
 }

@@ -74,6 +74,10 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
+var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
+	return createSaramaFactory()
+}
+
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -91,7 +95,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	options.Topic = topic
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
 	if err != nil {
 		return err
 	}
@@ -111,7 +118,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
+		return kafka.NewSaramaFactory(ctx, options, changefeedID)
+	})
 	if err != nil {
 		return err
 	}
@@ -135,22 +144,23 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
+	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -224,6 +234,9 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.isNormal.Load() {
+		return
+	}
 	s.eventChan.Push(event)
 }
 
@@ -259,6 +272,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -346,6 +360,11 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				})
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
 			s.rowChan.Push(events...)
 		}
@@ -617,6 +636,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close() {
+	s.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()

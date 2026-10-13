@@ -128,7 +128,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := metrics.NewStatistics(changefeedID, "mysqlSink")
+			stat := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{
@@ -203,7 +203,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{Dir: t.TempDir()})
 			ap.rd = NewMockReader(100, 130, rows, ddls)
 			ap.updateSplitter = newUpdateEventSplitter(ap.rd, ap.cfg.Dir)
-			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false)
+			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false, common.DefaultKeyspaceID)
 			defer ap.mysqlSink.Close()
 			require.True(t, ap.needRecoveryInfo)
 			require.ErrorIs(t, ap.consumeLogs(ctx), errApplyFinished)
@@ -483,7 +483,7 @@ func TestApply(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -691,7 +691,7 @@ func TestApplyBigTxn(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
