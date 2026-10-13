@@ -41,7 +41,7 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress, completed chan<- struct{}) *writer {
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress) *writer {
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
@@ -58,14 +58,14 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		downstream: downstream,
 		memory:     progress.memory,
 		progress:   progress,
-		completed:  completed,
+		completed:  make(chan struct{}, 1),
 		mutations:  make(map[mutationKey]*writeBatch),
 		ddlJobs:    make(chan *writeEvent, 1),
 		ddlDone:    make(chan struct{}, 1),
 	}
 }
 
-func (w *writer) start(ctx context.Context) error {
+func (w *writer) start(ctx context.Context, input <-chan []*writeEvent) error {
 	w.g, ctx = errgroup.WithContext(ctx)
 	w.g.Go(func() error {
 		return w.executeDDL(ctx)
@@ -82,9 +82,41 @@ func (w *writer) start(ctx context.Context) error {
 		log.Panic("consumer downstream sink stopped unexpectedly")
 		return nil
 	})
-	// Report cancellation before close joins tasks blocked on sink queues.
-	<-ctx.Done()
-	return context.Cause(ctx)
+	// Dispatch returns before close joins tasks blocked on sink queues.
+	return w.dispatch(ctx, input)
+}
+
+func (w *writer) dispatch(ctx context.Context, input <-chan []*writeEvent) error {
+	ticker := time.NewTicker(progressLogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case items, ok := <-input:
+			if !ok {
+				return context.Cause(ctx)
+			}
+			for _, item := range items {
+				w.consume(item)
+			}
+		case <-w.completed:
+		case <-ticker.C:
+			progress := w.progress
+			log.Info("consumer progress", zap.Int64("receivedInputs", progress.received.Load()),
+				zap.Int64("decodedRows", w.decodedRows), zap.Int64("writtenRows", w.writtenRows),
+				zap.Int64("completedInputs", progress.confirmed.Load()), zap.Int("pendingDMLCount", len(w.pendingDML)),
+				zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
+				zap.Int64("uncompletedInputs", progress.received.Load()-progress.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
+			continue
+		}
+		if err := w.flushDML(ctx); err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer DML submission failed", zap.Error(err))
+			}
+			return err
+		}
+	}
 }
 
 func (w *writer) close() {
@@ -125,7 +157,7 @@ type writer struct {
 	downstream        sink.Sink
 	memory            *memoryUsage
 	progress          *inputProgress
-	completed         chan<- struct{}
+	completed         chan struct{}
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
 	ddlInFlight       *writeEvent

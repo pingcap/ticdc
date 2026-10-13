@@ -68,15 +68,11 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			t.Cleanup(input.Close)
 			decoding := newDecodeConfig(upstreamURI, "UTC", config.GetDefaultReplicaConfig(), nil)
 			schemas := newSchemaUsage(input.memory)
-			decoder := newDecoderGroup(schemas, nil)
-			t.Cleanup(decoder.close)
-			a := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, schemas, decoder)
+			a := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, schemas)
+			t.Cleanup(a.close)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
 			}
-			g.Go(func() error {
-				return decoder.start(ctx)
-			})
 			// The topic limit can grow while this reader keeps the original URI.
 			producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ProducerBatchMaxBytes(2<<20))
 			require.NoError(t, err)
@@ -87,20 +83,29 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 				&kgo.Record{Topic: topic, Value: value},
 				&kgo.Record{Topic: topic, Value: []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":10}}`)},
 			).FirstErr())
-			c := &consumer{
-				reader:    input,
-				assembler: a,
-				progress:  input.progress,
+			r := &reader{
+				client:   input,
+				progress: input.progress,
 			}
-			result, err := c.next(ctx)
-			require.NoError(t, err)
-			require.NotNil(t, result.dml)
+			t.Cleanup(r.close)
+			requests := make(chan readRequest)
+			inputs := make(chan readResult)
+			output := make(chan []*writeEvent, 1)
+			g.Go(func() error {
+				return r.start(ctx, requests, inputs)
+			})
+			g.Go(func() error {
+				return a.start(ctx, requests, inputs, output)
+			})
+			var result *writeEvent
 			select {
-			case <-result.decoding.done:
+			case items := <-output:
+				result = items[0]
 			case <-ctx.Done():
-				t.Fatal("row conversion did not finish")
+				t.Fatal("row did not pass through the pipeline")
 			}
-			result.dml = result.decoding.dml
+			require.NotNil(t, result.dml)
+			require.Nil(t, result.decoding)
 			require.EqualValues(t, 10, result.dml.CommitTs)
 			require.Equal(t, payload, result.dml.Rows.GetRow(0).GetString(1))
 		})
@@ -168,21 +173,19 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 		dml.PostFlush()
 		close(written)
 	})
-	c := &consumer{
-		reader:    r,
-		assembler: &assembler{},
-		progress:  r.progress,
-		writer: &writer{
-			memory:     r.memory,
-			downstream: downstream,
-		},
+	w := &writer{
+		memory:     r.memory,
+		progress:   r.progress,
+		downstream: downstream,
 	}
-	results := make(chan *writeEvent, 1)
+	results := make(chan []*writeEvent, 1)
 	writeErrors := make(chan error, 1)
 	wg.Go(func() {
-		writeErrors <- c.write(ctx, results)
+		writeErrors <- w.dispatch(ctx, results)
 	})
-	results <- &writeEvent{dml: dml}
+	results <- []*writeEvent{{
+		dml: dml,
+	}}
 	select {
 	case <-written:
 	case <-ctx.Done():
@@ -209,11 +212,10 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 		_ = g.Wait()
 	}()
 	schemas := newSchemaUsage(memory)
-	decoder := newDecoderGroup(schemas, nil)
-	t.Cleanup(decoder.close)
-	a := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, schemas, decoder)
+	a := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory, schemas)
+	t.Cleanup(a.close)
 	g.Go(func() error {
-		return decoder.start(ctx)
+		return a.decoder.start(ctx)
 	})
 	r := &pulsarReader{memory: memory}
 	var records []*ack
@@ -270,7 +272,7 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			input := newStorageReader(t.Context(), upstreamURI, replicaConfig, progress, schemas, nil)
 			t.Cleanup(input.Close)
 			decoding := newDecodeConfig(upstreamURI, "UTC", replicaConfig, nil)
-			newAssembler(t.Context(), decoding, nil, replicaConfig, memory, schemas, newDecoderGroup(schemas, nil))
+			newAssembler(t.Context(), decoding, nil, replicaConfig, memory, schemas)
 		})
 	}
 }
@@ -333,7 +335,7 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 			a := newAssembler(ctx, &decodeConfig{
 				codec:  codecCommon.NewConfig(config.ProtocolCsv),
 				format: rowFormat,
-			}, nil, replicaConfig, memory, schemas, newDecoderGroup(schemas, nil))
+			}, nil, replicaConfig, memory, schemas)
 			w := &writer{
 				memory:  memory,
 				ddlJobs: make(chan *writeEvent, 1),
@@ -472,15 +474,14 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				require.NoError(t, c.accept(t.Context(), result, progress))
 			}
 		}
-		consumer := &consumer{
-			reader:    r,
-			assembler: c,
-		}
+		feedback := c.feedback()
+		readProgress, err := r.Advance(t.Context(), feedback)
+		require.NoError(t, err)
+		c.advance(feedback, readProgress)
 		downstream := mock.NewMockSink(gomock.NewController(t))
 		w := &writer{downstream: downstream, memory: memory}
 		for index, ddl := range ddls[startIndex:] {
-			result, err := consumer.next(t.Context())
-			require.NoError(t, err)
+			result := c.next()
 			require.NotNil(t, result)
 			require.Equal(t, ddl.Query, result.ddl.Query)
 			require.EqualValues(t, 1, r.partitions[0].records[index].ack.refs.Load())
@@ -492,8 +493,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				require.EqualValues(t, 1, record.ack.refs.Load())
 			}
 		}
-		result, err := consumer.next(t.Context())
-		require.NoError(t, err)
+		result := c.next()
 		require.True(t, result.hasWatermark)
 		require.EqualValues(t, 11, result.watermark)
 		require.NotNil(t, result.onFlush)
@@ -607,7 +607,7 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	}
 	decoding := newDecodeConfig(&url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), nil)
 	schemas := newSchemaUsage(memory)
-	a := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, schemas, newDecoderGroup(schemas, nil))
+	a := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, schemas)
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
 		record := progress.newAck(int64(len(value)+256), nil)
@@ -619,13 +619,7 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		}
 		require.EqualValues(t, 100, r.watermark)
 		// Idle partitions do not require a broker snapshot or a new message.
-		c := &consumer{
-			reader:    r,
-			assembler: a,
-			progress:  progress,
-		}
-		result, err := c.next(t.Context())
-		require.NoError(t, err)
+		result := a.next()
 		require.True(t, result.hasWatermark)
 		require.EqualValues(t, 1, record.refs.Load())
 		result.onFlush()
@@ -682,19 +676,16 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 		// An already delivered CREATE TABLE still has an unconfirmed copy.
 		ddlCopies: map[uint64]map[int32][]*ack{10: {1: {copyRecord}}},
 	}
-	consumer := &consumer{
-		reader:    r,
-		assembler: c,
-	}
-	result, err := consumer.next(t.Context())
+	feedback := c.feedback()
+	readProgress, err := r.Advance(t.Context(), feedback)
 	require.NoError(t, err)
+	c.advance(feedback, readProgress)
+	result := c.next()
 	require.Same(t, dml, result.dml)
 	require.EqualValues(t, 1, copyRecord.refs.Load())
-	result, err = consumer.next(t.Context())
-	require.NoError(t, err)
+	result = c.next()
 	require.Same(t, ddl, result.ddl)
-	result, err = consumer.next(t.Context())
-	require.NoError(t, err)
+	result = c.next()
 	require.True(t, result.hasWatermark)
 	require.EqualValues(t, 40, result.watermark)
 	require.EqualValues(t, 1, copyRecord.refs.Load())
@@ -823,7 +814,9 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 func TestReaderBudgetIncludesInFlightMemory(t *testing.T) {
 	memory := newMemoryUsage()
 	progress := newInputProgress(memory)
-	c := &consumer{progress: progress}
+	c := &reader{
+		progress: progress,
+	}
 	record := progress.newAck(128, nil)
 	memory.reserve(maxMemoryBytes - 128)
 	ctx, cancel := context.WithCancel(t.Context())

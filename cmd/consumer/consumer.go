@@ -18,11 +18,9 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"maps"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -55,15 +53,11 @@ const (
 
 type consumer struct {
 	g             *errgroup.Group
-	reader        reader
-	decoder       *decoderGroup
+	reader        *reader
 	assembler     *assembler
 	writer        *writer
 	upstreamDB    *sql.DB
 	profileServer *http.Server
-	progress      *inputProgress
-	completed     chan struct{}
-	confirmable   chan struct{}
 }
 
 func newConsumer(ctx context.Context, options *options) (c *consumer) {
@@ -87,7 +81,6 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	memory := newMemoryUsage()
 	progress := newInputProgress(memory)
 	schemas := newSchemaUsage(memory)
-	completed := make(chan struct{}, 1)
 	confirmable := make(chan struct{}, 1)
 	reader, streams := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
 	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig, streams)
@@ -96,26 +89,21 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 		if c != nil {
 			return
 		}
-		reader.Close()
+		reader.close()
 		if upstreamDB != nil {
 			if closeErr := upstreamDB.Close(); closeErr != nil {
 				log.Warn("consumer upstream database close failed", zap.Error(closeErr))
 			}
 		}
 	}()
-	decoder := newDecoderGroup(schemas, completed)
-	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas, decoder)
-	writer := newWriter(ctx, options.downstreamURI, replicaConfig, progress, completed)
+	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas)
+	writer := newWriter(ctx, options.downstreamURI, replicaConfig, progress)
 	return &consumer{
 		reader:        reader,
-		decoder:       decoder,
 		assembler:     assembler,
 		writer:        writer,
 		upstreamDB:    upstreamDB,
 		profileServer: newProfileServer(options.enableProfiling),
-		progress:      progress,
-		completed:     completed,
-		confirmable:   confirmable,
 	}
 }
 
@@ -160,20 +148,6 @@ func loadReplicaConfig(configFile string) *config.ReplicaConfig {
 		log.Panic("consumer filter rules are invalid", zap.Error(err))
 	}
 	return replicaConfig
-}
-
-// Return logical stream IDs with the reader so decoder initialization does not
-// depend on transport-specific reader fields. An empty list uses one decoder.
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) (reader, []int32) {
-	switch sourceTypeFromURI(upstreamURI) {
-	case sourceKafka:
-		reader := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
-		return reader, slices.Collect(maps.Keys(reader.partitions))
-	case sourcePulsar:
-		return newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable), nil
-	default:
-		return newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable), nil
-	}
 }
 
 // Resolve transport-specific defaults and requirements before constructing the assembler.
@@ -292,24 +266,19 @@ func (c *consumer) consume(ctx context.Context) {
 			return nil
 		})
 	}
-	results := make(chan *writeEvent, 64)
+	requests := make(chan readRequest)
+	inputs := make(chan readResult)
+	results := make(chan []*writeEvent, 1)
 	writeDone := make(chan struct{})
 	c.g.Go(func() error {
-		return c.writer.start(ctx)
+		return c.reader.start(ctx, requests, inputs)
 	})
 	c.g.Go(func() error {
-		return c.decoder.start(ctx)
-	})
-	c.g.Go(func() error {
-		return c.confirm(ctx)
-	})
-	c.g.Go(func() error {
-		defer close(results)
-		return c.read(ctx, results)
+		return c.assembler.start(ctx, requests, inputs, results)
 	})
 	c.g.Go(func() error {
 		defer close(writeDone)
-		return c.write(ctx, results)
+		return c.writer.start(ctx, results)
 	})
 	<-ctx.Done()
 	// Stop dispatching before the caller closes the sink.
@@ -324,163 +293,11 @@ func (c *consumer) stop() {
 	}
 	_ = c.g.Wait()
 	c.writer.close()
-	c.decoder.close()
-	c.reader.Close()
+	c.assembler.close()
+	c.reader.close()
 	if c.upstreamDB != nil {
 		if closeErr := c.upstreamDB.Close(); closeErr != nil {
 			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
-		}
-	}
-}
-
-func (c *consumer) read(ctx context.Context, results chan<- *writeEvent) error {
-	for ctx.Err() == nil {
-		result, err := c.next(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer read failed", zap.Error(err))
-			}
-			return err
-		}
-		select {
-		case results <- result:
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}
-	return context.Cause(ctx)
-}
-
-func (c *consumer) next(ctx context.Context) (*writeEvent, error) {
-	a := c.assembler
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return nil, err
-		}
-		if result := a.next(); result != nil {
-			return result, nil
-		}
-		decoded := a.decodePending()
-		if decoded == nil {
-			feedback := a.feedback()
-			progress, err := c.reader.Advance(ctx, feedback)
-			if err != nil {
-				return nil, err
-			}
-			a.advance(feedback, progress)
-			if progress.control != nil || (progress.boundary != nil && progress.boundary.reached) {
-				continue
-			}
-			if result := a.next(); result != nil {
-				return result, nil
-			}
-			if !progress.needsMoreInput && !a.needsMoreInput() {
-				if err := c.waitMemory(ctx); err != nil {
-					return nil, err
-				}
-			}
-			data, err := c.reader.Read(ctx)
-			if err != nil {
-				return nil, err
-			}
-			decoded = a.decode(ctx, data)
-		}
-		for result, err := range decoded {
-			if err != nil {
-				return nil, err
-			}
-			progress, err := c.reader.Advance(ctx, result.feedback)
-			if err != nil {
-				return nil, err
-			}
-			if err := a.accept(ctx, result, progress); err != nil {
-				return nil, err
-			}
-		}
-	}
-}
-
-// Backpressure applies to new independent inputs. Retained caches alone must
-// not prevent reading, and unfinished input boundaries bypass this wait.
-func (c *consumer) waitMemory(ctx context.Context) error {
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if c.progress.memory.used() < maxMemoryBytes || c.progress.received.Load() == c.progress.confirmed.Load() {
-			return nil
-		}
-		changed := c.progress.memory.changes()
-		// Subscribe before rechecking: a concurrent release either satisfies the
-		// admission condition or closes changed.
-		if c.progress.memory.used() < maxMemoryBytes || c.progress.received.Load() == c.progress.confirmed.Load() {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
-}
-
-func (c *consumer) write(ctx context.Context, results <-chan *writeEvent) error {
-	progress := c.progress
-	ticker := time.NewTicker(progressLogInterval)
-	defer ticker.Stop()
-	for {
-		var (
-			items []*writeEvent
-			err   error
-		)
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case result, ok := <-results:
-			if !ok {
-				return context.Cause(ctx)
-			}
-			items, err = c.assembler.assemble(ctx, results, result)
-		case <-c.completed:
-			items = c.assembler.collectDecoded()
-		case <-ticker.C:
-			log.Info("consumer progress", zap.Int64("receivedInputs", progress.received.Load()),
-				zap.Int64("decodedRows", c.writer.decodedRows), zap.Int64("writtenRows", c.writer.writtenRows),
-				zap.Int64("completedInputs", progress.confirmed.Load()), zap.Int("pendingDMLCount", len(c.writer.pendingDML)),
-				zap.Int("inFlightBatches", len(c.writer.inFlight)), zap.Int64("inFlightBytes", c.writer.inFlightBytes),
-				zap.Int64("uncompletedInputs", progress.received.Load()-progress.confirmed.Load()), zap.Int64("bufferedBytes", progress.memory.used()))
-			continue
-		}
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer event assembly failed", zap.Error(err))
-			}
-			return err
-		}
-		for _, item := range items {
-			c.writer.consume(item)
-		}
-		if err := c.writer.flushDML(ctx); err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer DML submission failed", zap.Error(err))
-			}
-			return err
-		}
-	}
-}
-
-func (c *consumer) confirm(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-c.confirmable:
-			if err := c.reader.Confirm(ctx); err != nil {
-				if ctx.Err() == nil {
-					log.Error("consumer input confirmation failed", zap.Error(err))
-				}
-				return err
-			}
 		}
 	}
 }

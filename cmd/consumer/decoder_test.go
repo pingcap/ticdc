@@ -76,15 +76,11 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				commits = append(commits, dml.CommitTs)
 				dml.PostFlush()
 			}).Times(3)
-			c := &consumer{
-				assembler: a,
-				progress:  progress,
-				completed: completed,
-				writer: &writer{
-					memory:     memory,
-					downstream: downstream,
-					completed:  completed,
-				},
+			w := &writer{
+				memory:     memory,
+				progress:   progress,
+				downstream: downstream,
+				completed:  completed,
 			}
 			g.Go(func() error {
 				return d.start(ctx)
@@ -145,12 +141,12 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			items, err := a.assemble(ctx, nil, watermark)
 			require.NoError(t, err)
 			for _, item := range items {
-				c.writer.consume(item)
+				w.consume(item)
 			}
-			require.NoError(t, c.writer.flushDML(ctx))
+			require.NoError(t, w.flushDML(ctx))
 			require.Equal(t, []string{"b"}, written)
 			require.Len(t, a.decoding, 3)
-			require.Zero(t, c.writer.writtenBefore)
+			require.Zero(t, w.writtenBefore)
 			first, second := a.decoding[0].decoding, a.decoding[1].decoding
 			close(release)
 			for _, task := range []*decodeTask{first, second} {
@@ -164,14 +160,14 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			require.Greater(t, record.refs.Load(), int64(0))
 			items = a.collectDecoded()
 			for _, item := range items {
-				c.writer.consume(item)
+				w.consume(item)
 			}
-			require.NoError(t, c.writer.flushDML(ctx))
+			require.NoError(t, w.flushDML(ctx))
 			require.Equal(t, []string{"b", "a", "a"}, written)
 			require.Equal(t, []uint64{12, 10, 11}, commits)
 			require.Empty(t, a.decoding)
 			require.Zero(t, record.refs.Load())
-			require.EqualValues(t, 20, c.writer.writtenBefore)
+			require.EqualValues(t, 20, w.writtenBefore)
 			for _, table := range metadata {
 				require.Zero(t, table.UpdateTS)
 			}

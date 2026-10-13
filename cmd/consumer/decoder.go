@@ -34,7 +34,7 @@ type decoderGroup struct {
 	workers   int
 	memory    *memoryUsage
 	schemas   *schemaUsage
-	completed chan<- struct{}
+	completed chan struct{}
 }
 
 type decodeTask struct {
@@ -48,7 +48,7 @@ type decodeTask struct {
 	retainedBytes int64
 }
 
-func newDecoderGroup(schemas *schemaUsage, completed chan<- struct{}) *decoderGroup {
+func newDecoderGroup(schemas *schemaUsage, completed chan struct{}) *decoderGroup {
 	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
 		input:     make(chan *decodeTask, workers*64),

@@ -16,18 +16,173 @@ package main
 
 import (
 	"context"
+	"maps"
+	"net/url"
+	"slices"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Read and Advance have one caller. Confirm may run concurrently.
 // Close runs after all callers have stopped.
-type reader interface {
+type readClient interface {
 	Read(ctx context.Context) (*readData, error)
 	Advance(ctx context.Context, feedback readFeedback) (readProgress, error)
 	Confirm(ctx context.Context) error
 	Close()
+}
+
+// reader owns transport access, reading admission and upstream confirmation.
+// Feedback and reads share one goroutine so positions never pass undecoded inputs.
+type reader struct {
+	g           *errgroup.Group
+	client      readClient
+	progress    *inputProgress
+	confirmable <-chan struct{}
+}
+
+// Progress exchanges complete before reading resumes. This also publishes
+// boundary updates to the assembler without concurrently mutating its proofs.
+type readRequest struct {
+	feedback       readFeedback
+	resume         bool
+	needsMoreInput bool
+}
+
+type readResult struct {
+	data     *readData
+	progress readProgress
+}
+
+// Return logical stream IDs with the reader so decoder initialization does not
+// depend on transport-specific reader fields. An empty list uses one decoder.
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan struct{}) (*reader, []int32) {
+	var (
+		client  readClient
+		streams []int32
+	)
+	switch sourceTypeFromURI(upstreamURI) {
+	case sourceKafka:
+		reader := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		client = reader
+		streams = slices.Collect(maps.Keys(reader.partitions))
+	case sourcePulsar:
+		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+	default:
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+	}
+	return &reader{
+		client:      client,
+		progress:    progress,
+		confirmable: confirmable,
+	}, streams
+}
+
+func (r *reader) start(ctx context.Context, requests <-chan readRequest, results chan<- readResult) error {
+	r.g, ctx = errgroup.WithContext(ctx)
+	r.g.Go(func() error {
+		return r.confirm(ctx)
+	})
+	var needsMoreInput bool
+	for {
+		if !needsMoreInput {
+			if err := r.waitMemory(ctx); err != nil {
+				return err
+			}
+		}
+		data, err := r.client.Read(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer read failed", zap.Error(err))
+			}
+			return err
+		}
+		select {
+		case results <- readResult{
+			data: data,
+		}:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+		for {
+			var request readRequest
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case request = <-requests:
+			}
+			if request.resume {
+				needsMoreInput = request.needsMoreInput
+				break
+			}
+			progress, err := r.client.Advance(ctx, request.feedback)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Error("consumer read progress failed", zap.Error(err))
+				}
+				return err
+			}
+			select {
+			case results <- readResult{
+				progress: progress,
+			}:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+	}
+}
+
+func (r *reader) confirm(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-r.confirmable:
+			if err := r.client.Confirm(ctx); err != nil {
+				if ctx.Err() == nil {
+					log.Error("consumer input confirmation failed", zap.Error(err))
+				}
+				return err
+			}
+		}
+	}
+}
+
+// Backpressure applies to new independent inputs. Retained caches alone must
+// not prevent reading, and unfinished input boundaries bypass this wait.
+func (r *reader) waitMemory(ctx context.Context) error {
+	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if r.progress.memory.used() < maxMemoryBytes || r.progress.received.Load() == r.progress.confirmed.Load() {
+			return nil
+		}
+		changed := r.progress.memory.changes()
+		// Subscribe before rechecking: a concurrent release either satisfies the
+		// admission condition or closes changed.
+		if r.progress.memory.used() < maxMemoryBytes || r.progress.received.Load() == r.progress.confirmed.Load() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-changed:
+		}
+	}
+}
+
+func (r *reader) close() {
+	if r.g != nil {
+		_ = r.g.Wait()
+	}
+	r.client.Close()
 }
 
 type readOrder uint8
@@ -67,7 +222,7 @@ type readData struct {
 // before its rows are sorted.
 type readGroup struct {
 	tableID  int64
-	order    readOrder
+	compare  func(first, second *event.DMLEvent) int
 	boundary *readBoundary
 }
 

@@ -198,26 +198,29 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	first := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 20, RowTypes: []common.RowType{common.RowTypeInsert}}}
 	second := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, RowTypes: []common.RowType{common.RowTypeInsert}}}
 	third := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 1, CommitTs: 10, RowTypes: []common.RowType{common.RowTypeDelete}}}
-	group := &readGroup{tableID: 1, order: commitOrder, boundary: &readBoundary{}}
+	r := &storageReader{
+		checkpoint:  20,
+		scanned:     true,
+		sortCSVRows: true,
+	}
+	group := &readGroup{
+		tableID:  1,
+		compare:  r.compareRows,
+		boundary: &readBoundary{},
+	}
 	for _, item := range []*writeEvent{first, second, third} {
 		item.boundary = group.boundary
 	}
 	unrelated := &writeEvent{dml: &event.DMLEvent{PhysicalTableID: 2, CommitTs: 5}}
 	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}, sortCSVRows: true}
-	r := &storageReader{checkpoint: 20, scanned: true}
 	for result, err := range a.decode(t.Context(), &readData{group: group, groupEnd: true}) {
 		require.NoError(t, err)
 		progress, err := r.Advance(t.Context(), result.feedback)
 		require.NoError(t, err)
 		require.NoError(t, a.accept(t.Context(), result, progress))
 	}
-	c := &consumer{
-		reader:    r,
-		assembler: a,
-	}
 	for _, expected := range []*writeEvent{third, second, first} {
-		result, err := c.next(t.Context())
-		require.NoError(t, err)
+		result := a.next()
 		require.Same(t, expected, result)
 	}
 	data, err := r.Read(t.Context())
@@ -231,11 +234,9 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	}
 	// The completed scan's checkpoint also covers the earlier table.
 	unrelated.boundary = &readBoundary{reached: true}
-	result, err := c.next(t.Context())
-	require.NoError(t, err)
+	result := a.next()
 	require.Same(t, unrelated, result)
-	result, err = c.next(t.Context())
-	require.NoError(t, err)
+	result = a.next()
 	require.True(t, result.hasWatermark)
 	require.EqualValues(t, 20, result.watermark)
 	require.Empty(t, a.pendingDML)

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -89,6 +90,7 @@ type storageReader struct {
 	dateSeparator  config.DateSeparator
 	fileExtension  string
 	fileIndexWidth int
+	sortCSVRows    bool
 	checkpoint     uint64
 	readCheckpoint uint64
 	schemas        map[cloudstorage.SchemaPathKey]*storageSchema
@@ -131,6 +133,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
+		sortCSVRows:    protocol == config.ProtocolCsv && replicaConfig.Sink.CSVConfig.OutputOldValue && replicaConfig.Sink.CSVConfig.IncludeCommitTs,
 		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
@@ -359,13 +362,13 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			c.tableIDs[idKey] = tableID
 		}
 		if c.group == nil || c.groupKey != key {
-			order := inputOrder
+			var compare func(first, second *event.DMLEvent) int
 			if input.sort {
-				order = commitOrder
+				compare = c.compareRows
 			}
 			c.group = &readGroup{
 				tableID:  tableID,
-				order:    order,
+				compare:  compare,
 				boundary: &readBoundary{reached: !input.sort},
 			}
 			c.groupKey = key
@@ -379,6 +382,16 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		return c.readDMLFile(ctx, input, table)
 	}
+}
+
+// File sequences from different dispatchers overlap in commitTs. Storage owns
+// their merge order; CSV old-value rows additionally delete before inserting.
+func (c *storageReader) compareRows(first, second *event.DMLEvent) int {
+	order := cmp.Compare(first.CommitTs, second.CommitTs)
+	if order != 0 || !c.sortCSVRows {
+		return order
+	}
+	return cmp.Compare(first.RowTypes[0], second.RowTypes[0])
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {

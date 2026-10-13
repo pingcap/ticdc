@@ -39,7 +39,150 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
+
+func (a *assembler) start(ctx context.Context, requests chan<- readRequest, inputs <-chan readResult, output chan<- []*writeEvent) error {
+	a.g, ctx = errgroup.WithContext(ctx)
+	ready := make(chan *writeEvent, 64)
+	a.g.Go(func() error {
+		return a.decoder.start(ctx)
+	})
+	a.g.Go(func() error {
+		defer close(ready)
+		err := a.arrange(ctx, requests, inputs, ready)
+		if err != nil && ctx.Err() == nil {
+			log.Error("consumer event assembly failed", zap.Error(err))
+		}
+		return err
+	})
+	defer close(output)
+	for {
+		var (
+			items []*writeEvent
+			err   error
+		)
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case result, ok := <-ready:
+			if !ok {
+				return a.g.Wait()
+			}
+			items, err = a.assemble(ctx, ready, result)
+		case <-a.decoder.completed:
+			items = a.collectDecoded()
+		}
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			continue
+		}
+		select {
+		case output <- items:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+func (a *assembler) close() {
+	if a.g != nil {
+		_ = a.g.Wait()
+	}
+	a.decoder.close()
+}
+
+// arrange owns protocol cursors and event dependency state. Only channel
+// messages cross into the reader; transport methods remain reader-owned.
+func (a *assembler) arrange(ctx context.Context, requests chan<- readRequest, inputs <-chan readResult, output chan<- *writeEvent) error {
+	awaitingInput := true
+	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if result := a.next(); result != nil {
+			select {
+			case output <- result:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+			continue
+		}
+		decoded := a.decodePending()
+		if decoded == nil {
+			if !awaitingInput {
+				feedback := a.feedback()
+				result, err := exchangeRead(ctx, requests, inputs, readRequest{
+					feedback: feedback,
+				})
+				if err != nil {
+					return err
+				}
+				progress := result.progress
+				a.advance(feedback, progress)
+				if progress.control != nil || (progress.boundary != nil && progress.boundary.reached) {
+					continue
+				}
+				if result := a.next(); result != nil {
+					select {
+					case output <- result:
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					}
+					continue
+				}
+				select {
+				case requests <- readRequest{
+					resume:         true,
+					needsMoreInput: progress.needsMoreInput || a.needsMoreInput(),
+				}:
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+				awaitingInput = true
+			}
+			select {
+			case input := <-inputs:
+				decoded = a.decode(ctx, input.data)
+				awaitingInput = false
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+		for result, err := range decoded {
+			if err != nil {
+				return err
+			}
+			input, err := exchangeRead(ctx, requests, inputs, readRequest{
+				feedback: result.feedback,
+			})
+			if err != nil {
+				return err
+			}
+			if err := a.accept(ctx, result, input.progress); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// exchangeRead serializes decoded facts with transport progress. A completed
+// exchange publishes every reader-owned boundary change before event selection.
+func exchangeRead(ctx context.Context, requests chan<- readRequest, inputs <-chan readResult, request readRequest) (readResult, error) {
+	select {
+	case requests <- request:
+	case <-ctx.Done():
+		return readResult{}, context.Cause(ctx)
+	}
+	select {
+	case result := <-inputs:
+		return result, nil
+	case <-ctx.Done():
+		return readResult{}, context.Cause(ctx)
+	}
+}
 
 func (a *assembler) assemble(ctx context.Context, results <-chan *writeEvent, result *writeEvent) ([]*writeEvent, error) {
 	var (
@@ -288,6 +431,7 @@ func (p *decodeStream) cacheSchemas(ddl *event.DDLEvent, schemas *schemaUsage) {
 
 // assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
+	g                 *errgroup.Group
 	memory            *memoryUsage
 	schemas           *schemaUsage
 	codecConfig       *codecCommon.Config
@@ -621,7 +765,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage, decoder *decoderGroup) *assembler {
+func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage) *assembler {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -652,7 +796,7 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.D
 		codecConfig: decoding.codec,
 		selectors:   selectors,
 		streams:     streams,
-		decoder:     decoder,
+		decoder:     newDecoderGroup(schemas, make(chan struct{}, 1)),
 		tables:      make(map[[2]string]*common.TableInfo),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
@@ -765,7 +909,7 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 	return func(yield func(decodedData, error) bool) {
 		if data.control != nil || data.groupEnd {
 			a.scanInvalid = true
-			if data.control == nil && data.group.order == commitOrder {
+			if data.control == nil && data.group.compare != nil {
 				start := slices.IndexFunc(a.pendingDML, func(item *writeEvent) bool {
 					return item != nil && item.boundary == data.group.boundary
 				})
@@ -775,11 +919,7 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 						end++
 					}
 					slices.SortStableFunc(a.pendingDML[start:end], func(first, second *writeEvent) int {
-						order := cmp.Compare(first.dml.CommitTs, second.dml.CommitTs)
-						if order != 0 || !a.sortCSVRows {
-							return order
-						}
-						return cmp.Compare(first.dml.RowTypes[0], second.dml.RowTypes[0])
+						return data.group.compare(first.dml, second.dml)
 					})
 				}
 			}
