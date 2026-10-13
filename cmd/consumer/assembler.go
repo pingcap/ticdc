@@ -236,7 +236,7 @@ func (a *assembler) collectDecoded() []*writeEvent {
 		if ready && len(remaining) != 0 {
 			ready = item.dml == nil || !blockedTables[item.dml.PhysicalTableID]
 			for _, prior := range blockedControls {
-				if item.hasWatermark || (prior.ddl != nil && (item.dml == nil || ddlBlocksTable(prior.ddl, item.dml))) {
+				if item.hasWatermark || (prior.ddl != nil && (item.dml == nil || ddlBlocksTable(prior.ddl, item))) {
 					ready = false
 					break
 				}
@@ -245,7 +245,7 @@ func (a *assembler) collectDecoded() []*writeEvent {
 			// Scan row scopes when a control itself needs a completion barrier.
 			if item.dml == nil {
 				for _, prior := range blockedRows {
-					if (item.ddl != nil && ddlBlocksTable(item.ddl, prior.dml)) ||
+					if (item.ddl != nil && ddlBlocksTable(item.ddl, prior)) ||
 						(item.hasWatermark && prior.dml.CommitTs <= item.watermark) {
 						ready = false
 						break
@@ -401,44 +401,16 @@ func (a *assembler) prepare(items []*writeEvent) []*writeEvent {
 type decodeStream struct {
 	decoder       codecCommon.Decoder
 	cachedRecords map[*codecCommon.DMLMessage]*ack
-	schemas       map[string]map[uint64]*common.TableInfo
-}
-
-// Simple retains versioned metadata independently of events awaiting writes.
-func (p *decodeStream) cacheSchemas(ddl *event.DDLEvent, schemas *schemaUsage) {
-	for _, table := range append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...) {
-		if table == nil {
-			continue
-		}
-		name := common.QuoteSchema(table.GetSchemaName(), table.GetTableName())
-		versions := p.schemas[name]
-		if versions == nil {
-			if p.schemas == nil {
-				p.schemas = make(map[string]map[uint64]*common.TableInfo)
-			}
-			versions = make(map[uint64]*common.TableInfo)
-			p.schemas[name] = versions
-		}
-		previous := versions[table.UpdateTS]
-		if previous == table {
-			continue
-		}
-		schemas.retain(table)
-		schemas.release(previous)
-		versions[table.UpdateTS] = table
-	}
 }
 
 // assembler decodes logical inputs and arranges events for downstream writes.
 type assembler struct {
 	g                 *errgroup.Group
 	memory            *memoryUsage
-	schemas           *schemaUsage
 	codecConfig       *codecCommon.Config
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
 	decoder           *decoderGroup
-	tables            map[[2]string]*common.TableInfo
 	current           *readData
 	currentDecoder    codecCommon.Decoder
 	pendingWatermarks []*writeEvent
@@ -473,7 +445,7 @@ func (a *assembler) queueDML(item *writeEvent, record *ack, boundary *readBounda
 	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
 	if item.boundary == nil {
 		for _, ddl := range a.pendingDDL {
-			if dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, dml) {
+			if dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, item) {
 				// The already observed control proves that its earlier rows can
 				// drain while the reader completes the control's input scope.
 				item.boundary = &readBoundary{reached: true}
@@ -550,20 +522,11 @@ func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) {
 	}
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
 	a.memory.reserve(bytes)
-	tables := append([]*common.TableInfo{ddl.TableInfo}, ddl.MultipleTableInfos...)
-	for _, table := range tables {
-		a.schemas.retain(table)
-	}
 	record.refs.Add(1)
 	a.pendingDDL = append(a.pendingDDL, &writeEvent{
-		ddl:   ddl,
-		bytes: bytes,
-		onFlush: func() {
-			for _, table := range tables {
-				a.schemas.release(table)
-			}
-			record.release()
-		},
+		ddl:     ddl,
+		bytes:   bytes,
+		onFlush: record.release,
 	})
 }
 
@@ -618,7 +581,7 @@ func (a *assembler) prepareScan(watermark uint64, head *writeEvent, headReady bo
 func (a *assembler) drainDDL(head *writeEvent, watermark uint64) *writeEvent {
 	for index := a.priorityIndex; index < len(a.pendingDML); index++ {
 		pending := a.pendingDML[index]
-		if pending == nil || pending.dml.CommitTs > head.ddl.GetCommitTs() || !ddlBlocksTable(head.ddl, pending.dml) {
+		if pending == nil || pending.dml.CommitTs > head.ddl.GetCommitTs() || !ddlBlocksTable(head.ddl, pending) {
 			continue
 		}
 		a.priorityIndex = index
@@ -629,7 +592,7 @@ func (a *assembler) drainDDL(head *writeEvent, watermark uint64) *writeEvent {
 			a.scanBoundaries[pending.boundary] = true
 		}
 		if (pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
-			return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending.dml)
+			return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending)
 		}) {
 			a.priorityIndex = max(a.priorityIndex, index+1)
 			return a.popDML(index)
@@ -658,7 +621,7 @@ func (a *assembler) nextDML(watermark uint64) *writeEvent {
 		}
 		// Every queued DDL fences its own post-DDL rows.
 		ready := (result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
-			return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result.dml)
+			return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result)
 		})
 		if ready {
 			return a.popDML(index)
@@ -733,11 +696,17 @@ func (a *assembler) hasPendingThrough(watermark uint64) bool {
 	return a.waitingCount != 0
 }
 
-func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
-	if dml.TableInfo == nil {
+func ddlBlocksTable(ddl *event.DDLEvent, item *writeEvent) bool {
+	dml := item.dml
+	var schema, table string
+	switch {
+	case dml.TableInfo != nil:
+		schema, table = dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName()
+	case item.decoding != nil:
+		schema, table = item.decoding.name.SchemaName, item.decoding.name.TableName
+	default:
 		return true
 	}
-	schema, table := dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName()
 	// Incomplete multi-table metadata must retain a global barrier.
 	if ddl.SchemaName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeAll) {
 		return true
@@ -765,7 +734,7 @@ func ddlBlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage, schemas *schemaUsage) *assembler {
+func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *assembler {
 	var selectors *columnselector.ColumnSelectors
 	if decoding.codec.Protocol == config.ProtocolCsv {
 		var err error
@@ -792,12 +761,10 @@ func newAssembler(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.D
 	}
 	return &assembler{
 		memory:      memory,
-		schemas:     schemas,
 		codecConfig: decoding.codec,
 		selectors:   selectors,
 		streams:     streams,
-		decoder:     newDecoderGroup(schemas, make(chan struct{}, 1)),
-		tables:      make(map[[2]string]*common.TableInfo),
+		decoder:     newDecoderGroup(memory, make(chan struct{}, 1)),
 		mergeRows:   decoding.codec.Protocol == config.ProtocolCsv,
 		sortCSVRows: decoding.codec.Protocol == config.ProtocolCsv && decoding.codec.OutputOldValue && decoding.codec.IncludeCommitTs,
 	}
@@ -932,6 +899,9 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 			return
 		}
 		if data.ddl != nil {
+			if data.format == rowFormat {
+				data.ddl.TableInfo = data.schema.tableInfo()
+			}
 			result, err := a.decodeDDL(data, data.ddl)
 			if err != nil {
 				yield(decodedData{}, err)
@@ -957,7 +927,8 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 		data.record.retain(bytes)
 		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
-			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, data.table, data.value, a.selectors.GetForTableInfo(data.table))
+			table := data.schema.tableInfo()
+			decoder, err := csv.NewDecoderWithColumnSelector(ctx, a.codecConfig, table, data.value, a.selectors.GetForTableInfo(table))
 			if err != nil {
 				yield(decodedData{}, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
 				return
@@ -1001,26 +972,12 @@ func (a *assembler) decodeMessage(data *readData, message *codecCommon.DMLMessag
 	if data.format == rowFormat {
 		tableID = data.group.tableID
 	}
-	name := [2]string{message.Schema, message.Table}
-	table := a.tables[name]
-	if table == nil {
-		table = &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  message.Schema,
-				Table:   message.Table,
-				TableID: tableID,
-			},
-		}
-		a.memory.reserve(int64(512 + len(message.Schema) + len(message.Table)))
-		a.tables[name] = table
-	}
 	return decodedData{
 		feedback: readFeedback{
 			data: data,
 			dml: &event.DMLEvent{
 				PhysicalTableID: tableID,
 				CommitTs:        message.GetCommitTs(),
-				TableInfo:       table,
 				Length:          1,
 				RowTypes:        []common.RowType{message.RowType},
 			},
@@ -1054,11 +1011,19 @@ func (a *assembler) accept(ctx context.Context, result decodedData, progress rea
 	}
 	data := result.feedback.data
 	if dml := result.feedback.dml; dml != nil {
+		var table *common.TableInfo
+		if data.format == rowFormat {
+			table = data.schema.tableInfo()
+		}
 		task := &decodeTask{
-			message:       result.message,
+			message: result.message,
+			name: event.SchemaTableName{
+				SchemaName: result.message.Schema,
+				TableName:  result.message.Table,
+			},
 			record:        result.record,
 			done:          make(chan struct{}),
-			table:         data.table,
+			table:         table,
 			tableID:       dml.PhysicalTableID,
 			retainedBytes: data.retainedBytes,
 		}
@@ -1125,7 +1090,6 @@ func (a *assembler) decodeMessages(data *readData) iter.Seq2[decodedData, error]
 			case codecCommon.MessageTypeDDL:
 				ddl := p.decoder.NextDDLEvent()
 				if decoder, ok := p.decoder.(*simple.Decoder); ok {
-					p.cacheSchemas(ddl, a.schemas)
 					if !a.decodeCachedMessages(data, p, decoder, yield) {
 						return
 					}

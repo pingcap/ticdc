@@ -38,11 +38,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	maxMemoryBytes      = 1 << 30
-	progressLogInterval = 5 * time.Second
-)
-
 type sourceType string
 
 const (
@@ -69,20 +64,18 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	}
 	version.LogVersionInfo("consumer")
 
-	upstreamURI := parseRequiredURI("upstream-uri", options.upstreamURI)
-	source := sourceTypeFromURI(upstreamURI)
+	upstreamURI := parseRequiredURI(options.upstreamURI)
+	sourceType := sourceTypeFromURI(upstreamURI)
 	consumerID := options.consumerID
-	if source != sourceStorage && strings.TrimSpace(consumerID) == "" {
+	if sourceType != sourceStorage && strings.TrimSpace(consumerID) == "" {
 		consumerID = "ticdc_consumer_" + uuid.NewString()
 	}
 	replicaConfig := loadReplicaConfig(options.configFile)
-	log.Info("consumer configuration loaded", zap.String("sourceType", string(source)), zap.String("consumerID", consumerID))
+	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
 	memory := newMemoryUsage()
-	progress := newInputProgress(memory)
-	schemas := newSchemaUsage(memory)
 	confirmable := make(chan struct{}, 1)
-	reader, streams := newReader(ctx, upstreamURI, consumerID, replicaConfig, progress, schemas, confirmable)
+	reader, streams := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig, streams)
 	upstreamDB := newUpstreamDB(ctx, upstreamURI)
 	defer func() {
@@ -96,8 +89,8 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			}
 		}
 	}()
-	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, schemas)
-	writer := newWriter(ctx, options.downstreamURI, replicaConfig, progress)
+	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory)
+	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
 		assembler:     assembler,
@@ -107,17 +100,17 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	}
 }
 
-func parseRequiredURI(name, rawURI string) *url.URL {
+func parseRequiredURI(rawURI string) *url.URL {
 	if rawURI == "" {
-		log.Panic("consumer URI is required", zap.String("option", name))
+		log.Panic("consumer URI is required", zap.String("rawURI", rawURI))
 	}
 	uri, err := url.Parse(rawURI)
 	if err != nil {
-		log.Panic("consumer URI parsing failed", zap.String("option", name), zap.Error(putil.MaskSensitiveDataInURLError(err)))
+		log.Panic("consumer URI parsing failed", zap.String("rawURI", rawURI), zap.Error(err))
 	}
 	uri.Scheme = strings.ToLower(uri.Scheme)
 	if uri.Scheme == "" {
-		log.Panic("consumer URI must include a scheme", zap.String("option", name))
+		log.Panic("consumer URI must include a scheme", zap.String("rawURI", rawURI))
 	}
 	return uri
 }

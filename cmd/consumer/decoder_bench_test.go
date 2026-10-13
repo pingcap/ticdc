@@ -45,8 +45,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 				_ = g.Wait()
 			}()
 			memory := newMemoryUsage()
-			progress := newInputProgress(memory)
-			d := newDecoderGroup(newSchemaUsage(memory), nil)
+			d := newDecoderGroup(memory, nil)
 			b.Cleanup(d.close)
 			g.Go(func() error {
 				return d.start(ctx)
@@ -89,7 +88,7 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			tasks := make([]*decodeTask, batchRows)
 			b.ReportAllocs()
 			for b.Loop() {
-				record := progress.newAck(128, nil)
+				record := newAck(memory, 128, nil)
 				for i := range tasks {
 					id := i % tables
 					task := &decodeTask{
@@ -137,7 +136,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						_ = g.Wait()
 					}()
 					memory := newMemoryUsage()
-					progress := newInputProgress(memory)
 					cfg := codecCommon.NewConfig(config.ProtocolCanalJSON)
 					cfg.EnableTiDBExtension = true
 					decoder, err := canal.NewDecoder(ctx, cfg, nil)
@@ -173,7 +171,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 						}
 						decoder.NextDMLMessage().ToDMLEvent().PostFlush()
 					}
-					d := newDecoderGroup(newSchemaUsage(memory), nil)
+					d := newDecoderGroup(memory, nil)
 					groups := make([]*decoderGroup, d.workers)
 					for i := range groups {
 						groups[i] = d
@@ -182,7 +180,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 								input:   make(chan *decodeTask, 64),
 								workers: 1,
 								memory:  memory,
-								schemas: d.schemas,
 							}
 						}
 						if queue != "table" && i != 0 {
@@ -196,7 +193,7 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()
 					for b.Loop() {
-						record := progress.newAck(128, nil)
+						record := newAck(memory, 128, nil)
 						for i := range tasks {
 							id := i % len(values)
 							if workload == "skewed" {

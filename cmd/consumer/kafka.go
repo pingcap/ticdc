@@ -72,7 +72,7 @@ type kafkaReader struct {
 	client                *kgo.Client
 	topic                 string
 	memory                *memoryUsage
-	progress              *inputProgress
+	prefetchedBytes       int64 // SDK bytes already included in the shared budget.
 	confirmable           chan<- struct{}
 	partitions            map[int32]*kafkaPartition
 	readSequence          uint64
@@ -81,7 +81,7 @@ type kafkaReader struct {
 	boundaryDDL           uint64
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, progress *inputProgress, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
+func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
 		log.Panic("Kafka upstream URI must include an endpoint")
 	}
@@ -167,13 +167,11 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		}
 	}
 
-	progress.memory.externalBytes = client.BufferedFetchBytes
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
 		client:      client,
 		topic:       topic,
-		memory:      progress.memory,
-		progress:    progress,
+		memory:      memory,
 		confirmable: confirmable,
 		partitions:  partitions,
 		router:      router,
@@ -181,14 +179,33 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	}
 }
 
-func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
+func (c *kafkaReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
+		prefetched := c.client.BufferedFetchBytes()
+		if prefetched > c.prefetchedBytes {
+			c.memory.reserve(prefetched - c.prefetchedBytes)
+		}
+		if prefetched < c.prefetchedBytes {
+			c.memory.release(c.prefetchedBytes - prefetched)
+		}
+		c.prefetchedBytes = prefetched
 		c.limitReads()
 		partitionID := c.nextPartition()
 		if partitionID < 0 {
+			// Drain SDK buffers before waiting; those bytes are already admitted.
+			// Buffered leading partitions may need a fetch from a slower one.
+			buffered := c.client.BufferedFetchRecords() != 0
+			for _, partition := range c.partitions {
+				buffered = buffered || len(partition.polled) != 0
+			}
+			if !needsMoreInput && !buffered {
+				if err := c.memory.wait(ctx); err != nil {
+					return nil, err
+				}
+			}
 			fetches := c.client.PollRecords(ctx, batchRows)
 			if err := context.Cause(ctx); err != nil {
 				return nil, err
@@ -221,7 +238,7 @@ func (c *kafkaReader) Read(ctx context.Context) (*readData, error) {
 		partition.sequence = c.readSequence
 		bytes := int64(len(record.Key) + len(record.Value) + 128)
 		c.memory.release(bytes)
-		state := c.progress.newAck(bytes, c.confirmable)
+		state := newAck(c.memory, bytes, c.confirmable)
 		partition.mu.Lock()
 		partition.records = append(partition.records, kafkaRecord{
 			ack:    state,
@@ -322,7 +339,7 @@ func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readP
 	if len(c.partitions) <= 1 || (feedback.boundaryDDL == nil && feedback.pendingDML == 0) {
 		return result, nil
 	}
-	if feedback.boundaryDDL == nil && feedback.pendingDML < batchRows && c.memory.used() < maxMemoryBytes {
+	if feedback.boundaryDDL == nil && feedback.pendingDML < batchRows && c.memory.used() < c.memory.limit {
 		c.limitReads()
 		if c.nextPartition() >= 0 {
 			result.needsMoreInput = true
@@ -537,7 +554,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 
 func (c *kafkaReader) limitReads() {
 	boundaryPending := c.boundary != nil && !c.boundary.reached
-	underPressure := !boundaryPending && c.memory.used() >= maxMemoryBytes
+	underPressure := !boundaryPending && c.memory.used() >= c.memory.limit
 	if !boundaryPending && !underPressure && c.pausedPartitions == 0 {
 		return
 	}
@@ -599,4 +616,5 @@ func (c *kafkaReader) nextPartition() int32 {
 
 func (c *kafkaReader) Close() {
 	c.client.Close()
+	c.memory.release(c.prefetchedBytes)
 }

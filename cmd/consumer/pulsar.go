@@ -43,17 +43,17 @@ type pulsarPartition struct {
 }
 
 type pulsarReader struct {
-	client       pulsar.Client
-	consumer     pulsar.Consumer
-	memory       *memoryUsage
-	progress     *inputProgress
-	partitions   map[string]*pulsarPartition
-	confirmable  chan<- struct{}
-	watermark    uint64
-	hasWatermark bool
+	client        pulsar.Client
+	consumer      pulsar.Consumer
+	memory        *memoryUsage
+	prefetchBytes int64
+	partitions    map[string]*pulsarPartition
+	confirmable   chan<- struct{}
+	watermark     uint64
+	hasWatermark  bool
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, confirmable chan<- struct{}) (reader *pulsarReader) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader) {
 	if err := context.Cause(ctx); err != nil {
 		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
 	}
@@ -172,26 +172,29 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	}
 	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
 	// scale down under the client memory limit; oversized messages may exceed it.
-	progress.memory.externalBytes = func() int64 {
-		return clientOptions.MemoryLimitBytes
-	}
+	memory.reserve(clientOptions.MemoryLimitBytes)
 	partitions := make(map[string]*pulsarPartition, len(topics))
 	for _, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{}
 	}
 	c := &pulsarReader{
-		client:      client,
-		consumer:    consumer,
-		memory:      progress.memory,
-		progress:    progress,
-		partitions:  partitions,
-		confirmable: confirmable,
+		client:        client,
+		consumer:      consumer,
+		memory:        memory,
+		prefetchBytes: clientOptions.MemoryLimitBytes,
+		partitions:    partitions,
+		confirmable:   confirmable,
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c
 }
 
-func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
+func (c *pulsarReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
+	if !needsMoreInput {
+		if err := c.memory.wait(ctx); err != nil {
+			return nil, err
+		}
+	}
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
@@ -199,7 +202,7 @@ func (c *pulsarReader) Read(ctx context.Context) (*readData, error) {
 		partition := c.partitions[message.Topic()]
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
-		record := c.progress.newAck(size, c.confirmable)
+		record := newAck(c.memory, size, c.confirmable)
 		partition.mu.Lock()
 		partition.records = append(partition.records, pulsarRecord{
 			ack:       record,
@@ -275,4 +278,5 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
+	c.memory.release(c.prefetchBytes)
 }

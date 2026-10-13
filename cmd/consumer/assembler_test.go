@@ -30,24 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMemoryReleasesSharedSchema(t *testing.T) {
-	memory := newMemoryUsage()
-	schemas := newSchemaUsage(memory)
-	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-		ID: 1, Name: ast.NewCIStr("t"),
-		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
-	})
-	schemas.retain(table)
-	bytes := memory.used()
-	require.Positive(t, bytes)
-	schemas.retain(table)
-	require.Equal(t, bytes, memory.used())
-	schemas.release(table)
-	require.Equal(t, bytes, memory.used())
-	schemas.release(table)
-	require.Zero(t, memory.used())
-}
-
 func TestAssemblerCSVTransactionBatches(t *testing.T) {
 	field := types.NewFieldType(mysql.TypeLonglong)
 	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
@@ -223,7 +205,7 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 		result := a.next()
 		require.Same(t, expected, result)
 	}
-	data, err := r.Read(t.Context())
+	data, err := r.Read(t.Context(), false)
 	require.NoError(t, err)
 	require.NotNil(t, data.control)
 	for result, err := range a.decode(t.Context(), data) {

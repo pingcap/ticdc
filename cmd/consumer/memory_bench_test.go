@@ -14,33 +14,15 @@
 
 package main
 
-import (
-	"testing"
-
-	"github.com/pingcap/ticdc/pkg/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
-)
+import "testing"
 
 func BenchmarkMemoryAccounting(b *testing.B) {
 	memory := newMemoryUsage()
-	schemas := newSchemaUsage(memory)
-	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
-		ID:      1,
-		Name:    ast.NewCIStr("t"),
-		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
-	})
-	schemas.retain(table)
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			schemas.retain(table)
 			memory.reserve(1024)
-			schemas.release(table)
 			memory.release(1024)
 		}
 	})
-	schemas.release(table)
 }

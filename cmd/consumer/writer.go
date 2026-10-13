@@ -20,7 +20,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -41,7 +40,7 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, progress *inputProgress) *writer {
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *writer {
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
@@ -56,8 +55,7 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 	}
 	return &writer{
 		downstream: downstream,
-		memory:     progress.memory,
-		progress:   progress,
+		memory:     memory,
 		completed:  make(chan struct{}, 1),
 		mutations:  make(map[mutationKey]*writeBatch),
 		ddlJobs:    make(chan *writeEvent, 1),
@@ -87,8 +85,6 @@ func (w *writer) start(ctx context.Context, input <-chan []*writeEvent) error {
 }
 
 func (w *writer) dispatch(ctx context.Context, input <-chan []*writeEvent) error {
-	ticker := time.NewTicker(progressLogInterval)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -101,14 +97,6 @@ func (w *writer) dispatch(ctx context.Context, input <-chan []*writeEvent) error
 				w.consume(item)
 			}
 		case <-w.completed:
-		case <-ticker.C:
-			progress := w.progress
-			log.Info("consumer progress", zap.Int64("receivedInputs", progress.received.Load()),
-				zap.Int64("decodedRows", w.decodedRows), zap.Int64("writtenRows", w.writtenRows),
-				zap.Int64("completedInputs", progress.confirmed.Load()), zap.Int("pendingDMLCount", len(w.pendingDML)),
-				zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
-				zap.Int64("uncompletedInputs", progress.received.Load()-progress.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
-			continue
 		}
 		if err := w.flushDML(ctx); err != nil {
 			if ctx.Err() == nil {
@@ -156,7 +144,6 @@ type writer struct {
 	g                 *errgroup.Group
 	downstream        sink.Sink
 	memory            *memoryUsage
-	progress          *inputProgress
 	completed         chan struct{}
 	pendingDML        []*writeEvent
 	pendingDDL        []*writeEvent
@@ -169,8 +156,6 @@ type writer struct {
 	writtenBefore     uint64
 	inFlightBytes     int64
 	inFlightEvents    int
-	decodedRows       int64
-	writtenRows       int64
 	pendingWatermarks []*writeEvent
 	watermark         uint64
 	progressChanged   bool
@@ -202,7 +187,6 @@ type ddlKey struct {
 func (w *writer) consume(result *writeEvent) {
 	if result.dml != nil {
 		w.pendingDML = append(w.pendingDML, result)
-		w.decodedRows += int64(result.dml.Len())
 		w.progressChanged = true
 	}
 	if result.ddl != nil {
@@ -273,22 +257,19 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			continue
 		}
 		for _, item := range w.pendingDML {
-			if item.dml.CommitTs <= ddl.GetCommitTs() && ddlBlocksTable(ddl, item.dml) {
+			if item.dml.CommitTs <= ddl.GetCommitTs() && ddlBlocksTable(ddl, item) {
 				return nil
 			}
 		}
 		for _, batch := range w.inFlight {
 			if slices.ContainsFunc(batch.items, func(item *writeEvent) bool {
-				return ddlBlocksTable(ddl, item.dml)
+				return ddlBlocksTable(ddl, item)
 			}) {
 				return nil
 			}
 		}
-		bytes := int64(len(key.schema) + len(key.table) + len(key.query) + 192)
-		w.memory.reserve(bytes)
 		select {
 		case <-ctx.Done():
-			w.memory.release(bytes)
 			return context.Cause(ctx)
 		case w.ddlJobs <- result:
 			if w.ddlWrites == nil {
@@ -357,9 +338,9 @@ func (w *writer) selectBatch(active map[int64]*writeEvent, blocked map[int64]boo
 		if blocked[id] {
 			continue
 		}
-		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
+		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item)
 		if fenced || slices.ContainsFunc(w.pendingDDL, func(control *writeEvent) bool {
-			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
+			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item)
 		}) {
 			blocked[id] = true
 			continue
@@ -476,23 +457,12 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 }
 
 func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
-	ticker := time.NewTicker(progressLogInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-batch.done:
-			w.finishBatches()
-			return nil
-		case <-ticker.C:
-			log.Info("consumer waiting for batch",
-				zap.Int64("receivedInputs", w.progress.received.Load()), zap.Int64("decodedRows", w.decodedRows),
-				zap.Int64("writtenRows", w.writtenRows), zap.Int64("completedInputs", w.progress.confirmed.Load()),
-				zap.Int("pendingDMLCount", len(w.pendingDML)),
-				zap.Int("inFlightBatches", len(w.inFlight)), zap.Int64("inFlightBytes", w.inFlightBytes),
-				zap.Int64("uncompletedInputs", w.progress.received.Load()-w.progress.confirmed.Load()), zap.Int64("bufferedBytes", w.memory.used()))
-		}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-batch.done:
+		w.finishBatches()
+		return nil
 	}
 }
 
@@ -507,9 +477,6 @@ func (w *writer) finishBatches() {
 		}
 		for _, dml := range batch.dropped {
 			dml.PostFlush()
-		}
-		for _, dml := range batch.events {
-			w.writtenRows += int64(dml.Len())
 		}
 		for _, key := range batch.keys {
 			w.mutations[key] = nil
@@ -571,20 +538,16 @@ func (w *writer) advanceWatermarks() {
 	}
 	w.writtenBefore = max(w.writtenBefore, before)
 	// Retire identities only after input progress and all earlier writes pass.
-	var released int64
 	for key := range w.mutations {
 		if key.commitTs < w.writtenBefore {
-			released += int64(len(key.handle) + 192)
 			delete(w.mutations, key)
 		}
 	}
 	for key := range w.ddlWrites {
 		if key.commitTs < w.writtenBefore {
-			released += int64(len(key.schema) + len(key.table) + len(key.query) + 192)
 			delete(w.ddlWrites, key)
 		}
 	}
-	w.memory.release(released)
 }
 
 func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
@@ -635,8 +598,6 @@ func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *wri
 				}
 				retain = false
 			default:
-				bytes := int64(len(key.handle) + 192)
-				w.memory.reserve(bytes)
 				w.mutations[key] = batch
 				batch.keys = append(batch.keys, key)
 			}

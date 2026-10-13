@@ -43,12 +43,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				_ = g.Wait()
 			}()
 			memory := newMemoryUsage()
-			progress := newInputProgress(memory)
-			schemas := newSchemaUsage(memory)
 			completed := make(chan struct{}, 1)
 			d := &decoderGroup{
 				memory:    memory,
-				schemas:   schemas,
 				completed: completed,
 				input:     make(chan *decodeTask, 8),
 				workers:   2,
@@ -56,9 +53,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			t.Cleanup(d.close)
 			a := &assembler{
 				memory:    memory,
-				schemas:   schemas,
 				decoder:   d,
-				tables:    make(map[[2]string]*common.TableInfo),
 				mergeRows: mergeRows,
 			}
 			downstream := mock.NewMockSink(gomock.NewController(t))
@@ -78,14 +73,13 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			}).Times(3)
 			w := &writer{
 				memory:     memory,
-				progress:   progress,
 				downstream: downstream,
 				completed:  completed,
 			}
 			g.Go(func() error {
 				return d.start(ctx)
 			})
-			record := progress.newAck(4096, nil)
+			record := newAck(memory, 4096, nil)
 			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}
 			r := &pulsarReader{memory: memory}
 			release := make(chan struct{})
@@ -106,8 +100,15 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				if mergeRows {
 					// A CSV selector can return shared metadata without the
 					// source schema version. Conversion must keep it immutable.
-					data.table = table.CloneWithRouting("test", name)
-					data.table.UpdateTS = 100
+					captured := table.CloneWithRouting("test", name)
+					captured.UpdateTS = 100
+					data.format = rowFormat
+					data.schema = &readSchema{
+						table: captured,
+					}
+					data.group = &readGroup{
+						tableID: id,
+					}
 				}
 				message := codecCommon.NewDMLMessage(id, "test", name, uint64(10+i), common.RowTypeInsert, func() *event.DMLEvent {
 					if i == 0 {
@@ -135,7 +136,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				t.Fatal("independent table could not convert while table a was blocked")
 			}
 			// An input shared by several rows retains its memory and remains unconfirmed.
-			require.EqualValues(t, 4096, record.memory.Load())
+			require.EqualValues(t, 4096, record.bytes.Load())
 			require.Greater(t, record.refs.Load(), int64(0))
 			watermark := &writeEvent{watermark: 20, hasWatermark: true}
 			items, err := a.assemble(ctx, nil, watermark)
@@ -156,7 +157,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					t.Fatal("table a conversion did not finish")
 				}
 			}
-			require.EqualValues(t, 128, record.memory.Load())
+			require.EqualValues(t, 128, record.bytes.Load())
 			require.Greater(t, record.refs.Load(), int64(0))
 			items = a.collectDecoded()
 			for _, item := range items {

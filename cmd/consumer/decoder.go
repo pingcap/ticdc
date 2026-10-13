@@ -19,12 +19,28 @@ import (
 	"runtime"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+// The reader supplies immutable schema contents. Only assembly materializes
+// and caches TableInfo; conversion workers receive that captured metadata.
+type readSchema struct {
+	file  *cloudstorage.SchemaFile
+	table *common.TableInfo
+}
+
+func (s *readSchema) tableInfo() *common.TableInfo {
+	if s.table == nil {
+		s.table = s.file.TableInfo()
+		s.table.UpdateTS = s.file.TableVersion
+	}
+	return s.table
+}
 
 // Protocol cursors and schema updates remain with the assembler. Workers only
 // use captured messages; their number does not depend on input partitions.
@@ -33,12 +49,12 @@ type decoderGroup struct {
 	input     chan *decodeTask
 	workers   int
 	memory    *memoryUsage
-	schemas   *schemaUsage
 	completed chan struct{}
 }
 
 type decodeTask struct {
 	message       *codecCommon.DMLMessage
+	name          event.SchemaTableName
 	record        *ack
 	dml           *event.DMLEvent
 	bytes         int64
@@ -48,13 +64,12 @@ type decodeTask struct {
 	retainedBytes int64
 }
 
-func newDecoderGroup(schemas *schemaUsage, completed chan struct{}) *decoderGroup {
+func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup {
 	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
 		input:     make(chan *decodeTask, workers*64),
 		workers:   workers,
-		memory:    schemas.memory,
-		schemas:   schemas,
+		memory:    memory,
 		completed: completed,
 	}
 }
@@ -127,12 +142,8 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		d.schemas.retain(dml.TableInfo)
 		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
 		d.memory.reserve(bytes)
-		dml.AddPostFlushFunc(func() {
-			d.schemas.release(dml.TableInfo)
-		})
 		task.dml, task.bytes = dml, bytes
 		task.record.decoded(task.retainedBytes)
 		task.message, task.record, task.table = nil, nil, nil

@@ -71,12 +71,6 @@ type storageTableKey struct {
 	partition int64
 }
 
-type storageSchema struct {
-	file  *cloudstorage.SchemaFile
-	table *common.TableInfo
-	bytes int64
-}
-
 type storageReader struct {
 	tableIDs       map[storageTableKey]int64
 	nextTableID    int64
@@ -84,8 +78,6 @@ type storageReader struct {
 	groupKey       cloudstorage.DMLPathKey
 	storage        storeapi.Storage
 	memory         *memoryUsage
-	progress       *inputProgress
-	schemaUsage    *schemaUsage
 	confirmable    chan<- struct{}
 	dateSeparator  config.DateSeparator
 	fileExtension  string
@@ -93,7 +85,7 @@ type storageReader struct {
 	sortCSVRows    bool
 	checkpoint     uint64
 	readCheckpoint uint64
-	schemas        map[cloudstorage.SchemaPathKey]*storageSchema
+	schemas        map[cloudstorage.SchemaPathKey]*readSchema
 	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks  map[string]uint64
 	mu             sync.Mutex
@@ -102,7 +94,7 @@ type storageReader struct {
 	scanned        bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan<- struct{}) *storageReader {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}
@@ -126,15 +118,13 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 
 	c := &storageReader{
 		storage:        storage,
-		memory:         progress.memory,
-		progress:       progress,
-		schemaUsage:    schemas,
+		memory:         memory,
 		confirmable:    confirmable,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		sortCSVRows:    protocol == config.ProtocolCsv && replicaConfig.Sink.CSVConfig.OutputOldValue && replicaConfig.Sink.CSVConfig.IncludeCommitTs,
-		schemas:        make(map[cloudstorage.SchemaPathKey]*storageSchema),
+		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
@@ -163,21 +153,14 @@ func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, erro
 func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange, error) {
 	// Read already rejects older schema versions after observing their DDL.
 	// Retire those caches at the next scan, after its captured inputs are drained.
-	for key, indices := range c.fileIndices {
+	for key := range c.fileIndices {
 		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
-			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
-			for index := range indices {
-				bytes += int64(len(index.DispatcherID) + 128)
-			}
 			delete(c.fileIndices, key)
-			c.memory.release(bytes)
 		}
 	}
-	for key, schema := range c.schemas {
+	for key := range c.schemas {
 		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 			delete(c.schemas, key)
-			c.memory.release(schema.bytes)
-			c.schemaUsage.release(schema.table)
 		}
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
@@ -221,13 +204,9 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		if indices == nil {
 			indices = make(map[cloudstorage.FileIndexKey]uint64)
 			c.fileIndices[key] = indices
-			bytes := int64(len(key.Schema) + len(key.Table) + len(key.Date) + 256)
-			c.memory.reserve(bytes)
 		}
 		if _, known := indices[index.FileIndexKey]; !known {
 			indices[index.FileIndexKey] = 0
-			bytes := int64(len(index.DispatcherID) + 128)
-			c.memory.reserve(bytes)
 		}
 
 		previous := indices[index.FileIndexKey]
@@ -291,16 +270,13 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if file.Checksum() != uint32(checksum) || key.TableVersion != file.TableVersion {
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
 	}
-	bytes := int64(len(data))*4 + 1024
-	c.memory.reserve(bytes)
-	c.schemas[key] = &storageSchema{
-		file:  &file,
-		bytes: bytes,
+	c.schemas[key] = &readSchema{
+		file: &file,
 	}
 	return key, true, nil
 }
 
-func (c *storageReader) Read(ctx context.Context) (*readData, error) {
+func (c *storageReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -324,7 +300,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		default:
 			c.inputs[0] = storageInput{}
 			c.inputs = c.inputs[1:]
-			c.memory.release(256)
 		}
 		schema := c.schemas[input.key.SchemaPathKey]
 		if schema == nil {
@@ -339,14 +314,12 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 			}
 			continue
 		}
-		table := schema.table
-		if table == nil {
-			table = schema.file.TableInfo()
-			table.UpdateTS = schema.file.TableVersion
-			c.schemaUsage.retain(table)
-			schema.table = table
-		}
 		if key.IsSchemaFileDMLPathKey() {
+			if !needsMoreInput {
+				if err := c.memory.wait(ctx); err != nil {
+					return nil, err
+				}
+			}
 			return c.readDDL(key, schema), nil
 		}
 		idKey := storageTableKey{
@@ -356,7 +329,6 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		tableID := c.tableIDs[idKey]
 		if tableID == 0 {
-			c.memory.reserve(int64(len(key.Schema) + len(key.Table) + 128))
 			c.nextTableID++
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
@@ -375,12 +347,18 @@ func (c *storageReader) Read(ctx context.Context) (*readData, error) {
 		}
 		if input.groupEnd {
 			return &readData{
-				table:    table,
+				format:   rowFormat,
+				schema:   schema,
 				group:    c.group,
 				groupEnd: true,
 			}, nil
 		}
-		return c.readDMLFile(ctx, input, table)
+		if !needsMoreInput {
+			if err := c.memory.wait(ctx); err != nil {
+				return nil, err
+			}
+		}
+		return c.readDMLFile(ctx, input, schema)
 	}
 }
 
@@ -425,7 +403,6 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	keys := slices.SortedFunc(maps.Keys(files), cloudstorage.CompareDMLPathKey)
 	for _, key := range keys {
 		if key.IsSchemaFileDMLPathKey() {
-			c.memory.reserve(256)
 			c.inputs = append(c.inputs, storageInput{key: key})
 			continue
 		}
@@ -434,7 +411,6 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 			sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
 		}
 		for indexKey, span := range files[key] {
-			c.memory.reserve(256)
 			c.inputs = append(c.inputs, storageInput{
 				key: key,
 				index: cloudstorage.FileIndex{
@@ -445,7 +421,6 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 				sort: sortBeforeWrite,
 			})
 		}
-		c.memory.reserve(256)
 		c.inputs = append(c.inputs, storageInput{
 			key:      key,
 			groupEnd: true,
@@ -454,9 +429,9 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *storageSchema) *readData {
+func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *readData {
 	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
-	record := c.progress.newAck(size, c.confirmable)
+	record := newAck(c.memory, size, c.confirmable)
 	c.mu.Lock()
 	c.records = append(c.records, record)
 	c.mu.Unlock()
@@ -467,9 +442,7 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *storageSche
 	case schema.file.Table == "":
 		scope = event.InfluenceTypeDB
 	}
-	// Reuse the cached table instead of reconstructing its columns again.
 	ddl := &event.DDLEvent{
-		TableInfo:     schema.table,
 		FinishedTs:    schema.file.TableVersion,
 		Type:          schema.file.Type,
 		Query:         schema.file.Query,
@@ -478,7 +451,8 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *storageSche
 		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 	}
 	return &readData{
-		table:         schema.table,
+		format:        rowFormat,
+		schema:        schema,
 		ddl:           ddl,
 		record:        record,
 		retainedBytes: 256,
@@ -486,7 +460,7 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *storageSche
 	}
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, table *common.TableInfo) (*readData, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema) (*readData, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 	file, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
@@ -501,7 +475,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, tab
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
-	record := c.progress.newAck(size+256, c.confirmable)
+	record := newAck(c.memory, size+256, c.confirmable)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(file, data); err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
@@ -513,7 +487,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, tab
 	return &readData{
 		format:        rowFormat,
 		value:         data,
-		table:         table,
+		schema:        schema,
 		group:         c.group,
 		record:        record,
 		retainedBytes: 256,
@@ -532,12 +506,13 @@ func (c *storageReader) Advance(_ context.Context, feedback readFeedback) (readP
 	}
 	if feedback.ddl != nil {
 		ddl := feedback.ddl
-		key := common.QuoteSchema(data.table.GetSchemaName(), data.table.GetTableName())
-		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], data.table.UpdateTS)
+		file := data.schema.file
+		key := common.QuoteSchema(file.Schema, file.Table)
+		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], file.TableVersion)
 		if ddl.Type == byte(timodel.ActionRenameTable) {
 			old := ddl.BlockedTableNames[0]
 			oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
-			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], data.table.UpdateTS)
+			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], file.TableVersion)
 		}
 	}
 	if feedback.dml != nil {

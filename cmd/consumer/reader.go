@@ -21,7 +21,6 @@ import (
 	"slices"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"go.uber.org/zap"
@@ -30,8 +29,9 @@ import (
 
 // Read and Advance have one caller. Confirm may run concurrently.
 // Close runs after all callers have stopped.
+// needsMoreInput lets an unfinished input boundary advance past the soft budget.
 type readClient interface {
-	Read(ctx context.Context) (*readData, error)
+	Read(ctx context.Context, needsMoreInput bool) (*readData, error)
 	Advance(ctx context.Context, feedback readFeedback) (readProgress, error)
 	Confirm(ctx context.Context) error
 	Close()
@@ -42,7 +42,6 @@ type readClient interface {
 type reader struct {
 	g           *errgroup.Group
 	client      readClient
-	progress    *inputProgress
 	confirmable <-chan struct{}
 }
 
@@ -61,24 +60,23 @@ type readResult struct {
 
 // Return logical stream IDs with the reader so decoder initialization does not
 // depend on transport-specific reader fields. An empty list uses one decoder.
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, progress *inputProgress, schemas *schemaUsage, confirmable chan struct{}) (*reader, []int32) {
+func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan struct{}) (*reader, []int32) {
 	var (
 		client  readClient
 		streams []int32
 	)
 	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		reader := newKafkaReader(ctx, upstreamURI, consumerID, progress, replicaConfig, confirmable)
+		reader := newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
 		client = reader
 		streams = slices.Collect(maps.Keys(reader.partitions))
 	case sourcePulsar:
-		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, progress, confirmable)
+		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
-		client = newStorageReader(ctx, upstreamURI, replicaConfig, progress, schemas, confirmable)
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, memory, confirmable)
 	}
 	return &reader{
 		client:      client,
-		progress:    progress,
 		confirmable: confirmable,
 	}, streams
 }
@@ -90,12 +88,7 @@ func (r *reader) start(ctx context.Context, requests <-chan readRequest, results
 	})
 	var needsMoreInput bool
 	for {
-		if !needsMoreInput {
-			if err := r.waitMemory(ctx); err != nil {
-				return err
-			}
-		}
-		data, err := r.client.Read(ctx)
+		data, err := r.client.Read(ctx, needsMoreInput)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer read failed", zap.Error(err))
@@ -154,30 +147,6 @@ func (r *reader) confirm(ctx context.Context) error {
 	}
 }
 
-// Backpressure applies to new independent inputs. Retained caches alone must
-// not prevent reading, and unfinished input boundaries bypass this wait.
-func (r *reader) waitMemory(ctx context.Context) error {
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if r.progress.memory.used() < maxMemoryBytes || r.progress.received.Load() == r.progress.confirmed.Load() {
-			return nil
-		}
-		changed := r.progress.memory.changes()
-		// Subscribe before rechecking: a concurrent release either satisfies the
-		// admission condition or closes changed.
-		if r.progress.memory.used() < maxMemoryBytes || r.progress.received.Load() == r.progress.confirmed.Load() {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
-}
-
 func (r *reader) close() {
 	if r.g != nil {
 		_ = r.g.Wait()
@@ -208,7 +177,7 @@ type readData struct {
 	stream        int32
 	record        *ack
 	retainedBytes int64
-	table         *common.TableInfo
+	schema        *readSchema
 	ddl           *event.DDLEvent
 	control       *readControl
 	group         *readGroup

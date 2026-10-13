@@ -88,7 +88,6 @@ func TestWriterWatermarksFollowWrites(t *testing.T) {
 		memory: newMemoryUsage(), inFlight: []*writeBatch{batch}, inFlightEvents: 1,
 		mutations: map[mutationKey]*writeBatch{first: batch, second: nil},
 	}
-	w.memory.reserve(int64(len(first.handle) + len(second.handle) + 384))
 	w.consume(&writeEvent{watermark: 20, hasWatermark: true})
 	w.finishBatches()
 	require.Contains(t, w.mutations, first)
@@ -109,12 +108,10 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field}},
 	})
 	memory := newMemoryUsage()
-	progress := newInputProgress(memory)
 	buffer := &assembler{
-		memory:  memory,
-		schemas: newSchemaUsage(memory),
+		memory: memory,
 	}
-	record := progress.newAck(128, nil)
+	record := newAck(memory, 128, nil)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	var retained *event.DMLEvent
 	downstream := mock.NewMockSink(gomock.NewController(t))
@@ -288,10 +285,8 @@ func TestWriterDDLOnlyFlushesAffectedTable(t *testing.T) {
 func TestWriterDDLReplay(t *testing.T) {
 	ctx := t.Context()
 	memory := newMemoryUsage()
-	progress := newInputProgress(memory)
 	a := &assembler{
-		memory:  memory,
-		schemas: newSchemaUsage(memory),
+		memory: memory,
 	}
 	w := &writer{memory: memory, ddlJobs: make(chan *writeEvent, 1)}
 	truncate := &event.DDLEvent{SchemaName: "test", TableName: "table_3", FinishedTs: 100, Query: "TRUNCATE TABLE `test`.`table_3`"}
@@ -305,7 +300,7 @@ func TestWriterDDLReplay(t *testing.T) {
 	}
 	w.downstream = downstream
 	for index, ddl := range []*event.DDLEvent{truncate, drop, truncate, first, second, first} {
-		record := progress.newAck(128, nil)
+		record := newAck(memory, 128, nil)
 		a.queueDDL(ddl, record)
 		w.consume(a.nextReady(ddl.GetCommitTs()))
 		record.decoded(128)
@@ -320,7 +315,7 @@ func TestWriterDDLReplay(t *testing.T) {
 		job := <-w.ddlJobs
 		var duplicate *ack
 		if index == 0 {
-			duplicate = progress.newAck(128, nil)
+			duplicate = newAck(memory, 128, nil)
 			a.queueDDL(ddl, duplicate)
 			w.consume(a.nextReady(ddl.GetCommitTs()))
 			duplicate.decoded(128)
@@ -349,7 +344,7 @@ func TestWriterDDLReplay(t *testing.T) {
 			checkpoint = true
 		},
 	})
-	record := progress.newAck(128, nil)
+	record := newAck(memory, 128, nil)
 	a.queueDDL(first, record)
 	w.consume(a.nextReady(300))
 	record.decoded(128)
@@ -358,11 +353,11 @@ func TestWriterDDLReplay(t *testing.T) {
 	require.Empty(t, w.ddlJobs)
 	require.Zero(t, record.refs.Load())
 	record.confirm()
-	require.Positive(t, memory.used())
+	require.Zero(t, memory.used())
 	w.consume(&writeEvent{watermark: 301, hasWatermark: true})
 	require.NoError(t, w.flushDML(ctx))
 	require.Zero(t, memory.used())
-	record = progress.newAck(128, nil)
+	record = newAck(memory, 128, nil)
 	a.queueDDL(truncate, record)
 	w.consume(a.nextReady(301))
 	record.decoded(128)

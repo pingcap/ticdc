@@ -20,37 +20,24 @@ import (
 	"go.uber.org/zap"
 )
 
-type inputProgress struct {
-	memory    *memoryUsage
-	received  atomic.Int64
-	confirmed atomic.Int64
-}
-
-func newInputProgress(memory *memoryUsage) *inputProgress {
-	return &inputProgress{
-		memory: memory,
-	}
-}
-
 // An input can be confirmed after decoding and downstream writes release all refs.
 type ack struct {
-	refs     atomic.Int64
-	decodes  atomic.Int64
-	memory   atomic.Int64
-	progress *inputProgress
-	done     chan<- struct{}
+	refs    atomic.Int64
+	decodes atomic.Int64
+	bytes   atomic.Int64 // This input's allocation balance, returned to the shared budget.
+	memory  *memoryUsage
+	done    chan<- struct{}
 }
 
-func (p *inputProgress) newAck(bytes int64, done chan<- struct{}) *ack {
-	p.memory.reserve(bytes)
+func newAck(memory *memoryUsage, bytes int64, done chan<- struct{}) *ack {
+	memory.reserve(bytes)
 	record := &ack{
-		progress: p,
-		done:     done,
+		memory: memory,
+		done:   done,
 	}
-	record.memory.Store(bytes)
+	record.bytes.Store(bytes)
 	record.refs.Store(1)
 	record.decodes.Store(1)
-	p.received.Inc()
 	return record
 }
 
@@ -74,18 +61,17 @@ func (a *ack) retainDecode() {
 }
 
 func (a *ack) retain(bytes int64) {
-	a.progress.memory.reserve(bytes)
-	a.memory.Add(bytes)
+	a.memory.reserve(bytes)
+	a.bytes.Add(bytes)
 }
 
 func (a *ack) decoded(retainedBytes int64) {
 	if a.decodes.Dec() == 0 {
-		a.progress.memory.release(a.memory.Swap(retainedBytes) - retainedBytes)
+		a.memory.release(a.bytes.Swap(retainedBytes) - retainedBytes)
 	}
 	a.release()
 }
 
 func (a *ack) confirm() {
-	a.progress.confirmed.Inc()
-	a.progress.memory.release(a.memory.Load())
+	a.memory.release(a.bytes.Load())
 }

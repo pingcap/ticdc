@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -22,24 +23,46 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxMemoryBytes = 1 << 30
+
 type memoryUsage struct {
-	bytes         atomic.Int64
-	waiting       atomic.Bool
-	externalBytes func() int64
-	mu            sync.Mutex
-	changed       chan struct{}
+	limit   int64
+	bytes   atomic.Int64
+	waiting atomic.Bool
+	mu      sync.Mutex
+	changed chan struct{}
 }
 
 func newMemoryUsage() *memoryUsage {
-	return &memoryUsage{}
+	return &memoryUsage{
+		limit: maxMemoryBytes,
+	}
 }
 
 func (m *memoryUsage) used() int64 {
-	bytes := m.bytes.Load()
-	if m.externalBytes != nil {
-		bytes += m.externalBytes()
+	return m.bytes.Load()
+}
+
+// Wait before admitting new input. Already admitted work reserves without
+// waiting so decoding and downstream writes can drain a full soft budget.
+func (m *memoryUsage) wait(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if m.used() < m.limit {
+			return nil
+		}
+		changed := m.changes()
+		if m.used() < m.limit {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
 	}
-	return bytes
 }
 
 func (m *memoryUsage) reserve(bytes int64) {
