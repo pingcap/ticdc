@@ -86,11 +86,14 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, int64(10), path.pendingSize.Load())
 
-	// Remove path and deduct the current pending size immediately.
+	// Remove the path from the area's registry. The pending size remains
+	// accounted until the owning stream clears the queue.
 	path.removed.Store(true)
 	mc.removePathFromArea(path)
-	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
-	require.Equal(t, int64(0), path.pendingSize.Load())
+	// Memory accounting is reconciled by the owning stream when it clears the
+	// pending queue, avoiding a double deduction if removal races with a pop.
+	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(10), path.pendingSize.Load())
 
 	// Simulate a stale in-flight append that races with RemovePath.
 	appendEvent(2, 7)
@@ -104,6 +107,56 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	require.Equal(t, int64(0), path.pendingSize.Load())
 	require.Equal(t, 0, path.pendingQueue.Length())
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
+func TestRemovePathWhilePoppingDoesNotUndercountAreaPendingSize(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	_, removedPath := setupTestComponents()
+	remainingPath := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         removedPath.area,
+		path:         "remaining-path",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	mc.addPathToArea(removedPath, settings, feedbackChan)
+	mc.addPathToArea(remainingPath, settings, feedbackChan)
+
+	handler := &mockHandler{}
+	eq := newEventQueue(handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(4, 0)))
+	eq.initPath(removedPath)
+	eq.initPath(remainingPath)
+	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], id, size int) {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{id: id, path: path.path},
+			eventType: DefaultEventType,
+			eventSize: size,
+		})
+	}
+
+	appendEvent(removedPath, 1, 10)
+	appendEvent(removedPath, 2, 20)
+	appendEvent(remainingPath, 3, 40)
+	require.Equal(t, int64(70), removedPath.areaMemStat.totalPendingSize.Load())
+
+	// Reproduce the ordering where popEvents has selected removedPath, then
+	// RemovePath runs before popEvent updates memory accounting.
+	removedPath.removed.Store(true)
+	mc.removePathFromArea(removedPath)
+	_, ok := removedPath.popEvent()
+	require.True(t, ok)
+	eq.releasePath(removedPath, false)
+
+	// Removing one path must not deduct any memory owned by another path.
+	require.Equal(t, int64(0), removedPath.pendingSize.Load())
+	require.Equal(t, int64(40), remainingPath.pendingSize.Load())
+	require.Equal(t, int64(40), remainingPath.areaMemStat.totalPendingSize.Load())
 }
 
 func TestAreaMemStatAppendEvent(t *testing.T) {
