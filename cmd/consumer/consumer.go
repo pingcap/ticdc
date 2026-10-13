@@ -168,6 +168,9 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
 	}
+	if replicaConfig.Integrity != nil {
+		codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
+	}
 	switch source {
 	case sourceStorage:
 		if protocol == config.ProtocolCanalJSON {

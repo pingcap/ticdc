@@ -53,6 +53,7 @@ func newMockEvent(id int, path string, sleep time.Duration, work mockWork, start
 type mockHandler struct {
 	mu            sync.Mutex
 	droppedEvents []*mockEvent
+	dropEvent     *mockEvent
 }
 
 func (h *mockHandler) Path(event *mockEvent) string {
@@ -89,7 +90,7 @@ func (h *mockHandler) OnDrop(event *mockEvent) interface{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.droppedEvents = append(h.droppedEvents, event)
-	return nil
+	return h.dropEvent
 }
 
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {
