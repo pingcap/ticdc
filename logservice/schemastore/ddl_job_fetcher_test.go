@@ -30,12 +30,16 @@ import (
 )
 
 func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
 	subClient := newTrackingSubscriptionClient()
 	fetcher := newDDLJobFetcher(
 		context.Background(),
 		subClient,
 		nil,
-		common.DefaultKeyspaceID,
+		keyspaceID,
 		func(DDLJobWithCommitTs) {},
 		func(uint64) {},
 	)
