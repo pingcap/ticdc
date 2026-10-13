@@ -100,3 +100,16 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *test
 		})
 	}
 }
+
+func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	info := &ChangeFeedInfo{
+		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+		Config:       replicaConfig,
+	}
+
+	changefeedConfig := info.ToChangefeedConfig()
+	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
+	require.True(t, changefeedConfig.IsLowLatencyMode())
+}

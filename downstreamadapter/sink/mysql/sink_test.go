@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
@@ -126,6 +127,21 @@ func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+}
+
+func TestMysqlSinkBatchConfig(t *testing.T) {
+	cfg := mysql.New()
+	cfg.MaxTxnRow = 128
+	cfg.MaxAllowedPacket = 4096
+
+	sink := &Sink{
+		cfg:        cfg,
+		maxTxnRows: cfg.MaxTxnRow,
+		dmlWriter:  make([]*mysql.Writer, 3),
+	}
+
+	require.Equal(t, 384, sink.BatchCount())
+	require.Equal(t, 4096, sink.BatchBytes())
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
@@ -493,8 +509,35 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectClose() // Expect database close when sink.Close() is called
 
-	// Call GetTableRecoveryInfo with removeDDLTs=true
-	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	sink.SetWriteGate(gate)
+
+	type recoveryResult struct {
+		startTsList   []int64
+		skipSyncpoint []bool
+		skipDML       []bool
+		err           error
+	}
+	resultCh := make(chan recoveryResult, 1)
+	go func() {
+		startTsList, skipSyncpoint, skipDML, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+		resultCh <- recoveryResult{startTsList, skipSyncpoint, skipDML, err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("DDL-ts cleanup passed through a closed capture write gate: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	result := <-resultCh
+	resultStartTsList := result.startTsList
+	skipSyncpointList := result.skipSyncpoint
+	skipDMLList := result.skipDML
+	err := result.err
 
 	require.NoError(t, err)
 	require.Len(t, resultStartTsList, 3)

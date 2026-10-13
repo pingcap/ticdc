@@ -5,7 +5,7 @@ go 1.25.12
 require (
 	github.com/AlekSi/gocov-xml v1.1.0
 	github.com/axw/gocov v1.1.0
-	github.com/daixiang0/gci v0.13.5
+	github.com/daixiang0/gci v0.13.7
 	github.com/deepmap/oapi-codegen v1.9.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.7.0-rc.1

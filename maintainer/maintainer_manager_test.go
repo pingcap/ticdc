@@ -103,7 +103,7 @@ func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
 
 	testutil.SetUpTestServices(t)
 	selfNode := node.NewInfo("", "")
-	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode)
+	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode, nil)
 	t.Cleanup(maintainers.closeAll)
 	return maintainers
 }

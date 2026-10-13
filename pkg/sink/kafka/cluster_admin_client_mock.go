@@ -46,17 +46,17 @@ func (mr *MockClusterAdminClientMockRecorder) Close() *gomock.Call {
 }
 
 // CreateTopic mocks base method.
-func (m *MockClusterAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (m *MockClusterAdminClient) CreateTopic(detail *TopicDetail) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTopic", detail, validateOnly)
+	ret := m.ctrl.Call(m, "CreateTopic", detail)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CreateTopic indicates an expected call of CreateTopic.
-func (mr *MockClusterAdminClientMockRecorder) CreateTopic(detail, validateOnly interface{}) *gomock.Call {
+func (mr *MockClusterAdminClientMockRecorder) CreateTopic(detail interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockClusterAdminClient)(nil).CreateTopic), detail, validateOnly)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTopic", reflect.TypeOf((*MockClusterAdminClient)(nil).CreateTopic), detail)
 }
 
 // GetAllBrokers mocks base method.

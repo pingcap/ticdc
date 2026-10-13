@@ -54,6 +54,9 @@ func startHTTPInterceptForTestingRegistry() {
 			if err != nil {
 				return nil, err
 			}
+			if subject == "server-error" {
+				return httpmock.NewStringResponse(http.StatusInternalServerError, "Internal Server Error"), nil
+			}
 			reqBody, err := io.ReadAll(req.Body)
 			if err != nil {
 				return nil, err

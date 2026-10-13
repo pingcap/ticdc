@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -94,4 +95,51 @@ func TestDebeziumAvroWatermarkConfig(t *testing.T) {
 	require.True(t, cfg.EnableTiDBExtension)
 	require.True(t, cfg.AvroEnableWatermark)
 	require.Equal(t, "http://127.0.0.1:8081", cfg.AvroConfluentSchemaRegistry)
+}
+
+func TestApplyReturnsSinkInvalidConfigForQueryBindingError(t *testing.T) {
+	cfg := NewConfig(config.ProtocolOpen)
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/topic?max-batch-size=invalid")
+	require.NoError(t, err)
+
+	err = cfg.Apply(sinkURI, config.GetDefaultReplicaConfig().Sink)
+	errCode, ok := errors.RFCCode(err)
+	require.True(t, ok, err)
+	require.Equal(t, errors.ErrSinkInvalidConfig.RFCCode(), errCode)
+}
+
+func TestValidateMessageLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		adjust   func(*Config)
+		expected string
+	}{
+		{
+			name: "non-positive max message bytes",
+			adjust: func(cfg *Config) {
+				cfg.MaxMessageBytes = 0
+			},
+			expected: "invalid max-message-bytes 0",
+		},
+		{
+			name: "non-positive max batch size",
+			adjust: func(cfg *Config) {
+				cfg.MaxBatchSize = 0
+			},
+			expected: "invalid max-batch-size 0",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NewConfig(config.ProtocolOpen)
+			test.adjust(cfg)
+
+			err := cfg.Validate()
+			require.ErrorContains(t, err, test.expected)
+			errCode, ok := errors.RFCCode(err)
+			require.True(t, ok, err)
+			require.Equal(t, errors.ErrCodecInvalidConfig.RFCCode(), errCode)
+		})
+	}
 }

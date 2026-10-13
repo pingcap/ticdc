@@ -23,9 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,23 +33,13 @@ func redoCallback() {
 	redoCount.Add(1)
 }
 
-func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil, // redo dispatcher doesn't need syncPointConfig
-		&defaultAtomicity,
-		false, // enableSplittableCheck
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+func newRedoDispatcherForTest(
+	sink sink.Sink,
+	tableSpan *heartbeatpb.TableSpan,
+	batchCount int,
+	batchBytes int,
+) *RedoDispatcher {
+	sharedInfo := newTestSharedInfo(false, nil)
 	return NewRedoDispatcher(
 		common.NewDispatcherID(),
 		tableSpan,
@@ -60,6 +48,8 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		NewSchemaIDToDispatchers(),
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs
+		batchCount,
+		batchBytes,
 		sink,
 		sharedInfo,
 	)
@@ -84,7 +74,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 	require.NoError(t, err)
-	dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan)
+	dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan, 0, 0)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
 	tableProgress := dispatcher.tableProgress
@@ -313,6 +303,18 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(7), checkpointTs)
 }
 
+func TestRedoDispatcherUsesOwnBatchConfig(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan, 4096, 32<<20)
+
+	batchCount, batchBytes := dispatcher.GetEventCollectorBatchConfig()
+	require.Equal(t, 4096, batchCount)
+	require.Equal(t, 32<<20, batchBytes)
+}
+
 func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	redoCount.Store(0)
 	helper := commonEvent.NewEventTestHelper(t)
@@ -324,7 +326,7 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 	tableSpan := getUncompleteTableSpan()
-	dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan)
+	dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan, 0, 0)
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
 	require.NotNil(t, dmlEvent)
@@ -393,7 +395,7 @@ func TestTableTriggerRedoDispatcherInMysql(t *testing.T) {
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
-	tableTriggerEventDispatcher := newRedoDispatcherForTest(testSink.Sink(), ddlTableSpan)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(testSink.Sink(), ddlTableSpan, 0, 0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -463,7 +465,7 @@ func TestTableTriggerRedoDispatcherInKafka(t *testing.T) {
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	testSink := newDispatcherTestSink(t, common.KafkaSinkType)
-	tableTriggerEventDispatcher := newRedoDispatcherForTest(testSink.Sink(), ddlTableSpan)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(testSink.Sink(), ddlTableSpan, 0, 0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -545,7 +547,7 @@ func TestRedoDispatcherClose(t *testing.T) {
 		testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 		tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 		require.NoError(t, err)
-		dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan)
+		dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan, 0, 0)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -568,7 +570,7 @@ func TestRedoDispatcherClose(t *testing.T) {
 		testSink := newDispatcherTestSink(t, common.MysqlSinkType)
 		tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 		require.NoError(t, err)
-		dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan)
+		dispatcher := newRedoDispatcherForTest(testSink.Sink(), tableSpan, 0, 0)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -613,7 +615,7 @@ func TestRedoBatchDMLEventsPartialFlush(t *testing.T) {
 	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
 	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 	require.NoError(t, err)
-	dispatcher := newRedoDispatcherForTest(mockSink.Sink(), tableSpan)
+	dispatcher := newRedoDispatcherForTest(mockSink.Sink(), tableSpan, 0, 0)
 
 	// Create a redoCallback that records when it's called
 	var redoCallbackCalled atomic.Bool

@@ -199,14 +199,17 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota           *uint64 `json:"memory_quota,omitempty"`
-	CaseSensitive         *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate        *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint      *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	PerformanceMode          *string `json:"performance_mode,omitempty"`
+	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
+	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
+	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
+	CaseSensitive            *bool   `json:"case_sensitive,omitempty"`
+	ForceReplicate           *bool   `json:"force_replicate,omitempty"`
+	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty"`
+	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty"`
+	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
+	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
+	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
@@ -233,8 +236,17 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
+	}
+	if c.EventCollectorBatchCount != nil {
+		res.EventCollectorBatchCount = c.EventCollectorBatchCount
+	}
+	if c.EventCollectorBatchBytes != nil {
+		res.EventCollectorBatchBytes = c.EventCollectorBatchBytes
 	}
 	if c.CaseSensitive != nil {
 		res.CaseSensitive = c.CaseSensitive
@@ -287,6 +299,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		if c.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = c.Consistent.MetaFlushIntervalInMs
+		}
+		if c.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = c.Consistent.EventCollectorBatchCount
 		}
 		if c.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = c.Consistent.EncodingWorkerNum
@@ -639,14 +654,17 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
-		MemoryQuota:           cloned.MemoryQuota,
-		CaseSensitive:         cloned.CaseSensitive,
-		ForceReplicate:        cloned.ForceReplicate,
-		IgnoreIneligibleTable: cloned.IgnoreIneligibleTable,
-		CheckGCSafePoint:      cloned.CheckGCSafePoint,
-		EnableSyncPoint:       cloned.EnableSyncPoint,
-		EnableTableMonitor:    cloned.EnableTableMonitor,
-		BDRMode:               cloned.BDRMode,
+		PerformanceMode:          cloned.PerformanceMode,
+		MemoryQuota:              cloned.MemoryQuota,
+		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
+		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
+		CaseSensitive:            cloned.CaseSensitive,
+		ForceReplicate:           cloned.ForceReplicate,
+		IgnoreIneligibleTable:    cloned.IgnoreIneligibleTable,
+		CheckGCSafePoint:         cloned.CheckGCSafePoint,
+		EnableSyncPoint:          cloned.EnableSyncPoint,
+		EnableTableMonitor:       cloned.EnableTableMonitor,
+		BDRMode:                  cloned.BDRMode,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -926,6 +944,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = cloned.Consistent.MetaFlushIntervalInMs
 		}
+		if cloned.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = cloned.Consistent.EventCollectorBatchCount
+		}
 		if cloned.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = cloned.Consistent.EncodingWorkerNum
 		}
@@ -1050,11 +1071,10 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
-	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
+	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
+	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
+	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
+	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule
@@ -1066,7 +1086,6 @@ func (e EventFilterRule) ToInternalEventFilterRule() *config.EventFilterRule {
 		IgnoreUpdateNewValueExpr: &e.IgnoreUpdateNewValueExpr,
 		IgnoreUpdateOldValueExpr: &e.IgnoreUpdateOldValueExpr,
 		IgnoreDeleteValueExpr:    &e.IgnoreDeleteValueExpr,
-		IgnoreUpdateOnlyColumns:  e.IgnoreUpdateOnlyColumns,
 	}
 	if len(e.IgnoreEvent) != 0 {
 		res.IgnoreEvent = make([]bf.EventType, len(e.IgnoreEvent))
@@ -1084,10 +1103,6 @@ func ToAPIEventFilterRule(er *config.EventFilterRule) EventFilterRule {
 		IgnoreUpdateNewValueExpr: util.GetOrZero(er.IgnoreUpdateNewValueExpr),
 		IgnoreUpdateOldValueExpr: util.GetOrZero(er.IgnoreUpdateOldValueExpr),
 		IgnoreDeleteValueExpr:    util.GetOrZero(er.IgnoreDeleteValueExpr),
-	}
-	if len(er.IgnoreUpdateOnlyColumns) != 0 {
-		res.IgnoreUpdateOnlyColumns = make([]string, len(er.IgnoreUpdateOnlyColumns))
-		copy(res.IgnoreUpdateOnlyColumns, er.IgnoreUpdateOnlyColumns)
 	}
 	if len(er.Matcher) != 0 {
 		res.Matcher = make([]string, len(er.Matcher))
@@ -1205,18 +1220,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string `json:"level,omitempty"`
-	MaxLogSize            *int64  `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64  `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64  `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int    `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int    `json:"flush_worker_num,omitempty"`
-	Storage               *string `json:"storage,omitempty"`
-	UseFileBackend        *bool   `json:"use_file_backend,omitempty"`
-	Compression           *string `json:"compression,omitempty"`
-	FlushConcurrency      *int    `json:"flush_concurrency,omitempty"`
+	Level                 *string                `json:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
+	Storage               *string                `json:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
 
-	MemoryUsage *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.

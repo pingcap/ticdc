@@ -45,7 +45,7 @@ type ClusterAdminClient interface {
 	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
 
 	// CreateTopic creates a new topic.
-	CreateTopic(detail *TopicDetail, validateOnly bool) error
+	CreateTopic(detail *TopicDetail) error
 
 	// Close shuts down the admin client.
 	Close()
