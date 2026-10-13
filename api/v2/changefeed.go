@@ -1773,7 +1773,7 @@ func verifyTable4MQ(
 		return nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
 		return err
 	}
@@ -1781,7 +1781,7 @@ func verifyTable4MQ(
 		return err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return err
 	}

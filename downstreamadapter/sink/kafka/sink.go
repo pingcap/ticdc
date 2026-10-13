@@ -78,7 +78,7 @@ var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error))
 	return createSaramaFactory()
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
@@ -110,11 +110,11 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	defer claimCheck.Close()
 
 	isAvroLike := protocol == config.ProtocolAvro
-	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+	if _, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, false, isAvroLike); err != nil {
 		return err
 	}
 
-	if _, err = columnselector.New(sinkConfig); err != nil {
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 
@@ -144,9 +144,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}

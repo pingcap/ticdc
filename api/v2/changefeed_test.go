@@ -40,7 +40,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	parsermodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	"github.com/twmb/franz-go/pkg/kfake"
@@ -437,6 +441,75 @@ func mustParseURLError(t *testing.T, rawURL string) error {
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
 	return err
+}
+
+func TestVerifyMQTablesCaseSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, scheme := range []string{config.KafkaScheme, config.PulsarScheme} {
+				t.Run(scheme, func(t *testing.T) {
+					cfg := config.GetDefaultReplicaConfig()
+					cfg.CaseSensitive = tc.caseSensitive
+					cfg.Sink.ColumnSelectors = []*config.ColumnSelector{{
+						Matcher: []string{"Test.*"}, Columns: []string{"name"},
+					}}
+					// Exercise the CLI/API conversion before checking the effective matcher.
+					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+					tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+					err := verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					if config.IsMQScheme(scheme) {
+						cfg.Sink.ColumnSelectors = nil
+						cfg.Sink.DispatchRules = []*config.DispatchRule{{
+							Matcher: []string{"Test.*"}, PartitionRule: "index-value", IndexName: "missing_index",
+						}}
+						err = verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+						if util.GetOrZero(tc.caseSensitive) {
+							require.NoError(t, err)
+						} else {
+							require.True(t, errors.ErrDispatcherFailed.Equal(err), "%v", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+
+	return common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:         1,
+		Name:       parsermodel.NewCIStr("t"),
+		PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      parsermodel.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      parsermodel.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
 }
 
 func TestRouteMatcherValidation(t *testing.T) {
