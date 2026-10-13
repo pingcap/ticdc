@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -66,8 +68,8 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 			upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: query + "&max-message-bytes=262144"}
 			input := newKafkaReader(ctx, upstreamURI, "small-message-limit", newMemoryUsage(), config.GetDefaultReplicaConfig(), nil)
 			t.Cleanup(input.Close)
-			decoding := newDecodeConfig(upstreamURI, "UTC", config.GetDefaultReplicaConfig(), nil)
-			a := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory)
+			decoding := newDecodeConfig(upstreamURI, "UTC", config.GetDefaultReplicaConfig())
+			a := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), input.memory, nil, input, simple.NewTableInfoCache())
 			t.Cleanup(a.close)
 			if !strings.HasPrefix(query, "protocol=canal-json") {
 				return
@@ -86,14 +88,13 @@ func TestKafkaReaderSmallMessageLimit(t *testing.T) {
 				client: input,
 			}
 			t.Cleanup(r.close)
-			requests := make(chan readRequest)
-			inputs := make(chan readResult)
+			inputs := make(chan []*readData, 1)
 			output := make(chan []*writeEvent, 1)
 			g.Go(func() error {
-				return r.start(ctx, requests, inputs)
+				return r.start(ctx, inputs)
 			})
 			g.Go(func() error {
-				return a.start(ctx, requests, inputs, output)
+				return a.start(ctx, inputs, output)
 			})
 			var result *writeEvent
 			select {
@@ -120,9 +121,12 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	t.Cleanup(cluster.Close)
 	r := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, topic, newMemoryUsage(), config.GetDefaultReplicaConfig(), nil)
 	t.Cleanup(r.Close)
-	require.NoError(t, r.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("a")}, &kgo.Record{Topic: topic, Value: []byte("b")}).FirstErr())
-	first, err := r.Read(ctx, false)
+	require.NoError(t, r.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("a")}).FirstErr())
+	batch, err := r.Read(ctx)
 	require.NoError(t, err)
+	require.Len(t, batch, 1)
+	first := batch[0]
+	r.Advance([]readUpdate{{data: first, decoded: true}})
 	first.record.decoded(128)
 	committing, release := make(chan struct{}), make(chan struct{})
 	cluster.ControlKey(int16(kmsg.OffsetCommit), func(kmsg.Request) (kmsg.Response, error, bool) {
@@ -143,15 +147,16 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("confirmation did not reach the broker")
 	}
+	require.NoError(t, r.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("b")}).FirstErr())
 	read := make(chan *readData, 1)
 	readErrors := make(chan error, 1)
 	wg.Go(func() {
-		data, err := r.Read(ctx, false)
+		data, err := r.Read(ctx)
 		if err != nil {
 			readErrors <- err
 			return
 		}
-		read <- data
+		read <- data[0]
 	})
 	var second *readData
 	select {
@@ -200,58 +205,108 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 
 func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	memory := newMemoryUsage()
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	g, ctx := errgroup.WithContext(ctx)
 	defer func() {
 		cancel()
 		_ = g.Wait()
 	}()
-	a := newAssembler(ctx, &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}, nil, config.GetDefaultReplicaConfig(), memory)
+	r := &pulsarReader{
+		readLimit: newReadLimit(memory),
+		memory:    memory,
+	}
+	decoding := &decodeConfig{codec: codecCommon.NewConfig(config.ProtocolSimple)}
+	schemas := simple.NewTableInfoCache()
+	streams := make(map[int32]*decodeStream)
+	for id := range int32(3) {
+		streams[id] = newDecodeStream(ctx, int(id), decoding, nil, schemas)
+	}
+	a := newAssembler(ctx, decoding, nil, config.GetDefaultReplicaConfig(), memory, streams, r, schemas)
 	t.Cleanup(a.close)
 	g.Go(func() error {
 		return a.decoder.start(ctx)
 	})
-	r := &pulsarReader{memory: memory}
-	var records []*ack
-	for _, table := range []string{"a", "b"} {
-		value := []byte(`{"version":1,"database":"test","table":"` + table + `","tableID":1,"type":"INSERT","commitTs":101,"schemaVersion":100,"data":{"id":"1"}}`)
-		record := newAck(memory, int64(len(value)+256), nil)
+	completed := make(chan struct{}, 6)
+	var (
+		batch   []*readData
+		records []*ack
+	)
+	rows := make(map[string]*ack)
+	for id, table := range []string{"a", "b"} {
+		value := []byte(`{"version":1,"database":"test","table":"` + table + `","tableID":` + strconv.Itoa(id+1) + `,"type":"INSERT","commitTs":101,"schemaVersion":100,"data":{"id":"1"}}`)
+		record := newAck(memory, int64(len(value)+256), completed)
 		records = append(records, record)
-		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}) {
-			require.NoError(t, err)
-			progress, err := r.Advance(t.Context(), result.feedback)
-			require.NoError(t, err)
-			require.NoError(t, a.accept(t.Context(), result, progress))
+		rows[table] = record
+		batch = append(batch, &readData{
+			value:         value,
+			stream:        int32(id + 1),
+			record:        record,
+			retainedBytes: 256,
+			dmlBoundary:   &readBoundary{reached: true},
+		})
+	}
+	// Another stream supplies the first schemas. Their later replicas must
+	// not create duplicate writes or borrow the bootstrap's input ownership.
+	for _, stream := range []int32{0, 1} {
+		for id, table := range []string{"a", "b"} {
+			value := []byte(`{"version":1,"type":"BOOTSTRAP","tableSchema":{"schema":"test","table":"` + table + `","tableID":` + strconv.Itoa(id+1) + `,"version":100,"columns":[{"name":"id","dataType":{"mysqlType":"bigint","charset":"binary","collate":"binary","length":20}}]}}`)
+			record := newAck(memory, int64(len(value)+256), completed)
+			records = append(records, record)
+			batch = append(batch, &readData{
+				value:         value,
+				stream:        stream,
+				record:        record,
+				retainedBytes: 256,
+				dmlBoundary:   &readBoundary{reached: true},
+			})
 		}
 	}
-	for index, table := range []string{"a", "b"} {
-		value := []byte(`{"version":1,"type":"BOOTSTRAP","commitTs":100,"tableSchema":{"schema":"test","table":"` + table + `","tableID":1,"version":100,"columns":[{"name":"id","dataType":{"mysqlType":"bigint","charset":"binary","collate":"binary","length":20}}]}}`)
-		record := newAck(memory, int64(len(value)+256), nil)
-		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, dmlBoundary: &readBoundary{reached: true}}) {
-			require.NoError(t, err)
-			progress, err := r.Advance(t.Context(), result.feedback)
-			require.NoError(t, err)
-			require.NoError(t, a.accept(t.Context(), result, progress))
-		}
-		item := a.nextReady(0)
-		require.NotNil(t, item)
+	inputs := make(chan []*readData, 1)
+	ready := make(chan *writeEvent, 4)
+	g.Go(func() error {
+		return a.arrange(ctx, inputs, ready)
+	})
+	inputs <- batch
+	written := make(map[string]bool)
+	for len(written) != len(rows) {
 		select {
-		case <-item.decoding.done:
+		case item := <-ready:
+			select {
+			case <-item.decoding.done:
+			case <-ctx.Done():
+				t.Fatal("cached row conversion did not finish")
+			}
+			table := item.decoding.dml.TableInfo.GetTableName()
+			require.False(t, written[table])
+			require.Contains(t, rows, table)
+			item.decoding.dml.AddPostFlushFunc(item.dml.PostFlush)
+			memory.release(item.decoding.bytes)
+			item.dml = item.decoding.dml
+			item.dml.PostFlush()
+			memory.release(item.bytes)
+			written[table] = true
+			require.Zero(t, rows[table].refs.Load())
+			for name, record := range rows {
+				if !written[name] {
+					require.Positive(t, record.refs.Load())
+				}
+			}
 		case <-ctx.Done():
-			t.Fatal("cached row conversion did not finish")
-		}
-		require.Equal(t, table, item.dml.TableInfo.GetTableName())
-		item.decoding.dml.AddPostFlushFunc(item.dml.PostFlush)
-		memory.release(item.decoding.bytes)
-		item.dml = item.decoding.dml
-		item.dml.PostFlush()
-		memory.release(item.bytes)
-		require.Zero(t, records[index].refs.Load())
-		if index == 0 {
-			require.EqualValues(t, 1, records[1].refs.Load())
+			t.Fatal("cached inputs did not finish")
 		}
 	}
-	require.Empty(t, a.streams[0].cachedRecords)
+	for range records {
+		select {
+		case <-completed:
+		case <-ctx.Done():
+			t.Fatal("bootstrap replicas did not complete")
+		}
+	}
+	for _, record := range records {
+		require.Zero(t, record.refs.Load())
+		record.confirm()
+	}
+	require.Zero(t, memory.used())
 }
 
 func TestStorageReaderSmallMessageLimit(t *testing.T) {
@@ -263,8 +318,8 @@ func TestStorageReaderSmallMessageLimit(t *testing.T) {
 			memory := newMemoryUsage()
 			input := newStorageReader(t.Context(), upstreamURI, replicaConfig, memory, nil)
 			t.Cleanup(input.Close)
-			decoding := newDecodeConfig(upstreamURI, "UTC", replicaConfig, nil)
-			newAssembler(t.Context(), decoding, nil, replicaConfig, memory)
+			decoding := newDecodeConfig(upstreamURI, "UTC", replicaConfig)
+			newAssembler(t.Context(), decoding, nil, replicaConfig, memory, nil, input, simple.NewTableInfoCache())
 		})
 	}
 }
@@ -290,8 +345,9 @@ func TestStorageReaderStreamsFileRanges(t *testing.T) {
 				require.NoError(t, r.storage.WriteFile(ctx, key.GenerateDMLFilePath(&index, r.fileExtension, r.fileIndexWidth), []byte("row")))
 			}
 			for id := uint64(1); id <= 2; id++ {
-				data, err := r.Read(ctx, false)
+				batch, err := r.Read(ctx)
 				require.NoError(t, err)
+				data := batch[0]
 				require.Equal(t, id, r.fileIndices[key][index.FileIndexKey])
 				require.NotNil(t, data.schema)
 				require.NotNil(t, data.group)
@@ -299,8 +355,9 @@ func TestStorageReaderStreamsFileRanges(t *testing.T) {
 				require.Equal(t, []byte("row"), data.value)
 			}
 			if end == 2 {
-				data, err := r.Read(ctx, false)
+				batch, err := r.Read(ctx)
 				require.NoError(t, err)
+				data := batch[0]
 				require.True(t, data.groupEnd)
 				require.Nil(t, data.record)
 			}
@@ -325,7 +382,7 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 			a := newAssembler(ctx, &decodeConfig{
 				codec:  codecCommon.NewConfig(config.ProtocolCsv),
 				format: rowFormat,
-			}, nil, replicaConfig, memory)
+			}, nil, replicaConfig, memory, nil, r, simple.NewTableInfoCache())
 			w := &writer{
 				memory:  memory,
 				ddlJobs: make(chan *writeEvent, 1),
@@ -351,13 +408,14 @@ func TestStorageDDLDoesNotBlockIndependentTables(t *testing.T) {
 			} {
 				require.NoError(t, r.storage.WriteFile(ctx, schema.Path(false, 0), schema.Marshal()))
 				r.scanned = false
-				data, err := r.Read(ctx, false)
+				batch, err := r.Read(ctx)
 				require.NoError(t, err)
+				data := batch[0]
 				for result, err := range a.decode(ctx, data) {
 					require.NoError(t, err)
-					progress, err := r.Advance(ctx, result.feedback)
-					require.NoError(t, err)
-					require.NoError(t, a.accept(ctx, result, progress))
+					require.NoError(t, a.accept(ctx, result))
+					r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+					a.collectWatermarks()
 				}
 				item := a.nextReady(0)
 				require.NotNil(t, item)
@@ -416,7 +474,6 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			client:     client,
 			memory:     memory,
 			partitions: make(map[int32]*kafkaPartition),
-			ddlCopies:  make(map[uint64]map[int32][]*ack),
 		}
 		c := &assembler{
 			memory:      memory,
@@ -443,11 +500,11 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 					ack:    record,
 					offset: int64(offset),
 				})
-				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, key: message.Key, value: message.Value, record: record, retainedBytes: 128}) {
+				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, position: int64(offset + 1), ddlCopy: partitionID != 0, key: message.Key, value: message.Value, record: record, retainedBytes: 128}) {
 					require.NoError(t, err)
-					progress, err := r.Advance(t.Context(), result.feedback)
-					require.NoError(t, err)
-					require.NoError(t, c.accept(t.Context(), result, progress))
+					require.NoError(t, c.accept(t.Context(), result))
+					r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+					c.collectWatermarks()
 				}
 			}
 			record := newAck(memory, int64(len(watermark.Key)+len(watermark.Value)+128), nil)
@@ -455,17 +512,14 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				ack:    record,
 				offset: int64(len(input)),
 			})
-			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}) {
+			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, position: int64(len(input) + 1), key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}) {
 				require.NoError(t, err)
-				progress, err := r.Advance(t.Context(), result.feedback)
-				require.NoError(t, err)
-				require.NoError(t, c.accept(t.Context(), result, progress))
+				require.NoError(t, c.accept(t.Context(), result))
+				r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+				c.collectWatermarks()
 			}
 		}
-		feedback := c.feedback()
-		readProgress, err := r.Advance(t.Context(), feedback)
-		require.NoError(t, err)
-		c.advance(feedback, readProgress)
+		c.collectWatermarks()
 		downstream := mock.NewMockSink(gomock.NewController(t))
 		w := &writer{downstream: downstream, memory: memory}
 		for index, ddl := range ddls[startIndex:] {
@@ -530,59 +584,40 @@ func TestReaderDDLNormalization(t *testing.T) {
 	require.EqualValues(t, 128, memory.bytes.Load())
 }
 
-func TestKafkaReaderWatermark(t *testing.T) {
-	c := &kafkaReader{
-		memory: newMemoryUsage(),
-		partitions: map[int32]*kafkaPartition{
-			0: {
-				watermark:    20,
-				hasWatermark: true,
-			},
-			1: {
-				watermark:    10,
-				hasWatermark: true,
-			},
+func TestAssemblerCombinesInputWatermarks(t *testing.T) {
+	memory := newMemoryUsage()
+	a := &assembler{
+		memory: memory,
+		streams: map[int32]*decodeStream{
+			0: {watermark: 20, hasWatermark: true},
+			1: {watermark: 10, hasWatermark: true},
 		},
 	}
-	watermark, ready := c.globalWatermark()
-	require.True(t, ready)
-	require.EqualValues(t, 10, watermark)
-	c.partitions[1].hasWatermark = false
-	_, ready = c.globalWatermark()
-	require.False(t, ready)
-	c.partitions[1].hasWatermark = true
-	c.partitions[1].needsMoreInput = true
-	_, ready = c.globalWatermark()
-	require.False(t, ready)
-	c.controls = []*readControl{{watermark: 20}}
-	progress, err := c.Advance(t.Context(), readFeedback{})
-	require.NoError(t, err)
-	require.True(t, progress.needsMoreInput)
-	require.False(t, progress.hasWatermark)
-	require.Nil(t, progress.control)
-	data := &readData{stream: 1, record: &ack{}}
-	// Schema availability can change while an input is still being decoded.
-	_, err = c.Advance(t.Context(), readFeedback{data: data})
-	require.NoError(t, err)
-	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true})
-	require.NoError(t, err)
-	require.True(t, progress.hasWatermark)
-	require.EqualValues(t, 10, progress.watermark)
-	_, err = c.Advance(t.Context(), readFeedback{data: data, needsMoreInput: true})
-	require.NoError(t, err)
-	progress, err = c.Advance(t.Context(), readFeedback{})
-	require.NoError(t, err)
-	require.False(t, progress.hasWatermark)
-	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true, watermark: 20, hasWatermark: true})
-	require.NoError(t, err)
-	require.True(t, progress.hasWatermark)
-	require.EqualValues(t, 20, progress.watermark)
-	require.NotNil(t, progress.control)
-	require.Equal(t, []*ack{data.record}, progress.control.records)
-	progress, err = c.Advance(t.Context(), readFeedback{data: data, decoded: true})
-	require.NoError(t, err)
-	require.True(t, progress.hasWatermark)
-	require.Nil(t, progress.control)
+	a.collectWatermarks()
+	require.EqualValues(t, 10, a.watermark)
+	a.streams[1].hasWatermark = false
+	record := newAck(memory, 128, nil)
+	record.refs.Inc()
+	record.decoded(128)
+	memory.reserve(128)
+	a.controls = []*readControl{{watermark: 20, records: []*ack{record}}}
+	a.collectWatermarks()
+	require.Empty(t, a.pendingWatermarks)
+	require.Len(t, a.controls, 1)
+	a.streams[1].hasWatermark = true
+	a.streams[1].watermark = 20
+	a.collectWatermarks()
+	require.EqualValues(t, 20, a.watermark)
+	require.Empty(t, a.controls)
+	require.Len(t, a.pendingWatermarks, 1)
+	require.Positive(t, record.refs.Load())
+	a.pendingWatermarks[0].onFlush()
+	require.Zero(t, record.refs.Load())
+	record.confirm()
+	require.Zero(t, memory.used())
+	a.pendingWatermarks = nil
+	a.collectWatermarks()
+	require.Empty(t, a.pendingWatermarks)
 }
 
 func TestPulsarControlsUseTopicProgress(t *testing.T) {
@@ -590,18 +625,18 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	r := &pulsarReader{
 		memory: memory,
 	}
-	decoding := newDecodeConfig(&url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig(), nil)
-	a := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory)
+	decoding := newDecodeConfig(&url.URL{Scheme: "pulsar", Path: "test", RawQuery: "enable-tidb-extension=true"}, "UTC", config.GetDefaultReplicaConfig())
+	a := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, nil, r, simple.NewTableInfoCache())
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
 		record := newAck(memory, int64(len(value)+256), nil)
 		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
-			progress, err := r.Advance(t.Context(), result.feedback)
-			require.NoError(t, err)
-			require.NoError(t, a.accept(t.Context(), result, progress))
+			require.NoError(t, a.accept(t.Context(), result))
+			r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+			a.collectWatermarks()
 		}
-		require.EqualValues(t, 100, r.watermark)
+		require.EqualValues(t, 100, a.watermark)
 		// Idle partitions do not require a broker snapshot or a new message.
 		result := a.next()
 		require.True(t, result.hasWatermark)
@@ -620,9 +655,9 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		record := newAck(memory, int64(len(query)+256), nil)
 		for result, err := range a.decode(t.Context(), &readData{value: []byte(query), record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
-			progress, err := r.Advance(t.Context(), result.feedback)
-			require.NoError(t, err)
-			require.NoError(t, a.accept(t.Context(), result, progress))
+			require.NoError(t, a.accept(t.Context(), result))
+			r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+			a.collectWatermarks()
 		}
 	}
 	require.EqualValues(t, 100, a.nextReady(100).ddl.GetCommitTs())
@@ -644,26 +679,14 @@ func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 		memory:     memory,
 		pendingDML: []*writeEvent{{dml: dml}},
 		pendingDDL: []*writeEvent{{ddl: ddl}},
-	}
-	r := &kafkaReader{
-		memory: memory,
-		partitions: map[int32]*kafkaPartition{
-			0: {
-				watermark:    40,
-				hasWatermark: true,
-			},
-			1: {
-				watermark:    40,
-				hasWatermark: true,
-			},
+		streams: map[int32]*decodeStream{
+			0: {watermark: 40, hasWatermark: true},
+			1: {watermark: 40, hasWatermark: true},
 		},
 		// An already delivered CREATE TABLE still has an unconfirmed copy.
-		ddlCopies: map[uint64]map[int32][]*ack{10: {1: {copyRecord}}},
+		ddlCopies: map[uint64][]*ack{10: {copyRecord}},
 	}
-	feedback := c.feedback()
-	readProgress, err := r.Advance(t.Context(), feedback)
-	require.NoError(t, err)
-	c.advance(feedback, readProgress)
+	c.collectWatermarks()
 	result := c.next()
 	require.Same(t, dml, result.dml)
 	require.EqualValues(t, 1, copyRecord.refs.Load())
@@ -838,8 +861,10 @@ func TestOversizedInputCanComplete(t *testing.T) {
 }
 
 func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
+	memory := newMemoryUsage()
 	c := &kafkaReader{
-		memory: newMemoryUsage(),
+		memory:    memory,
+		readLimit: newReadLimit(memory),
 		partitions: map[int32]*kafkaPartition{
 			0: {
 				hasWatermark: true,
@@ -861,9 +886,15 @@ func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	require.EqualValues(t, 2, c.nextPartition())
 	c.partitions[2].sequence = 2
 	require.EqualValues(t, 1, c.nextPartition())
-	c.partitions[0].needsMoreInput = true
+	c.partitions[1].fetchPaused = true
+	require.EqualValues(t, 1, c.nextPartition(), "a fetch pause must not hold already fetched input")
+	c.partitions[1].fetchPaused = false
+	c.partitions[0].hasWatermark = false
 	require.EqualValues(t, 0, c.nextPartition())
-	c.partitions[0].needsMoreInput = false
+	c.partitions[0].hasWatermark = true
+	c.ContinueReading(true)
+	require.EqualValues(t, 0, c.nextPartition(), "lookahead fairly considers every readable partition")
+	c.ContinueReading(false)
 	c.boundary = &readBoundary{}
 	c.partitions[0].position = 10
 	c.partitions[2].position = 10
@@ -871,15 +902,12 @@ func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	c.partitions[1].target = 5
 	c.partitions[2].target = 10
 	require.EqualValues(t, 1, c.nextPartition())
-	c.boundaryDDL = 100
 	c.partitions[1].position = 1
-	c.partitions[1].ddlTs = 99
 	c.advanceBoundary()
 	require.False(t, c.boundary.reached)
-	// Only this job's local copy closes its partition. The post-DDL backlog
-	// up to offset five need not be read to execute the DDL.
-	c.partitions[1].ddlTs = 100
-	c.advanceBoundary()
+	// Assembly identifies a control's input position. The reader shortens
+	// its transport window without knowing the message type or timestamp.
+	c.Advance([]readUpdate{{data: &readData{stream: 1, position: 1}, boundary: c.boundary}})
 	require.True(t, c.boundary.reached)
 	require.EqualValues(t, 1, c.partitions[1].position)
 	require.Zero(t, c.memory.used())
@@ -900,7 +928,7 @@ func TestKafkaInputBoundaryIsFixed(t *testing.T) {
 	).FirstErr())
 	r := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, "input-boundary", newMemoryUsage(), config.GetDefaultReplicaConfig(), nil)
 	t.Cleanup(r.Close)
-	boundary, err := r.capture(ctx, nil, 0)
+	boundary, err := r.Boundary(ctx, nil)
 	require.NoError(t, err)
 	require.False(t, boundary.reached)
 	require.EqualValues(t, 1, r.partitions[0].target)
@@ -910,10 +938,13 @@ func TestKafkaInputBoundaryIsFixed(t *testing.T) {
 	// contributes its empty boundary without requiring a watermark or a message.
 	require.NoError(t, producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("later")}).FirstErr())
 	for !boundary.reached {
-		data, err := r.Read(ctx, false)
+		batch, err := r.Read(ctx)
 		require.NoError(t, err)
-		data.record.decoded(128)
-		r.advanceBoundary()
+		require.False(t, boundary.reached, "reading a batch must not certify its undecoded inputs")
+		for _, data := range batch {
+			r.Advance([]readUpdate{{data: data, decoded: true}})
+			data.record.decoded(128)
+		}
 	}
 	require.EqualValues(t, 1, r.partitions[0].position)
 	require.EqualValues(t, 1, r.partitions[1].position)
@@ -923,28 +954,30 @@ func TestKafkaInputBoundaryIsFixed(t *testing.T) {
 	}
 	// A new boundary may cover only one partition. Excluded partitions pause
 	// while it is being read, and a zero offset remains a valid captured target.
-	boundary, err = r.capture(ctx, []int32{0}, 0)
+	boundary, err = r.Boundary(ctx, []event.SchemaTableName{})
 	require.NoError(t, err)
 	require.False(t, boundary.reached)
 	require.EqualValues(t, 2, r.partitions[0].target)
 	require.EqualValues(t, -1, r.partitions[1].target)
 	require.EqualValues(t, -1, r.partitions[2].target)
 	r.limitReads()
-	require.False(t, r.partitions[0].paused)
-	require.True(t, r.partitions[1].paused)
-	require.True(t, r.partitions[2].paused)
-	data, err := r.Read(ctx, false)
+	require.False(t, r.partitions[0].fetchPaused)
+	require.True(t, r.partitions[1].fetchPaused)
+	require.True(t, r.partitions[2].fetchPaused)
+	batch, err := r.Read(ctx)
 	require.NoError(t, err)
+	require.Len(t, batch, 1)
+	data := batch[0]
 	require.Equal(t, "later", string(data.value))
+	r.Advance([]readUpdate{{data: data, decoded: true}})
 	data.record.decoded(128)
-	r.advanceBoundary()
 	require.True(t, boundary.reached)
 	for _, partition := range r.partitions {
 		require.EqualValues(t, -1, partition.target)
 	}
 	r.limitReads()
 	for _, partition := range r.partitions {
-		require.False(t, partition.paused)
+		require.False(t, partition.fetchPaused)
 	}
 	require.NoError(t, r.Confirm(ctx))
 	require.Zero(t, r.memory.used())
@@ -1137,15 +1170,15 @@ func TestDDLScope(t *testing.T) {
 	input.router = router
 	partitionID, _, err := input.router.GetPartitionGenerator("test", "a").GeneratePartitionIndexAndKey(nil, 4, tableA, 10)
 	require.NoError(t, err)
-	selected := input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
+	selected := input.tablePartitions(ddlScope(&event.DDLEvent{SchemaName: "test", TableName: "a"}))
 	require.Equal(t, []int32{partitionID}, selected)
-	selected = input.ddlPartitions(&event.DDLEvent{SchemaName: "test"})
+	selected = input.tablePartitions(ddlScope(&event.DDLEvent{SchemaName: "test"}))
 	require.Nil(t, selected)
 	sinkConfig := config.GetDefaultReplicaConfig().Sink
 	sinkConfig.DispatchRules = []*config.DispatchRule{{Matcher: []string{"*.*"}, PartitionRule: "index-value"}}
 	input.router, err = eventrouter.NewEventRouter(sinkConfig, true, "test", false, false)
 	require.NoError(t, err)
-	selected = input.ddlPartitions(&event.DDLEvent{SchemaName: "test", TableName: "a"})
+	selected = input.tablePartitions(ddlScope(&event.DDLEvent{SchemaName: "test", TableName: "a"}))
 	require.Nil(t, selected)
 }
 

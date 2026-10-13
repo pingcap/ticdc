@@ -48,37 +48,30 @@ type kafkaRecord struct {
 }
 
 type kafkaPartition struct {
-	watermark      uint64
-	hasWatermark   bool
-	needsMoreInput bool
-	ddlTs          uint64
-	polled         []*kgo.Record
-	paused         bool
-	sequence       uint64
-	position       int64
-	target         int64 // -1 means this partition is outside the current boundary.
-	records        []kafkaRecord
-	mu             sync.Mutex // Protects records, shared by Read and Confirm.
+	watermark    uint64
+	hasWatermark bool
+	polled       []*kgo.Record
+	fetchPaused  bool
+	sequence     uint64
+	position     int64 // Next offset after the last fully decoded input.
+	target       int64 // -1 means this partition is outside the current boundary.
+	records      []kafkaRecord
+	mu           sync.Mutex // Protects records, shared by Read and Confirm.
 }
 
 type kafkaReader struct {
-	router                *eventrouter.EventRouter
-	ddlCopies             map[uint64]map[int32][]*ack
-	controls              []*readControl
-	watermark             uint64
-	hasWatermark          bool
-	deliveredWatermark    uint64
-	hasDeliveredWatermark bool
-	client                *kgo.Client
-	topic                 string
-	memory                *memoryUsage
-	prefetchedBytes       int64 // SDK bytes already included in the shared budget.
-	confirmable           chan<- struct{}
-	partitions            map[int32]*kafkaPartition
-	readSequence          uint64
-	pausedPartitions      int
-	boundary              *readBoundary
-	boundaryDDL           uint64
+	*readLimit
+	router           *eventrouter.EventRouter
+	client           *kgo.Client
+	topic            string
+	memory           *memoryUsage
+	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
+	confirmable      chan<- struct{}
+	partitions       map[int32]*kafkaPartition
+	readSequence     uint64
+	pausedPartitions int
+	boundary         *readBoundary
+	progressMu       sync.Mutex // Protects cursors and scheduling progress shared with assembly.
 }
 
 func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
@@ -169,17 +162,17 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
+		readLimit:   newReadLimit(memory),
 		client:      client,
 		topic:       topic,
 		memory:      memory,
 		confirmable: confirmable,
 		partitions:  partitions,
 		router:      router,
-		ddlCopies:   make(map[uint64]map[int32][]*ack),
 	}
 }
 
-func (c *kafkaReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
+func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -193,220 +186,117 @@ func (c *kafkaReader) Read(ctx context.Context, needsMoreInput bool) (*readData,
 		}
 		c.prefetchedBytes = prefetched
 		c.limitReads()
-		partitionID := c.nextPartition()
-		if partitionID < 0 {
-			// Drain SDK buffers before waiting; those bytes are already admitted.
-			// Buffered leading partitions may need a fetch from a slower one.
-			buffered := c.client.BufferedFetchRecords() != 0
-			for _, partition := range c.partitions {
-				buffered = buffered || len(partition.polled) != 0
+		var (
+			batch []*readData
+			size  int64
+		)
+		for len(batch) < batchRows && size < batchBytes {
+			partitionID := c.nextPartition()
+			if partitionID < 0 {
+				break
 			}
-			if !needsMoreInput && !buffered {
-				if err := c.memory.wait(ctx); err != nil {
-					return nil, err
-				}
+			partition := c.partitions[partitionID]
+			queue := partition.polled
+			record := queue[0]
+			queue[0] = nil
+			partition.polled = queue[1:]
+			if len(partition.polled) == 0 {
+				partition.polled = nil
 			}
-			fetches := c.client.PollRecords(ctx, batchRows)
-			if err := context.Cause(ctx); err != nil {
+			c.readSequence++
+			partition.sequence = c.readSequence
+			bytes := int64(len(record.Key) + len(record.Value) + 128)
+			c.memory.release(bytes)
+			state := newAck(c.memory, bytes, c.confirmable)
+			partition.mu.Lock()
+			partition.records = append(partition.records, kafkaRecord{
+				ack:    state,
+				offset: record.Offset,
+			})
+			partition.mu.Unlock()
+			data := &readData{
+				key:           record.Key,
+				value:         record.Value,
+				stream:        partitionID,
+				position:      record.Offset + 1,
+				ddlCopy:       partitionID != 0,
+				record:        state,
+				retainedBytes: 128,
+			}
+			if partitionID == 0 {
+				data.dmlBoundary = &readBoundary{reached: true}
+			}
+			if len(c.partitions) == 1 {
+				data.ddlBoundary = &readBoundary{reached: true}
+			}
+			batch = append(batch, data)
+			size += bytes
+		}
+		if len(batch) != 0 {
+			return batch, nil
+		}
+		// Drain SDK buffers before waiting; those bytes are already admitted.
+		// Buffered leading partitions may need a fetch from a slower one.
+		buffered := c.client.BufferedFetchRecords() != 0
+		for _, partition := range c.partitions {
+			buffered = buffered || len(partition.polled) != 0
+		}
+		if !buffered {
+			if err := c.wait(ctx); err != nil {
 				return nil, err
 			}
-			if fetches.IsClientClosed() {
-				return nil, errors.ErrKafkaSinkClosed.GenWithStackByArgs()
-			}
-			for _, fetchError := range fetches.Errors() {
-				return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
-			}
-			var bytes int64
-			for iterator := fetches.RecordIter(); !iterator.Done(); {
-				record := iterator.Next()
-				partition := c.partitions[record.Partition]
-				partition.polled = append(partition.polled, record)
-				bytes += int64(len(record.Key) + len(record.Value) + 128)
-			}
-			c.memory.reserve(bytes)
-			continue
 		}
-		partition := c.partitions[partitionID]
-		queue := partition.polled
-		record := queue[0]
-		queue[0] = nil
-		partition.polled = queue[1:]
-		if len(partition.polled) == 0 {
-			partition.polled = nil
+		fetches := c.client.PollRecords(ctx, batchRows)
+		if fetches.IsClientClosed() {
+			return nil, errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 		}
-		c.readSequence++
-		partition.sequence = c.readSequence
-		bytes := int64(len(record.Key) + len(record.Value) + 128)
-		c.memory.release(bytes)
-		state := newAck(c.memory, bytes, c.confirmable)
-		partition.mu.Lock()
-		partition.records = append(partition.records, kafkaRecord{
-			ack:    state,
-			offset: record.Offset,
-		})
-		partition.mu.Unlock()
-		partition.position = record.Offset + 1
-		data := &readData{
-			key:           record.Key,
-			value:         record.Value,
-			stream:        partitionID,
-			record:        state,
-			retainedBytes: 128,
+		for _, fetchError := range fetches.Errors() {
+			return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
 		}
-		if partitionID == 0 {
-			data.dmlBoundary = &readBoundary{reached: true}
+		var bytes int64
+		for iterator := fetches.RecordIter(); !iterator.Done(); {
+			record := iterator.Next()
+			partition := c.partitions[record.Partition]
+			partition.polled = append(partition.polled, record)
+			bytes += int64(len(record.Key) + len(record.Value) + 128)
 		}
-		if len(c.partitions) == 1 {
-			data.ddlBoundary = &readBoundary{reached: true}
-		}
-		return data, nil
+		c.memory.reserve(bytes)
 	}
 }
 
-func (c *kafkaReader) Advance(ctx context.Context, feedback readFeedback) (readProgress, error) {
-	var result readProgress
-	progressChanged := feedback.hasWatermark
-	if data := feedback.data; data != nil {
+func (c *kafkaReader) Advance(updates []readUpdate) {
+	c.progressMu.Lock()
+	for _, update := range updates {
+		data := update.data
 		partition := c.partitions[data.stream]
-		progressChanged = progressChanged || partition.needsMoreInput != feedback.needsMoreInput
-		partition.needsMoreInput = feedback.needsMoreInput
-		if ddl := feedback.ddl; ddl != nil {
-			partition.ddlTs = ddl.GetCommitTs()
-			c.receivedDDL(data.stream, ddl.GetCommitTs())
-			if data.stream != 0 {
-				c.memory.reserve(128)
-				data.record.refs.Add(1)
-				copies := c.ddlCopies[ddl.GetCommitTs()]
-				if copies == nil {
-					copies = make(map[int32][]*ack)
-					c.ddlCopies[ddl.GetCommitTs()] = copies
-				}
-				copies[data.stream] = append(copies[data.stream], data.record)
-				result.skip = true
-			}
+		if update.decoded {
+			partition.position = max(partition.position, data.position)
 		}
-		if feedback.hasWatermark {
-			partition.watermark = max(partition.watermark, feedback.watermark)
+		if update.progress != 0 {
+			partition.watermark = max(partition.watermark, update.progress)
 			partition.hasWatermark = true
-			c.memory.reserve(128)
-			data.record.refs.Add(1)
-			c.controls = append(c.controls, &readControl{
-				watermark: feedback.watermark,
-				records:   []*ack{data.record},
-			})
 		}
-	}
-	// Ordinary DML does not change progress. Recompute the minimum only when
-	// a partition advances or enters/leaves schema bootstrap.
-	if progressChanged || !c.hasDeliveredWatermark {
-		c.watermark, c.hasWatermark = c.globalWatermark()
-	}
-	if feedback.data != nil && !feedback.decoded {
-		return result, nil
+		if update.boundary != nil && update.boundary == c.boundary && partition.target >= 0 {
+			partition.target = min(partition.target, data.position)
+		}
 	}
 	c.advanceBoundary()
-	result.watermark, result.hasWatermark = c.watermark, c.hasWatermark
-	if result.hasWatermark && (!c.hasDeliveredWatermark || result.watermark > c.deliveredWatermark || len(c.controls) != 0 || len(c.ddlCopies) != 0) {
-		control := &readControl{watermark: result.watermark}
-		for commitTs, records := range c.ddlCopies {
-			if commitTs <= result.watermark {
-				for _, copies := range records {
-					control.records = append(control.records, copies...)
-				}
-				delete(c.ddlCopies, commitTs)
-			}
-		}
-		c.controls = slices.DeleteFunc(c.controls, func(pending *readControl) bool {
-			if pending.watermark > result.watermark {
-				return false
-			}
-			control.records = append(control.records, pending.records...)
-			return true
-		})
-		if !c.hasDeliveredWatermark || result.watermark > c.deliveredWatermark || len(control.records) != 0 {
-			c.deliveredWatermark, c.hasDeliveredWatermark = result.watermark, true
-			result.control = control
-		}
-	}
-	result.needsMoreInput = len(c.controls) != 0 || len(c.ddlCopies) != 0
-	if c.boundary != nil && !c.boundary.reached {
-		result.needsMoreInput = true
-		return result, nil
-	}
-	if result.control != nil {
-		return result, nil
-	}
-	if len(c.partitions) <= 1 || (feedback.boundaryDDL == nil && feedback.pendingDML == 0) {
-		return result, nil
-	}
-	if feedback.boundaryDDL == nil && feedback.pendingDML < batchRows && c.memory.used() < c.memory.limit {
-		c.limitReads()
-		if c.nextPartition() >= 0 {
-			result.needsMoreInput = true
-			return result, nil
-		}
-	}
-	partitions := []int32{0}
-	var commitTs uint64
-	if feedback.boundaryDDL != nil {
-		partitions = c.ddlPartitions(feedback.boundaryDDL)
-		if partitions != nil && !slices.Contains(partitions, int32(0)) {
-			partitions = append(partitions, 0)
-		}
-		commitTs = feedback.boundaryDDL.GetCommitTs()
-	}
-	boundary, err := c.capture(ctx, partitions, commitTs)
-	if err != nil {
-		return result, err
-	}
-	if commitTs != 0 {
-		c.receivedDDL(0, commitTs)
-		for partitionID := range c.ddlCopies[commitTs] {
-			c.receivedDDL(partitionID, commitTs)
-		}
-		c.advanceBoundary()
-	}
-	result.boundary = boundary
-	result.needsMoreInput = result.needsMoreInput || !boundary.reached
-	return result, nil
+	c.progressMu.Unlock()
+	// Fetch can be blocked while every partition is paused. Publish admission
+	// changes immediately instead of waiting for another PollRecords return.
+	c.limitReads()
 }
 
-func (c *kafkaReader) globalWatermark() (uint64, bool) {
-	watermark := uint64(math.MaxUint64)
-	for _, partition := range c.partitions {
-		if !partition.hasWatermark || partition.needsMoreInput {
-			return 0, false
-		}
-		watermark = min(watermark, partition.watermark)
-	}
-	return watermark, true
+func (c *kafkaReader) ContinueReading(enabled bool) {
+	c.readLimit.ContinueReading(enabled)
+	c.limitReads()
 }
 
-// A nil selection conservatively covers every partition. Table dispatch uses
-// logical names, including both sides of rename/exchange and physical partitions.
-func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) []int32 {
-	if c.router == nil || ddl.SchemaName == "" || ddl.TableName == "" ||
-		(ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType != event.InfluenceTypeNormal) {
+// A nil selection covers every partition. The assembler supplies logical table
+// names; the reader translates them using its transport's routing rules.
+func (c *kafkaReader) tablePartitions(names []event.SchemaTableName) []int32 {
+	if c.router == nil || len(names) == 0 {
 		return nil
-	}
-	names := []event.SchemaTableName{{
-		SchemaName: ddl.SchemaName,
-		TableName:  ddl.TableName,
-	}}
-	if ddl.ExtraTableName != "" {
-		names = append(names, event.SchemaTableName{
-			SchemaName: ddl.ExtraSchemaName,
-			TableName:  ddl.ExtraTableName,
-		})
-	}
-	names = append(names, ddl.BlockedTableNames...)
-	for _, info := range ddl.MultipleTableInfos {
-		if info != nil {
-			names = append(names, event.SchemaTableName{
-				SchemaName: info.GetSchemaName(),
-				TableName:  info.GetTableName(),
-			})
-		}
 	}
 	var partitions []int32
 	for _, name := range names {
@@ -417,11 +307,12 @@ func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) []int32 {
 		switch generator.(type) {
 		case *routing.TablePartitionGenerator:
 		default:
-			// Index/column values can place a table's rows in any partition.
 			return nil
 		}
-		table := common.NewTableInfo4Decoder(name.SchemaName, &timodel.TableInfo{Name: ast.NewCIStr(name.TableName)})
-		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(c.partitions)), table, ddl.GetCommitTs())
+		table := common.NewTableInfo4Decoder(name.SchemaName, &timodel.TableInfo{
+			Name: ast.NewCIStr(name.TableName),
+		})
+		partitionID, _, err := generator.GeneratePartitionIndexAndKey(nil, int32(len(c.partitions)), table, 0)
 		if err != nil {
 			log.Panic("Kafka table partition generation failed", zap.String("schema", name.SchemaName), zap.String("table", name.TableName), zap.Error(err))
 		}
@@ -429,18 +320,29 @@ func (c *kafkaReader) ddlPartitions(ddl *event.DDLEvent) []int32 {
 			partitions = append(partitions, partitionID)
 		}
 	}
+	if !slices.Contains(partitions, int32(0)) {
+		partitions = append(partitions, 0)
+	}
 	return partitions
 }
 
-// Capture once after candidate events have been read. New arrivals cannot
-// extend this window or certify events read while catching up to it.
-func (c *kafkaReader) capture(ctx context.Context, partitionIDs []int32, commitTs uint64) (*readBoundary, error) {
+// Capture a fixed transport window. Already decoded control positions can
+// subsequently shorten it through Advance without passing DDLs to this reader.
+func (c *kafkaReader) Boundary(ctx context.Context, tables []event.SchemaTableName) (*readBoundary, error) {
+	if len(c.partitions) == 1 {
+		return &readBoundary{
+			reached: true,
+		}, nil
+	}
+	partitionIDs := c.tablePartitions(tables)
+	if tables != nil && len(tables) == 0 {
+		partitionIDs = []int32{0}
+	}
 	req := kmsg.NewPtrListOffsetsRequest()
 	req.TimeoutMillis = 10000
 	topic := kmsg.NewListOffsetsRequestTopic()
 	topic.Topic = c.topic
-	for partitionID, state := range c.partitions {
-		state.target = -1
+	for partitionID := range c.partitions {
 		if partitionIDs != nil && !slices.Contains(partitionIDs, partitionID) {
 			continue
 		}
@@ -449,6 +351,7 @@ func (c *kafkaReader) capture(ctx context.Context, partitionIDs []int32, commitT
 		topic.Partitions = append(topic.Partitions, partition)
 	}
 	req.Topics = append(req.Topics, topic)
+	targets := make(map[int32]int64, len(topic.Partitions))
 	for _, shard := range c.client.RequestSharded(ctx, req) {
 		if shard.Err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, shard.Err, "get input boundary", c.topic)
@@ -458,47 +361,32 @@ func (c *kafkaReader) capture(ctx context.Context, partitionIDs []int32, commitT
 				if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
 				}
-				c.partitions[partition.Partition].target = partition.Offset
+				targets[partition.Partition] = partition.Offset
 			}
 		}
 	}
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
+	c.progressMu.Lock()
+	defer c.progressMu.Unlock()
+	for partitionID, partition := range c.partitions {
+		partition.target = -1
+		if target, ok := targets[partitionID]; ok {
+			partition.target = target
+		}
 	}
 	c.boundary = &readBoundary{}
-	c.boundaryDDL = commitTs
 	c.advanceBoundary()
 	return c.boundary, nil
 }
 
-func (c *kafkaReader) receivedDDL(partitionID int32, commitTs uint64) {
-	if commitTs == 0 || c.boundary == nil || c.boundary.reached || c.boundaryDDL != commitTs {
-		return
-	}
-	if partition := c.partitions[partitionID]; partition.target >= 0 {
-		// All pre-DDL rows in this partition precede its local broadcast copy.
-		partition.target = partition.position
-	}
-}
-
+// Called by assembly while holding progressMu. Only assembly mutates reached.
 func (c *kafkaReader) advanceBoundary() {
 	if c.boundary == nil || c.boundary.reached {
 		return
 	}
-	ready := true
 	for _, partition := range c.partitions {
-		if partition.target < 0 {
-			continue
+		if partition.target >= 0 && partition.position < partition.target {
+			return
 		}
-		if c.boundaryDDL != 0 && partition.ddlTs == c.boundaryDDL {
-			partition.target = partition.position
-		}
-		if partition.position < partition.target || partition.needsMoreInput {
-			ready = false
-		}
-	}
-	if !ready {
-		return
 	}
 	c.boundary.reached = true
 	for _, partition := range c.partitions {
@@ -507,9 +395,6 @@ func (c *kafkaReader) advanceBoundary() {
 }
 
 func (c *kafkaReader) Confirm(ctx context.Context) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
 	records := make([]*kgo.Record, 0, len(c.partitions))
 	counts := make(map[*kafkaPartition]int, len(c.partitions))
 	for partitionID, partition := range c.partitions {
@@ -553,6 +438,8 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 }
 
 func (c *kafkaReader) limitReads() {
+	c.progressMu.Lock()
+	defer c.progressMu.Unlock()
 	boundaryPending := c.boundary != nil && !c.boundary.reached
 	underPressure := !boundaryPending && c.memory.used() >= c.memory.limit
 	if !boundaryPending && !underPressure && c.pausedPartitions == 0 {
@@ -571,13 +458,13 @@ func (c *kafkaReader) limitReads() {
 	for partitionID, partition := range c.partitions {
 		// Fetch unfinished fixed boundaries first. Schema bootstrap messages
 		// remain readable even beyond that boundary.
-		pause := boundaryPending && partition.position >= partition.target && !partition.needsMoreInput
+		pause := boundaryPending && partition.position >= partition.target && !c.continuing.Load()
 		if underPressure {
 			// Retained controls still need slow partitions to advance before
 			// they can release memory. Do not fetch ahead of that progress.
-			pause = partition.hasWatermark && partition.watermark > slowest && !partition.needsMoreInput
+			pause = partition.hasWatermark && partition.watermark > slowest && !c.continuing.Load()
 		}
-		if pause == partition.paused {
+		if pause == partition.fetchPaused {
 			continue
 		}
 		partitions := map[string][]int32{c.topic: {partitionID}}
@@ -589,19 +476,32 @@ func (c *kafkaReader) limitReads() {
 			c.client.ResumeFetchPartitions(partitions)
 			c.pausedPartitions--
 		}
-		partition.paused = pause
+		partition.fetchPaused = pause
 	}
 }
 
 func (c *kafkaReader) nextPartition() int32 {
+	c.progressMu.Lock()
+	defer c.progressMu.Unlock()
 	selected := int32(-1)
 	var progress, sequence uint64
 	for partitionID, partition := range c.partitions {
-		if len(partition.polled) == 0 || partition.paused {
+		if len(partition.polled) == 0 {
+			continue
+		}
+		// A fetch pause under memory pressure must not hold already fetched
+		// inputs. Only an unfinished fixed boundary limits their delivery.
+		if c.boundary != nil && !c.boundary.reached && !c.continuing.Load() &&
+			(partition.position >= partition.target || partition.polled[0].Offset >= partition.target) {
 			continue
 		}
 		watermark := partition.watermark
-		if !partition.hasWatermark || partition.needsMoreInput {
+		if !partition.hasWatermark {
+			watermark = 0
+		}
+		if c.continuing.Load() {
+			// Missing dependencies can be satisfied by any input. Fair rotation
+			// lets a nearby control pass a backlog in another partition.
 			watermark = 0
 		}
 		if c.boundary != nil && !c.boundary.reached && partition.position < partition.target {

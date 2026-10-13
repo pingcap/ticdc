@@ -25,6 +25,7 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
@@ -43,14 +44,13 @@ type pulsarPartition struct {
 }
 
 type pulsarReader struct {
+	*readLimit
 	client        pulsar.Client
 	consumer      pulsar.Consumer
 	memory        *memoryUsage
 	prefetchBytes int64
 	partitions    map[string]*pulsarPartition
 	confirmable   chan<- struct{}
-	watermark     uint64
-	hasWatermark  bool
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader) {
@@ -178,6 +178,7 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		partitions[partitionTopic] = &pulsarPartition{}
 	}
 	c := &pulsarReader{
+		readLimit:     newReadLimit(memory),
 		client:        client,
 		consumer:      consumer,
 		memory:        memory,
@@ -189,16 +190,21 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	return c
 }
 
-func (c *pulsarReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
-	if !needsMoreInput {
-		if err := c.memory.wait(ctx); err != nil {
-			return nil, err
-		}
+func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
+	if err := c.wait(ctx); err != nil {
+		return nil, err
 	}
+	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
-	case message := <-c.consumer.Chan():
+	case message = <-c.consumer.Chan():
+	}
+	var (
+		batch []*readData
+		bytes int64
+	)
+	for {
 		partition := c.partitions[message.Topic()]
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
@@ -209,36 +215,34 @@ func (c *pulsarReader) Read(ctx context.Context, needsMoreInput bool) (*readData
 			messageID: messageID,
 		})
 		partition.mu.Unlock()
-		return &readData{
+		batch = append(batch, &readData{
 			key:           []byte(message.Key()),
 			value:         message.Payload(),
 			record:        record,
 			retainedBytes: 256,
 			dmlBoundary:   &readBoundary{reached: true},
 			ddlOrder:      commitOrder,
-		}, nil
+		})
+		bytes += size
+		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
+			return batch, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case message = <-c.consumer.Chan():
+		default:
+			return batch, nil
+		}
 	}
 }
 
-func (c *pulsarReader) Advance(_ context.Context, feedback readFeedback) (readProgress, error) {
-	result := readProgress{
-		watermark:    c.watermark,
-		hasWatermark: c.hasWatermark,
-	}
-	result.needsMoreInput = feedback.boundaryDDL != nil && (!c.hasWatermark || feedback.boundaryDDL.GetCommitTs() > c.watermark)
-	if !feedback.hasWatermark {
-		return result, nil
-	}
-	c.watermark = max(c.watermark, feedback.watermark)
-	c.hasWatermark = true
-	c.memory.reserve(128)
-	feedback.data.record.refs.Add(1)
-	result.watermark, result.hasWatermark = c.watermark, true
-	result.control = &readControl{
-		watermark: feedback.watermark,
-		records:   []*ack{feedback.data.record},
-	}
-	return result, nil
+func (c *pulsarReader) Advance(_ []readUpdate) {
+}
+
+func (c *pulsarReader) Boundary(_ context.Context, _ []event.SchemaTableName) (*readBoundary, error) {
+	// Topic-wide checkpoints provide this transport's completion boundaries.
+	return nil, nil
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {

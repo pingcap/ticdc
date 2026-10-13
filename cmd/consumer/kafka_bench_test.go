@@ -24,8 +24,10 @@ import (
 func BenchmarkKafkaReadScheduling(b *testing.B) {
 	for _, count := range []int{4, 64} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			memory := newMemoryUsage()
 			c := &kafkaReader{
-				memory:     newMemoryUsage(),
+				readLimit:  newReadLimit(memory),
+				memory:     memory,
 				partitions: make(map[int32]*kafkaPartition, count),
 			}
 			for id := range count {
@@ -35,7 +37,6 @@ func BenchmarkKafkaReadScheduling(b *testing.B) {
 					polled:       []*kgo.Record{{Partition: int32(id)}},
 				}
 			}
-			ctx := b.Context()
 			data := &readData{}
 			b.ReportAllocs()
 			for b.Loop() {
@@ -44,9 +45,7 @@ func BenchmarkKafkaReadScheduling(b *testing.B) {
 				c.readSequence++
 				c.partitions[id].sequence = c.readSequence
 				data.stream = id
-				if _, err := c.Advance(ctx, readFeedback{data: data, decoded: true}); err != nil {
-					b.Fatal(err)
-				}
+				c.Advance([]readUpdate{{data: data, decoded: true}})
 			}
 		})
 	}

@@ -193,10 +193,12 @@ func TestWriterReplayKeepsEarlierMutationsUntilWatermark(t *testing.T) {
 		if index == 1 {
 			// Another writer's files can replay older mutations in the next group.
 			group := &readGroup{tableID: 1, boundary: &readBoundary{}}
-			progress, err := input.Advance(t.Context(), readFeedback{data: &readData{group: group, groupEnd: true}, decoded: true})
-			require.NoError(t, err)
+			a := &assembler{}
+			require.NoError(t, a.accept(t.Context(), decodedData{
+				data:    &readData{group: group, groupEnd: true},
+				decoded: true,
+			}))
 			require.True(t, group.boundary.reached)
-			require.Nil(t, progress.control)
 		}
 	}
 	w.consume(&writeEvent{watermark: 201, hasWatermark: true})

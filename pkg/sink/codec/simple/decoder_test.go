@@ -124,10 +124,11 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 	)
 	tableIDAllocator.Clean()
 	t.Cleanup(tableIDAllocator.Clean)
+	cache := NewTableInfoCache()
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
-		memo:           newMemoryTableInfoProvider(),
+		memo:           cache,
 		cachedMessages: list.New(),
 	}
 	decoder.msg = &message{
@@ -189,6 +190,17 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 		Type:     MessageTypeWatermark,
 		CommitTs: commitTs + 1,
 	}
+	current := ddl.TableInfo.CloneWithRouting(schema, table)
+	current.UpdateTS = 200
+	future := ddl.TableInfo.CloneWithRouting(schema, table)
+	future.UpdateTS = 300
+	cache.Write(current)
+	cache.Write(future)
+	cache.ReleaseBefore(250)
+	require.Nil(t, cache.Read(schema, table, schemaVersion))
+	require.Same(t, current, cache.Read(schema, table, 200))
+	require.Same(t, future, cache.Read(schema, table, 300))
+	// Conversion captured the old immutable schema before history reclamation.
 	dmlEvent := dmlMessage.ToDMLEvent()
 	require.NotNil(t, dmlEvent)
 	require.Equal(t, physicalTableID, dmlEvent.GetTableID())

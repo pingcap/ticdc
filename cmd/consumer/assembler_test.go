@@ -197,22 +197,23 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	a := &assembler{pendingDML: []*writeEvent{unrelated, first, second, third}, sortCSVRows: true}
 	for result, err := range a.decode(t.Context(), &readData{group: group, groupEnd: true}) {
 		require.NoError(t, err)
-		progress, err := r.Advance(t.Context(), result.feedback)
-		require.NoError(t, err)
-		require.NoError(t, a.accept(t.Context(), result, progress))
+		require.NoError(t, a.accept(t.Context(), result))
+		r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+		a.collectWatermarks()
 	}
 	for _, expected := range []*writeEvent{third, second, first} {
 		result := a.next()
 		require.Same(t, expected, result)
 	}
-	data, err := r.Read(t.Context(), false)
+	batch, err := r.Read(t.Context())
 	require.NoError(t, err)
+	data := batch[0]
 	require.NotNil(t, data.control)
 	for result, err := range a.decode(t.Context(), data) {
 		require.NoError(t, err)
-		progress, err := r.Advance(t.Context(), result.feedback)
-		require.NoError(t, err)
-		require.NoError(t, a.accept(t.Context(), result, progress))
+		require.NoError(t, a.accept(t.Context(), result))
+		r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+		a.collectWatermarks()
 	}
 	// The completed scan's checkpoint also covers the earlier table.
 	unrelated.boundary = &readBoundary{reached: true}
@@ -222,10 +223,11 @@ func TestAssemblerGroupBoundary(t *testing.T) {
 	require.True(t, result.hasWatermark)
 	require.EqualValues(t, 20, result.watermark)
 	require.Empty(t, a.pendingDML)
-	progress, err := r.Advance(t.Context(), readFeedback{data: &readData{}, dml: &event.DMLEvent{CommitTs: 19}})
-	require.NoError(t, err)
-	require.True(t, progress.skip)
-	progress, err = r.Advance(t.Context(), readFeedback{data: &readData{}, dml: &event.DMLEvent{CommitTs: 20}})
-	require.NoError(t, err)
-	require.False(t, progress.skip)
+	record := newAck(newMemoryUsage(), 256, nil)
+	require.NoError(t, a.accept(t.Context(), decodedData{
+		data:   &readData{format: rowFormat},
+		dml:    &event.DMLEvent{CommitTs: 19},
+		record: record,
+	}))
+	require.Empty(t, a.pendingDML)
 }

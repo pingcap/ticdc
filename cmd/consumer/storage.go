@@ -72,6 +72,7 @@ type storageTableKey struct {
 }
 
 type storageReader struct {
+	*readLimit
 	tableIDs       map[storageTableKey]int64
 	nextTableID    int64
 	group          *readGroup
@@ -88,6 +89,7 @@ type storageReader struct {
 	schemas        map[cloudstorage.SchemaPathKey]*readSchema
 	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks  map[string]uint64
+	pendingSchema  chan struct{} // Header decoding determines the next file groups.
 	mu             sync.Mutex
 	records        []*ack
 	inputs         []storageInput
@@ -117,6 +119,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 	}
 
 	c := &storageReader{
+		readLimit:      newReadLimit(memory),
 		storage:        storage,
 		memory:         memory,
 		confirmable:    confirmable,
@@ -224,9 +227,6 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 }
 
 func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
 	g, ctx := errgroup.WithContext(ctx)
 	workers := min(8, len(paths))
 	for worker := range workers {
@@ -276,15 +276,28 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
-func (c *storageReader) Read(ctx context.Context, needsMoreInput bool) (*readData, error) {
+func (c *storageReader) Read(ctx context.Context) ([]*readData, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
+		if c.pendingSchema != nil {
+			select {
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			case <-c.pendingSchema:
+				c.pendingSchema = nil
+			}
+		}
 		if len(c.inputs) == 0 {
 			if c.scanned && c.checkpoint > c.readCheckpoint {
+				c.readCheckpoint = c.checkpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				return &readData{control: &readControl{watermark: c.checkpoint}}, nil
+				return []*readData{{
+					control: &readControl{
+						watermark: c.checkpoint,
+					},
+				}}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -294,8 +307,11 @@ func (c *storageReader) Read(ctx context.Context, needsMoreInput bool) (*readDat
 		input := c.inputs[0]
 		key := input.key
 		tableKey := key.GetKey()
+		c.mu.Lock()
+		ddlWatermark := c.ddlWatermarks[tableKey]
+		c.mu.Unlock()
 		switch {
-		case input.index.Idx < input.end && key.TableVersion >= c.ddlWatermarks[tableKey]:
+		case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
 			c.inputs[0].index.Idx++
 		default:
 			c.inputs[0] = storageInput{}
@@ -305,22 +321,20 @@ func (c *storageReader) Read(ctx context.Context, needsMoreInput bool) (*readDat
 		if schema == nil {
 			log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 		}
-		if key.IsSchemaFileDMLPathKey() && (schema.file.Query == "" || key.TableVersion <= c.ddlWatermarks[tableKey]) {
+		if key.IsSchemaFileDMLPathKey() && (schema.file.Query == "" || key.TableVersion <= ddlWatermark) {
 			continue
 		}
-		if key.TableVersion < c.ddlWatermarks[tableKey] {
+		if key.TableVersion < ddlWatermark {
 			if !input.groupEnd {
 				c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
 			}
 			continue
 		}
 		if key.IsSchemaFileDMLPathKey() {
-			if !needsMoreInput {
-				if err := c.memory.wait(ctx); err != nil {
-					return nil, err
-				}
+			if err := c.wait(ctx); err != nil {
+				return nil, err
 			}
-			return c.readDDL(key, schema), nil
+			return []*readData{c.readDDL(key, schema)}, nil
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -346,19 +360,23 @@ func (c *storageReader) Read(ctx context.Context, needsMoreInput bool) (*readDat
 			c.groupKey = key
 		}
 		if input.groupEnd {
-			return &readData{
+			data := &readData{
 				format:   rowFormat,
 				schema:   schema,
 				group:    c.group,
 				groupEnd: true,
-			}, nil
-		}
-		if !needsMoreInput {
-			if err := c.memory.wait(ctx); err != nil {
-				return nil, err
 			}
+			c.group = nil
+			return []*readData{data}, nil
 		}
-		return c.readDMLFile(ctx, input, schema)
+		if err := c.wait(ctx); err != nil {
+			return nil, err
+		}
+		data, err := c.readDMLFile(ctx, input, schema)
+		if err != nil {
+			return nil, err
+		}
+		return []*readData{data}, nil
 	}
 }
 
@@ -430,6 +448,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 }
 
 func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *readData {
+	c.pendingSchema = make(chan struct{})
 	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
 	record := newAck(c.memory, size, c.confirmable)
 	c.mu.Lock()
@@ -495,17 +514,15 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	}, nil
 }
 
-func (c *storageReader) Advance(_ context.Context, feedback readFeedback) (readProgress, error) {
-	data := feedback.data
-	if data == nil {
-		return readProgress{}, nil
-	}
-	if data.control != nil {
-		c.readCheckpoint = max(c.readCheckpoint, data.control.watermark)
-		return readProgress{control: data.control}, nil
-	}
-	if feedback.ddl != nil {
-		ddl := feedback.ddl
+func (c *storageReader) Advance(updates []readUpdate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, update := range updates {
+		data := update.data
+		if !update.decoded || data.ddl == nil {
+			continue
+		}
+		ddl := data.ddl
 		file := data.schema.file
 		key := common.QuoteSchema(file.Schema, file.Table)
 		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], file.TableVersion)
@@ -514,17 +531,13 @@ func (c *storageReader) Advance(_ context.Context, feedback readFeedback) (readP
 			oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
 			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], file.TableVersion)
 		}
+		close(c.pendingSchema)
 	}
-	if feedback.dml != nil {
-		if feedback.dml.GetCommitTs() < c.readCheckpoint {
-			return readProgress{skip: true}, nil
-		}
-	}
-	if data.groupEnd {
-		data.group.boundary.reached = true
-		c.group = nil
-	}
-	return readProgress{}, nil
+}
+
+func (c *storageReader) Boundary(_ context.Context, _ []event.SchemaTableName) (*readBoundary, error) {
+	// File group completion is published in the ordered input itself.
+	return nil, nil
 }
 
 func (c *storageReader) Confirm(_ context.Context) error {

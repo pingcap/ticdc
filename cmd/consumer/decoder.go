@@ -16,16 +16,51 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"runtime"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+type decodeStream struct {
+	decoder       codecCommon.Decoder
+	cachedRecords map[*codecCommon.DMLMessage]*cachedInput
+	watermark     uint64
+	hasWatermark  bool
+}
+
+type cachedInput struct {
+	data *readData
+	task *decodeTask
+}
+
+func newDecodeStream(ctx context.Context, id int, decoding *decodeConfig, upstreamDB *sql.DB, tables simple.TableInfoProvider) *decodeStream {
+	var (
+		decoder codecCommon.Decoder
+		err     error
+	)
+	if decoding.codec.Protocol == config.ProtocolSimple {
+		decoder, err = simple.NewDecoder(ctx, decoding.codec, upstreamDB, tables)
+	}
+	if decoding.codec.Protocol != config.ProtocolSimple {
+		decoder, err = codec.NewEventDecoder(ctx, id, decoding.codec, decoding.topic, upstreamDB)
+	}
+	if err != nil {
+		log.Panic("consumer event decoder initialization failed", zap.String("protocol", decoding.codec.Protocol.String()), zap.Error(err))
+	}
+	return &decodeStream{
+		decoder: decoder,
+	}
+}
 
 // The reader supplies immutable schema contents. Only assembly materializes
 // and caches TableInfo; conversion workers receive that captured metadata.
@@ -75,9 +110,6 @@ func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup
 }
 
 func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
 	task.record.retainDecode()
 	// Conversion can finish out of order. The assembler joins results in table
 	// order before allowing controls or writes to pass them.

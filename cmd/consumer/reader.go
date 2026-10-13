@@ -16,60 +16,91 @@ package main
 
 import (
 	"context"
-	"maps"
 	"net/url"
-	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-// Read and Advance have one caller. Confirm may run concurrently.
+// Read, Advance and Confirm may run concurrently. Boundary is assembler-owned.
 // Close runs after all callers have stopped.
-// needsMoreInput lets an unfinished input boundary advance past the soft budget.
-type readClient interface {
-	Read(ctx context.Context, needsMoreInput bool) (*readData, error)
-	Advance(ctx context.Context, feedback readFeedback) (readProgress, error)
+// Read returns a nonempty batch without waiting to fill it.
+// ContinueReading lets an unfinished dependency advance past the soft budget.
+type Reader interface {
+	Read(ctx context.Context) ([]*readData, error)
+	Advance(updates []readUpdate)
+	// Boundary covers logical tables. Nil covers every input; an empty,
+	// nonnil selection requests the transport's control window.
+	Boundary(ctx context.Context, tables []event.SchemaTableName) (*readBoundary, error)
+	ContinueReading(bool)
 	Confirm(ctx context.Context) error
 	Close()
 }
 
 // reader owns transport access, reading admission and upstream confirmation.
-// Feedback and reads share one goroutine so positions never pass undecoded inputs.
 type reader struct {
 	g           *errgroup.Group
-	client      readClient
+	client      Reader
 	confirmable <-chan struct{}
 }
 
-// Progress exchanges complete before reading resumes. This also publishes
-// boundary updates to the assembler without concurrently mutating its proofs.
-type readRequest struct {
-	feedback       readFeedback
-	resume         bool
-	needsMoreInput bool
+// readLimit admits new input against the shared soft budget. An unfinished
+// dependency can request more input without exposing its protocol to the reader.
+type readLimit struct {
+	memory     *memoryUsage
+	continuing atomic.Bool
+	changed    chan struct{}
 }
 
-type readResult struct {
-	data     *readData
-	progress readProgress
+func newReadLimit(memory *memoryUsage) *readLimit {
+	return &readLimit{
+		memory:  memory,
+		changed: make(chan struct{}, 1),
+	}
 }
 
-// Return logical stream IDs with the reader so decoder initialization does not
-// depend on transport-specific reader fields. An empty list uses one decoder.
-func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan struct{}) (*reader, []int32) {
-	var (
-		client  readClient
-		streams []int32
-	)
+func (l *readLimit) ContinueReading(enabled bool) {
+	if l.continuing.Swap(enabled) == enabled {
+		return
+	}
+	select {
+	case l.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (l *readLimit) wait(ctx context.Context) error {
+	for l.memory.used() >= l.memory.limit && !l.continuing.Load() {
+		changed := l.memory.changes()
+		if l.memory.used() < l.memory.limit || l.continuing.Load() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		case <-l.changed:
+		}
+	}
+	return nil
+}
+
+func newReader(
+	ctx context.Context,
+	upstreamURI *url.URL,
+	consumerID string,
+	replicaConfig *config.ReplicaConfig,
+	memory *memoryUsage,
+	confirmable chan struct{},
+) *reader {
+	var client Reader
 	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		reader := newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
-		client = reader
-		streams = slices.Collect(maps.Keys(reader.partitions))
+		client = newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
 	case sourcePulsar:
 		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
@@ -78,17 +109,17 @@ func newReader(ctx context.Context, upstreamURI *url.URL, consumerID string, rep
 	return &reader{
 		client:      client,
 		confirmable: confirmable,
-	}, streams
+	}
 }
 
-func (r *reader) start(ctx context.Context, requests <-chan readRequest, results chan<- readResult) error {
+func (r *reader) start(ctx context.Context, results chan<- []*readData) error {
 	r.g, ctx = errgroup.WithContext(ctx)
 	r.g.Go(func() error {
 		return r.confirm(ctx)
 	})
-	var needsMoreInput bool
+	defer close(results)
 	for {
-		data, err := r.client.Read(ctx, needsMoreInput)
+		data, err := r.client.Read(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer read failed", zap.Error(err))
@@ -96,37 +127,9 @@ func (r *reader) start(ctx context.Context, requests <-chan readRequest, results
 			return err
 		}
 		select {
-		case results <- readResult{
-			data: data,
-		}:
+		case results <- data:
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		}
-		for {
-			var request readRequest
-			select {
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			case request = <-requests:
-			}
-			if request.resume {
-				needsMoreInput = request.needsMoreInput
-				break
-			}
-			progress, err := r.client.Advance(ctx, request.feedback)
-			if err != nil {
-				if ctx.Err() == nil {
-					log.Error("consumer read progress failed", zap.Error(err))
-				}
-				return err
-			}
-			select {
-			case results <- readResult{
-				progress: progress,
-			}:
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
 		}
 	}
 }
@@ -175,6 +178,8 @@ type readData struct {
 	key           []byte
 	value         []byte
 	stream        int32
+	position      int64 // Transport cursor; the assembler only returns it to its reader.
+	ddlCopy       bool  // A control replica updates input progress without executing again.
 	record        *ack
 	retainedBytes int64
 	schema        *readSchema
@@ -195,27 +200,13 @@ type readGroup struct {
 	boundary *readBoundary
 }
 
-// Decoded facts drive reading progress. They never confirm downstream writes.
-// A boundary request covers only the candidate events already decoded.
-type readFeedback struct {
-	data           *readData
-	decoded        bool
-	dml            *event.DMLEvent
-	ddl            *event.DDLEvent
-	watermark      uint64
-	hasWatermark   bool
-	needsMoreInput bool
-	boundaryDDL    *event.DDLEvent
-	pendingDML     int
-}
-
-type readProgress struct {
-	watermark      uint64
-	hasWatermark   bool
-	needsMoreInput bool
-	boundary       *readBoundary
-	control        *readControl
-	skip           bool
+// Updates contain transport progress only. DDLs, watermarks and schema waits
+// stay with the assembler; decoding progress never confirms downstream writes.
+type readUpdate struct {
+	data     *readData
+	decoded  bool
+	progress uint64
+	boundary *readBoundary
 }
 
 // Controls retain their input references until the downstream watermark passes.

@@ -124,9 +124,9 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					return dml
 				})
 				result := a.decodeMessage(data, message, record)
-				progress, err := r.Advance(ctx, result.feedback)
-				require.NoError(t, err)
-				require.NoError(t, a.accept(ctx, result, progress))
+				require.NoError(t, a.accept(ctx, result))
+				r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
+				a.collectWatermarks()
 				a.decoding = append(a.decoding, a.nextReady(0))
 			}
 			record.decoded(128)

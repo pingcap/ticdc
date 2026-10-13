@@ -232,9 +232,6 @@ func (w *writer) flushDDL(ctx context.Context) error {
 		}
 	}
 	for w.ddlInFlight == nil && len(w.pendingDDL) != 0 {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
 		result := w.pendingDDL[0]
 		ddl := result.ddl
 		// Failover can resend an old DDL after a newer one. Query is part of

@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/logger"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -75,8 +76,8 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 
 	memory := newMemoryUsage()
 	confirmable := make(chan struct{}, 1)
-	reader, streams := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
-	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig, streams)
+	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
+	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
 	upstreamDB := newUpstreamDB(ctx, upstreamURI)
 	defer func() {
 		if c != nil {
@@ -89,7 +90,18 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			}
 		}
 	}()
-	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory)
+	var streams map[int32]*decodeStream
+	tables := simple.NewTableInfoCache()
+	if sourceType == sourceKafka {
+		partitions := reader.client.(*kafkaReader).partitions
+		streams = make(map[int32]*decodeStream, len(partitions))
+		// Protocol constructors reset table ID allocation. Prepare all partition
+		// cursors before decoding starts.
+		for id := range partitions {
+			streams[id] = newDecodeStream(ctx, int(id), decoding, upstreamDB, tables)
+		}
+	}
+	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, streams, reader.client, tables)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
@@ -144,7 +156,7 @@ func loadReplicaConfig(configFile string) *config.ReplicaConfig {
 }
 
 // Resolve transport-specific defaults and requirements before constructing the assembler.
-func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig, streams []int32) *decodeConfig {
+func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig) *decodeConfig {
 	source := sourceTypeFromURI(upstreamURI)
 	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
 	switch source {
@@ -196,10 +208,9 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 		format = rowFormat
 	}
 	return &decodeConfig{
-		codec:   codecConfig,
-		format:  format,
-		topic:   strings.Trim(upstreamURI.Path, "/"),
-		streams: streams,
+		codec:  codecConfig,
+		format: format,
+		topic:  strings.Trim(upstreamURI.Path, "/"),
 	}
 }
 
@@ -262,15 +273,14 @@ func (c *consumer) consume(ctx context.Context) {
 			return nil
 		})
 	}
-	requests := make(chan readRequest)
-	inputs := make(chan readResult)
+	inputs := make(chan []*readData, 1)
 	results := make(chan []*writeEvent, 1)
 	writeDone := make(chan struct{})
 	c.g.Go(func() error {
-		return c.reader.start(ctx, requests, inputs)
+		return c.reader.start(ctx, inputs)
 	})
 	c.g.Go(func() error {
-		return c.assembler.start(ctx, requests, inputs, results)
+		return c.assembler.start(ctx, inputs, results)
 	})
 	c.g.Go(func() error {
 		defer close(writeDone)
