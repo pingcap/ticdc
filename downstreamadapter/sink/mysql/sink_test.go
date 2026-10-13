@@ -40,7 +40,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, common.DefaultKeyspaceID)
 	return ctx, sink, mock
 }
 
@@ -56,7 +56,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, common.DefaultKeyspaceID)
 	return ctx, sink, mock
 }
 
@@ -76,7 +76,7 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false)
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, common.DefaultKeyspaceID)
 	return ctx, sink, dmlMock, controlMock
 }
 
