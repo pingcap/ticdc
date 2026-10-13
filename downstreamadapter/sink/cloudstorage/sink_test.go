@@ -157,6 +157,76 @@ func TestBasicFunctionality(t *testing.T) {
 	require.Equal(t, count.Load(), int64(3))
 }
 
+func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
+		{Matcher: []string{"test.table1"}, Columns: []string{"c1"}},
+	}
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	setPDClockForTest(t, pdutil.NewClock4Test())
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table table1(c1 int primary key, c2 varchar(255))")
+	require.NotNil(t, job)
+	helper.ApplyJob(job)
+
+	dispatcherID := common.NewDispatcherID()
+	event := helper.DML2Event(job.SchemaName, job.TableName, `insert into table1 values (1, "filtered")`)
+	event.TableInfoVersion = job.BinlogInfo.FinishedTS
+	event.DispatcherID = dispatcherID
+
+	var flushed atomic.Uint64
+	event.AddPostFlushFunc(func() {
+		flushed.Add(1)
+	})
+
+	cloudStorageSink.AddDMLEvent(event)
+	err = cloudStorageSink.FlushDMLBeforeBlock(&commonEvent.DDLEvent{
+		DispatcherID: dispatcherID,
+		FinishedTs:   event.CommitTs + 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), flushed.Load())
+
+	tableDir := path.Join(parentDir, job.SchemaName, job.TableName, fmt.Sprint(event.TableInfoVersion))
+	var content []byte
+	require.Eventually(t, func() bool {
+		files, err := os.ReadDir(tableDir)
+		if err != nil {
+			return false
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".csv") {
+				continue
+			}
+			content, err = os.ReadFile(path.Join(tableDir, file.Name()))
+			return err == nil
+		}
+		return false
+	}, testEventuallyTimeout, testEventuallyTick)
+	require.Contains(t, string(content), "1")
+	require.NotContains(t, string(content), "filtered")
+}
+
 func TestIgnoreCallsAfterRunError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
 	sinkURI, err := url.Parse(uri)
