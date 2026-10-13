@@ -75,6 +75,7 @@ import (
 //   - *MaintainerPostBootstrapRequest: Configuration for post-bootstrap setup
 //   - error: Any error encountered during the bootstrap process
 func (c *Controller) FinishBootstrap(
+	ctx context.Context,
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
 ) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
@@ -108,7 +109,7 @@ func (c *Controller) FinishBootstrap(
 		return nil, err
 	}
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := c.loadTables(startTs, schemaStore, f)
+	tables, err := c.loadTables(ctx, startTs, schemaStore, f)
 	if err != nil {
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
@@ -122,7 +123,7 @@ func (c *Controller) FinishBootstrap(
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTables, err = c.loadTables(redoStartTs, schemaStore, f)
+		redoTables, err = c.loadTables(ctx, redoStartTs, schemaStore, f)
 		if err != nil {
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
@@ -583,8 +584,8 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	)
 }
 
-func (c *Controller) loadTables(startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
-	return schemaStore.GetAllPhysicalTables(c.keyspaceMeta, startTs, f)
+func (c *Controller) loadTables(ctx context.Context, startTs uint64, schemaStore schemastore.SchemaStore, f filter.Filter) ([]commonEvent.Table, error) {
+	return schemaStore.GetAllPhysicalTables(ctx, c.keyspaceMeta, startTs, f)
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
