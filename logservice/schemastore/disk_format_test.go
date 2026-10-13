@@ -25,7 +25,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -98,7 +98,7 @@ func TestPersistSchemaSnapshotStopsRetryingWhenCanceled(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, _, _, err := persistSchemaSnapshot(ctx, db, &snapshotLostStorage{
-			err:       cerror.New("retryable snapshot error"),
+			err:       errors.New("retryable snapshot error"),
 			attempted: attempted,
 		}, 100, true)
 		done <- err
