@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/model"
 )
 
 // rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
@@ -134,27 +134,14 @@ func rewriteDDLStmt(stmt ast.StmtNode, router Router, defaultSchema string) (boo
 		if err != nil {
 			return sqlname.Name{}, err
 		}
-<<<<<<< HEAD
-		t.Schema = parser_model.NewCIStr(v.targetNames[v.i].SchemaName)
-		t.Name = parser_model.NewCIStr(v.targetNames[v.i].TableName)
-		v.i++
-		return in, true
-	}
-	if c, ok := in.(*ast.ColumnName); ok {
-		v.rewriteColumnName(c)
-		return in, true
-	}
-	return in, false
-=======
 		routed = routed || binding.routed()
 		return sqlname.Name{Schema: binding.Target.Schema, Table: binding.Target.Table}, nil
 	})
 	return routed, err
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 }
 
 // routeDatabaseName routes the database name of a database-level DDL.
-func routeDatabaseName(name *ast.CIStr, router Router) (bool, error) {
+func routeDatabaseName(name *model.CIStr, router Router) (bool, error) {
 	binding, err := router.Route(name.O, "")
 	if err != nil {
 		return false, err
@@ -162,112 +149,14 @@ func routeDatabaseName(name *ast.CIStr, router Router) (bool, error) {
 	if !binding.routed() {
 		return false, nil
 	}
-	*name = ast.NewCIStr(binding.Target.Schema)
+	*name = model.NewCIStr(binding.Target.Schema)
 	return true, nil
 }
 
-<<<<<<< HEAD
-// rewriteColumnName rewrites only schema-qualified column references
-// (e.g. `db`.`t`.`col`) to match routed table names.
-func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
-	if c == nil || c.Schema.O == "" || c.Table.O == "" {
-		return
-	}
-
-	target, ok := v.targetByQualifiedSource[normalizedSchemaTableName(c.Schema.O, c.Table.O)]
-	if !ok {
-		return
-	}
-	c.Schema = parser_model.NewCIStr(target.SchemaName)
-	c.Table = parser_model.NewCIStr(target.TableName)
-}
-
-// newTableRenameVisitor builds the lookup map used for schema-qualified column
-// references. It pairs each source table with its routed target.
-func newTableRenameVisitor(
-	sourceTables []commonEvent.SchemaTableName,
-	targetTables []commonEvent.SchemaTableName,
-) *tableRenameVisitor {
-	visitor := &tableRenameVisitor{
-		targetNames:             targetTables,
-		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
-	}
-
-	for i, source := range sourceTables {
-		if i >= len(targetTables) || source.TableName == "" {
-			continue
-		}
-		target := targetTables[i]
-		if source.SchemaName != "" {
-			visitor.targetByQualifiedSource[normalizedSchemaTableName(source.SchemaName, source.TableName)] = target
-		}
-	}
-	return visitor
-}
-
-func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName {
-	return commonEvent.SchemaTableName{
-		SchemaName: strings.ToLower(schema),
-		TableName:  strings.ToLower(table),
-	}
-}
-
-// rewriteDDLStmtTables rewrites table names in a DDL AST.
-// sourceTables and targetTables must have matching lengths and follow the
-// traversal order produced by extractTableNames. TableName nodes are rewritten
-// positionally. For CREATE VIEW, schema-qualified column references are also
-// updated so `db`.`table`.`column` keeps pointing at the routed table.
-//
-// Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func rewriteDDLStmtTables(
-	stmt ast.StmtNode,
-	sourceTables []commonEvent.SchemaTableName,
-	targetTables []commonEvent.SchemaTableName,
-) (string, error) {
-	if _, ok := stmt.(ast.DDLNode); !ok {
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite ddl query got non ddl statement: %T", stmt)
-	}
-
-	switch v := stmt.(type) {
-	case *ast.AlterDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = parser_model.NewCIStr(targetTables[0].SchemaName)
-	case *ast.CreateDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = parser_model.NewCIStr(targetTables[0].SchemaName)
-	case *ast.DropDatabaseStmt:
-		if len(targetTables) != 1 {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
-		}
-		v.Name = parser_model.NewCIStr(targetTables[0].SchemaName)
-	default:
-		visitor := newTableRenameVisitor(sourceTables, targetTables)
-		stmt.Accept(visitor)
-		if visitor.hasErr {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got too few target tables: count=%d", len(targetTables))
-		}
-		// Check if all target tables were consumed - extra targets indicate a configuration mismatch
-		if visitor.i < len(targetTables) {
-			return "", errors.ErrTableRoutingFailed.GenWithStack(
-				"rewrite ddl query got too many target tables: count=%d, used=%d", len(targetTables), visitor.i)
-		}
-	}
-
-=======
 // restoreDDLStmt serializes a routed DDL AST.
 //
 // Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 	bf := &bytes.Buffer{}
 	err := stmt.Restore(&format.RestoreCtx{
 		// TiDB stores the original SQL in sessionctx.QueryString and copies it into

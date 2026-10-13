@@ -206,120 +206,57 @@ func TestResolveDDL(t *testing.T) {
 		// Expected output follows TiDB parser Restore formatting.
 		{
 			"alter table `t1` add column if not exists c1 int",
-<<<<<<< HEAD
-			[]string{"ALTER TABLE `t1` ADD COLUMN IF NOT EXISTS `c1` INT"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` ADD COLUMN IF NOT EXISTS `c1` INT"},
-		},
-		{
-			"alter table `t1` add index if not exists (a) using btree comment 'a'",
-			[]string{"ALTER TABLE `t1` ADD INDEX IF NOT EXISTS(`a`) USING BTREE COMMENT 'a'"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` ADD INDEX IF NOT EXISTS(`a`) USING BTREE COMMENT 'a'"},
-		},
-		{
-			"alter table `t1` add constraint fk_t2_id foreign key if not exists (t2_id) references t2(id)",
-			[]string{"ALTER TABLE `t1` ADD CONSTRAINT `fk_t2_id` FOREIGN KEY IF NOT EXISTS (`t2_id`) REFERENCES `t2`(`id`)"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}, commonEvent.SchemaTableName{SchemaName: "", TableName: "t2"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}, commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt2"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` ADD CONSTRAINT `fk_t2_id` FOREIGN KEY IF NOT EXISTS (`t2_id`) REFERENCES `xtest`.`xt2`(`id`)"},
-		},
-		{
-			"create index if not exists i1 on `t1`(`c1`)",
-			[]string{"CREATE INDEX IF NOT EXISTS `i1` ON `t1` (`c1`)"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"CREATE INDEX IF NOT EXISTS `i1` ON `xtest`.`xt1` (`c1`)"},
-		},
-		{
-			"alter table `t1` add partition if not exists ( partition p2 values less than maxvalue)",
-			[]string{"ALTER TABLE `t1` ADD PARTITION IF NOT EXISTS (PARTITION `p2` VALUES LESS THAN (MAXVALUE))"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` ADD PARTITION IF NOT EXISTS (PARTITION `p2` VALUES LESS THAN (MAXVALUE))"},
-		},
-		{
-			"alter table `t1` drop column if exists c2",
-			[]string{"ALTER TABLE `t1` DROP COLUMN IF EXISTS `c2`"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` DROP COLUMN IF EXISTS `c2`"},
-		},
-		{
-			"alter table `t1` change column if exists a b varchar(255)",
-			[]string{"ALTER TABLE `t1` CHANGE COLUMN IF EXISTS `a` `b` VARCHAR(255)"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` CHANGE COLUMN IF EXISTS `a` `b` VARCHAR(255)"},
-		},
-		{
-			"alter table `t1` modify column if exists a varchar(255)",
-			[]string{"ALTER TABLE `t1` MODIFY COLUMN IF EXISTS `a` VARCHAR(255)"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` MODIFY COLUMN IF EXISTS `a` VARCHAR(255)"},
-		},
-		{
-			"alter table `t1` drop index if exists i1",
-			[]string{"ALTER TABLE `t1` DROP INDEX IF EXISTS `i1`"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` DROP INDEX IF EXISTS `i1`"},
-=======
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` ADD COLUMN /*T! IF NOT EXISTS  */`c1` INT",
+			"ALTER TABLE `xtest`.`xt1` ADD COLUMN IF NOT EXISTS `c1` INT",
 		},
 		{
 			"alter table `t1` add index if not exists (a) using btree comment 'a'",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` ADD INDEX/*T!  IF NOT EXISTS */(`a`) USING BTREE COMMENT 'a'",
+			"ALTER TABLE `xtest`.`xt1` ADD INDEX IF NOT EXISTS(`a`) USING BTREE COMMENT 'a'",
 		},
 		{
 			"alter table `t1` add constraint fk_t2_id foreign key if not exists (t2_id) references t2(id)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}, {SchemaName: "", TableName: "t2"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}, {SchemaName: "xtest", TableName: "xt2"}},
-			"ALTER TABLE `xtest`.`xt1` ADD CONSTRAINT `fk_t2_id` FOREIGN KEY /*T! IF NOT EXISTS  */(`t2_id`) REFERENCES `xtest`.`xt2`(`id`)",
+			"ALTER TABLE `xtest`.`xt1` ADD CONSTRAINT `fk_t2_id` FOREIGN KEY IF NOT EXISTS (`t2_id`) REFERENCES `xtest`.`xt2`(`id`)",
 		},
 		{
 			"create index if not exists i1 on `t1`(`c1`)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"CREATE INDEX /*T! IF NOT EXISTS  */`i1` ON `xtest`.`xt1` (`c1`)",
+			"CREATE INDEX IF NOT EXISTS `i1` ON `xtest`.`xt1` (`c1`)",
 		},
 		{
 			"alter table `t1` add partition if not exists ( partition p2 values less than maxvalue)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` ADD PARTITION/*T!  IF NOT EXISTS */ (PARTITION `p2` VALUES LESS THAN (MAXVALUE))",
+			"ALTER TABLE `xtest`.`xt1` ADD PARTITION IF NOT EXISTS (PARTITION `p2` VALUES LESS THAN (MAXVALUE))",
 		},
 		{
 			"alter table `t1` drop column if exists c2",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` DROP COLUMN /*T! IF EXISTS  */`c2`",
+			"ALTER TABLE `xtest`.`xt1` DROP COLUMN IF EXISTS `c2`",
 		},
 		{
 			"alter table `t1` change column if exists a b varchar(255)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` CHANGE COLUMN /*T! IF EXISTS  */`a` `b` VARCHAR(255)",
+			"ALTER TABLE `xtest`.`xt1` CHANGE COLUMN IF EXISTS `a` `b` VARCHAR(255)",
 		},
 		{
 			"alter table `t1` modify column if exists a varchar(255)",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` MODIFY COLUMN /*T! IF EXISTS  */`a` VARCHAR(255)",
+			"ALTER TABLE `xtest`.`xt1` MODIFY COLUMN IF EXISTS `a` VARCHAR(255)",
 		},
 		{
 			"alter table `t1` drop index if exists i1",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` DROP INDEX /*T! IF EXISTS  */`i1`",
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
+			"ALTER TABLE `xtest`.`xt1` DROP INDEX IF EXISTS `i1`",
 		},
 		{
 			"alter table `t1` drop foreign key fk_t2_id",
@@ -329,16 +266,9 @@ func TestResolveDDL(t *testing.T) {
 		},
 		{
 			"alter table `t1` drop partition if exists p2",
-<<<<<<< HEAD
-			[]string{"ALTER TABLE `t1` DROP PARTITION IF EXISTS `p2`"},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "", TableName: "t1"}}},
-			[][]commonEvent.SchemaTableName{{commonEvent.SchemaTableName{SchemaName: "xtest", TableName: "xt1"}}},
-			[]string{"ALTER TABLE `xtest`.`xt1` DROP PARTITION IF EXISTS `p2`"},
-=======
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}},
 			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}},
-			"ALTER TABLE `xtest`.`xt1` DROP PARTITION /*T! IF EXISTS  */`p2`",
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
+			"ALTER TABLE `xtest`.`xt1` DROP PARTITION IF EXISTS `p2`",
 		},
 		// ALTER TABLE PARTITION BY
 		{
@@ -410,50 +340,6 @@ func routeRulesForTest(t *testing.T, sources, targets []commonEvent.SchemaTableN
 	t.Helper()
 	require.Len(t, targets, len(sources))
 
-<<<<<<< HEAD
-	p := parser.New()
-	// SELECT is not a DDL statement - extractTableNames returns empty names
-	stmts, _, err := p.Parse("SELECT 1", "", "")
-	require.NoError(t, err)
-	require.Len(t, stmts, 1)
-
-	names := extractTableNames(stmts[0])
-	require.Empty(t, names)
-}
-
-func TestRewriteDDLStmtTablesError(t *testing.T) {
-	t.Parallel()
-
-	p := parser.New()
-
-	t.Run("non ddl statement", func(t *testing.T) {
-		stmts, _, err := p.Parse("SELECT 1", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], nil, []commonEvent.SchemaTableName{})
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("unexpected target table count for alter database", func(t *testing.T) {
-		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}})
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("too few target tables", func(t *testing.T) {
-		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-
-	t.Run("too many target tables", func(t *testing.T) {
-		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
-		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}})
-		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-	})
-=======
 	var rules []*config.DispatchRule
 	for i, source := range sources {
 		target := targets[i]
@@ -474,7 +360,6 @@ func TestRewriteDDLStmtTablesError(t *testing.T) {
 		rules = append(rules, rule)
 	}
 	return rules
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 }
 
 func TestRewriteParserBackedDDLQueryWithSemicolonsInLiteralsAndComments(t *testing.T) {

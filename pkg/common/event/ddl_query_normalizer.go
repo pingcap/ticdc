@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/model"
 )
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
@@ -105,91 +104,6 @@ func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchem
 	return true
 }
 
-<<<<<<< HEAD
-func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
-	switch v := in.(type) {
-	case *ast.SelectStmt:
-		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
-	case *ast.ColumnName:
-		n.qualifyColumnName(v)
-	}
-	return in, false
-}
-
-func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
-	if _, ok := in.(*ast.SelectStmt); ok {
-		n.scopes = n.scopes[:len(n.scopes)-1]
-	}
-	return in, true
-}
-
-func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
-	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
-		return
-	}
-
-	scope := n.scopes[len(n.scopes)-1]
-	tableKey := strings.ToLower(c.Table.O)
-	if _, ok := scope.aliases[tableKey]; ok {
-		return
-	}
-	if _, ok := scope.ambiguousTables[tableKey]; ok {
-		return
-	}
-	schema, ok := scope.tableByName[tableKey]
-	if !ok {
-		return
-	}
-	c.Schema = model.NewCIStr(schema)
-	n.changed = true
-}
-
-func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {
-	scope := createViewSelectScope{
-		aliases:         make(map[string]struct{}),
-		tableByName:     make(map[string]string),
-		ambiguousTables: make(map[string]struct{}),
-	}
-	if selectStmt == nil || selectStmt.From == nil || selectStmt.From.TableRefs == nil {
-		return scope
-	}
-	collectCreateViewSelectTables(selectStmt.From.TableRefs, &scope)
-	return scope
-}
-
-func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSelectScope) {
-	switch v := node.(type) {
-	case *ast.Join:
-		if v.Left != nil {
-			collectCreateViewSelectTables(v.Left, scope)
-		}
-		if v.Right != nil {
-			collectCreateViewSelectTables(v.Right, scope)
-		}
-	case *ast.TableSource:
-		if v.AsName.O != "" {
-			scope.aliases[strings.ToLower(v.AsName.O)] = struct{}{}
-			return
-		}
-		tableName, ok := v.Source.(*ast.TableName)
-		if !ok || tableName.Schema.O == "" || tableName.Name.O == "" {
-			return
-		}
-		tableKey := strings.ToLower(tableName.Name.O)
-		if _, ambiguous := scope.ambiguousTables[tableKey]; ambiguous {
-			return
-		}
-		if _, exists := scope.tableByName[tableKey]; exists {
-			delete(scope.tableByName, tableKey)
-			scope.ambiguousTables[tableKey] = struct{}{}
-			return
-		}
-		scope.tableByName[tableKey] = tableName.Schema.O
-	}
-}
-
-=======
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))
 type tableSchemaExtractor struct {
 	schemas []string
 }

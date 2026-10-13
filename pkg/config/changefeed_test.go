@@ -65,25 +65,11 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
-<<<<<<< HEAD
-=======
-
-func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
-	info := &ChangeFeedInfo{
-		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-		Config:       replicaConfig,
-	}
-
-	changefeedConfig := info.ToChangefeedConfig()
-	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
-	require.True(t, changefeedConfig.IsLowLatencyMode())
-}
 
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"}}
 	cfg.Sink.KafkaConfig = &KafkaConfig{
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
@@ -105,27 +91,25 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.NoError(t, err)
 
 	output := info.String()
-	for _, secret := range []string{
-		"sink-password-sentinel",
-		"uri-secret-sentinel",
-		"registry-secret-sentinel",
-		"plain-password-sentinel",
-		"gssapi-password-sentinel",
-		"oauth-secret-sentinel",
-		"token-url-secret-sentinel",
-		"private-key-sentinel",
-		"claim-check-secret-sentinel",
-		"glue-access-sentinel",
-		"glue-secret-sentinel",
-		"glue-token-sentinel",
-	} {
-		require.NotContains(t, output, secret)
-	}
+	require.NotContains(t, output, "sentinel")
 	require.Contains(t, output, "xxxxx")
 	require.Contains(t, output, "******")
 	after, err := info.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, original, after)
+}
+
+func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	info := &ChangeFeedInfo{
+		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+		Config:       replicaConfig,
+	}
+
+	changefeedConfig := info.ToChangefeedConfig()
+	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
+	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
@@ -160,39 +144,3 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 		})
 	}
 }
-
-func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		protocol     Protocol
-		keepRegistry bool
-	}{
-		{protocol: ProtocolAvro, keepRegistry: true},
-		{protocol: ProtocolDebeziumAvro, keepRegistry: true},
-		{protocol: ProtocolDebezium, keepRegistry: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.protocol.String(), func(t *testing.T) {
-			t.Parallel()
-
-			cfg := GetDefaultReplicaConfig()
-			cfg.Sink.Protocol = util.AddressOf(tt.protocol.String())
-			cfg.Sink.SchemaRegistry = util.AddressOf("http://127.0.0.1:8088")
-			info := &ChangeFeedInfo{
-				SinkURI: "kafka://127.0.0.1:9092/topic",
-				Config:  cfg,
-			}
-
-			info.RmUnusedFields()
-			if tt.keepRegistry {
-				require.NotNil(t, info.Config.Sink.SchemaRegistry)
-				require.Equal(t, "http://127.0.0.1:8088", *info.Config.Sink.SchemaRegistry)
-			} else {
-				require.Nil(t, info.Config.Sink.SchemaRegistry)
-			}
-		})
-	}
-}
->>>>>>> 07c236849 (routing: fix rule validation, MQ dispatch and view rewriting (#6259))

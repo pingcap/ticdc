@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/model"
 )
 
 // Name identifies a source or target table. Source spellings are resolved by
@@ -87,9 +88,9 @@ func (b *Bindings) Apply(resolve Resolver) (bool, error) {
 		targets[table] = target
 	}
 	changed := false
-	set := func(schema, table *ast.CIStr, target Name) {
+	set := func(schema, table *model.CIStr, target Name) {
 		if schema.O != target.Schema || table.O != target.Table {
-			*schema, *table = ast.NewCIStr(target.Schema), ast.NewCIStr(target.Table)
+			*schema, *table = model.NewCIStr(target.Schema), model.NewCIStr(target.Table)
 			changed = true
 		}
 	}

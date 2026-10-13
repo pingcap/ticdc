@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -32,7 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/tidb/pkg/domain"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parsermodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -43,14 +44,15 @@ var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", co
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
 	dispatcher.EventDispatcher
-	startTs      uint64
-	id           common.DispatcherID
-	changefeedID common.ChangeFeedID
-	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
-	handleError  func(err error)
-	events       []dispatcher.DispatcherEvent
-	checkPointTs uint64
-	tableSpan    *heartbeatpb.TableSpan
+	startTs        uint64
+	id             common.DispatcherID
+	changefeedID   common.ChangeFeedID
+	handleEvents   func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError    func(err error)
+	events         []dispatcher.DispatcherEvent
+	checkPointTs   uint64
+	tableSpan      *heartbeatpb.TableSpan
+	lowLatencyMode bool
 
 	skipSyncpointAtStartTs bool
 	router                 routing.Router
@@ -89,6 +91,10 @@ func (m *mockDispatcher) GetId() common.DispatcherID {
 
 func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
+}
+
+func (m *mockDispatcher) IsLowLatencyMode() bool {
+	return m.lowLatencyMode
 }
 
 func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -1277,6 +1283,44 @@ func TestHandleBatchDataEvents(t *testing.T) {
 	}
 }
 
+func TestInjectResetDispatcherAfterBatchDataEvents(t *testing.T) {
+	failpointName := "github.com/pingcap/ticdc/downstreamadapter/eventcollector/InjectResetDispatcherAfterBatchDataEvents"
+	require.NoError(t, failpoint.Enable(failpointName, `1*return(true)`))
+	defer func() {
+		require.NoError(t, failpoint.Disable(failpointName))
+	}()
+
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+	collector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, collector, nil)
+	stat.currentEpoch.Store(newDispatcherEpochState(1, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(100)
+	markSessionReceiving(stat.session, localServerID)
+
+	require.True(t, stat.handleBatchDataEvents([]dispatcher.DispatcherEvent{
+		{
+			From: &localServerID,
+			Event: &commonEvent.DMLEvent{
+				Seq:      2,
+				Epoch:    1,
+				CommitTs: 101,
+			},
+		},
+	}))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, collector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	require.Equal(t, uint64(2), stat.loadCurrentEpochState().epoch)
+	require.Equal(t, uint64(101), stat.loadCurrentEpochState().maxEventTs.Load())
+}
+
 func TestHandleSingleDataEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1646,6 +1690,15 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
+}
+
+func TestDispatcherRequestsCarryLowLatencyMode(t *testing.T) {
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 100)
+	mockDisp.lowLatencyMode = true
+	stat := newDispatcherStatForTest(mockDisp, nil)
+
+	require.True(t, stat.session.newDispatcherRegisterRequest("local", false).LowLatencyMode)
+	require.True(t, stat.session.newDispatcherResetRequest("local", 100, 1).LowLatencyMode)
 }
 
 func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
@@ -2166,7 +2219,7 @@ func TestExchangeDMLRouting(t *testing.T) {
 		{"partition_db", "pt", normal.TableID, oldNormal, 7},
 		{"normal_db", "nt", partitionID, oldPartition, 8},
 	} {
-		table, err := domain.GetDomain(helper.Tk().Session()).InfoSchema().TableByName(t.Context(), ast.NewCIStr(tc.schema), ast.NewCIStr(tc.table))
+		table, err := domain.GetDomain(helper.Tk().Session()).InfoSchema().TableByName(t.Context(), parsermodel.NewCIStr(tc.schema), parsermodel.NewCIStr(tc.table))
 		require.NoError(t, err)
 		helper.ApplyJob(&model.Job{SchemaName: tc.schema, BinlogInfo: &model.HistoryInfo{TableInfo: table.Meta()}})
 		next := common.WrapTableInfo(tc.schema, table.Meta())
