@@ -435,7 +435,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 			log.Warn("schema store close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 		if store.gcKeeper != nil {
-			err := closeSchemaStoreGCKeeper(ctx, keyspaceID, store.gcKeeper)
+			err := closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
 			if err != nil {
 				log.Warn("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 			}
@@ -445,14 +445,10 @@ func (s *schemaStore) Close(ctx context.Context) error {
 	return nil
 }
 
-// closeSchemaStoreGCKeeper bounds GC cleanup by both the caller's context and
-// the maximum time allowed for deleting a schema store GC service.
-func closeSchemaStoreGCKeeper(
-	ctx context.Context,
-	keyspaceID uint32,
-	gcKeeper *schemaStoreGCKeeper,
-) error {
-	cleanupCtx, cancel := context.WithTimeout(ctx, schemaStoreGCDeleteTimeout)
+// closeSchemaStoreGCKeeper uses a fresh bounded context so GC cleanup still
+// runs during shutdown even if the caller's context has already been canceled.
+func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaStoreGCDeleteTimeout)
 	defer cancel()
 	err := gcKeeper.close(cleanupCtx)
 	if err != nil {
@@ -657,7 +653,7 @@ func (s *schemaStore) RegisterKeyspace(
 	storage := newPersistentStorage(keyspaceCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
 	if err := storage.initialize(initializationCtx, gcSafePoint); err != nil {
 		cancelKeyspace()
-		if closeErr := closeSchemaStoreGCKeeper(s.ctx, keyspaceMeta.ID, gcKeeper); closeErr != nil {
+		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
 			log.Warn("cleanup schema store gc keeper failed after storage init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
 		}
@@ -704,7 +700,7 @@ func (s *schemaStore) RegisterKeyspace(
 			log.Warn("cleanup schema store failed after fetcher init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
 		}
-		if closeErr := closeSchemaStoreGCKeeper(s.ctx, keyspaceMeta.ID, gcKeeper); closeErr != nil {
+		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
 			log.Warn("cleanup schema store gc keeper failed after fetcher init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
 		}
