@@ -52,6 +52,12 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
+// IsReusable reports whether shutdown has not started. Bootstrap callers must
+// hold MaintainerFenceMu to serialize this check with maintainer close requests.
+func (e *DispatcherManager) IsReusable() bool {
+	return !e.closing.Load() && !e.closed.Load() && !e.writePathClosed.Load()
+}
+
 // TryUpdateMaintainer records the active maintainer owner and epoch.
 // Maintainer epoch 0 is accepted only while the manager is still in compatibility
 // mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver

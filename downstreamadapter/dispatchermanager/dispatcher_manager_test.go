@@ -500,6 +500,17 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestTryCloseWaitsForFinalCleanup(t *testing.T) {
+	manager := &DispatcherManager{}
+	// finishClose publishes closed before cancelling tasks and deleting metrics.
+	manager.closed.Store(true)
+	manager.closing.Store(true)
+	require.False(t, manager.TryClose(false))
+
+	manager.closing.Store(false)
+	require.True(t, manager.TryClose(false))
+}
+
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	manager := &DispatcherManager{

@@ -1054,16 +1054,23 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 
 // ==== remove and clean related functions ====
 
+// TryClose starts asynchronous shutdown and reports when base cleanup has finished.
+// Remove-only cleanup remains best effort and does not delay the close response.
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {
 		e.removeChangefeedRequested.Store(true)
 	}
 	if e.closed.Load() {
+		// closed stops background tasks before finishClose deletes metrics. Wait
+		// until finishClose returns before allowing a replacement manager.
+		if e.closing.Load() {
+			return false
+		}
 		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
 	if !e.closing.CompareAndSwap(false, true) {
-		return e.closed.Load()
+		return e.closed.Load() && !e.closing.Load()
 	}
 
 	go e.close()
