@@ -53,6 +53,10 @@ const (
 	createChangefeedRetryInterval = 5 * time.Second
 )
 
+// stopChangefeedWaitInterval is how often the API waits for a stop changefeed
+// operator to finish. Tests shorten it to keep the waits short.
+var stopChangefeedWaitInterval = time.Second
+
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
 //  2. operatorController: manage all operators and execute them periodically.
@@ -268,11 +272,16 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				changefeedDownstreamTypeCache[displayName] = downstreamType
 				metrics.ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, name, downstreamType).Set(1)
 
-				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
+				metrics.ChangefeedStatusGauge.WithLabelValues(
+					keyspace,
+					name,
+					metrics.FormatKeyspaceID(info.KeyspaceID),
+				).Set(float64(info.State.ToInt()))
 
 				if !updateChangefeedCheckpointMetrics(
 					keyspace,
 					name,
+					info.KeyspaceID,
 					info.State,
 					cf.GetLastSavedCheckPointTs(),
 					c.pdClock.CurrentTime(),
@@ -328,13 +337,14 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 func updateChangefeedCheckpointMetrics(
 	keyspace string,
 	name string,
+	keyspaceID uint32,
 	state config.FeedState,
 	checkpointTs uint64,
 	pdTime time.Time,
 ) bool {
 	switch state {
 	case config.StateStopped, config.StateFinished, config.StateRemoved:
-		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name)
+		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
 		return false
 	}
 
@@ -342,7 +352,11 @@ func updateChangefeedCheckpointMetrics(
 	phyCkpTs := oracle.ExtractPhysical(checkpointTs)
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
-	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+		keyspace,
+		name,
+		metrics.FormatKeyspaceID(keyspaceID),
+	).Set(lag)
 	return true
 }
 
@@ -837,7 +851,10 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 				c.operatorController.StopChangefeed(ctx, cfID, remove)
 			}
 			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, remove)
-			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
+			log.Info("stop changefeed when bootstrapping",
+				zap.String("changefeed", cfID.String()),
+				zap.Int("progress", int(cfMeta.Status.Progress)),
+				zap.Uint64("checkpointTs", cfMeta.Status.CheckpointTs))
 		default:
 			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, false)
 		}
@@ -1024,7 +1041,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
@@ -1065,7 +1082,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for {
 		if op.IsFinished() {

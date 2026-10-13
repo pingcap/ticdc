@@ -42,6 +42,8 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+	// defaultDDLPollInterval is how often a running downstream DDL is re-checked.
+	defaultDDLPollInterval = 5 * time.Second
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
@@ -74,7 +76,10 @@ type Writer struct {
 	// for dry-run mode
 	blockerTicker *time.Ticker
 
-	writeGate *writelease.Gate
+	// ddlPollInterval is how often a running downstream DDL is re-checked.
+	// Tests lower it to avoid paying the production poll interval.
+	ddlPollInterval time.Duration
+	writeGate       *writelease.Gate
 }
 
 func NewWriter(
@@ -99,6 +104,7 @@ func NewWriter(
 
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
+		ddlPollInterval:             defaultDDLPollInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {

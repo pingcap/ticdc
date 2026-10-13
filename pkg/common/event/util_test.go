@@ -21,6 +21,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSharedEventTestStoreAfterPrivateStore(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	store := helper.Storage()
+	helper.Close()
+
+	t.Run("private store", func(t *testing.T) {
+		private := NewEventTestHelperWithPrivateStore(t)
+		t.Cleanup(private.Close)
+		require.NotSame(t, store, private.Storage())
+		// Force the next helper to change the schema cache size, exercising the
+		// TiDB global hook even when NewTestKit does not randomly change it.
+		private.Tk().MustExec("set @@global.tidb_schema_cache_size = 1")
+	})
+
+	reused := NewEventTestHelper(t)
+	t.Cleanup(reused.Close)
+	require.Same(t, store, reused.Storage())
+	reused.Tk().MustExec("set @@global.tidb_schema_cache_size = 0")
+}
+
 func TestIsSplitable(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()

@@ -66,6 +66,39 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
 
+func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"}}
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		Key:                   util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+		GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+	info := &ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config:  cfg,
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	output := info.String()
+	require.NotContains(t, output, "sentinel")
+	require.Contains(t, output, "xxxxx")
+	require.Contains(t, output, "******")
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	replicaConfig := GetDefaultReplicaConfig()
 	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
