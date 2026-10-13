@@ -423,9 +423,7 @@ func (s *schemaStore) Run(ctx context.Context) error {
 func (s *schemaStore) Close(ctx context.Context) error {
 	// Cancel in-progress keyspace registration before waiting for the keyspace
 	// lock. Registration can hold the lock while loading the initial snapshot.
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.cancel()
 
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
@@ -616,10 +614,8 @@ func (s *schemaStore) RegisterKeyspace(
 	// Check it synchronously so registration cannot restart after Close releases
 	// the lock. This must precede the existing-keyspace check because Close does
 	// not remove closed keyspaces from the map.
-	if s.ctx != nil {
-		if err := s.ctx.Err(); err != nil {
-			return err
-		}
+	if err := s.ctx.Err(); err != nil {
+		return err
 	}
 	// If the keyspace has already been registered
 	// No need to register again
@@ -629,16 +625,15 @@ func (s *schemaStore) RegisterKeyspace(
 	if _, tombstone := s.tombstoneKeyspaces[keyspaceMeta.ID]; tombstone {
 		return errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 	}
-	storeCtx, cancel := s.newKeyspaceContext(ctx)
-	if err := storeCtx.Err(); err != nil {
-		cancel()
+	initializationCtx, cancelInitialization := s.newInitializationContext(ctx)
+	defer cancelInitialization()
+	if err := initializationCtx.Err(); err != nil {
 		return err
 	}
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
-	kvStorage, err := keyspaceManager.GetStorage(storeCtx, keyspaceMeta.Name)
+	kvStorage, err := keyspaceManager.GetStorage(initializationCtx, keyspaceMeta.Name)
 	if err != nil {
-		cancel()
 		return err
 	}
 
@@ -649,15 +644,17 @@ func (s *schemaStore) RegisterKeyspace(
 	// The keeper is created before the initial snapshot and stays alive for the
 	// whole schema store lifetime so both guarantees share the same GC barrier.
 	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
-	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
+	gcSafePoint, err := s.acquireInitialGCSafePoint(initializationCtx, keyspaceMeta, gcKeeper)
 	if err != nil {
-		cancel()
 		return err
 	}
 
-	storage, err := newPersistentStorage(storeCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage, gcSafePoint)
+	keyspaceCtx, cancelKeyspace := context.WithCancel(s.ctx)
+	storage, err := newPersistentStorage(
+		keyspaceCtx, initializationCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage, gcSafePoint,
+	)
 	if err != nil {
-		cancel()
+		cancelKeyspace()
 		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
 			log.Warn("cleanup schema store gc keeper failed after storage init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
@@ -665,8 +662,8 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 	store := &keyspaceSchemaStore{
-		ctx:           storeCtx,
-		cancel:        cancel,
+		ctx:           keyspaceCtx,
+		cancel:        cancelKeyspace,
 		gcKeeper:      gcKeeper,
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
@@ -687,7 +684,7 @@ func (s *schemaStore) RegisterKeyspace(
 
 	subClient := appcontext.GetService[logpuller.SubscriptionClient](appcontext.SubscriptionClient)
 	fetcher := newDDLJobFetcher(
-		storeCtx,
+		keyspaceCtx,
 		subClient,
 		kvStorage,
 		keyspaceMeta.ID,
@@ -698,7 +695,7 @@ func (s *schemaStore) RegisterKeyspace(
 
 	err = fetcher.run(upperBound.ResolvedTs)
 	if err == nil {
-		err = ctx.Err()
+		err = initializationCtx.Err()
 	}
 	if err != nil {
 		if closeErr := store.close(); closeErr != nil {
@@ -727,12 +724,12 @@ func (s *schemaStore) RegisterKeyspace(
 				schemaStore.tryUpdateResolvedTs()
 			}
 		}
-	}(storeCtx, store)
+	}(keyspaceCtx, store)
 
 	// After initialization, keep advancing the GC barrier with the schema store's
 	// durable resolvedTs so the retained DDL history always covers local reads.
 	store.gcKeeper.run(
-		storeCtx,
+		keyspaceCtx,
 		func() uint64 { return store.resolvedTs.Load() },
 		func() { s.removeTombstoneKeyspace(keyspaceMeta, store) },
 	)
@@ -742,13 +739,12 @@ func (s *schemaStore) RegisterKeyspace(
 	return nil
 }
 
-func (s *schemaStore) newKeyspaceContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	storeCtx, cancel := context.WithCancel(ctx)
-	if s.ctx == nil {
-		return storeCtx, cancel
-	}
+func (s *schemaStore) newInitializationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	initializationCtx, cancel := context.WithCancel(ctx)
+	// Stop initialization when the schema store closes. If initialization
+	// finishes first, the returned cleanup unregisters this callback.
 	stopCancelOnSchemaStoreClose := context.AfterFunc(s.ctx, cancel)
-	return storeCtx, func() {
+	return initializationCtx, func() {
 		stopCancelOnSchemaStoreClose()
 		cancel()
 	}

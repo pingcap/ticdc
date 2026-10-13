@@ -350,7 +350,9 @@ func TestPersistSchemaSnapshotEncryptionRoundTrip(t *testing.T) {
 		encryptionManager: encMgr,
 		ctx:               context.Background(),
 	}
-	require.NoError(t, storage.initializeFromKVStorage(filepath.Join(t.TempDir(), "schema-store"), version.Ver))
+	require.NoError(t, storage.initializeFromKVStorage(
+		context.Background(), filepath.Join(t.TempDir(), "schema-store"), version.Ver,
+	))
 	defer func() {
 		require.NoError(t, storage.db.Close())
 	}()

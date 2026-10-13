@@ -109,7 +109,7 @@ func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
-	keyspaceCtx, cancel := store.newKeyspaceContext(context.Background())
+	initializationCtx, cancel := store.newInitializationContext(context.Background())
 	defer cancel()
 
 	// Registration holds this lock while loading the initial snapshot. Close
@@ -120,8 +120,8 @@ func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
 		closeDone <- store.Close(context.Background())
 	}()
 	select {
-	case <-keyspaceCtx.Done():
-		require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
+	case <-initializationCtx.Done():
+		require.ErrorIs(t, initializationCtx.Err(), context.Canceled)
 	case <-time.After(time.Second):
 		store.keyspaceLocker.Unlock()
 		require.FailNow(t, "keyspace initialization context was not canceled")
@@ -159,12 +159,14 @@ func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
 func TestRemoveTombstoneKeyspace(t *testing.T) {
 	const keyspaceID = uint32(42)
 	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
-	storeCtx, cancel := context.WithCancel(context.Background())
+	schemaStoreCtx, cancelSchemaStore := context.WithCancel(context.Background())
+	defer cancelSchemaStore()
+	keyspaceCtx, cancelKeyspace := context.WithCancel(schemaStoreCtx)
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
 	require.NoError(t, storage.run())
 
 	subClient := newTrackingSubscriptionClient()
-	fetcher := newDDLJobFetcher(storeCtx, subClient, nil, keyspaceID, nil, nil)
+	fetcher := newDDLJobFetcher(keyspaceCtx, subClient, nil, keyspaceID, nil, nil)
 	subID := subClient.AllocSubscriptionID()
 	subClient.Subscribe(
 		subID,
@@ -179,14 +181,16 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 
 	keyspaceStore := &keyspaceSchemaStore{
-		ctx:           storeCtx,
-		cancel:        cancel,
+		ctx:           keyspaceCtx,
+		cancel:        cancelKeyspace,
 		ddlJobFetcher: fetcher,
 		dataStorage:   storage,
 		unsortedCache: newDDLCache(),
 		notifyCh:      make(chan any, 1),
 	}
 	store := &schemaStore{
+		ctx:                    schemaStoreCtx,
+		cancel:                 cancelSchemaStore,
 		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{keyspaceID: keyspaceStore},
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
@@ -225,7 +229,7 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 
-	require.ErrorIs(t, storeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
 	require.False(t, subClient.contains(subID))
 	var panicValue any
 	func() {

@@ -143,7 +143,8 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
-	ctx context.Context,
+	keyspaceCtx context.Context,
+	initializationCtx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
@@ -167,8 +168,8 @@ func newPersistentStorage(
 		tableRegisteredCount:   make(map[int64]int),
 		encryptionManager:      encMgr,
 	}
-	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
-	err := dataStorage.initialize(gcSafePoint)
+	dataStorage.ctx, dataStorage.cancel = context.WithCancel(keyspaceCtx)
+	err := dataStorage.initialize(initializationCtx, gcSafePoint)
 	if err != nil {
 		dataStorage.cancel()
 		return nil, err
@@ -181,7 +182,7 @@ func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) 
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(gcSafePoint uint64) error {
+func (p *persistentStorage) initialize(ctx context.Context, gcSafePoint uint64) error {
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
@@ -220,12 +221,12 @@ func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 		}
 	}
 	if !isDataReusable {
-		return p.initializeFromKVStorage(dbPath, gcSafePoint)
+		return p.initializeFromKVStorage(ctx, dbPath, gcSafePoint)
 	}
 	return nil
 }
 
-func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) error {
+func (p *persistentStorage) initializeFromKVStorage(ctx context.Context, dbPath string, gcTs uint64) error {
 	now := time.Now()
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Fatal("fail to remove path in initializeFromKVStorage")
@@ -237,7 +238,7 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 
 	var err error
 	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshotWithEncryption(
-		p.ctx, p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
+		ctx, p.db, p.kvStorage, gcTs, true, p.encryptionManager, p.keyspaceID); err != nil {
 		closeErr := p.db.Close()
 		p.db = nil
 		if closeErr != nil {
