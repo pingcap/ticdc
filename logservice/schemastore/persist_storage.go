@@ -144,13 +144,11 @@ func openDB(dbPath string) *pebble.DB {
 
 func newPersistentStorage(
 	keyspaceCtx context.Context,
-	initializationCtx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
-	gcSafePoint uint64,
-) (*persistentStorage, error) {
+) *persistentStorage {
 	// Try to get encryption manager from appcontext (optional)
 	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
 
@@ -169,13 +167,7 @@ func newPersistentStorage(
 		encryptionManager:      encMgr,
 	}
 	dataStorage.ctx, dataStorage.cancel = context.WithCancel(keyspaceCtx)
-	err := dataStorage.initialize(initializationCtx, gcSafePoint)
-	if err != nil {
-		dataStorage.cancel()
-		return nil, err
-	}
-
-	return dataStorage, nil
+	return dataStorage
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {

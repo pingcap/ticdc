@@ -650,10 +650,8 @@ func (s *schemaStore) RegisterKeyspace(
 	}
 
 	keyspaceCtx, cancelKeyspace := context.WithCancel(s.ctx)
-	storage, err := newPersistentStorage(
-		keyspaceCtx, initializationCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage, gcSafePoint,
-	)
-	if err != nil {
+	storage := newPersistentStorage(keyspaceCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
+	if err := storage.initialize(initializationCtx, gcSafePoint); err != nil {
 		cancelKeyspace()
 		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
 			log.Warn("cleanup schema store gc keeper failed after storage init error",
