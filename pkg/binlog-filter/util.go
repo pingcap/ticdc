@@ -82,6 +82,10 @@ func toEventType(es string) (EventType, error) {
 		AddTablePartition,
 		DropTablePartition,
 		TruncateTablePartition,
+		AddForeignKey,
+		DropForeignKey,
+		AddFullTextIndex,
+		CreateHybridIndex,
 
 		IncompatibleDDLChanges,
 		ValueRangeDecrease,

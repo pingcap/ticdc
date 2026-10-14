@@ -66,6 +66,7 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),
+		zap.Int("maxBatchedBytes", o.MaxBatchedBytes),
 		zap.String("compression", config.Producer.Compression.String()),
 		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
 		zap.Int("maxRetry", o.MaxRetry),
@@ -80,7 +81,7 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 	}, nil
 }
 
-func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (ClusterAdminClient, error) {
+func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (AdminClient, error) {
 	start := time.Now()
 	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start)
@@ -116,7 +117,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
@@ -180,7 +181,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 }
 
 func (f *saramaFactory) MetricsCollector(
-	adminClient ClusterAdminClient,
+	adminClient AdminClient,
 ) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,

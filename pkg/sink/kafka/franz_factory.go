@@ -79,6 +79,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),
+		zap.Int("maxBatchedBytes", o.MaxBatchedBytes),
 		zap.String("compression", compression),
 		zap.Int16("requiredAcks", int16(o.RequiredAcks)),
 		zap.Int("maxRetry", o.MaxRetry),
@@ -91,7 +92,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	}, nil
 }
 
-func (f *franzFactory) AdminClient(context.Context) (ClusterAdminClient, error) {
+func (f *franzFactory) AdminClient(context.Context) (AdminClient, error) {
 	return &admin{
 		changefeed: f.changefeedID,
 		admin:      kadm.NewClient(f.client),
@@ -123,7 +124,7 @@ func (f *franzFactory) Close() {
 	cleanupMetrics(f.changefeedID)
 }
 
-func (f *franzFactory) MetricsCollector(ClusterAdminClient) MetricsCollector {
+func (f *franzFactory) MetricsCollector(AdminClient) MetricsCollector {
 	// franz-go reports producer metrics through hooks, so there is nothing to poll.
 	return nil
 }

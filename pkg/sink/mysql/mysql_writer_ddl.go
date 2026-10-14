@@ -252,7 +252,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 
 // waitDDLDone wait current ddl
 func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddlCreateTime string) error {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	ticker1 := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	defer ticker1.Stop()
@@ -357,7 +357,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string
 		return nil
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	defer ticker.Stop()
 
 	for {

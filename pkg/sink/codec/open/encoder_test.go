@@ -778,7 +778,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 		`insert into test.t values (3, 333)`)
 
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
+	codecConfig := common.NewConfig(config.ProtocolOpen).
+		WithMaxMessageBytes(1000).
+		WithMaxBatchedBytes(400)
 	encoder, err := NewBatchEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
@@ -808,11 +810,13 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, 2, len(messages))
 	require.Equal(t, 2, messages[0].GetRowsCount())
 	require.Equal(t, 1, messages[1].GetRowsCount())
+	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
+	require.LessOrEqual(t, messages[1].Length(), codecConfig.MaxBatchedBytes)
+	require.Equal(t, 0, count)
 
-	for _, message := range messages {
-		message.Callback()
-	}
-
+	messages[0].Callback()
+	require.Equal(t, 2, count)
+	messages[1].Callback()
 	require.Equal(t, 3, count)
 
 	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
@@ -855,13 +859,14 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 func TestEncoderUsesKafkaRecordBatchSize(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolOpen).
-		WithMaxMessageBytes(120).
+		WithMaxMessageBytes(200).
+		WithMaxBatchedBytes(120).
 		WithKafkaRecordBatchSize()
 	encoder := &batchEncoder{config: codecConfig}
 
 	encoder.pushMessage([]byte("k"), []byte("v"), nil)
 	require.Len(t, encoder.messages, 1)
-	require.LessOrEqual(t, encoder.messages[0].KafkaRecordBatchLength(), codecConfig.MaxMessageBytes)
+	require.LessOrEqual(t, encoder.messages[0].KafkaRecordBatchLength(), codecConfig.MaxBatchedBytes)
 
 	encoder.pushMessage([]byte("k"), []byte("v"), nil)
 	require.Len(t, encoder.messages, 2)
@@ -899,6 +904,48 @@ func TestMessageTooLarge(t *testing.T) {
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 	require.Equal(t, count, 0)
+}
+
+func TestMessageLargerThanBatchLimit(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen).
+		WithMaxMessageBytes(400).
+		WithMaxBatchedBytes(100)
+	encoder, err := NewBatchEncoder(codecConfig, nil)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
+	tableInfo := helper.GetTableInfo(job)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
+	require.NotNil(t, dmlEvent)
+	insertRow, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	count := 0
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() { count++ },
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Equal(t, 1, messages[0].GetRowsCount())
+	require.Greater(t, messages[0].Length(), codecConfig.MaxBatchedBytes)
+	require.LessOrEqual(t, messages[0].Length(), codecConfig.MaxMessageBytes)
+	require.Equal(t, 0, count)
+
+	messages[0].Callback()
+	require.Equal(t, 1, count)
 }
 
 func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
@@ -1012,7 +1059,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 			Columns: []string{"a"},
 		},
 	}
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	rowEvent := &commonEvent.RowEvent{

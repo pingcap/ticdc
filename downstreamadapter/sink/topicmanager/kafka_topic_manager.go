@@ -40,7 +40,7 @@ type kafkaTopicManager struct {
 
 	defaultTopic string
 
-	admin kafka.ClusterAdminClient
+	admin kafka.AdminClient
 	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
@@ -52,7 +52,7 @@ type kafkaTopicManager struct {
 func newKafkaTopicManager(
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
-	admin kafka.ClusterAdminClient,
+	admin kafka.AdminClient,
 	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	return &kafkaTopicManager{
@@ -69,7 +69,7 @@ func EnsureTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) error {
 	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
 	_, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic)
@@ -82,7 +82,7 @@ func GetTopicManagerAndTryCreateTopic(
 	changefeedID common.ChangeFeedID,
 	topic string,
 	topicCfg *kafka.AutoCreateTopicConfig,
-	adminClient kafka.ClusterAdminClient,
+	adminClient kafka.AdminClient,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(topic, changefeedID, adminClient, topicCfg)
 
@@ -192,7 +192,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(ctx context.Context) (ma
 // can be safely written to. The reason is that it may take several seconds after
 // CreateTopic returns success for all the brokers to become aware that the
 // topics have been created.
-// See https://kafka.apache.org/23/javadoc/org/apache/kafka/clients/admin/ClusterAdminClient.html
+// See https://kafka.apache.org/23/javadoc/org/apache/kafka/clients/admin/AdminClient.html
 func (m *kafkaTopicManager) waitUntilTopicVisible(
 	ctx context.Context,
 	topicName string,
@@ -214,7 +214,9 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	}, retry.WithBackoffBaseDelay(500),
 		retry.WithBackoffMaxDelay(1000),
 		retry.WithMaxTries(6),
-		retry.WithIsRetryableErr(func(err error) bool { return !kafka.IsUnretryableKafkaError(err) }),
+		retry.WithIsRetryableErr(func(err error) bool {
+			return !kafka.IsUnretryableKafkaError(err)
+		}),
 	)
 	if err != nil {
 		log.Warn("kafka topic metadata refresh failed",
@@ -229,10 +231,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 
 // createTopic creates a topic with the given name
 // and returns the number of partitions.
-func (m *kafkaTopicManager) createTopic(
-	ctx context.Context,
-	topicName string,
-) (int32, error) {
+func (m *kafkaTopicManager) createTopic(ctx context.Context, topicName string) (int32, error) {
 	if !m.cfg.AutoCreate {
 		return 0, errors.ErrKafkaInvalidConfig.GenWithStack("`auto-create-topic` is false, and %s not found", topicName)
 	}
@@ -261,8 +260,6 @@ func (m *kafkaTopicManager) createTopic(
 		return 0, err
 	}
 
-	m.tryUpdatePartitionsAndLogging(topicName, m.cfg.PartitionNum)
-
 	return m.cfg.PartitionNum, nil
 }
 
@@ -273,27 +270,15 @@ func (m *kafkaTopicManager) createTopic(
 func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	ctx context.Context, topicName string,
 ) (int32, error) {
-	// If the topic is not in the cache, we try to get the metadata of the topic.
-	// ignoreTopicErr is set to true to ignore the error if the topic is not found,
-	// which means we should create the topic later.
-	topicDetails, err := m.admin.GetTopicsMeta(ctx, []string{topicName}, true)
-	if err != nil {
-		if kafka.IsAuthorizationFailed(err) {
-			return m.useConfiguredPartitionNum(topicName, err), nil
+	// If the topic is not in the cache, try to get its metadata.
+	topicDetails, err := m.admin.GetTopicsMeta(ctx, []string{topicName}, false)
+	if err == nil {
+		if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
+			return numPartition, nil
 		}
-		return 0, err
 	}
-	if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
-		return numPartition, nil
-	}
-
-	topicDetails, err = m.admin.GetTopicsMeta(ctx, []string{topicName}, false)
-	if err != nil {
-		if kafka.IsAuthorizationFailed(err) {
-			return m.useConfiguredPartitionNum(topicName, err), nil
-		}
-	} else if numPartition, ok := m.tryStoreTopicMeta(topicName, topicDetails); ok {
-		return numPartition, nil
+	if kafka.IsAuthorizationFailed(err) {
+		return m.useConfiguredPartitionNum(topicName, err), nil
 	}
 
 	start := time.Now()
@@ -309,6 +294,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	if err != nil {
 		return 0, err
 	}
+	m.tryUpdatePartitionsAndLogging(topicName, partitionNum)
 
 	log.Info(
 		"kafka topic created",

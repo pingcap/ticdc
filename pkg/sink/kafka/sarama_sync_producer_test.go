@@ -18,7 +18,6 @@ import (
 	"io"
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -126,12 +125,8 @@ func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
 	producer := &saramaAsyncProducer{
 		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
 	}
-	err := producer.handleProducerError(&sarama.ProducerError{
-		Err: cause,
-		Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
-			logInfo: &codecCommon.MessageLogInfo{},
-		}},
-	})
+
+	err := producer.handleProducerError(cause, &codecCommon.MessageLogInfo{})
 
 	requireKafkaSendError(t, err, cause)
 }

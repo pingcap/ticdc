@@ -29,7 +29,7 @@ func TestTxnPostFlushRowCallback(t *testing.T) {
 		flushCount++
 	})
 
-	rowCallback := NewTxnPostFlushRowCallback(event, 3)
+	rowCallback := NewPostFlushRowCallback(event, 3)
 	rowCallback()
 	rowCallback()
 	require.Equal(t, 0, flushCount)
