@@ -119,8 +119,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	isAvroLike := o.protocol == config.ProtocolAvro
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
+	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.caseSensitive, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -136,7 +136,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		SinkURI:      o.downstreamURI,
 		SinkConfig:   o.sinkConfig,
 	}
-	w.mysqlSink, err = sink.New(ctx, cfg, changefeedID)
+	w.mysqlSink, err = sink.New(ctx, cfg, changefeedID, commonType.DefaultKeyspaceID)
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
@@ -509,7 +509,7 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 	}
 	switch w.protocol {
 	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple,
-		config.ProtocolDebezium:
+		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
 	default:
 		return
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -157,8 +158,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := uint64(event.Len())
-	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
+	rowCallback := helper.NewPostFlushRowCallback(event, uint64(rowsCount))
 
 	var (
 		startTs         = event.GetStartTs()
@@ -181,6 +182,11 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		})
 	}
 	s.logBuffer.Push(events...)
+}
+
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.dmlWriter.SetWriteGate(gate)
+	s.ddlWriter.SetWriteGate(gate)
 }
 
 func (s *Sink) IsNormal() bool {

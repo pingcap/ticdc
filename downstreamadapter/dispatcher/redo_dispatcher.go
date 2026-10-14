@@ -21,8 +21,10 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
 )
 
@@ -98,6 +100,9 @@ func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.Consisten
 	}
 	ctx, rd.cancel = context.WithCancel(ctx)
 	rd.redoMeta = redo.NewRedoMeta(rd.sharedInfo.changefeedID, rd.startTs, cfg)
+	if gate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate); ok {
+		rd.redoMeta.SetWriteGate(gate)
+	}
 	go func() {
 		err := rd.redoMeta.PreStart(ctx)
 		if err != nil {

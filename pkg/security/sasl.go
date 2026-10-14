@@ -71,6 +71,7 @@ type OAuth2 struct {
 	ClientID     string
 	ClientSecret string
 	TokenURL     string
+	CAPath       string
 	Scopes       []string
 	GrantType    string
 	Audience     string
