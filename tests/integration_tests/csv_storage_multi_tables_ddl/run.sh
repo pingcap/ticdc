@@ -39,9 +39,9 @@ function run() {
 
 	SINK_URI3="file://$WORK_DIR/storage_test/$TOPIC_NAME_3?flush-interval=5s&protocol=csv"
 	cdc_cli_changefeed create -c=$cf_err2 --start-ts=$start_ts --sink-uri="$SINK_URI3" --config="$CUR/conf/error-2.toml"
-	run_storage_consumer $WORK_DIR $SINK_URI1 "$CUR/conf/normal.toml" 1
-	run_storage_consumer $WORK_DIR $SINK_URI2 "$CUR/conf/error-1.toml" 2
-	run_storage_consumer $WORK_DIR $SINK_URI3 "$CUR/conf/error-2.toml" 3
+	run_consumer $WORK_DIR $SINK_URI1 "$CUR/conf/normal.toml" 1
+	run_consumer $WORK_DIR $SINK_URI2 "$CUR/conf/error-1.toml" 2
+	run_consumer $WORK_DIR $SINK_URI3 "$CUR/conf/error-2.toml" 3
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists multi_tables_ddl_test.t55 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}

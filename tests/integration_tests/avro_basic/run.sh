@@ -8,7 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-# use kafka-consumer with avro decoder to sync data from kafka to mysql
+# use cdc_consumer with avro decoder to sync data from kafka to mysql
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
@@ -48,7 +48,7 @@ function run() {
 	schema_registry_uri="http://127.0.0.1:8088"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri=$SINK_URI --config=$CUR/conf/changefeed.toml --schema-registry=$schema_registry_uri
 
-	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml $schema_registry_uri
+	run_consumer $WORK_DIR "$SINK_URI&schema-registry=$(printf '%s' "$schema_registry_uri" | jq -sRr @uri)" $CUR/conf/changefeed.toml
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

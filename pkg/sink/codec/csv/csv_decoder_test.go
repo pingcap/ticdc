@@ -97,6 +97,7 @@ func TestCSVBatchDecoderWithColumnSelector(t *testing.T) {
 
 	createTableDDL := helper.DDL2Event(
 		"create table test.t(id int primary key, visible varchar(255), secret varchar(255))")
+	createTableDDL.TableInfo.UpdateTS = 100
 
 	selectors, err := columnselector.New(&config.SinkConfig{
 		ColumnSelectors: []*config.ColumnSelector{
@@ -126,6 +127,7 @@ func TestCSVBatchDecoderWithColumnSelector(t *testing.T) {
 	require.Equal(t, common.MessageTypeRow, tp)
 
 	event := decoder.NextDMLMessage().ToDMLEvent()
+	require.EqualValues(t, 100, event.TableInfo.UpdateTS)
 	require.Len(t, event.TableInfo.GetColumns(), 2)
 	require.Equal(t, "id", event.TableInfo.GetColumns()[0].Name.O)
 	require.Equal(t, "visible", event.TableInfo.GetColumns()[1].Name.O)

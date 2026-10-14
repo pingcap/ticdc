@@ -16,7 +16,7 @@ function run_changefeed() {
 	SINK_URI="file://$WORK_DIR/storage_test/$changefeed_id?flush-interval=5s"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$CUR/conf/$changefeed_id.toml -c "$changefeed_id"
 
-	run_storage_consumer $WORK_DIR $SINK_URI $CUR/conf/$changefeed_id.toml $changefeed_id
+	run_consumer $WORK_DIR $SINK_URI $CUR/conf/$changefeed_id.toml $changefeed_id
 	sleep 8
 
 	cp $CUR/conf/diff_config.toml $WORK_DIR/diff_config.toml
