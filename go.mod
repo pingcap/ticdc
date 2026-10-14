@@ -1,6 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.26.8
+go 1.26.9
 
 // Keep the Go 1.25 default behaviors that Go 1.26 changed:
 //   - urlstrictcolons=0: the sink URI may carry several Kafka broker endpoints
@@ -55,11 +55,11 @@ require (
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.3
 	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.9.1
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
-	github.com/pierrec/lz4/v4 v4.1.31
+	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/pingcap/errors v0.11.5-0.20260508054701-306e305bcf41
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260724054804-059694ae4472
@@ -84,10 +84,10 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
 	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
 	github.com/tinylib/msgp v1.5.0
-	github.com/twmb/franz-go v1.21.7
-	github.com/twmb/franz-go/pkg/kadm v1.18.0
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1
+	github.com/twmb/franz-go v1.22.2
+	github.com/twmb/franz-go/pkg/kadm v1.19.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20261013022759-7b6cac30a57a
+	github.com/twmb/franz-go/pkg/kmsg v1.15.0
 	github.com/twmb/franz-go/pkg/sasl/kerberos v1.1.0
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
