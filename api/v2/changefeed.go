@@ -1747,7 +1747,7 @@ func getVerifiedTables(
 		return nil, nil, nil, err
 	}
 
-	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
+	if err := verifyTablesForSink(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1762,18 +1762,27 @@ func getVerifiedTables(
 	return ineligibleTables, eligibleTables, allTables, nil
 }
 
-func verifyTable4MQ(
+func verifyTablesForSink(
 	replicaConfig *config.ReplicaConfig,
 	scheme string,
 	topic string,
 	protocol config.Protocol,
 	tableInfos []*common.TableInfo,
 ) error {
+	if config.IsStorageScheme(scheme) {
+		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			return err
+		}
+		return selectors.VerifyTables(tableInfos, nil)
+	}
+
 	if !config.IsMQScheme(scheme) {
 		return nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), isAvroLike)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,7 +79,7 @@ type sink struct {
 	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -86,6 +87,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	}
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
+		return err
+	}
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
@@ -102,7 +106,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
 	keyspaceID uint32,
 ) (*sink, error) {
@@ -125,6 +129,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
+	if err != nil {
+		return nil, err
+	}
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
@@ -136,7 +144,7 @@ func New(
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
 	if err != nil {
 		return nil, err
 	}

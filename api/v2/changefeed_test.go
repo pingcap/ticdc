@@ -411,6 +411,84 @@ func TestVerifyRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
 }
 
+func TestVerifyTablesForSinkValidatesStorageColumnSelectors(t *testing.T) {
+	t.Parallel()
+
+	replicaCfg := config.GetDefaultReplicaConfig()
+	replicaCfg.Sink.ColumnSelectors = []*config.ColumnSelector{
+		{Matcher: []string{"test.t"}, Columns: []string{"name"}},
+	}
+	tableInfos := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+
+	err := verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos)
+	require.Error(t, err)
+	require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
+
+	replicaCfg.Sink.ColumnSelectors[0].Columns = []string{"id", "name"}
+	require.NoError(t, verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos))
+}
+
+func TestVerifyTablesForSinkStorageCaseSensitive(t *testing.T) {
+	for _, caseSensitive := range []*bool{nil, util.AddressOf(false), util.AddressOf(true)} {
+		replicaCfg := config.GetDefaultReplicaConfig()
+		replicaCfg.CaseSensitive = caseSensitive
+		replicaCfg.Sink.ColumnSelectors = []*config.ColumnSelector{
+			{Matcher: []string{"Test.t"}, Columns: []string{"name"}},
+		}
+		err := verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCsv,
+			[]*common.TableInfo{newTableInfoWithPrimaryKeyForTest()})
+		if util.GetOrZero(caseSensitive) {
+			require.NoError(t, err)
+		} else {
+			require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+		}
+	}
+}
+
+func TestVerifyTablesForSinkAvroTopicRules(t *testing.T) {
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolDebeziumAvro} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			for _, caseSensitive := range []bool{false, true} {
+				cfg := config.GetDefaultReplicaConfig()
+				cfg.CaseSensitive = util.AddressOf(caseSensitive)
+				cfg.Sink.DispatchRules = []*config.DispatchRule{{
+					Matcher: []string{"test.*"}, TopicRule: "{schema}",
+				}}
+				tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+				err := verifyTablesForSink(cfg, config.KafkaScheme, "default-topic", protocol, tables)
+				require.True(t, errors.ErrKafkaInvalidConfig.Equal(err), "%v", err)
+				cfg.Sink.DispatchRules[0].TopicRule = "{schema}_{table}"
+				require.NoError(t, verifyTablesForSink(cfg, config.KafkaScheme, "default-topic", protocol, tables))
+			}
+		})
+	}
+}
+
+func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+
+	return common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:         1,
+		Name:       parsermodel.NewCIStr("t"),
+		PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      parsermodel.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      parsermodel.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
+}
+
 // TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
 // fields. It checks both a valid URI with secret query parameters and an invalid
 // URI parse error that previously exposed raw credentials.
@@ -463,7 +541,7 @@ func TestVerifyMQTablesCaseSensitive(t *testing.T) {
 					// Exercise the CLI/API conversion before checking the effective matcher.
 					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
 					tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
-					err := verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+					err := verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
 					if util.GetOrZero(tc.caseSensitive) {
 						require.NoError(t, err)
 					} else {
@@ -474,7 +552,7 @@ func TestVerifyMQTablesCaseSensitive(t *testing.T) {
 						cfg.Sink.DispatchRules = []*config.DispatchRule{{
 							Matcher: []string{"Test.*"}, PartitionRule: "index-value", IndexName: "missing_index",
 						}}
-						err = verifyTable4MQ(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+						err = verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
 						if util.GetOrZero(tc.caseSensitive) {
 							require.NoError(t, err)
 						} else {
@@ -485,31 +563,6 @@ func TestVerifyMQTablesCaseSensitive(t *testing.T) {
 			}
 		})
 	}
-}
-
-func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
-	idFieldType := types.NewFieldType(mysql.TypeLong)
-	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-
-	return common.WrapTableInfo("test", &timodel.TableInfo{
-		ID:         1,
-		Name:       parsermodel.NewCIStr("t"),
-		PKIsHandle: true,
-		Columns: []*timodel.ColumnInfo{
-			{
-				ID:        1,
-				Name:      parsermodel.NewCIStr("id"),
-				FieldType: *idFieldType,
-				State:     timodel.StatePublic,
-			},
-			{
-				ID:        2,
-				Name:      parsermodel.NewCIStr("name"),
-				FieldType: *types.NewFieldType(mysql.TypeVarchar),
-				State:     timodel.StatePublic,
-			},
-		},
-	})
 }
 
 func TestRouteMatcherValidation(t *testing.T) {
