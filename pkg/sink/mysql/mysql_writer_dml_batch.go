@@ -382,7 +382,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	tableInfo := events[0].TableInfo
 	finalRowLists, _, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
-	if err == errDuplicateInsertRows || err == errDuplicateUpdateInsertRows {
+	if cerror.Is(err, errDuplicateInsertRows) || cerror.Is(err, errDuplicateUpdateInsertRows) {
 		// Event filtering can remove an intervening delete. Keep event order and
 		// batch only within each event, as in the legacy MySQL sink.
 		return w.generateBatchSQLsPerEvent(events)

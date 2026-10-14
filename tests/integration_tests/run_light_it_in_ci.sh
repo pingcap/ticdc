@@ -61,7 +61,7 @@ mysql_groups=(
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error changefeed_query_toml_api'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
+	'batch_add_table batch_update_to_no_batch batch_dml_with_filter fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
 	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )

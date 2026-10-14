@@ -364,7 +364,7 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 		events     []*commonEvent.DMLEvent
 		unsafeSQLs []string
 		safeSQLs   []string
-		args       [][]interface{}
+		args       [][]any
 		rowTypes   []common.RowType
 	}{
 		{
@@ -372,7 +372,7 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 			events:     []*commonEvent.DMLEvent{updateEvent, insertEvent2},
 			unsafeSQLs: []string{updateSQL, insertsSQL},
 			safeSQLs:   []string{updateSQL, replacesSQL},
-			args:       [][]interface{}{{int64(1), "updated", int64(1)}, {int64(1), "last", int64(2), "other"}},
+			args:       [][]any{{int64(1), "updated", int64(1)}, {int64(1), "last", int64(2), "other"}},
 			rowTypes:   []common.RowType{common.RowTypeUpdate, common.RowTypeInsert},
 		},
 		{
@@ -380,7 +380,7 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 			events:     []*commonEvent.DMLEvent{insertEvent, insertEvent2},
 			unsafeSQLs: []string{insertSQL, insertsSQL},
 			safeSQLs:   []string{replaceSQL, replacesSQL},
-			args:       [][]interface{}{{int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			args:       [][]any{{int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
 			rowTypes:   []common.RowType{common.RowTypeInsert, common.RowTypeInsert},
 		},
 		{
@@ -388,7 +388,7 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 			events:     []*commonEvent.DMLEvent{deleteEvent, insertEvent, insertEvent2},
 			unsafeSQLs: []string{deleteSQL, insertSQL, insertsSQL},
 			safeSQLs:   []string{deleteSQL, replaceSQL, replacesSQL},
-			args:       [][]interface{}{{int64(1)}, {int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			args:       [][]any{{int64(1)}, {int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
 			rowTypes:   []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert},
 		},
 	}
