@@ -212,6 +212,8 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
+	// Deprecated: retained for configuration parsing only. Use ReplicaConfig.CaseSensitive.
+	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
