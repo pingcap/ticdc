@@ -95,6 +95,7 @@ func InitMetrics(registry *prometheus.Registry) {
 		requestDuration,
 		throttleTime,
 		recordsPerBatch,
+		batchesPerRequest,
 		compressionRatio,
 	)
 	registry.MustRegister(compressionRatioGauge)

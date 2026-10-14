@@ -54,6 +54,14 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
 	}, []string{"namespace", "changefeed"})
 
+	batchesPerRequest = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "sink",
+		Name:      "kafka_producer_batches_per_request",
+		Help:      "Topic-partition batches in each encoded Kafka produce request.",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
+	}, []string{"namespace", "changefeed"})
+
 	compressionRatio = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",
