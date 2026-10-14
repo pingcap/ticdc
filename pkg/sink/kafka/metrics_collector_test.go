@@ -15,9 +15,11 @@
 package kafka
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rcrowley/go-metrics"
 	"github.com/stretchr/testify/require"
@@ -53,4 +55,52 @@ func TestCollectBrokerThrottleTime(t *testing.T) {
 	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", p99))
 	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", avg))
 	require.False(t, throttleTimeGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", p99))
+}
+
+func TestCollectBrokerRequestLatency(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "request-latency")
+
+	registry := metrics.NewRegistry()
+	firstBroker := metrics.NewHistogram(metrics.NewUniformSample(10))
+	firstBroker.Update(100)
+	firstBroker.Update(300)
+	require.NoError(t, registry.Register(getBrokerMetricName(requestLatencyInMsMetricNamePrefix, "1"), firstBroker))
+
+	secondBroker := metrics.NewHistogram(metrics.NewUniformSample(10))
+	secondBroker.Update(500)
+	require.NoError(t, registry.Register(getBrokerMetricName(requestLatencyInMsMetricNamePrefix, "2"), secondBroker))
+
+	collector := saramaMetricsCollector{
+		changefeedID: changefeedID,
+		brokers:      map[int32]struct{}{1: {}, 2: {}},
+		registry:     registry,
+	}
+	t.Cleanup(collector.cleanupMetrics)
+	collector.collectBrokerMetrics()
+
+	require.Equal(t, 0.2, testutil.ToFloat64(RequestLatencyGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", avg)))
+	require.Equal(t, 0.3, testutil.ToFloat64(RequestLatencyGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", p99)))
+	require.Equal(t, 0.5, testutil.ToFloat64(RequestLatencyGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", avg)))
+	require.Equal(t, 0.5, testutil.ToFloat64(RequestLatencyGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", p99)))
+
+	collector.cleanupMetrics()
+	require.False(t, RequestLatencyGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", avg))
+	require.False(t, RequestLatencyGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "1", p99))
+	require.False(t, RequestLatencyGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", avg))
+	require.False(t, RequestLatencyGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "2", p99))
+}
+
+func TestInitMetricsRegistersThrottleTime(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	InitMetrics(registry)
+
+	labels := []string{"test-keyspace", "throttle-metric-registration", "1", avg}
+	throttleTimeGauge.WithLabelValues(labels...).Set(0.025)
+	t.Cleanup(func() { throttleTimeGauge.DeleteLabelValues(labels...) })
+
+	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
+# HELP ticdc_sink_kafka_producer_throttle_time Kafka broker throttle time in seconds.
+# TYPE ticdc_sink_kafka_producer_throttle_time gauge
+ticdc_sink_kafka_producer_throttle_time{broker="1",changefeed="throttle-metric-registration",namespace="test-keyspace",type="avg"} 0.025
+`), "ticdc_sink_kafka_producer_throttle_time"))
 }

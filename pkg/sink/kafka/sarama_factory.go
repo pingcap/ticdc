@@ -179,13 +179,9 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}, nil
 }
 
-<<<<<<< HEAD
 func (f *saramaFactory) MetricsCollector(
 	adminClient ClusterAdminClient,
 ) MetricsCollector {
-=======
-func (f *saramaFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,
 		adminClient:  adminClient,

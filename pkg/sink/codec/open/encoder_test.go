@@ -855,14 +855,13 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 func TestEncoderUsesKafkaRecordBatchSize(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolOpen).
-		WithMaxMessageBytes(200).
-		WithMaxBatchedBytes(120).
+		WithMaxMessageBytes(120).
 		WithKafkaRecordBatchSize()
 	encoder := &batchEncoder{config: codecConfig}
 
 	encoder.pushMessage([]byte("k"), []byte("v"), nil)
 	require.Len(t, encoder.messages, 1)
-	require.LessOrEqual(t, encoder.messages[0].KafkaRecordBatchLength(), codecConfig.MaxBatchedBytes)
+	require.LessOrEqual(t, encoder.messages[0].KafkaRecordBatchLength(), codecConfig.MaxMessageBytes)
 
 	encoder.pushMessage([]byte("k"), []byte("v"), nil)
 	require.Len(t, encoder.messages, 2)

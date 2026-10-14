@@ -72,11 +72,7 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-<<<<<<< HEAD
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-=======
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
@@ -116,11 +112,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-<<<<<<< HEAD
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
-=======
 	factory, err := kafka.NewFactory(ctx, options, changefeedID)
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	if err != nil {
 		return err
 	}
@@ -236,6 +228,9 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.isNormal.Load() {
+		return
+	}
 	s.eventChan.Push(event)
 }
 
@@ -264,6 +259,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -348,6 +344,11 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				})
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
 			s.rowChan.Push(events...)
 		}
@@ -565,14 +566,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-<<<<<<< HEAD
-				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
-=======
-				if !writelease.CanWrite(s.writeGate) {
-					continue
-				}
 				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 				if err != nil {
 					return err
 				}
@@ -583,14 +577,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return err
 					}
-<<<<<<< HEAD
-					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
-=======
-					if !writelease.CanWrite(s.writeGate) {
-						break
-					}
 					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 					if err != nil {
 						return err
 					}
@@ -614,6 +601,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close() {
+	s.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()

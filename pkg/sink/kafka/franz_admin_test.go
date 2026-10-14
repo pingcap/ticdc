@@ -137,7 +137,9 @@ func TestFranzTopicDetailsFromMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			actual, err := topicDetailsFromMetadata(tc.metadata, []string{topic}, tc.ignoreTopicError)
+			actual, err := topicDetailsFromMetadata(
+				common.NewChangefeedID4Test(common.DefaultKeyspaceName, "topic-metadata"),
+				tc.metadata, []string{topic}, tc.ignoreTopicError)
 			if tc.expectedError != nil {
 				require.ErrorIs(t, err, tc.expectedError)
 				if tc.expectedCause != nil {

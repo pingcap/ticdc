@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -35,12 +36,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kfake"
 	"go.uber.org/atomic"
 )
 
 const kafkaSinkTestTopic = "mock_topic"
+
+type noopMetricsCollector struct{}
+
+func (noopMetricsCollector) Run(context.Context) {}
 
 func TestSinkWorkersReturnContextError(t *testing.T) {
 	contexts := []struct {
@@ -89,7 +94,6 @@ func TestSinkWorkersReturnContextError(t *testing.T) {
 }
 
 func TestVerifyInvalidConfig(t *testing.T) {
-<<<<<<< HEAD
 	broker := sarama.NewMockBroker(t, 1)
 	defer broker.Close()
 	broker.SetHandlerByMap(map[string]sarama.MockResponse{
@@ -106,10 +110,6 @@ func TestVerifyInvalidConfig(t *testing.T) {
 			SetLeader(kafkaSinkTestTopic, 0, broker.BrokerID()),
 		"DescribeConfigsRequest": sarama.NewMockDescribeConfigsResponse(t),
 	})
-=======
-	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, kafkaSinkTestTopic))
-	defer cluster.Close()
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 
 	schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "invalid response", http.StatusInternalServerError)
@@ -121,11 +121,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 		Protocol:       &avroProtocol,
 		SchemaRegistry: &schemaRegistry.URL,
 	}
-<<<<<<< HEAD
 	sinkURI, err := url.Parse("kafka://" + broker.Addr() + "/" + kafkaSinkTestTopic +
-=======
-	sinkURI, err := url.Parse("kafka://" + cluster.ListenAddrs()[0] + "/" + kafkaSinkTestTopic +
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 		"?required-acks=1&kafka-version=2.4.0")
 	require.NoError(t, err)
 
@@ -169,7 +165,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	options.Topic = topic
 
 	adminClient := kafka.NewMockClusterAdminClient(ctrl)
-	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+	adminClient.EXPECT().GetTopicsMeta(gomock.Any(), []string{kafkaSinkTestTopic}, true).Return(
 		map[string]kafka.TopicDetail{
 			kafkaSinkTestTopic: {
 				Name:          kafkaSinkTestTopic,
@@ -330,16 +326,12 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 			}
 			return nil
 		}).Times(2)
-<<<<<<< HEAD
 	asyncProducer.EXPECT().Close().AnyTimes()
-	syncProducer.EXPECT().SendMessages(gomock.Any(), int32(1), gomock.Any()).Return(nil)
+	syncProducer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), int32(1), gomock.Any()).Return(nil)
 	syncProducer.EXPECT().Close().AnyTimes()
 
 	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
 	require.NoError(t, err)
-=======
-	syncProducer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), int32(1), gomock.Any()).Return(nil)
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 	defer cancel()
 	go kafkaSink.Run(ctx)
 
@@ -366,14 +358,12 @@ func TestKafkaSinkBatchConfig(t *testing.T) {
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
 }
-<<<<<<< HEAD
-=======
 
 func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("async producer creation fails", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient := kafka.NewMockClusterAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
@@ -387,7 +377,6 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "async-creation-fails"),
-			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -399,7 +388,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("sync producer creation fails", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient := kafka.NewMockClusterAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
@@ -416,7 +405,6 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "sync-creation-fails"),
-			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -428,7 +416,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 	t.Run("successful construction owns resources until close", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		factory := kafka.NewMockFactory(ctrl)
-		adminClient := kafka.NewMockAdminClient(ctrl)
+		adminClient := kafka.NewMockClusterAdminClient(ctrl)
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 		syncProducer := kafka.NewMockSyncProducer(ctrl)
@@ -438,17 +426,16 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
 		gomock.InOrder(
-			syncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			asyncProducer.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			adminClient.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			topicManager.EXPECT().Close().Do(func() { closeCount.Add(1) }),
-			factory.EXPECT().Close().Do(func() { closeCount.Add(1) }),
+			syncProducer.EXPECT().Close().Do(func() { closeCount.Inc() }),
+			asyncProducer.EXPECT().Close().Do(func() { closeCount.Inc() }),
+			adminClient.EXPECT().Close().Do(func() { closeCount.Inc() }),
+			topicManager.EXPECT().Close().Do(func() { closeCount.Inc() }),
+			factory.EXPECT().Close().Do(func() { closeCount.Inc() }),
 		)
 
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "successful-construction"),
-			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -665,7 +652,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 			{SchemaName: "db2", Tables: []*heartbeatpb.TableInfo{{TableName: "t2"}}},
-		}, common.KafkaSinkType, false))
+		}, common.KafkaSinkType))
 		// The checkpoint must be fanned out to every active topic: the two
 		// rule topics and the default topic.
 		partitionCounts := map[string]int32{"topic-a": 2, "topic-b": 3, kafkaSinkTestTopic: 4}
@@ -697,7 +684,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 			t, t.Context(), config.ProtocolOpen, sinkConfig)
 		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
-		}, common.KafkaSinkType, false))
+		}, common.KafkaSinkType))
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 		// Fail whichever topic the fan-out reaches first: sendCheckpoint must
 		// return the error and stop, so exactly one GetPartitionNum and one
@@ -739,15 +726,15 @@ func newKafkaSinkForTest(
 	testSinkConfig := *sinkConfig
 	testSinkConfig.Protocol = &protocolName
 	sinkConfig = &testSinkConfig
-	router, err := eventrouter.NewEventRouter(sinkConfig, false, kafkaSinkTestTopic, false, false)
+	router, err := eventrouter.NewEventRouter(sinkConfig, kafkaSinkTestTopic, false, false)
 	require.NoError(t, err)
-	columnSelector, err := columnselector.New(sinkConfig, false)
+	columnSelector, err := columnselector.New(sinkConfig)
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1
-	encoderGroup, err := codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
+	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
 	require.NoError(t, err)
-	encoder, err := codec.NewEventEncoder(encoderConfig, nil, nil)
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
 	require.NoError(t, err)
 	topicManager := topicmanager.NewMockTopicManager(ctrl)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
@@ -761,7 +748,7 @@ func newKafkaSinkForTest(
 	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
 	factory.EXPECT().Close().AnyTimes()
 
-	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
+	kafkaSink, err := newWithComponents(ctx, changefeedID, protocol, components{
 		encoderGroup:   encoderGroup,
 		encoder:        encoder,
 		columnSelector: columnSelector,
@@ -774,4 +761,3 @@ func newKafkaSinkForTest(
 
 	return kafkaSink, topicManager, asyncProducer, syncProducer
 }
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))

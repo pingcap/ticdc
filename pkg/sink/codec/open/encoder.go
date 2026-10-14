@@ -168,9 +168,6 @@ func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
 
-<<<<<<< HEAD
-	if len(d.messages) == 0 || d.messages[len(d.messages)-1].Length()+length > d.config.MaxMessageBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
-=======
 	var batchedMessageLength int
 	if len(d.messages) > 0 {
 		latestMessage := d.messages[len(d.messages)-1]
@@ -179,8 +176,7 @@ func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 			len(latestMessage.Value)+rowLengthPrefixBytes+len(value),
 		)
 	}
-	if len(d.messages) == 0 || batchedMessageLength > d.config.MaxBatchedBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
+	if len(d.messages) == 0 || batchedMessageLength > d.config.MaxMessageBytes || d.messages[len(d.messages)-1].GetRowsCount() >= d.config.MaxBatchSize {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, protocolVersionBytes)

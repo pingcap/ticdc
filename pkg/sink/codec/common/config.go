@@ -346,14 +346,6 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
-<<<<<<< HEAD
-=======
-// WithMaxBatchedBytes sets the maximum batched message bytes.
-func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
-	c.MaxBatchedBytes = bytes
-	return c
-}
-
 // WithKafkaRecordBatchSize applies encoder byte limits to the complete
 // uncompressed Kafka record batch rather than a client-specific estimate.
 func (c *Config) WithKafkaRecordBatchSize() *Config {
@@ -378,7 +370,6 @@ func (c *Config) MessageLengthForKeyValue(keyLength, valueLength int) int {
 	return recordLength(keyLength, valueLength)
 }
 
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167))
 // WithChangefeedID set the `changefeedID`
 func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 	c.ChangefeedID = id

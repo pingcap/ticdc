@@ -143,15 +143,20 @@ func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicE
 		return nil, classifyAdminError(err, "describe-topics", resource)
 	}
 
-	return topicDetailsFromMetadata(meta, topics, ignoreTopicError)
+	return topicDetailsFromMetadata(a.changefeed, meta, topics, ignoreTopicError)
 }
 
-func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+func topicDetailsFromMetadata(changefeedID common.ChangeFeedID, meta kadm.Metadata, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
 			if ignoreTopicError {
+				log.Warn("kafka topic metadata refresh failed",
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeed", changefeedID.Name()),
+					zap.String("topic", topic),
+					zap.Error(kerr.UnknownTopicOrPartition))
 				continue
 			}
 			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, kerr.UnknownTopicOrPartition, "describe-topic", topic)
@@ -166,6 +171,11 @@ func topicDetailsFromMetadata(meta kadm.Metadata, topics []string, ignoreTopicEr
 		}
 
 		if ignoreTopicError {
+			log.Warn("kafka topic metadata refresh failed",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeed", changefeedID.Name()),
+				zap.String("topic", topic),
+				zap.Error(detail.Err))
 			continue
 		}
 

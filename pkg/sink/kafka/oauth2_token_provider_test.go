@@ -14,12 +14,10 @@
 package kafka
 
 import (
-	"context"
 	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,13 +32,13 @@ func TestNewTokenProvider(t *testing.T) {
 		{
 			name: "valid",
 			options: &options{
-				SASL: &security.SASL{
-					OAuth2: security.OAuth2{
-						ClientID:     "client-id",
-						ClientSecret: "client-secret",
-						TokenURL:     "http://localhost:8080/oauth2/token",
-						Scopes:       []string{"scope1", "scope2"},
-						GrantType:    "client_credentials",
+				sasl: &saslConfig{
+					oauth2: oauth2Config{
+						clientID:     "client-id",
+						clientSecret: "client-secret",
+						tokenURL:     "http://localhost:8080/oauth2/token",
+						scopes:       []string{"scope1", "scope2"},
+						grantType:    "client_credentials",
 					},
 				},
 			},
@@ -48,30 +46,29 @@ func TestNewTokenProvider(t *testing.T) {
 		{
 			name: "invalid token URL",
 			options: &options{
-				SASL: &security.SASL{
-					OAuth2: security.OAuth2{
-						ClientID:     "client-id",
-						ClientSecret: "client-secret",
-						TokenURL:     "http://test.com/Segment%%2815197306101420000%29",
-						Scopes:       []string{"scope1", "scope2"},
-						GrantType:    "client_credentials",
+				sasl: &saslConfig{
+					oauth2: oauth2Config{
+						clientID:     "client-id",
+						clientSecret: "client-secret",
+						tokenURL:     "http://test.com/Segment%%2815197306101420000%29",
+						scopes:       []string{"scope1", "scope2"},
+						grantType:    "client_credentials",
 					},
 				},
 			},
 			expectedErr: "invalid URL escape",
 		},
 	} {
-		ts := test
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := newTokenProvider(context.TODO(), ts.options)
-			if ts.expectedErr == "" {
+			_, err := newTokenProvider(t.Context(), test.options)
+			if test.expectedErr == "" {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
 				var escapeErr url.EscapeError
 				require.ErrorAs(t, err, &escapeErr)
-				require.Contains(t, err.Error(), ts.expectedErr)
+				require.Contains(t, err.Error(), test.expectedErr)
 			}
 		})
 	}

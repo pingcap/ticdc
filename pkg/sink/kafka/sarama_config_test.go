@@ -71,10 +71,10 @@ func TestNewSaramaConfig(t *testing.T) {
 	saslOptions := NewOptions()
 	saslOptions.Version = "2.6.0"
 	saslOptions.ClientID = "test-sasl-scram"
-	saslOptions.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: sarama.SASLTypeSCRAMSHA256,
+	saslOptions.sasl = &saslConfig{
+		user:      "user",
+		password:  "password",
+		mechanism: scram256Mechanism,
 	}
 
 	cfg, err = newSaramaConfig(ctx, saslOptions)
@@ -144,10 +144,10 @@ func TestSelectKafkaVersion(t *testing.T) {
 
 func TestNewSaramaConfigInvalidOAuthTokenURL(t *testing.T) {
 	options := NewOptions()
-	options.SASL = &security.SASL{
-		SASLMechanism: security.OAuthMechanism,
-		OAuth2: security.OAuth2{
-			TokenURL: "http://test.com/Segment%%2815197306101420000%29",
+	options.sasl = &saslConfig{
+		mechanism: oauthMechanism,
+		oauth2: oauth2Config{
+			tokenURL: "http://test.com/Segment%%2815197306101420000%29",
 		},
 	}
 
@@ -211,7 +211,7 @@ func TestNewSaramaConfigMaxRetryFromSinkURI(t *testing.T) {
 	}
 }
 
-func TestApplySASL(t *testing.T) {
+func TestApplySaramaSASL(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -267,26 +267,25 @@ func TestApplySASL(t *testing.T) {
 			URI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0" +
 				"&sasl-mechanism=a",
 			replicaConfig: config.GetDefaultReplicaConfig,
-			exceptErr:     "unknown a SASL mechanism",
+			exceptErr:     "unknown SASL mechanism: a",
 		},
 		{
 			name: "invalid GSSAPI auth type",
 			URI: "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0" +
 				"&sasl-mechanism=gssapi&sasl-gssapi-auth-type=keyta1b",
 			replicaConfig: config.GetDefaultReplicaConfig,
-			exceptErr:     "unknown keyta1b auth type",
+			exceptErr:     "unknown auth type: keyta1b",
 		},
 		{
 			name: "valid OAUTHBEARER SASL",
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=OAUTHBEARER",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientID := "client_id"
 				clientSecret := "Y2xpZW50X3NlY3JldA==" // base64(client_secret)
 				tokenURL := "127.0.0.1:9093/token"
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:         &oauthMechanism,
+					SASLMechanism:         new(string(oauthMechanism)),
 					SASLOAuthClientID:     &clientID,
 					SASLOAuthClientSecret: &clientSecret,
 					SASLOAuthTokenURL:     &tokenURL,
@@ -300,11 +299,10 @@ func TestApplySASL(t *testing.T) {
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=OAUTHBEARER",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientSecret := "Y2xpZW50X3NlY3JldA==" // base64(client_secret)
 				tokenURL := "127.0.0.1:9093/token"
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:         &oauthMechanism,
+					SASLMechanism:         new(string(oauthMechanism)),
 					SASLOAuthClientSecret: &clientSecret,
 					SASLOAuthTokenURL:     &tokenURL,
 				}
@@ -317,11 +315,10 @@ func TestApplySASL(t *testing.T) {
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=OAUTHBEARER",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientID := "client_id"
 				tokenURL := "127.0.0.1:9093/token"
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:     &oauthMechanism,
+					SASLMechanism:     new(string(oauthMechanism)),
 					SASLOAuthClientID: &clientID,
 					SASLOAuthTokenURL: &tokenURL,
 				}
@@ -334,11 +331,10 @@ func TestApplySASL(t *testing.T) {
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=OAUTHBEARER",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientID := "client_id"
 				clientSecret := "Y2xpZW50X3NlY3JldA==" // base64(client_secret)
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:         &oauthMechanism,
+					SASLMechanism:         new(string(oauthMechanism)),
 					SASLOAuthClientID:     &clientID,
 					SASLOAuthClientSecret: &clientSecret,
 				}
@@ -351,12 +347,11 @@ func TestApplySASL(t *testing.T) {
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=OAUTHBEARER",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientID := "client_id"
 				clientSecret := "client_secret"
 				tokenURL := "127.0.0.1:9093/token"
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:         &oauthMechanism,
+					SASLMechanism:         new(string(oauthMechanism)),
 					SASLOAuthClientID:     &clientID,
 					SASLOAuthClientSecret: &clientSecret,
 					SASLOAuthTokenURL:     &tokenURL,
@@ -370,12 +365,11 @@ func TestApplySASL(t *testing.T) {
 			URI:  "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&partition-num=0&sasl-mechanism=GSSAPI",
 			replicaConfig: func() *config.ReplicaConfig {
 				cfg := config.GetDefaultReplicaConfig()
-				oauthMechanism := string(security.OAuthMechanism)
 				clientID := "client_id"
 				clientSecret := "Y2xpZW50X3NlY3JldA==" // base64(client_secret)
 				tokenURL := "127.0.0.1:9093/token"
 				cfg.Sink.KafkaConfig = &config.KafkaConfig{
-					SASLMechanism:         &oauthMechanism,
+					SASLMechanism:         new(string(oauthMechanism)),
 					SASLOAuthClientID:     &clientID,
 					SASLOAuthClientSecret: &clientSecret,
 					SASLOAuthTokenURL:     &tokenURL,
@@ -407,7 +401,7 @@ func TestApplySASL(t *testing.T) {
 	}
 }
 
-func TestApplyTLS(t *testing.T) {
+func TestApplySaramaTLS(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -481,35 +475,112 @@ func TestApplyTLS(t *testing.T) {
 func TestCompleteSaramaSASLConfig(t *testing.T) {
 	t.Parallel()
 
-	// Test that SASL is turned on correctly.
-	options := NewOptions()
-	options.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: "",
-		GSSAPI:        security.GSSAPI{},
+	tests := []struct {
+		name   string
+		sasl   *saslConfig
+		verify func(*testing.T, *sarama.Config)
+	}{
+		{
+			name: "disabled",
+			sasl: &saslConfig{},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.False(t, config.Net.SASL.Enable)
+			},
+		},
+		{
+			name: "PLAIN",
+			sasl: &saslConfig{user: "user", password: "password", mechanism: plainMechanism},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.Equal(t, "user", config.Net.SASL.User)
+				require.Equal(t, "password", config.Net.SASL.Password)
+				require.Nil(t, config.Net.SASL.SCRAMClientGeneratorFunc)
+			},
+		},
+		{
+			name: "SCRAM-SHA-256",
+			sasl: &saslConfig{user: "user", password: "password", mechanism: scram256Mechanism},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.Equal(t, "user", config.Net.SASL.User)
+				require.Equal(t, "password", config.Net.SASL.Password)
+				require.NotNil(t, config.Net.SASL.SCRAMClientGeneratorFunc)
+			},
+		},
+		{
+			name: "SCRAM-SHA-512",
+			sasl: &saslConfig{user: "user", password: "password", mechanism: scram512Mechanism},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.Equal(t, "user", config.Net.SASL.User)
+				require.Equal(t, "password", config.Net.SASL.Password)
+				require.NotNil(t, config.Net.SASL.SCRAMClientGeneratorFunc)
+			},
+		},
+		{
+			name: "GSSAPI user auth",
+			sasl: &saslConfig{mechanism: gssapiMechanism, gssapi: gssapiConfig{
+				authType:           userAuth,
+				kerberosConfigPath: "/etc/krb5.conf",
+				serviceName:        "kafka",
+				username:           "user",
+				password:           "password",
+				realm:              "EXAMPLE.COM",
+				disablePAFXFAST:    true,
+			}},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.Equal(t, int(userAuth), config.Net.SASL.GSSAPI.AuthType)
+				require.Equal(t, "/etc/krb5.conf", config.Net.SASL.GSSAPI.KerberosConfigPath)
+				require.Equal(t, "kafka", config.Net.SASL.GSSAPI.ServiceName)
+				require.Equal(t, "user", config.Net.SASL.GSSAPI.Username)
+				require.Equal(t, "password", config.Net.SASL.GSSAPI.Password)
+				require.Empty(t, config.Net.SASL.GSSAPI.KeyTabPath)
+				require.Equal(t, "EXAMPLE.COM", config.Net.SASL.GSSAPI.Realm)
+				require.True(t, config.Net.SASL.GSSAPI.DisablePAFXFAST)
+			},
+		},
+		{
+			name: "GSSAPI keytab auth",
+			sasl: &saslConfig{mechanism: gssapiMechanism, gssapi: gssapiConfig{
+				authType:           keyTabAuth,
+				keyTabPath:         "/tmp/user.keytab",
+				kerberosConfigPath: "/etc/krb5.conf",
+				serviceName:        "kafka",
+				username:           "user",
+				password:           "unused",
+				realm:              "EXAMPLE.COM",
+			}},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.Equal(t, int(keyTabAuth), config.Net.SASL.GSSAPI.AuthType)
+				require.Equal(t, "/tmp/user.keytab", config.Net.SASL.GSSAPI.KeyTabPath)
+				require.Empty(t, config.Net.SASL.GSSAPI.Password)
+			},
+		},
+		{
+			name: "OAUTHBEARER",
+			sasl: &saslConfig{mechanism: oauthMechanism, oauth2: oauth2Config{
+				clientID:     "client-id",
+				clientSecret: "client-secret",
+				tokenURL:     "http://127.0.0.1/token",
+			}},
+			verify: func(t *testing.T, config *sarama.Config) {
+				require.NotNil(t, config.Net.SASL.TokenProvider)
+			},
+		},
 	}
-	ctx := context.Background()
-	saramaConfig := sarama.NewConfig()
-	completeSaramaSASLConfig(ctx, saramaConfig, options)
-	require.False(t, saramaConfig.Net.SASL.Enable)
-	options.SASL.SASLMechanism = "plain"
-	completeSaramaSASLConfig(ctx, saramaConfig, options)
-	require.True(t, saramaConfig.Net.SASL.Enable)
-	// Test that the SCRAMClientGeneratorFunc is set up correctly.
-	options = NewOptions()
-	options.SASL = &security.SASL{
-		SASLUser:      "user",
-		SASLPassword:  "password",
-		SASLMechanism: "plain",
-		GSSAPI:        security.GSSAPI{},
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			config := sarama.NewConfig()
+			options := NewOptions()
+			options.sasl = test.sasl
+			err := completeSaramaSASLConfig(t.Context(), config, options)
+			require.NoError(t, err)
+			if test.sasl.mechanism != "" {
+				require.True(t, config.Net.SASL.Enable)
+				require.Equal(t, sarama.SASLMechanism(test.sasl.mechanism), config.Net.SASL.Mechanism)
+			}
+			test.verify(t, config)
+		})
 	}
-	saramaConfig = sarama.NewConfig()
-	completeSaramaSASLConfig(ctx, saramaConfig, options)
-	require.Nil(t, saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
-	options.SASL.SASLMechanism = "SCRAM-SHA-512"
-	completeSaramaSASLConfig(ctx, saramaConfig, options)
-	require.NotNil(t, saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
 }
 
 func TestSaramaTimeout(t *testing.T) {

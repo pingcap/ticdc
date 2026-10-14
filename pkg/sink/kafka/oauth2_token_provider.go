@@ -15,12 +15,9 @@ package kafka
 
 import (
 	"context"
-<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
-	"net/url"
-=======
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 
 	"github.com/IBM/sarama"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/oauth2"
 )
 
@@ -46,48 +43,16 @@ func (t *tokenProvider) Token() (*sarama.AccessToken, error) {
 		// Errors will result in Sarama retrying the broker connection and logging
 		// the transient error, with a Broker connection error surfacing after retry
 		// attempts have been exhausted.
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	return &sarama.AccessToken{Token: token.AccessToken}, nil
 }
 
 func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvider, error) {
-<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
-	// grant_type is by default going to be set to 'client_credentials' by the
-	// client credentials library as defined by the spec, however non-compliant
-	// auth server implementations may want a custom type
-	endpointParams := url.Values{}
-	if o.SASL.OAuth2.GrantType != "" {
-		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
-	}
-
-	// audience is an optional parameter that can be used to specify the
-	// intended audience of the token.
-	if o.SASL.OAuth2.Audience != "" {
-		endpointParams.Set("audience", o.SASL.OAuth2.Audience)
-	}
-
-	tokenURL, err := url.Parse(o.SASL.OAuth2.TokenURL)
-=======
 	tokenSource, err := newOAuthTokenSource(ctx, o.sasl.oauth2)
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 	if err != nil {
 		return nil, err
 	}
-<<<<<<< HEAD:pkg/sink/kafka/oauth2_token_provider.go
-
-	cfg := clientcredentials.Config{
-		ClientID:       o.SASL.OAuth2.ClientID,
-		ClientSecret:   o.SASL.OAuth2.ClientSecret,
-		TokenURL:       tokenURL.String(),
-		EndpointParams: endpointParams,
-		Scopes:         o.SASL.OAuth2.Scopes,
-	}
-	return &tokenProvider{
-		tokenSource: cfg.TokenSource(ctx),
-	}, nil
-=======
 	return &tokenProvider{tokenSource: tokenSource}, nil
->>>>>>> 884f10974 (kafka: introduce franz-go as the kafka client (#4167)):pkg/sink/kafka/sarama_oauth2_token_provider.go
 }

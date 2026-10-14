@@ -32,7 +32,7 @@ func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedI
 type Factory interface {
 	// Close releases factory-owned resources after all components are closed.
 	Close()
-	// AdminClient return a kafka cluster admin client
+	// AdminClient returns a Kafka cluster admin client.
 	AdminClient(ctx context.Context) (ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
