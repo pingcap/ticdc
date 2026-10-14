@@ -36,8 +36,8 @@ func TestResolveDDL(t *testing.T) {
 		{
 			"create table `t1` (`id` int, `student_id` int, primary key (`id`), foreign key (`student_id`) references `t2`(`id`))",
 			[]commonEvent.SchemaTableName{{SchemaName: "", TableName: "t1"}, {SchemaName: "", TableName: "t2"}},
-			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "t1"}, {SchemaName: "xtest", TableName: "t2"}},
-			"CREATE TABLE `xtest`.`t1` (`id` INT,`student_id` INT,PRIMARY KEY(`id`),CONSTRAINT FOREIGN KEY (`student_id`) REFERENCES `xtest`.`t2`(`id`))",
+			[]commonEvent.SchemaTableName{{SchemaName: "xtest", TableName: "xt1"}, {SchemaName: "xtest", TableName: "xt2"}},
+			"CREATE TABLE `xtest`.`xt1` (`id` INT,`student_id` INT,PRIMARY KEY(`id`),CONSTRAINT FOREIGN KEY (`student_id`) REFERENCES `xtest`.`xt2`(`id`))",
 		},
 		// CREATE SCHEMA/DATABASE
 		{
@@ -326,10 +326,7 @@ func TestResolveDDL(t *testing.T) {
 		router := newTestRouter(t, false, routeRulesForTest(t, ca.expectedTableNames, ca.targetTableNames))
 		newQuery, changed, err := router.rewriteSingleDDLQuery(ca.sql, "xtest")
 		require.NoError(t, err, "rewriteSingleDDLQuery failed for: %s", ca.sql)
-		if !changed {
-			require.Equal(t, ca.sql, newQuery, "unrouted statement changed: %s", ca.sql)
-			continue
-		}
+		require.Equal(t, ca.targetSQL != ca.sql, changed, "unexpected routing result for: %s", ca.sql)
 		require.Equal(t, ca.targetSQL, newQuery, "rewriteSingleDDLQuery failed for: %s", ca.sql)
 	}
 }
