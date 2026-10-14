@@ -121,24 +121,7 @@ func (a *assembler) arrange(ctx context.Context, inputs <-chan []*readData, outp
 				continue
 			}
 			if len(batch) == 0 {
-				// Collect already available input up to the existing batch bound.
-				// A control or exhausted input still requests its boundary promptly.
-				if len(a.pendingDDL) == 0 && a.unprovenCount < batchRows && a.memory.used() < a.memory.limit {
-					select {
-					case input, ok := <-inputs:
-						if !ok {
-							return nil
-						}
-						batch = input
-					default:
-					}
-				}
-			}
-			if len(batch) == 0 {
-				if err := a.prove(ctx); err != nil {
-					return err
-				}
-				a.reader.ContinueReading(a.needsMoreInput())
+				a.advanceReading()
 				if result := a.next(); result != nil {
 					select {
 					case output <- result:
@@ -206,6 +189,20 @@ func (a *assembler) acceptBatch(ctx context.Context, batch []decodedData) error 
 				progress: result.watermark,
 			})
 		}
+		if ddl := a.boundaryDDL; ddl != nil && !ddl.boundary.reached {
+			crossed := result.ddl != nil && result.ddl.GetCommitTs() == ddl.ddl.GetCommitTs() &&
+				result.ddl.SchemaName == ddl.ddl.SchemaName && result.ddl.TableName == ddl.ddl.TableName && result.ddl.Query == ddl.ddl.Query
+			if result.dml != nil {
+				item := a.pendingDML[len(a.pendingDML)-1]
+				crossed = crossed || (item.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, item))
+			}
+			if crossed {
+				updates = append(updates, readUpdate{
+					data:     result.data,
+					boundary: ddl.boundary,
+				})
+			}
+		}
 		if result.record != nil {
 			result.record.decoded(result.data.retainedBytes)
 		}
@@ -213,7 +210,7 @@ func (a *assembler) acceptBatch(ctx context.Context, batch []decodedData) error 
 	a.reader.Advance(updates)
 	a.collectWatermarks()
 	a.cleanHistory()
-	a.reader.ContinueReading(a.needsMoreInput())
+	a.advanceReading()
 	clear(batch)
 	return nil
 }
@@ -321,7 +318,8 @@ type writeEvent struct {
 	hasWatermark bool
 	sequential   bool // Preserve table batch order when metadata cannot describe every conflict key.
 	boundary     *readBoundary
-	proofPending bool
+	stream       int32 // Reading scope retained while assembly holds this event.
+	awaitingDDL  bool  // A replica waits for canonical input or a covering control watermark.
 }
 
 func (a *assembler) prepare(items []*writeEvent) []*writeEvent {
@@ -438,9 +436,10 @@ type assembler struct {
 	schemas            *simple.TableInfoCache
 	controls           []*readControl
 	ddlCopies          map[uint64][]*ack
-	ddlInputs          map[uint64][]*readData
+	ddlInputs          map[ddlKey]*ddlInput
 	boundary           *readBoundary
 	boundaryTs         uint64
+	boundaryDDL        *writeEvent
 	completedWatermark atomic.Uint64
 	cleanedWatermark   uint64
 	historyChanged     chan struct{}
@@ -459,8 +458,7 @@ type assembler struct {
 	decoding           []*writeEvent // Owned by the goroutine that collects conversion results.
 	pendingDML         []*writeEvent
 	pendingDDL         []*writeEvent
-	unproven           []*writeEvent
-	unprovenCount      int
+	controlTs          uint64
 	scanIndex          int
 	priorityIndex      int
 	scanWatermark      uint64
@@ -468,11 +466,16 @@ type assembler struct {
 	scanDDLReady       bool
 	scanInvalid        bool
 	scanBlocked        map[int64]uint64
-	scanBoundaries     map[*readBoundary]bool
+	scanBoundaries     map[*readBoundary]uint64
 	holes              int
 	waitingWatermark   uint64
 	waitingCount       int
 	waitingKnown       bool
+}
+
+type ddlInput struct {
+	event   *writeEvent // Nil once assembly emits or retires the canonical effect.
+	streams []int32     // Inputs that have crossed this exact DDL.
 }
 
 func (a *assembler) queueDML(item *writeEvent, record *ack, boundary *readBoundary) {
@@ -482,21 +485,6 @@ func (a *assembler) queueDML(item *writeEvent, record *ack, boundary *readBounda
 	record.refs.Inc()
 	dml.AddPostFlushFunc(record.release)
 	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
-	if item.boundary == nil {
-		for _, ddl := range a.pendingDDL {
-			if dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, item) {
-				// The already observed control proves that its earlier rows can
-				// drain while the reader completes the control's input scope.
-				item.boundary = &readBoundary{reached: true}
-				break
-			}
-		}
-	}
-	if item.boundary == nil && dml.CommitTs > a.watermark {
-		item.proofPending = true
-		a.unproven = append(a.unproven, item)
-		a.unprovenCount++
-	}
 	if len(a.pendingDML) == 0 {
 		a.scanInvalid = true
 	}
@@ -554,7 +542,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 	return nil
 }
 
-func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) {
+func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) *ddlInput {
 	a.scanInvalid = true
 	if a.waitingKnown && ddl.GetCommitTs() <= a.waitingWatermark {
 		a.waitingCount++
@@ -567,12 +555,44 @@ func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) {
 		bytes:   bytes,
 		onFlush: record.release,
 	})
+	if a.ddlInputs == nil {
+		a.ddlInputs = make(map[ddlKey]*ddlInput)
+	}
+	key := ddlKey{
+		commitTs: ddl.GetCommitTs(),
+		schema:   ddl.SchemaName,
+		table:    ddl.TableName,
+		query:    ddl.Query,
+	}
+	input := &ddlInput{
+		event: a.pendingDDL[len(a.pendingDDL)-1],
+	}
+	a.ddlInputs[key] = input
+	return input
 }
 
 func (a *assembler) nextReady(watermark uint64) *writeEvent {
 	var head *writeEvent
-	if len(a.pendingDDL) != 0 {
+	for len(a.pendingDDL) != 0 {
 		head = a.pendingDDL[0]
+		if !head.awaitingDDL {
+			break
+		}
+		covered := head.ddl.GetCommitTs() <= watermark
+		if head.boundary != nil && head.boundary.watermark != nil {
+			covered = covered || head.ddl.GetCommitTs() <= *head.boundary.watermark
+		}
+		if !covered {
+			break
+		}
+		// A covering canonical-stream watermark without this DDL means that
+		// its canonical input was confirmed before this run. Retire the replica.
+		head.awaitingDDL = false
+		head.onFlush()
+		a.memory.release(head.bytes)
+		a.popDDL()
+		a.scanInvalid = true
+		head = nil
 	}
 	headReady := head != nil && ddlReady(head, watermark)
 	a.prepareScan(watermark, head, headReady)
@@ -585,6 +605,9 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 }
 
 func ddlReady(item *writeEvent, watermark uint64) bool {
+	if item.awaitingDDL {
+		return false
+	}
 	if item.ddl.GetCommitTs() <= watermark || (item.boundary != nil && item.boundary.reached) {
 		return true
 	}
@@ -603,14 +626,15 @@ func ddlReady(item *writeEvent, watermark uint64) bool {
 
 func (a *assembler) prepareScan(watermark uint64, head *writeEvent, headReady bool) {
 	reset := a.scanInvalid || a.scanWatermark != watermark || a.scanDDL != head || a.scanDDLReady != headReady || a.scanIndex > len(a.pendingDML)
-	for boundary := range a.scanBoundaries {
-		reset = reset || boundary.reached
+	for boundary, before := range a.scanBoundaries {
+		reset = reset || boundary.reached || (boundary.watermark != nil && *boundary.watermark != before)
 	}
 	a.scanWatermark, a.scanDDL, a.scanDDLReady = watermark, head, headReady
 	if !reset {
 		return
 	}
 	a.scanIndex, a.priorityIndex, a.scanBlocked = 0, 0, nil
+	a.controlTs = 0
 	clear(a.scanBoundaries)
 	a.scanInvalid = false
 }
@@ -626,11 +650,15 @@ func (a *assembler) drainDDL(head *writeEvent, watermark uint64) *writeEvent {
 		a.priorityIndex = index
 		if pending.boundary != nil && !pending.boundary.reached {
 			if a.scanBoundaries == nil {
-				a.scanBoundaries = make(map[*readBoundary]bool)
+				a.scanBoundaries = make(map[*readBoundary]uint64)
 			}
-			a.scanBoundaries[pending.boundary] = true
+			var through uint64
+			if pending.boundary.watermark != nil {
+				through = *pending.boundary.watermark
+			}
+			a.scanBoundaries[pending.boundary] = through
 		}
-		if (pending.dml.CommitTs <= watermark || (pending.boundary != nil && pending.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+		if a.dmlReady(pending, watermark) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
 			return pending.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, pending)
 		}) {
 			a.priorityIndex = max(a.priorityIndex, index+1)
@@ -638,12 +666,26 @@ func (a *assembler) drainDDL(head *writeEvent, watermark uint64) *writeEvent {
 		}
 		return nil
 	}
-	if a.waitingKnown && head.ddl.GetCommitTs() <= a.waitingWatermark {
+	return a.popDDL()
+}
+
+func (a *assembler) popDDL() *writeEvent {
+	item := a.pendingDDL[0]
+	if a.waitingKnown && item.ddl.GetCommitTs() <= a.waitingWatermark {
 		a.waitingCount--
 	}
 	a.pendingDDL[0] = nil
 	a.pendingDDL = a.pendingDDL[1:]
-	return head
+	key := ddlKey{
+		commitTs: item.ddl.GetCommitTs(),
+		schema:   item.ddl.SchemaName,
+		table:    item.ddl.TableName,
+		query:    item.ddl.Query,
+	}
+	if input, exists := a.ddlInputs[key]; exists && input.event == item {
+		input.event, input.streams = nil, nil
+	}
+	return item
 }
 
 func (a *assembler) nextDML(watermark uint64) *writeEvent {
@@ -659,7 +701,8 @@ func (a *assembler) nextDML(watermark uint64) *writeEvent {
 			continue
 		}
 		// Every queued DDL fences its own post-DDL rows.
-		ready := (result.dml.CommitTs <= watermark || (result.boundary != nil && result.boundary.reached)) && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+		known := a.dmlReady(result, watermark)
+		ready := known && !slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
 			return result.dml.CommitTs > ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, result)
 		})
 		if ready {
@@ -668,14 +711,18 @@ func (a *assembler) nextDML(watermark uint64) *writeEvent {
 		// A later row must not overtake an earlier row waiting for its proof.
 		if result.boundary != nil && !result.boundary.reached {
 			if a.scanBoundaries == nil {
-				a.scanBoundaries = make(map[*readBoundary]bool)
+				a.scanBoundaries = make(map[*readBoundary]uint64)
 			}
-			a.scanBoundaries[result.boundary] = true
+			var through uint64
+			if result.boundary.watermark != nil {
+				through = *result.boundary.watermark
+			}
+			a.scanBoundaries[result.boundary] = through
 		}
-		if result.boundary == nil && !result.proofPending {
-			result.proofPending = true
-			a.unproven = append(a.unproven, result)
-			a.unprovenCount++
+		if !known && (result.boundary == nil || result.boundary.watermark != nil) {
+			if a.controlTs == 0 || result.dml.CommitTs < a.controlTs {
+				a.controlTs = result.dml.CommitTs
+			}
 		}
 		if a.scanBlocked == nil {
 			a.scanBlocked = make(map[int64]uint64)
@@ -687,18 +734,29 @@ func (a *assembler) nextDML(watermark uint64) *writeEvent {
 	return nil
 }
 
+func (a *assembler) dmlReady(item *writeEvent, watermark uint64) bool {
+	if item.dml.CommitTs <= watermark {
+		return true
+	}
+	if boundary := item.boundary; boundary != nil {
+		if boundary.reached || (boundary.watermark != nil && item.dml.CommitTs <= *boundary.watermark) {
+			return true
+		}
+		if boundary.watermark == nil {
+			return false
+		}
+	}
+	// A later control in this row's scope proves its preceding DDLs are known.
+	// Finite file-group boundaries above must still complete before sorting.
+	return slices.ContainsFunc(a.pendingDDL, func(ddl *writeEvent) bool {
+		return item.dml.CommitTs <= ddl.ddl.GetCommitTs() && ddlBlocksTable(ddl.ddl, item)
+	})
+}
+
 func (a *assembler) popDML(index int) *writeEvent {
 	result := a.pendingDML[index]
 	if a.waitingKnown && result.dml.CommitTs <= a.waitingWatermark {
 		a.waitingCount--
-	}
-	if result.proofPending {
-		result.proofPending = false
-		a.unprovenCount--
-		if a.unprovenCount == 0 {
-			clear(a.unproven)
-			a.unproven = a.unproven[:0]
-		}
 	}
 	a.pendingDML[index] = nil
 	a.holes++
@@ -842,74 +900,100 @@ func ddlScope(ddl *event.DDLEvent) []event.SchemaTableName {
 	return names
 }
 
-func (a *assembler) prove(ctx context.Context) error {
-	if a.boundary != nil && !a.boundary.reached {
-		if a.boundaryTs != 0 {
-			updates := make([]readUpdate, 0, len(a.ddlInputs[a.boundaryTs]))
-			for _, data := range a.ddlInputs[a.boundaryTs] {
-				updates = append(updates, readUpdate{
-					data:     data,
-					boundary: a.boundary,
-				})
+func (a *assembler) advanceReading() {
+	for _, stream := range a.streams {
+		if len(stream.cachedRecords) != 0 {
+			// A shared dependency may arrive on any stream. Keep this lookahead fair.
+			a.boundary, a.boundaryDDL = nil, nil
+			a.reader.Boundary([]event.SchemaTableName{}, 0)
+			a.reader.ContinueReading(true)
+			return
+		}
+	}
+	var (
+		pending *writeEvent
+		through uint64
+		tables  = []event.SchemaTableName{}
+	)
+	if len(a.pendingDDL) != 0 {
+		head := a.pendingDDL[0]
+		if head.awaitingDDL {
+			through = head.ddl.GetCommitTs()
+		}
+		if !head.awaitingDDL && !ddlReady(head, a.watermark) {
+			pending, through, tables = head, head.ddl.GetCommitTs(), ddlScope(head.ddl)
+		}
+	}
+	if through == 0 {
+		through = a.controlTs
+	}
+	if through == 0 {
+		// Whole-input progress only drives reclamation and input confirmation.
+		// Its lag must not fence already safe DML from independent streams.
+		tables = nil
+		for _, control := range a.controls {
+			if through == 0 || control.watermark < through {
+				through = control.watermark
 			}
-			a.reader.Advance(updates)
 		}
-		if !a.boundary.reached {
-			return nil
+		for ts := range a.ddlCopies {
+			if through == 0 || ts < through {
+				through = ts
+			}
 		}
+	}
+	if through == 0 {
+		a.boundary, a.boundaryDDL = nil, nil
+		a.reader.Boundary([]event.SchemaTableName{}, 0)
+		a.reader.ContinueReading(a.needsMoreInput())
+		return
+	}
+	if a.boundary != nil && !a.boundary.reached && a.boundaryTs == through && a.boundaryDDL == pending {
+		a.reader.ContinueReading(true)
+		return
+	}
+	a.boundary = a.reader.Boundary(tables, through)
+	a.boundaryTs, a.boundaryDDL = through, nil
+	if pending != nil && a.boundary != nil {
+		pending.boundary = a.boundary
+		a.boundaryDDL = pending
 		a.scanInvalid = true
-	}
-	var pending *writeEvent
-	for _, item := range a.pendingDDL {
-		if item.boundary == nil && item.ddl.GetCommitTs() > a.watermark {
-			pending = item
-			break
+		key := ddlKey{
+			commitTs: pending.ddl.GetCommitTs(),
+			schema:   pending.ddl.SchemaName,
+			table:    pending.ddl.TableName,
+			query:    pending.ddl.Query,
 		}
-	}
-	if pending == nil && a.unprovenCount == 0 {
-		return nil
-	}
-	tables := []event.SchemaTableName{}
-	if pending != nil {
-		tables = ddlScope(pending.ddl)
-	}
-	boundary, err := a.reader.Boundary(ctx, tables)
-	if err != nil {
-		return err
-	}
-	if boundary == nil {
-		return nil
-	}
-	a.boundary, a.boundaryTs = boundary, 0
-	if pending != nil {
-		pending.boundary = boundary
-		a.boundaryTs = pending.ddl.GetCommitTs()
-		updates := make([]readUpdate, 0, len(a.ddlInputs[a.boundaryTs]))
-		for _, data := range a.ddlInputs[a.boundaryTs] {
+		var updates []readUpdate
+		for _, stream := range a.ddlInputs[key].streams {
 			updates = append(updates, readUpdate{
-				data:     data,
-				boundary: boundary,
+				data: &readData{
+					stream: stream,
+				},
+				boundary: a.boundary,
+			})
+		}
+		for _, item := range a.pendingDML {
+			if item == nil || item.dml.CommitTs <= pending.ddl.GetCommitTs() || !ddlBlocksTable(pending.ddl, item) {
+				continue
+			}
+			updates = append(updates, readUpdate{
+				data: &readData{
+					stream: item.stream,
+				},
+				boundary: a.boundary,
 			})
 		}
 		a.reader.Advance(updates)
 	}
-	for _, item := range a.unproven {
-		if item.proofPending {
-			item.boundary, item.proofPending = boundary, false
-		}
-	}
-	clear(a.unproven)
-	a.unproven = a.unproven[:0]
-	a.unprovenCount = 0
-	a.scanInvalid = true
-	return nil
+	a.reader.ContinueReading(a.needsMoreInput())
 }
 
 func (a *assembler) needsMoreInput() bool {
 	if a.boundary != nil && !a.boundary.reached {
 		return true
 	}
-	if len(a.controls) != 0 || len(a.ddlCopies) != 0 || a.unprovenCount != 0 {
+	if len(a.controls) != 0 || len(a.ddlCopies) != 0 || a.controlTs != 0 {
 		return true
 	}
 	for boundary := range a.scanBoundaries {
@@ -996,9 +1080,9 @@ func (a *assembler) cleanHistory() {
 	if a.codecConfig.Protocol == config.ProtocolSimple {
 		a.schemas.ReleaseBefore(watermark)
 	}
-	for ts := range a.ddlInputs {
-		if ts < watermark {
-			delete(a.ddlInputs, ts)
+	for key := range a.ddlInputs {
+		if key.commitTs < watermark {
+			delete(a.ddlInputs, key)
 		}
 	}
 }
@@ -1188,6 +1272,7 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 		item := &writeEvent{
 			dml:      dml,
 			decoding: task,
+			stream:   data.stream,
 		}
 		a.queueDML(item, result.record, data.dmlBoundary)
 		if result.waiting {
@@ -1197,14 +1282,39 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 		return a.decoder.submit(ctx, task)
 	}
 	if ddl := result.ddl; ddl != nil {
-		if a.ddlInputs == nil {
-			a.ddlInputs = make(map[uint64][]*readData)
+		key := ddlKey{
+			commitTs: ddl.GetCommitTs(),
+			schema:   ddl.SchemaName,
+			table:    ddl.TableName,
+			query:    ddl.Query,
 		}
-		a.ddlInputs[ddl.GetCommitTs()] = append(a.ddlInputs[ddl.GetCommitTs()], &readData{
-			stream:   data.stream,
-			position: data.position,
-		})
-		if data.ddlCopy {
+		input, exists := a.ddlInputs[key]
+		if !exists {
+			input = a.queueDDL(ddl, data.record)
+			item := input.event
+			item.awaitingDDL = data.ddlCopy
+			item.boundary = data.ddlBoundary
+			if data.ddlCopy {
+				item.boundary = data.dmlBoundary
+			}
+		}
+		if input.event != nil && !slices.Contains(input.streams, data.stream) {
+			input.streams = append(input.streams, data.stream)
+		}
+		if exists && !data.ddlCopy && input.event != nil && input.event.awaitingDDL {
+			// Canonical input arrives before its effect can leave assembly.
+			item := input.event
+			item.awaitingDDL, item.ddl, item.boundary = false, ddl, data.ddlBoundary
+			onFlush := item.onFlush
+			data.record.refs.Inc()
+			item.onFlush = func() {
+				onFlush()
+				data.record.release()
+			}
+			a.scanInvalid = true
+			return nil
+		}
+		if exists {
 			a.memory.reserve(128)
 			data.record.refs.Inc()
 			if a.ddlCopies == nil {
@@ -1213,8 +1323,6 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 			a.ddlCopies[ddl.GetCommitTs()] = append(a.ddlCopies[ddl.GetCommitTs()], data.record)
 			return nil
 		}
-		a.queueDDL(ddl, data.record)
-		a.pendingDDL[len(a.pendingDDL)-1].boundary = data.ddlBoundary
 		if data.ddlOrder == commitOrder {
 			slices.SortStableFunc(a.pendingDDL, func(first, second *writeEvent) int {
 				return cmp.Compare(first.ddl.GetCommitTs(), second.ddl.GetCommitTs())

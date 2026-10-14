@@ -535,9 +535,9 @@ func (c *storageReader) Advance(updates []readUpdate) {
 	}
 }
 
-func (c *storageReader) Boundary(_ context.Context, _ []event.SchemaTableName) (*readBoundary, error) {
+func (c *storageReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
 	// File group completion is published in the ordered input itself.
-	return nil, nil
+	return nil
 }
 
 func (c *storageReader) Confirm(_ context.Context) error {

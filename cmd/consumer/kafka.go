@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	routing "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -36,9 +37,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/twmb/franz-go/pkg/kadm"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 )
 
@@ -53,8 +52,7 @@ type kafkaPartition struct {
 	polled       []*kgo.Record
 	fetchPaused  bool
 	sequence     uint64
-	position     int64 // Next offset after the last fully decoded input.
-	target       int64 // -1 means this partition is outside the current boundary.
+	targetTs     uint64 // Event progress still needed for the current boundary; zero means complete.
 	records      []kafkaRecord
 	mu           sync.Mutex // Protects records, shared by Read and Confirm.
 }
@@ -71,7 +69,8 @@ type kafkaReader struct {
 	readSequence     uint64
 	pausedPartitions int
 	boundary         *readBoundary
-	progressMu       sync.Mutex // Protects cursors and scheduling progress shared with assembly.
+	control          *readBoundary
+	progressMu       sync.Mutex // Protects event progress and scheduling shared with assembly.
 }
 
 func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
@@ -128,36 +127,9 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		log.Panic("Kafka topic metadata is unavailable", zap.String("topic", topic), zap.Error(topicMetadata.Err), zap.Int("partitionCount", len(topicMetadata.Partitions)))
 	}
 
-	committed, err := admin.FetchOffsetsForTopics(ctx, consumerID, topic)
-	if err != nil && !errors.Is(err, kerr.GroupIDNotFound) {
-		log.Panic("Kafka consumer offsets lookup failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
-	}
-	starts, err := admin.ListStartOffsets(ctx, topic)
-	if err == nil {
-		err = starts.Error()
-	}
-	if err != nil {
-		log.Panic("Kafka start offsets lookup failed", zap.String("topic", topic), zap.Error(err))
-	}
-	ends, err := admin.ListEndOffsets(ctx, topic)
-	if err == nil {
-		err = ends.Error()
-	}
-	if err != nil {
-		log.Panic("Kafka end offsets lookup failed", zap.String("topic", topic), zap.Error(err))
-	}
 	partitions := make(map[int32]*kafkaPartition, len(topicMetadata.Partitions))
 	for partitionID := range topicMetadata.Partitions {
-		start := starts[topic][partitionID]
-		end := ends[topic][partitionID]
-		position := committed[topic][partitionID].At
-		if position < start.Offset || position > end.Offset {
-			position = start.Offset
-		}
-		partitions[partitionID] = &kafkaPartition{
-			position: position,
-			target:   -1,
-		}
+		partitions[partitionID] = &kafkaPartition{}
 	}
 
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
@@ -169,6 +141,10 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		confirmable: confirmable,
 		partitions:  partitions,
 		router:      router,
+		control: &readBoundary{
+			reached:   helper.GetDDLDispatchRule(protocol) == helper.PartitionAll,
+			watermark: &partitions[0].watermark,
+		},
 	}
 }
 
@@ -218,13 +194,16 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 				key:           record.Key,
 				value:         record.Value,
 				stream:        partitionID,
-				position:      record.Offset + 1,
 				ddlCopy:       partitionID != 0,
 				record:        state,
 				retainedBytes: 128,
+				dmlBoundary:   c.control,
 			}
 			if partitionID == 0 {
-				data.dmlBoundary = &readBoundary{reached: true}
+				data.dmlBoundary = &readBoundary{
+					reached:   true,
+					watermark: c.control.watermark,
+				}
 			}
 			if len(c.partitions) == 1 {
 				data.ddlBoundary = &readBoundary{reached: true}
@@ -269,15 +248,12 @@ func (c *kafkaReader) Advance(updates []readUpdate) {
 	for _, update := range updates {
 		data := update.data
 		partition := c.partitions[data.stream]
-		if update.decoded {
-			partition.position = max(partition.position, data.position)
-		}
 		if update.progress != 0 {
 			partition.watermark = max(partition.watermark, update.progress)
 			partition.hasWatermark = true
 		}
-		if update.boundary != nil && update.boundary == c.boundary && partition.target >= 0 {
-			partition.target = min(partition.target, data.position)
+		if update.boundary != nil && update.boundary == c.boundary {
+			partition.targetTs = 0
 		}
 	}
 	c.advanceBoundary()
@@ -320,62 +296,31 @@ func (c *kafkaReader) tablePartitions(names []event.SchemaTableName) []int32 {
 			partitions = append(partitions, partitionID)
 		}
 	}
-	if !slices.Contains(partitions, int32(0)) {
-		partitions = append(partitions, 0)
-	}
 	return partitions
 }
 
-// Capture a fixed transport window. Already decoded control positions can
-// subsequently shorten it through Advance without passing DDLs to this reader.
-func (c *kafkaReader) Boundary(ctx context.Context, tables []event.SchemaTableName) (*readBoundary, error) {
-	if len(c.partitions) == 1 {
-		return &readBoundary{
-			reached: true,
-		}, nil
-	}
+// Routing selects the inputs whose decoded events must cover commitTs. A matching
+// scoped event can complete an input through Advance; watermarks cover every scope.
+func (c *kafkaReader) Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary {
 	partitionIDs := c.tablePartitions(tables)
 	if tables != nil && len(tables) == 0 {
 		partitionIDs = []int32{0}
 	}
-	req := kmsg.NewPtrListOffsetsRequest()
-	req.TimeoutMillis = 10000
-	topic := kmsg.NewListOffsetsRequestTopic()
-	topic.Topic = c.topic
-	for partitionID := range c.partitions {
-		if partitionIDs != nil && !slices.Contains(partitionIDs, partitionID) {
-			continue
-		}
-		partition := kmsg.NewListOffsetsRequestTopicPartition()
-		partition.Partition, partition.Timestamp = partitionID, -1
-		topic.Partitions = append(topic.Partitions, partition)
-	}
-	req.Topics = append(req.Topics, topic)
-	targets := make(map[int32]int64, len(topic.Partitions))
-	for _, shard := range c.client.RequestSharded(ctx, req) {
-		if shard.Err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaAdminAPI, shard.Err, "get input boundary", c.topic)
-		}
-		for _, topic := range shard.Resp.(*kmsg.ListOffsetsResponse).Topics {
-			for _, partition := range topic.Partitions {
-				if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-					return nil, errors.WrapError(errors.ErrKafkaAdminAPI, err, "get input boundary", c.topic)
-				}
-				targets[partition.Partition] = partition.Offset
-			}
-		}
-	}
 	c.progressMu.Lock()
 	defer c.progressMu.Unlock()
 	for partitionID, partition := range c.partitions {
-		partition.target = -1
-		if target, ok := targets[partitionID]; ok {
-			partition.target = target
+		partition.targetTs = 0
+		if (partitionIDs == nil || slices.Contains(partitionIDs, partitionID)) && partition.watermark < commitTs {
+			partition.targetTs = commitTs
 		}
+	}
+	if commitTs == 0 {
+		c.boundary = nil
+		return nil
 	}
 	c.boundary = &readBoundary{}
 	c.advanceBoundary()
-	return c.boundary, nil
+	return c.boundary
 }
 
 // Called by assembly while holding progressMu. Only assembly mutates reached.
@@ -383,15 +328,16 @@ func (c *kafkaReader) advanceBoundary() {
 	if c.boundary == nil || c.boundary.reached {
 		return
 	}
+	reached := true
 	for _, partition := range c.partitions {
-		if partition.target >= 0 && partition.position < partition.target {
-			return
+		if partition.watermark >= partition.targetTs {
+			partition.targetTs = 0
+		}
+		if partition.targetTs != 0 {
+			reached = false
 		}
 	}
-	c.boundary.reached = true
-	for _, partition := range c.partitions {
-		partition.target = -1
-	}
+	c.boundary.reached = reached
 }
 
 func (c *kafkaReader) Confirm(ctx context.Context) error {
@@ -441,7 +387,7 @@ func (c *kafkaReader) limitReads() {
 	c.progressMu.Lock()
 	defer c.progressMu.Unlock()
 	boundaryPending := c.boundary != nil && !c.boundary.reached
-	underPressure := !boundaryPending && c.memory.used() >= c.memory.limit
+	underPressure := c.memory.used() >= c.memory.limit
 	if !boundaryPending && !underPressure && c.pausedPartitions == 0 {
 		return
 	}
@@ -456,10 +402,11 @@ func (c *kafkaReader) limitReads() {
 		}
 	}
 	for partitionID, partition := range c.partitions {
-		// Fetch unfinished fixed boundaries first. Schema bootstrap messages
-		// remain readable even beyond that boundary.
-		pause := boundaryPending && partition.position >= partition.target && !c.continuing.Load()
-		if underPressure {
+		pause := false
+		if boundaryPending {
+			pause = underPressure && partition.targetTs == 0
+		}
+		if underPressure && !boundaryPending {
 			// Retained controls still need slow partitions to advance before
 			// they can release memory. Do not fetch ahead of that progress.
 			pause = partition.hasWatermark && partition.watermark > slowest && !c.continuing.Load()
@@ -485,14 +432,13 @@ func (c *kafkaReader) nextPartition() int32 {
 	defer c.progressMu.Unlock()
 	selected := int32(-1)
 	var progress, sequence uint64
+	boundaryPending := c.boundary != nil && !c.boundary.reached
+	underPressure := c.memory.used() >= c.memory.limit
 	for partitionID, partition := range c.partitions {
 		if len(partition.polled) == 0 {
 			continue
 		}
-		// A fetch pause under memory pressure must not hold already fetched
-		// inputs. Only an unfinished fixed boundary limits their delivery.
-		if c.boundary != nil && !c.boundary.reached && !c.continuing.Load() &&
-			(partition.position >= partition.target || partition.polled[0].Offset >= partition.target) {
+		if boundaryPending && underPressure && partition.targetTs == 0 {
 			continue
 		}
 		watermark := partition.watermark
@@ -504,10 +450,24 @@ func (c *kafkaReader) nextPartition() int32 {
 			// lets a nearby control pass a backlog in another partition.
 			watermark = 0
 		}
-		if c.boundary != nil && !c.boundary.reached && partition.position < partition.target {
-			watermark = 0
+		needed := boundaryPending && partition.targetTs != 0
+		selectedNeeded := selected >= 0 && boundaryPending && c.partitions[selected].targetTs != 0
+		// A busy dependency must still let other buffered streams make progress.
+		// Under pressure, admission remains restricted to the unfinished scope.
+		overdue := !underPressure && c.readSequence-partition.sequence >= batchRows
+		selectedOverdue := selected >= 0 && !underPressure && c.readSequence-c.partitions[selected].sequence >= batchRows
+		if selectedOverdue && !overdue {
+			continue
 		}
-		if selected < 0 || watermark < progress || (watermark == progress && (partition.sequence < sequence || (partition.sequence == sequence && partitionID < selected))) {
+		if overdue && !selectedOverdue {
+			selected, progress, sequence = partitionID, watermark, partition.sequence
+			continue
+		}
+		if selectedNeeded && !needed {
+			continue
+		}
+		earlier := watermark < progress || (watermark == progress && (partition.sequence < sequence || (partition.sequence == sequence && partitionID < selected)))
+		if selected < 0 || (needed && !selectedNeeded) || earlier {
 			selected, progress, sequence = partitionID, watermark, partition.sequence
 		}
 	}

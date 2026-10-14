@@ -33,9 +33,9 @@ import (
 type Reader interface {
 	Read(ctx context.Context) ([]*readData, error)
 	Advance(updates []readUpdate)
-	// Boundary covers logical tables. Nil covers every input; an empty,
-	// nonnil selection requests the transport's control window.
-	Boundary(ctx context.Context, tables []event.SchemaTableName) (*readBoundary, error)
+	// Boundary requests event progress through commitTs. Nil covers every input;
+	// an empty, nonnil selection covers the control stream. Zero clears the request.
+	Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary
 	ContinueReading(bool)
 	Confirm(ctx context.Context) error
 	Close()
@@ -178,8 +178,7 @@ type readData struct {
 	key           []byte
 	value         []byte
 	stream        int32
-	position      int64 // Transport cursor; the assembler only returns it to its reader.
-	ddlCopy       bool  // A control replica updates input progress without executing again.
+	ddlCopy       bool // A replica awaits its canonical DDL before downstream execution.
 	record        *ack
 	retainedBytes int64
 	schema        *readSchema
@@ -200,8 +199,8 @@ type readGroup struct {
 	boundary *readBoundary
 }
 
-// Updates contain transport progress only. DDLs, watermarks and schema waits
-// stay with the assembler; decoding progress never confirms downstream writes.
+// Assembly returns decoded progress and matching scoped boundary crossings.
+// These facts never confirm downstream writes or expose protocol state to readers.
 type readUpdate struct {
 	data     *readData
 	decoded  bool
@@ -215,7 +214,9 @@ type readControl struct {
 	records   []*ack
 }
 
-// Readers own the positions behind a proof and publish when it is reached.
+// A boundary either completes a finite input scope or exposes a shared control
+// watermark. Only assembly advances these facts; groups retain their own boundary.
 type readBoundary struct {
-	reached bool
+	reached   bool
+	watermark *uint64
 }

@@ -240,9 +240,9 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
 func (c *pulsarReader) Advance(_ []readUpdate) {
 }
 
-func (c *pulsarReader) Boundary(_ context.Context, _ []event.SchemaTableName) (*readBoundary, error) {
+func (c *pulsarReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
 	// Topic-wide checkpoints provide this transport's completion boundaries.
-	return nil, nil
+	return nil
 }
 
 func (c *pulsarReader) Confirm(ctx context.Context) error {

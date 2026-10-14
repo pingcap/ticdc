@@ -486,7 +486,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			r.partitions[partitionID] = &kafkaPartition{}
 			c.streams[partitionID] = &decodeStream{decoder: decoder}
 		}
-		// Noncanonical copies may arrive first and are never executed.
+		// Replicas arrive first and fence their scope until canonical input or progress.
 		for _, partitionID := range []int32{1, 0} {
 			input := ddls
 			if partitionID == 0 {
@@ -500,7 +500,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 					ack:    record,
 					offset: int64(offset),
 				})
-				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, position: int64(offset + 1), ddlCopy: partitionID != 0, key: message.Key, value: message.Value, record: record, retainedBytes: 128}) {
+				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, ddlCopy: partitionID != 0, key: message.Key, value: message.Value, record: record, retainedBytes: 128}) {
 					require.NoError(t, err)
 					require.NoError(t, c.accept(t.Context(), result))
 					r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
@@ -512,7 +512,7 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 				ack:    record,
 				offset: int64(len(input)),
 			})
-			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, position: int64(len(input) + 1), key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}) {
+			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}) {
 				require.NoError(t, err)
 				require.NoError(t, c.accept(t.Context(), result))
 				r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
@@ -531,7 +531,11 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			downstream.EXPECT().WriteBlockEvent(result.ddl).Return(nil)
 			require.NoError(t, w.writeDDL(t.Context(), result))
 			require.Zero(t, r.partitions[0].records[index].ack.refs.Load())
-			for _, record := range r.partitions[1].records[:len(ddls)] {
+			for copyIndex, record := range r.partitions[1].records[:len(ddls)] {
+				if copyIndex <= startIndex+index {
+					require.Zero(t, record.ack.refs.Load())
+					continue
+				}
 				require.EqualValues(t, 1, record.ack.refs.Load())
 			}
 		}
@@ -883,8 +887,10 @@ func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	c.partitions[2].hasWatermark = true
 	c.partitions[2].watermark = 10
 	c.partitions[1].sequence = 1
+	c.readSequence = 1
 	require.EqualValues(t, 2, c.nextPartition())
 	c.partitions[2].sequence = 2
+	c.readSequence = 2
 	require.EqualValues(t, 1, c.nextPartition())
 	c.partitions[1].fetchPaused = true
 	require.EqualValues(t, 1, c.nextPartition(), "a fetch pause must not hold already fetched input")
@@ -896,97 +902,212 @@ func TestKafkaReaderPrioritizesBlockedPartitions(t *testing.T) {
 	require.EqualValues(t, 0, c.nextPartition(), "lookahead fairly considers every readable partition")
 	c.ContinueReading(false)
 	c.boundary = &readBoundary{}
-	c.partitions[0].position = 10
-	c.partitions[2].position = 10
-	c.partitions[0].target = 10
-	c.partitions[1].target = 5
-	c.partitions[2].target = 10
+	c.partitions[1].targetTs = 30
 	require.EqualValues(t, 1, c.nextPartition())
-	c.partitions[1].position = 1
+	c.readSequence = batchRows
+	c.partitions[1].sequence = batchRows
+	require.EqualValues(t, 0, c.nextPartition(), "a continuously busy dependency must not starve other buffered streams")
 	c.advanceBoundary()
 	require.False(t, c.boundary.reached)
-	// Assembly identifies a control's input position. The reader shortens
-	// its transport window without knowing the message type or timestamp.
-	c.Advance([]readUpdate{{data: &readData{stream: 1, position: 1}, boundary: c.boundary}})
+	// Assembly supplies a matching scoped marker. Unrelated progress cannot
+	// complete this partition's event-time boundary.
+	c.Advance([]readUpdate{{data: &readData{stream: 0}, progress: 40}})
+	require.False(t, c.boundary.reached)
+	c.readLimit.ContinueReading(true)
+	memory.reserve(memory.limit)
+	require.EqualValues(t, 1, c.nextPartition(), "lookahead keeps an unfinished scope ahead of unrelated inputs")
+	memory.release(memory.limit)
+	c.Advance([]readUpdate{{data: &readData{stream: 1}, boundary: c.boundary}})
 	require.True(t, c.boundary.reached)
-	require.EqualValues(t, 1, c.partitions[1].position)
+	require.Zero(t, c.partitions[1].targetTs)
 	require.Zero(t, c.memory.used())
 }
 
-func TestKafkaInputBoundaryIsFixed(t *testing.T) {
-	const topic = "input-boundary"
-	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(3, topic))
-	t.Cleanup(cluster.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+func TestKafkaEventBoundary(t *testing.T) {
+	client, err := kgo.NewClient()
 	require.NoError(t, err)
-	t.Cleanup(producer.Close)
-	require.NoError(t, producer.ProduceSync(ctx,
-		&kgo.Record{Topic: topic, Partition: 0, Value: []byte("control")},
-		&kgo.Record{Topic: topic, Partition: 1, Value: []byte("data")},
-	).FirstErr())
-	r := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, "input-boundary", newMemoryUsage(), config.GetDefaultReplicaConfig(), nil)
-	t.Cleanup(r.Close)
-	boundary, err := r.Boundary(ctx, nil)
+	t.Cleanup(client.Close)
+	router, err := eventrouter.NewEventRouter(config.GetDefaultReplicaConfig().Sink, false, "event-boundary", false, false)
 	require.NoError(t, err)
-	require.False(t, boundary.reached)
-	require.EqualValues(t, 1, r.partitions[0].target)
-	require.EqualValues(t, 1, r.partitions[1].target)
-	require.Zero(t, r.partitions[2].target)
-	// Traffic after capture must not extend the old window. Idle partition two
-	// contributes its empty boundary without requiring a watermark or a message.
-	require.NoError(t, producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("later")}).FirstErr())
-	for !boundary.reached {
-		batch, err := r.Read(ctx)
-		require.NoError(t, err)
-		require.False(t, boundary.reached, "reading a batch must not certify its undecoded inputs")
-		for _, data := range batch {
-			r.Advance([]readUpdate{{data: data, decoded: true}})
-			data.record.decoded(128)
-		}
+	memory := newMemoryUsage()
+	r := &kafkaReader{
+		client:    client,
+		memory:    memory,
+		readLimit: newReadLimit(memory),
+		router:    router,
+		partitions: map[int32]*kafkaPartition{
+			0: {
+				watermark:    100,
+				hasWatermark: true,
+			},
+			1: {
+				watermark:    300,
+				hasWatermark: true,
+			},
+			2: {
+				watermark:    250,
+				hasWatermark: true,
+			},
+		},
 	}
-	require.EqualValues(t, 1, r.partitions[0].position)
-	require.EqualValues(t, 1, r.partitions[1].position)
-	require.NoError(t, r.Confirm(ctx))
-	for _, partition := range r.partitions {
-		require.EqualValues(t, -1, partition.target)
-	}
-	// A new boundary may cover only one partition. Excluded partitions pause
-	// while it is being read, and a zero offset remains a valid captured target.
-	boundary, err = r.Boundary(ctx, []event.SchemaTableName{})
-	require.NoError(t, err)
-	require.False(t, boundary.reached)
-	require.EqualValues(t, 2, r.partitions[0].target)
-	require.EqualValues(t, -1, r.partitions[1].target)
-	require.EqualValues(t, -1, r.partitions[2].target)
+	control := r.Boundary([]event.SchemaTableName{}, 200)
+	require.False(t, control.reached)
+	require.EqualValues(t, 200, r.partitions[0].targetTs)
+	require.Zero(t, r.partitions[1].targetTs)
+	require.Zero(t, r.partitions[2].targetTs)
+	r.ContinueReading(true)
+	memory.reserve(memory.limit)
 	r.limitReads()
 	require.False(t, r.partitions[0].fetchPaused)
 	require.True(t, r.partitions[1].fetchPaused)
 	require.True(t, r.partitions[2].fetchPaused)
-	batch, err := r.Read(ctx)
-	require.NoError(t, err)
-	require.Len(t, batch, 1)
-	data := batch[0]
-	require.Equal(t, "later", string(data.value))
-	r.Advance([]readUpdate{{data: data, decoded: true}})
-	data.record.decoded(128)
-	require.True(t, boundary.reached)
+	r.Advance([]readUpdate{{data: &readData{stream: 0}, progress: 200}})
+	require.True(t, control.reached)
+
+	scope := r.Boundary(nil, 300)
+	require.False(t, scope.reached)
+	require.EqualValues(t, 300, r.partitions[0].targetTs)
+	require.Zero(t, r.partitions[1].targetTs)
+	require.EqualValues(t, 300, r.partitions[2].targetTs)
+	r.Advance([]readUpdate{{data: &readData{stream: 0}, progress: 300}})
+	require.False(t, scope.reached)
+	// A matching DDL or post-DDL scoped event completes only its own input.
+	r.Advance([]readUpdate{{data: &readData{stream: 2}, boundary: scope}})
+	require.True(t, scope.reached)
+	require.EqualValues(t, 250, r.partitions[2].watermark, "a scoped marker must not advance a partition-wide watermark")
+	memory.release(memory.limit)
+	r.ContinueReading(false)
 	for _, partition := range r.partitions {
-		require.EqualValues(t, -1, partition.target)
-	}
-	r.limitReads()
-	for _, partition := range r.partitions {
+		require.Zero(t, partition.targetTs)
 		require.False(t, partition.fetchPaused)
 	}
-	require.NoError(t, r.Confirm(ctx))
-	require.Zero(t, r.memory.used())
+	names := []event.SchemaTableName{{
+		SchemaName: "test",
+		TableName:  "a",
+	}}
+	partitions := r.tablePartitions(names)
+	require.Len(t, partitions, 1)
+	table := r.Boundary(names, 400)
+	require.False(t, table.reached)
+	for id, partition := range r.partitions {
+		if id == partitions[0] {
+			require.EqualValues(t, 400, partition.targetTs)
+			continue
+		}
+		require.Zero(t, partition.targetTs)
+	}
+	r.Advance([]readUpdate{{data: &readData{stream: partitions[0]}, boundary: table}})
+	require.True(t, table.reached)
+	require.Nil(t, r.Boundary([]event.SchemaTableName{}, 0))
+}
+
+func TestDDLReplicaFencesOnlyItsScope(t *testing.T) {
+	memory := newMemoryUsage()
+	client, err := kgo.NewClient()
+	require.NoError(t, err)
+	t.Cleanup(client.Close)
+	r := &kafkaReader{
+		client:    client,
+		memory:    memory,
+		readLimit: newReadLimit(memory),
+		partitions: map[int32]*kafkaPartition{
+			0: {},
+			1: {},
+			2: {
+				watermark:    20,
+				hasWatermark: true,
+			},
+		},
+		control: &readBoundary{
+			reached:   true,
+			watermark: new(uint64(0)),
+		},
+	}
+	a := &assembler{
+		reader: r,
+		memory: memory,
+	}
+	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
+	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
+	before := &event.DMLEvent{
+		PhysicalTableID: 1,
+		CommitTs:        10,
+		TableInfo:       tableA,
+	}
+	after := &event.DMLEvent{
+		PhysicalTableID: 1,
+		CommitTs:        30,
+		TableInfo:       tableA,
+	}
+	independent := &event.DMLEvent{
+		PhysicalTableID: 2,
+		CommitTs:        30,
+		TableInfo:       tableB,
+	}
+	a.pendingDML = []*writeEvent{
+		{
+			dml:      before,
+			stream:   1,
+			boundary: r.control,
+		},
+		{
+			dml:      after,
+			stream:   1,
+			boundary: r.control,
+		},
+		{
+			dml:      independent,
+			stream:   2,
+			boundary: r.control,
+		},
+	}
+	ddl := &event.DDLEvent{
+		SchemaName: "test",
+		TableName:  "a",
+		FinishedTs: 20,
+	}
+	copyRecord := newAck(memory, 128, nil)
+	require.NoError(t, a.accept(t.Context(), decodedData{
+		data: &readData{
+			stream:      1,
+			ddlCopy:     true,
+			record:      copyRecord,
+			dmlBoundary: r.control,
+		},
+		ddl: ddl,
+	}))
+	copyRecord.decoded(128)
+	require.Same(t, before, a.nextReady(0).dml)
+	require.Same(t, independent, a.nextReady(0).dml)
+	require.Nil(t, a.nextReady(0), "post-DDL rows must wait for canonical input")
+	canonical := newAck(memory, 128, nil)
+	require.NoError(t, a.accept(t.Context(), decodedData{
+		data: &readData{
+			stream: 0,
+			record: canonical,
+		},
+		ddl: ddl,
+	}))
+	canonical.decoded(128)
+	a.advanceReading()
+	result := a.nextReady(0)
+	require.Same(t, ddl, result.ddl, "scoped replicas prove preceding input without a new global watermark")
+	result.onFlush()
+	memory.release(result.bytes)
+	require.Zero(t, copyRecord.refs.Load())
+	require.Zero(t, canonical.refs.Load())
+	require.Same(t, after, a.nextReady(0).dml)
+	copyRecord.confirm()
+	canonical.confirm()
+	require.Zero(t, memory.used())
 }
 
 func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	tableA := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 1, Name: ast.NewCIStr("a")})
 	tableB := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: 2, Name: ast.NewCIStr("b")})
-	boundary := &readBoundary{}
+	boundary := &readBoundary{
+		watermark: new(uint64(0)),
+	}
 	before := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 9, TableInfo: tableA}
 	after := &event.DMLEvent{PhysicalTableID: 1, CommitTs: 11, TableInfo: tableA}
 	independent := &event.DMLEvent{PhysicalTableID: 2, CommitTs: 12, TableInfo: tableB}
@@ -1001,8 +1122,9 @@ func TestInputBoundariesFenceDDLAndWatermark(t *testing.T) {
 	require.Nil(t, a.nextReady(0))
 	ddlBoundary := &readBoundary{}
 	a.pendingDDL = []*writeEvent{{ddl: ddl, boundary: ddlBoundary}}
-	boundary.reached = true
 	require.Same(t, before, a.nextReady(0).dml)
+	require.Nil(t, a.nextReady(0), "a table DDL must not prove an independent table's rows are safe")
+	*boundary.watermark = 12
 	require.Same(t, independent, a.nextReady(0).dml)
 	require.Nil(t, a.nextReady(0))
 	require.True(t, a.hasPendingThrough(10))
