@@ -73,7 +73,7 @@ func TestCSVBatchDecoderWithColumnSelector(t *testing.T) {
 		ColumnSelectors: []*config.ColumnSelector{
 			{Matcher: []string{"test.t"}, Columns: []string{"id", "visible"}},
 		},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	codecConfig := &common.Config{

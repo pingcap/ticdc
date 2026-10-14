@@ -41,7 +41,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	parsermodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/types"
@@ -428,24 +428,60 @@ func TestVerifyTablesForSinkValidatesStorageColumnSelectors(t *testing.T) {
 	require.NoError(t, verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCanalJSON, tableInfos))
 }
 
+func TestVerifyTablesForSinkStorageCaseSensitive(t *testing.T) {
+	for _, caseSensitive := range []*bool{nil, util.AddressOf(false), util.AddressOf(true)} {
+		replicaCfg := config.GetDefaultReplicaConfig()
+		replicaCfg.CaseSensitive = caseSensitive
+		replicaCfg.Sink.ColumnSelectors = []*config.ColumnSelector{
+			{Matcher: []string{"Test.t"}, Columns: []string{"name"}},
+		}
+		err := verifyTablesForSink(replicaCfg, config.FileScheme, "", config.ProtocolCsv,
+			[]*common.TableInfo{newTableInfoWithPrimaryKeyForTest()})
+		if util.GetOrZero(caseSensitive) {
+			require.NoError(t, err)
+		} else {
+			require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+		}
+	}
+}
+
+func TestVerifyTablesForSinkAvroTopicRules(t *testing.T) {
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolDebeziumAvro} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			for _, caseSensitive := range []bool{false, true} {
+				cfg := config.GetDefaultReplicaConfig()
+				cfg.CaseSensitive = util.AddressOf(caseSensitive)
+				cfg.Sink.DispatchRules = []*config.DispatchRule{{
+					Matcher: []string{"test.*"}, TopicRule: "{schema}",
+				}}
+				tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+				err := verifyTablesForSink(cfg, config.KafkaScheme, "default-topic", protocol, tables)
+				require.True(t, errors.ErrKafkaInvalidConfig.Equal(err), "%v", err)
+				cfg.Sink.DispatchRules[0].TopicRule = "{schema}_{table}"
+				require.NoError(t, verifyTablesForSink(cfg, config.KafkaScheme, "default-topic", protocol, tables))
+			}
+		})
+	}
+}
+
 func newTableInfoWithPrimaryKeyForTest() *common.TableInfo {
 	idFieldType := types.NewFieldType(mysql.TypeLong)
 	idFieldType.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 
 	return common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:         1,
-		Name:       parser_model.NewCIStr("t"),
+		Name:       parsermodel.NewCIStr("t"),
 		PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{
 			{
 				ID:        1,
-				Name:      parser_model.NewCIStr("id"),
+				Name:      parsermodel.NewCIStr("id"),
 				FieldType: *idFieldType,
 				State:     timodel.StatePublic,
 			},
 			{
 				ID:        2,
-				Name:      parser_model.NewCIStr("name"),
+				Name:      parsermodel.NewCIStr("name"),
 				FieldType: *types.NewFieldType(mysql.TypeVarchar),
 				State:     timodel.StatePublic,
 			},
@@ -483,4 +519,78 @@ func mustParseURLError(t *testing.T, rawURL string) error {
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
 	return err
+}
+
+func TestVerifyMQTablesCaseSensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		caseSensitive *bool
+	}{
+		{name: "unset"},
+		{name: "insensitive", caseSensitive: util.AddressOf(false)},
+		{name: "sensitive", caseSensitive: util.AddressOf(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, scheme := range []string{config.KafkaScheme, config.PulsarScheme} {
+				t.Run(scheme, func(t *testing.T) {
+					cfg := config.GetDefaultReplicaConfig()
+					cfg.CaseSensitive = tc.caseSensitive
+					cfg.Sink.ColumnSelectors = []*config.ColumnSelector{{
+						Matcher: []string{"Test.*"}, Columns: []string{"name"},
+					}}
+					// Exercise the CLI/API conversion before checking the effective matcher.
+					cfg = ToAPIReplicaConfig(cfg).ToInternalReplicaConfig()
+					tables := []*common.TableInfo{newTableInfoWithPrimaryKeyForTest()}
+					err := verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+					if util.GetOrZero(tc.caseSensitive) {
+						require.NoError(t, err)
+					} else {
+						require.True(t, errors.ErrColumnSelectorFailed.Equal(err), "%v", err)
+					}
+					if config.IsMQScheme(scheme) {
+						cfg.Sink.ColumnSelectors = nil
+						cfg.Sink.DispatchRules = []*config.DispatchRule{{
+							Matcher: []string{"Test.*"}, PartitionRule: "index-value", IndexName: "missing_index",
+						}}
+						err = verifyTablesForSink(cfg, scheme, "default-topic", config.ProtocolCanalJSON, tables)
+						if util.GetOrZero(tc.caseSensitive) {
+							require.NoError(t, err)
+						} else {
+							require.True(t, errors.ErrDispatcherFailed.Equal(err), "%v", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRouteMatcherValidation(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	for _, tc := range []struct {
+		name       string
+		eligible   []common.TableName
+		ineligible []common.TableName
+	}{
+		{name: "empty"},
+		{name: "eligible", eligible: []common.TableName{{Schema: "sales", Table: "orders"}}},
+		{name: "ineligible", ineligible: []common.TableName{{Schema: "sales", Table: "orders"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, forceReplicate := range []bool{false, true} {
+				cfg := config.GetDefaultReplicaConfig()
+				cfg.ForceReplicate = util.AddressOf(forceReplicate)
+				cfg.Sink.DispatchRules = []*config.DispatchRule{{
+					Matcher: []string{"["}, TargetSchema: "archive",
+				}}
+				err := verifyRouteConflict(changefeedID, tc.eligible, tc.ineligible, cfg)
+				code, ok := errors.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
+
+				cfg.Sink.DispatchRules[0].Matcher = []string{"sales.*"}
+				require.NoError(t, verifyRouteConflict(changefeedID, tc.eligible, tc.ineligible, cfg))
+			}
+		})
+	}
 }

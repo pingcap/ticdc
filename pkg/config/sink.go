@@ -212,7 +212,6 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -412,6 +411,8 @@ func (d DateSeparator) String() string {
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	// Rules are evaluated in order, and the first matching rule wins.
+	// MQ dispatching skips rules that only configure target schema or table names.
+	// A matcher-only rule selects the default MQ topic and partition strategy.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`

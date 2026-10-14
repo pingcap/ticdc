@@ -47,7 +47,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs, common.DefaultKeyspaceID)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), true, cleanUpJobs, common.DefaultKeyspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +225,26 @@ func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
 	}, testEventuallyTimeout, testEventuallyTick)
 	require.Contains(t, string(content), "1")
 	require.NotContains(t, string(content), "filtered")
+}
+
+func TestCloudStorageColumnSelectorCaseSensitive(t *testing.T) {
+	for _, caseSensitive := range []*bool{nil, util.AddressOf(false), util.AddressOf(true)} {
+		replicaConfig := config.GetDefaultReplicaConfig()
+		replicaConfig.CaseSensitive = caseSensitive
+		replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
+			{Matcher: []string{"Test.t"}, Columns: []string{"id"}},
+		}
+		sinkURI, err := url.Parse(fmt.Sprintf("file:///%s?protocol=csv", t.TempDir()))
+		require.NoError(t, err)
+		require.NoError(t, replicaConfig.ValidateAndAdjust(sinkURI))
+		cloudStorageSink, err := newSinkForTest(t.Context(), replicaConfig, sinkURI, nil)
+		require.NoError(t, err)
+		selector := cloudStorageSink.dmlWriters.columnSelector.Get("test", "t")
+		require.True(t, selector.Select(&timodel.ColumnInfo{Name: parser_model.NewCIStr("id")}))
+		require.Equal(t, util.GetOrZero(caseSensitive),
+			selector.Select(&timodel.ColumnInfo{Name: parser_model.NewCIStr("name")}))
+		cloudStorageSink.Close()
+	}
 }
 
 func TestIgnoreCallsAfterRunError(t *testing.T) {
@@ -737,7 +757,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil, common.DefaultKeyspaceID)
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
 	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())

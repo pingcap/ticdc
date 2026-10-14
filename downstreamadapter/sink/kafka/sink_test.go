@@ -50,7 +50,7 @@ func TestVerifyValidatesEncoderConfigBeforeKafkaConnection(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "verify-existing-topic")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = Verify(ctx, changefeedID, sinkURI, sinkConfig)
+	err = Verify(ctx, changefeedID, sinkURI, sinkConfig, false)
 	require.ErrorContains(t, err, "invalid max-batch-size 0")
 }
 
@@ -138,7 +138,7 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	})
 
 	changefeedID := common.NewChangefeedID4Test("test", "verify-invalid-config")
-	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig)
+	err = Verify(context.Background(), changefeedID, sinkURI, sinkConfig, false)
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
@@ -670,9 +670,9 @@ func newKafkaSinkForTest(
 	testSinkConfig := *sinkConfig
 	testSinkConfig.Protocol = &protocolName
 	sinkConfig = &testSinkConfig
-	router, err := eventrouter.NewEventRouter(sinkConfig, kafkaSinkTestTopic, false, false)
+	router, err := eventrouter.NewEventRouter(sinkConfig, false, kafkaSinkTestTopic, false, false)
 	require.NoError(t, err)
-	columnSelector, err := columnselector.New(sinkConfig)
+	columnSelector, err := columnselector.New(sinkConfig, false)
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1

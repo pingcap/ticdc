@@ -1770,7 +1770,7 @@ func verifyTablesForSink(
 	tableInfos []*common.TableInfo,
 ) error {
 	if config.IsStorageScheme(scheme) {
-		selectors, err := columnselector.New(replicaConfig.Sink)
+		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
 			return err
 		}
@@ -1782,7 +1782,7 @@ func verifyTablesForSink(
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), isAvroLike)
 	if err != nil {
 		return err
 	}
@@ -1790,7 +1790,7 @@ func verifyTablesForSink(
 		return err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return err
 	}
@@ -1803,8 +1803,7 @@ func verifyRouteConflict(
 	ineligibleTables []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
-		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
 	}
 	if util.GetOrZero(replicaCfg.ForceReplicate) {
