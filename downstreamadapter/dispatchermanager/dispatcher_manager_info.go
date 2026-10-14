@@ -52,10 +52,11 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-// IsReusable reports whether shutdown has not started. Bootstrap callers must
-// hold MaintainerFenceMu to serialize this check with maintainer close requests.
+// IsReusable reports whether local initialization has finished and shutdown has
+// not started. Bootstrap callers must hold MaintainerFenceMu to serialize this
+// check with maintainer close requests.
 func (e *DispatcherManager) IsReusable() bool {
-	return !e.closing.Load() && !e.closed.Load() && !e.writePathClosed.Load()
+	return e.getState() == dispatcherManagerRunning
 }
 
 // TryUpdateMaintainer records the active maintainer owner and epoch.
