@@ -64,14 +64,11 @@ func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bo
 	return changefeedDisplayName, true
 }
 
-<<<<<<< HEAD
 func genSinkURIInvalidError(sinkURI string, err error) error {
 	return errors.WrapError(
 		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(sinkURI))
 }
 
-=======
->>>>>>> bc99b79fd (api: improve error message when changefeed_id contains invalid characters such as underscores (#4631))
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
 // CreateChangefeed creates a changefeed
