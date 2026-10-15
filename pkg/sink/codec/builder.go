@@ -46,11 +46,8 @@ func NewEventEncoder(
 		return canal.NewJSONRowEventEncoder(cfg, claimCheck)
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
-<<<<<<< HEAD
-=======
 	case config.ProtocolDebeziumAvro:
 		return debezium.NewAvroBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID, schemaM)
->>>>>>> fb743a814 (sink: Make ddl and dml encoders share schema manager (#6100))
 	case config.ProtocolSimple:
 		return simple.NewEncoder(cfg, claimCheck)
 	default:
@@ -77,6 +74,8 @@ func NewEventDecoder(
 		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolDebezium:
 		return debezium.NewDecoder(codecConfig, idx, upstreamTiDB), nil
+	case config.ProtocolDebeziumAvro:
+		return debezium.NewAvroDecoder(ctx, codecConfig, idx, upstreamTiDB)
 	default:
 	}
 	log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))

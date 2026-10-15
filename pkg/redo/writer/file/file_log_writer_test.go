@@ -78,7 +78,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 	for _, tt := range tests {
 		mockWriter := &mockFileWriter{}
 		mockWriter.On("IsRunning").Return(tt.isRunning)
-		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
+		mockWriter.On("SyncWrite", mock.Anything, mock.Anything).Return(tt.writerErr)
 		w := ddlWriter{logWriter: &logWriter{
 			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
 			backendWriter: mockWriter,

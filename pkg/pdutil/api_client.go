@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -115,6 +114,10 @@ type pdAPIClient struct {
 	grpcClient   pd.Client
 	httpClient   *httputil.Client
 	pdHttpClient pdhttp.Client
+
+	// maxRetries bounds the retry budget of the HTTP API calls.
+	// Tests lower it to skip the production backoff sleeps.
+	maxRetries uint64
 }
 
 // NewPDAPIClient create a new pdAPIClient.
@@ -133,6 +136,7 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		grpcClient:   pdClient,
 		httpClient:   dialClient,
 		pdHttpClient: pdHttpClient,
+		maxRetries:   defaultMaxRetry,
 	}, nil
 }
 
@@ -179,7 +183,7 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 
 		log.Info("Succeed to add meta region label to PD")
 		return nil
-	}, retry.WithMaxTries(defaultMaxRetry),
+	}, retry.WithMaxTries(pc.maxRetries),
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
@@ -279,7 +283,7 @@ func (pc *pdAPIClient) scanRegions(
 				// Because start key is less than end key, there must be some regions.
 				log.Error("fail to scan region, missing region",
 					zap.String("endpoint", endpoint))
-				return nil, cerror.WrapError(cerror.ErrInternalServerError,
+				return nil, errors.WrapError(errors.ErrInternalServerError,
 					fmt.Errorf("fail to scan region, missing region"))
 			}
 			if r[0].StartKey != startKeyHex {
@@ -355,12 +359,8 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 			return err
 		}
 		return nil
-	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
+	}, retry.WithMaxTries(pc.maxRetries), retry.WithIsRetryableErr(func(err error) bool {
+		return !errors.Is(errors.Cause(err), context.Canceled)
 	}))
 	return resp, err
 }

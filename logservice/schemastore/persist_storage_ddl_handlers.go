@@ -22,6 +22,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sqlname"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -96,6 +97,9 @@ type updateFullTableInfoFuncArgs struct {
 type persistStorageDDLHandler struct {
 	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
 	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
+	// enrichPersistedDDLEventFunc supplies the lookup to avoid an initialization cycle between
+	// allDDLHandlers and getTableInfoAtTs, which also uses allDDLHandlers.
+	enrichPersistedDDLEventFunc func(getTableInfo func(int64, uint64) (*common.TableInfo, error), event *PersistedDDLEvent) error
 	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateFullTableInfoFunc update the full table info map according to the ddl event
@@ -112,9 +116,10 @@ type persistStorageDDLHandler struct {
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
-	// NOTE: the tableID is used in exchange table partition and rename tables DDL only,
-	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
-	// For other DDLs, tableID is not used and can be set to 0.
+	// NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
+	// and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
+	// The rename table and eligibility build functions consume it directly; exchange
+	// partition uses it to attach the dispatcher's table state in buildTableDDLEvent.
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
 }
 
@@ -165,31 +170,34 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropColumn: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForNormalDDLOnSingleTable,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForAddIndex,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForAddIndex,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForNormalDDLOnSingleTable,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -219,13 +227,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForTruncateTable,
 	},
 	model.ActionModifyColumn: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForNormalDDLOnSingleTable,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionRebaseAutoID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -354,22 +363,24 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForModifySchemaCharsetAndCollate,
 	},
 	model.ActionAddPrimaryKey: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForNormalDDLOnSingleTable,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropPrimaryKey: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForNormalDDLOnSingleTable,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAlterIndexVisibility: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -381,13 +392,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionExchangeTablePartition: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForExchangePartition,
-		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
-		updateFullTableInfoFunc:    updateFullTableInfoForExchangeTablePartition,
-		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
-		iterateEventTablesFunc:     iterateEventTablesForExchangeTablePartition,
-		extractTableInfoFunc:       extractTableInfoFuncForExchangeTablePartition,
-		buildDDLEventFunc:          buildDDLEventForExchangeTablePartition,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForExchangePartition,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForExchangePartition,
+		updateDDLHistoryFunc:        updateDDLHistoryForExchangeTablePartition,
+		updateFullTableInfoFunc:     updateFullTableInfoForExchangeTablePartition,
+		updateSchemaMetadataFunc:    updateSchemaMetadataForExchangeTablePartition,
+		iterateEventTablesFunc:      iterateEventTablesForExchangeTablePartition,
+		extractTableInfoFunc:        extractTableInfoFuncForExchangeTablePartition,
+		buildDDLEventFunc:           buildDDLEventForExchangeTablePartition,
 	},
 	model.ActionRenameTables: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTables,
@@ -408,13 +420,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 	model.ActionMultiSchemaChange: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForMultiSchemaChange,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc:  buildPersistedDDLEventForMultiSchemaChange,
+		enrichPersistedDDLEventFunc: enrichPersistedDDLEventForReplicationKey,
+		updateDDLHistoryFunc:        updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:     updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:    updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:      iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:        extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:           buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionReorganizePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
@@ -592,7 +605,6 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
-	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -614,24 +626,18 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
-func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent, resolve sqlname.Resolver) error {
 	if event.TableInfo == nil || event.TableInfo.View == nil {
-		return
+		return nil
 	}
-
 	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
-		event.Query,
-		event.TableInfo.View.SelectStmt,
-		event.SchemaName,
+		event.Query, event.TableInfo.View.SelectStmt, event.SchemaName, resolve,
 	)
 	if err != nil {
-		log.Warn("normalize create view query with stored select failed",
-			zap.String("query", event.Query),
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.Error(err))
-		return
+		return err
 	}
 	event.Query = query
+	return nil
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -1220,7 +1226,50 @@ func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 	return args.tableTriggerDDLHistory
 }
 
+func enrichPersistedDDLEventForReplicationKey(getTableInfo func(int64, uint64) (*common.TableInfo, error), event *PersistedDDLEvent) error {
+	if event.TableInfo == nil {
+		return nil
+	}
+	hasKey := common.OriginalHasPKOrNotNullUK(event.TableInfo)
+	switch model.ActionType(event.Type) {
+	case model.ActionAddIndex:
+		if !hasKey {
+			return nil
+		}
+	case model.ActionDropPrimaryKey, model.ActionDropIndex, model.ActionDropColumn:
+		if hasKey {
+			return nil
+		}
+	}
+	// Column and index DDLs preserve physical IDs. Any partition can supply the
+	// pre-DDL schema, since history is indexed by physical rather than logical ID.
+	physicalTableID := event.TableID
+	if isPartitionTable(event.TableInfo) && len(event.TableInfo.Partition.Definitions) > 0 {
+		physicalTableID = event.TableInfo.Partition.Definitions[0].ID
+	}
+	previous, err := getTableInfo(physicalTableID, event.FinishedTs-1)
+	if err != nil {
+		return err
+	}
+	event.TableAcquiredReplicationKey = !previous.HasPKOrNotNullUK && hasKey
+	event.TableLostReplicationKey = previous.HasPKOrNotNullUK && !hasKey
+	if event.TableLostReplicationKey {
+		event.ExtraTableInfo = previous
+	}
+	return nil
+}
+
+func enrichPersistedDDLEventForExchangePartition(getTableInfo func(int64, uint64) (*common.TableInfo, error), event *PersistedDDLEvent) error {
+	// ExtraTableInfo is the normal table schema immediately before exchange.
+	var err error
+	event.ExtraTableInfo, err = getTableInfo(event.TableID, event.FinishedTs-1)
+	return err
+}
+
 func updateDDLHistoryForNormalDDLOnSingleTable(args updateDDLHistoryFuncArgs) []uint64 {
+	if args.ddlEvent.TableAcquiredReplicationKey || args.ddlEvent.TableLostReplicationKey {
+		args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	}
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
@@ -1932,13 +1981,19 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	filtered, notSync := false, false
 	var err error
 	if tableFilter != nil {
+		filterTableInfo := rawEvent.TableInfo
+		if rawEvent.TableLostReplicationKey {
+			// Use the previously replicated schema to admit the removal event.
+			// The resulting DDLEvent must still carry the post-DDL schema and SQL.
+			filterTableInfo = rawEvent.ExtraTableInfo.ToTiDBTableInfo()
+		}
 		filtered, notSync, err = filterDDL(
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
 			rawEvent.Query,
 			model.ActionType(rawEvent.Type),
-			rawEvent.TableInfo,
+			filterTableInfo,
 			rawEvent.StartTs,
 		)
 		if err != nil {
@@ -2240,6 +2295,32 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 }
 
 func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	if rawEvent.TableAcquiredReplicationKey {
+		if tableFilter != nil && !tableFilter.IsForceReplicateEnabled() {
+			// A dispatcher may survive a previous loss of the replication key.
+			// Only the table trigger may execute this DDL and add the table.
+			if tableID != common.DDLSpanTableID {
+				return commonEvent.DDLEvent{}, false, nil
+			}
+			return buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
+		}
+		// A nil filter means no eligibility restriction, not the default config.
+		// Force replication (or no filter) already includes the table. Only its
+		// existing dispatchers should receive the DDL, avoiding duplicate execution.
+		if tableID == common.DDLSpanTableID {
+			return commonEvent.DDLEvent{}, false, nil
+		}
+	}
+	if rawEvent.TableLostReplicationKey {
+		if tableFilter != nil && !tableFilter.IsForceReplicateEnabled() {
+			// Reuse the drop barrier to flush and remove all physical dispatchers.
+			// The event still carries the original ALTER, not a DROP TABLE query.
+			return buildDDLEventForDropTable(rawEvent, tableFilter, tableID)
+		}
+		if tableID == common.DDLSpanTableID {
+			return commonEvent.DDLEvent{}, false, nil
+		}
+	}
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2634,7 +2715,10 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 	return ddlEvent, true, err
 }
 
-func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+// NOTE: the third parameter is the physical table id of the fetching
+// dispatcher. This function ignores it because the post-DDL table info of that
+// table is attached in buildTableDDLEvent.
+func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, _ int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2753,38 +2837,14 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	}
 	// For exchange table partition, we only set NotSync to true when the partition table is filtered.
 	ddlEvent.NotSync = notSyncPartitionTable
+	// The default event (including the DDL trigger) describes the partition table.
+	// Keep the old normal table info for storage sinks to emit its column schema.
+	// A table dispatcher fetch replaces TableInfo with the post-DDL info of its
+	// own physical table in buildTableDDLEvent.
+	ddlEvent.TableInfo = common.WrapTableInfo(rawEvent.ExtraSchemaName, rawEvent.TableInfo)
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
-		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
+		ddlEvent.TableInfo,
 		rawEvent.ExtraTableInfo,
-	}
-	if tableID != 0 {
-		// Here we set TableInfo to the table info of tableID.
-		// First, check whether the tableID is a normal table after exchange.
-		// If false, set TableInfo to rawEvent.TableInfo, because the rawEvent.TableInfo is the partition table info after exchange.
-		// NOTE: ddlEvent.TableInfo is already the rawEvent.TableInfo in buildDDLEventCommon. So we don't need to set it again if false.
-		// If true, set TableInfo to rawEvent.ExtraTableInfo,
-		// because the rawEvent.ExtraTableInfo is the normal table info before exchange,
-		// but the tableID is the normal table after exchange, so we need to get a new TableInfo for it.
-		// NOTE: We can't just check tableID == rawEvent.ExtraTableInfo.TableName.TableID,
-		// because rawEvent.ExtraTableInfo is the table info before exchange,
-		// and the tableID is the table id after exchange.
-		isNormalTableAfterExchange := true
-		for _, id := range physicalIDs {
-			if id == tableID {
-				isNormalTableAfterExchange = false
-				break
-			}
-		}
-		if isNormalTableAfterExchange {
-			ddlEvent.TableInfo = common.NewTableInfo(
-				rawEvent.ExtraSchemaName,
-				parser_model.NewCIStr(rawEvent.ExtraTableName).O,
-				tableID,
-				false,
-				rawEvent.ExtraTableInfo.ShadowCopyColumnSchema(),
-				rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
-			)
-		}
 	}
 	return ddlEvent, true, err
 }
