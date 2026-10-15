@@ -21,8 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-=======
 func TestSinkConfigDateSeparator(t *testing.T) {
 	t.Parallel()
 
@@ -80,7 +78,6 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
->>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078))
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.
 func TestReplicaConfigConversion(t *testing.T) {
