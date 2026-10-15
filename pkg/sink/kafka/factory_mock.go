@@ -36,10 +36,10 @@ func (m *MockFactory) EXPECT() *MockFactoryMockRecorder {
 }
 
 // AdminClient mocks base method.
-func (m *MockFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (m *MockFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AdminClient", ctx)
-	ret0, _ := ret[0].(ClusterAdminClient)
+	ret0, _ := ret[0].(AdminClient)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -66,7 +66,7 @@ func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 }
 
 // MetricsCollector mocks base method.
-func (m *MockFactory) MetricsCollector(adminClient ClusterAdminClient) MetricsCollector {
+func (m *MockFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MetricsCollector", adminClient)
 	ret0, _ := ret[0].(MetricsCollector)
