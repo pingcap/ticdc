@@ -219,7 +219,7 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 				log.Info("Stale Etcd event dropped",
 					zap.Int64("eventRevision", response.Header.GetRevision()),
 					zap.Int64("previousRevision", worker.revision),
-					zap.Any("events", response.Events),
+					zap.Strings("events", etcdEventKeys(response.Events)),
 					zap.String("role", role))
 				continue
 			}
@@ -323,6 +323,16 @@ func isRetryableError(err error) bool {
 	return ok
 }
 
+// etcdEventKeys returns the type and key of each event for logging. Values are
+// omitted as they may contain sensitive information, e.g. the sink URI.
+func etcdEventKeys(events []*clientv3.Event) []string {
+	res := make([]string, 0, len(events))
+	for _, event := range events {
+		res = append(res, event.Type.String()+" "+string(event.Kv.Key))
+	}
+	return res
+}
+
 func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) error {
 	if worker.isDeleteCounterKey(event.Kv.Key) {
 		switch event.Type {
@@ -362,7 +372,7 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 					"owner resign or externally delete operation"+
 					"exit etcd worker and campaign again",
 					zap.String("ownerMetaKey", worker.ownerMetaKey),
-					zap.String("value", string(event.Kv.Value)),
+					zap.String("value", pkgutil.RedactValue(string(event.Kv.Value))),
 					zap.Error(err))
 				return err
 			}
