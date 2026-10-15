@@ -168,6 +168,10 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns false if the status is not changed
 // It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
+	if newStatus == nil {
+		return false, config.StateNormal, nil
+	}
+
 	old := c.status.Load()
 	failpoint.Inject("CoordinatorDontUpdateChangefeedCheckpoint", func() {
 		newStatus.CheckpointTs = old.CheckpointTs
