@@ -69,3 +69,8 @@ run_mockgen -source downstreamadapter/sink/sink.go -destination downstreamadapte
 run_mockgen -source downstreamadapter/sink/topicmanager/topic_manager.go -destination downstreamadapter/sink/topicmanager/topic_manager_mock.go -package topicmanager
 
 wait_for_batch
+
+# Keep the PD client alias stable when mockgen cannot resolve package metadata.
+sed -e 's|client "github.com/tikv/pd/client"|pd "github.com/tikv/pd/client"|' \
+	-e 's/client\.Client/pd.Client/g' pkg/server/mock/server_mock.go >pkg/server/mock/server_mock.go.tmp
+mv pkg/server/mock/server_mock.go.tmp pkg/server/mock/server_mock.go
