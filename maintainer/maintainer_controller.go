@@ -259,8 +259,6 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
-<<<<<<< HEAD
-=======
 
 		if !allowSelfHealing {
 			continue
