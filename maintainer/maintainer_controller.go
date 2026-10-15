@@ -299,7 +299,6 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				}
 			}
 		}
->>>>>>> 3f0a68abf (maintainer: prevent stale spans from reentering scheduler state (#6073))
 	}
 }
 
