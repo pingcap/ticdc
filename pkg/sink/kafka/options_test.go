@@ -250,6 +250,7 @@ func TestApplySASL(t *testing.T) {
 				SASLOAuthClientID:     aws.String("client_id"),
 				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
 				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+				SASLOAuthCA:           aws.String("/etc/ssl/oauth-ca.pem"),
 			},
 			expected: security.SASL{
 				SASLMechanism: security.OAuthMechanism,
@@ -257,6 +258,7 @@ func TestApplySASL(t *testing.T) {
 					ClientID:     "client_id",
 					ClientSecret: "client_secret",
 					TokenURL:     "127.0.0.1:9093/token",
+					CAPath:       "/etc/ssl/oauth-ca.pem",
 					GrantType:    "client_credentials",
 				},
 			},
@@ -308,6 +310,17 @@ func TestApplySASL(t *testing.T) {
 			},
 			expectErr: "OAuth2 is only supported with SASL mechanism type OAUTHBEARER",
 		},
+		{
+			name: "invalid OAUTHBEARER SASL: empty CA path",
+			uri:  baseURI + "?sasl-mechanism=OAUTHBEARER",
+			kafkaConfig: &config.KafkaConfig{
+				SASLOAuthClientID:     aws.String("client_id"),
+				SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+				SASLOAuthTokenURL:     aws.String("127.0.0.1:9093/token"),
+				SASLOAuthCA:           aws.String(""),
+			},
+			expectErr: "OAuth2 CA path cannot be empty",
+		},
 	}
 
 	for _, test := range tests {
@@ -334,6 +347,34 @@ func TestApplySASL(t *testing.T) {
 			require.Equal(t, test.expected, *options.SASL)
 		})
 	}
+}
+
+func TestOAuthCAIsIndependentFromBrokerTLS(t *testing.T) {
+	t.Parallel()
+
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/abc?sasl-mechanism=OAUTHBEARER")
+	require.NoError(t, err)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.KafkaConfig = &config.KafkaConfig{
+		SASLOAuthClientID:     aws.String("client_id"),
+		SASLOAuthClientSecret: aws.String("Y2xpZW50X3NlY3JldA=="),
+		SASLOAuthTokenURL:     aws.String("https://oauth.example.com/token"),
+		SASLOAuthCA:           aws.String("/etc/ssl/oauth-ca.pem"),
+		CA:                    aws.String("/etc/ssl/broker-ca.pem"),
+		Cert:                  aws.String("/etc/ssl/broker-cert.pem"),
+		Key:                   aws.String("/etc/ssl/broker-key.pem"),
+	}
+
+	options := NewOptions()
+	require.NoError(t, options.Apply(
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test"),
+		sinkURI,
+		replicaConfig.Sink,
+	))
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", options.SASL.OAuth2.CAPath)
+	require.Equal(t, "/etc/ssl/broker-ca.pem", options.Credential.CAPath)
+	require.Equal(t, "/etc/ssl/broker-cert.pem", options.Credential.CertPath)
+	require.Equal(t, "/etc/ssl/broker-key.pem", options.Credential.KeyPath)
 }
 
 func TestApplyTLS(t *testing.T) {

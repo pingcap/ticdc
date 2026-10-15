@@ -76,6 +76,9 @@ func TestTomlFileToApiModel(t *testing.T) {
 	content := `
 	[filter]
 	rules = ['*.*', '!test.*']
+
+	[sink.kafka-config]
+	sasl-oauth-ca = "/etc/ssl/oauth-ca.pem"
 `
 	err := os.WriteFile(path, []byte(content), 0o644)
 	require.Nil(t, err)
@@ -86,7 +89,10 @@ func TestTomlFileToApiModel(t *testing.T) {
 	err = o.strictDecodeConfig("cdc", cfg)
 	require.Nil(t, err)
 	apiModel := v2.ToAPIReplicaConfig(cfg)
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", *cfg.Sink.KafkaConfig.SASLOAuthCA)
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", *apiModel.Sink.KafkaConfig.SASLOAuthCA)
 	cfg2 := apiModel.ToInternalReplicaConfig()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", *cfg2.Sink.KafkaConfig.SASLOAuthCA)
 	cfgBuf, err := json.MarshalIndent(cfg, "", "  ")
 	require.NoError(t, err)
 	cfg2Buf, err := json.MarshalIndent(cfg2, "", "  ")
