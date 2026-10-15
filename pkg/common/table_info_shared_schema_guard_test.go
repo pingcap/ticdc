@@ -86,6 +86,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"Revision", "DBID",
 				// These table-level storage settings do not affect the shared column schema.
 				"Mode",
+				"MaterializedView", "MaterializedViewBase", "MaterializedViewLog", "MaterializedViewShadow",
 			},
 		},
 		{
