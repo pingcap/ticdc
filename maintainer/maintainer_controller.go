@@ -259,7 +259,7 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
-		}
+	}
 }
 
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
