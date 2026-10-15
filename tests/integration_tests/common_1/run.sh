@@ -71,6 +71,12 @@ EOF
 	check_table_exists common_1.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
+	# sync-diff-inspector compares JSON values but does not verify their numeric types.
+	# A whole-number double must remain a DOUBLE instead of becoming an INTEGER.
+	run_sql "SELECT JSON_TYPE(JSON_EXTRACT(t_json, '$.whole_number')) AS whole_number_type, JSON_TYPE(JSON_EXTRACT(t_json, '$.fractional_number')) AS fractional_number_type FROM common_1.cdc_multi_data_type WHERE JSON_CONTAINS_PATH(t_json, 'one', '$.whole_number');" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "whole_number_type: DOUBLE"
+	check_contains "fractional_number_type: DOUBLE"
+
 	cleanup_process $CDC_BINARY
 }
 

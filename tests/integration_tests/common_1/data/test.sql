@@ -68,6 +68,14 @@ VALUES ('{
   "key2": "value2"
 }');
 
+-- Make sure TiCDC preserves JSON numbers encoded as doubles even when they
+-- have no fractional part. See https://github.com/pingcap/ticdc/issues/6547.
+INSERT INTO cdc_multi_data_type(t_json)
+VALUES ('{
+  "whole_number": 2500.0,
+  "fractional_number": 1.5
+}');
+
 -- view test
 
 CREATE TABLE t1
