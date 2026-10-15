@@ -34,6 +34,7 @@ import (
 type SharedInfo struct {
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
+	lowLatencyMode       bool
 	timezone             string
 	bdrMode              bool
 	outputRawChangeEvent bool
@@ -54,6 +55,10 @@ type SharedInfo struct {
 	// If true, we need to check whether a DDL event received by a split dispatcher
 	// will break the splittability of this table.
 	enableSplittableCheck bool
+
+	// Normal event dispatchers inherit these shared batch defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
 
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
@@ -82,6 +87,7 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
+	lowLatencyMode bool,
 	timezone string,
 	bdrMode bool,
 	outputRawChangeEvent bool,
@@ -90,26 +96,31 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	router routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusBufferSize int,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		enableSplittableCheck: enableSplittableCheck,
-		router:                router,
-		statusesChan:          statusesChan,
-		blockStatusBuffer:     NewBlockStatusBuffer(blockStatusBufferSize),
-		blockExecutor:         newBlockEventExecutor(),
-		errCh:                 errCh,
-		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		changefeedID:             changefeedID,
+		lowLatencyMode:           lowLatencyMode,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		router:                   router,
+		statusesChan:             statusesChan,
+		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
+		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -134,6 +145,14 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) IsLowLatencyMode() bool {
+	return d.sharedInfo.lowLatencyMode
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
@@ -174,10 +193,6 @@ func (d *BasicDispatcher) GetTimezone() string {
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
-}
-
-func (d *BasicDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
-	return d.sink.SinkType() == common.KafkaSinkType
 }
 
 func (d *BasicDispatcher) GetRouter() routing.Router {

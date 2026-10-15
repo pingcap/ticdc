@@ -27,7 +27,7 @@ function run() {
 
 	run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server1
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server1
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" | grep '^ID:' | head -n1 | awk '{print $2}')
@@ -35,15 +35,21 @@ function run() {
 	run_sql_file $CUR/data/create.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "partition_table2.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	sleep 5
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "partition_table.server1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "partition_table.server2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server2
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server2
 
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# to ensure row changed events have been replicated to TiCDC
 	sleep 120
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "partition_table.server1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "partition_table.server2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	storage_path="file://$WORK_DIR/redo"

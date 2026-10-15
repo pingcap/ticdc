@@ -199,14 +199,17 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota           *uint64 `json:"memory_quota,omitempty"`
-	CaseSensitive         *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate        *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint      *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	PerformanceMode          *string `json:"performance_mode,omitempty"`
+	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
+	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
+	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
+	CaseSensitive            *bool   `json:"case_sensitive,omitempty"`
+	ForceReplicate           *bool   `json:"force_replicate,omitempty"`
+	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty"`
+	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty"`
+	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
+	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
+	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
@@ -233,8 +236,17 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
+	}
+	if c.EventCollectorBatchCount != nil {
+		res.EventCollectorBatchCount = c.EventCollectorBatchCount
+	}
+	if c.EventCollectorBatchBytes != nil {
+		res.EventCollectorBatchBytes = c.EventCollectorBatchBytes
 	}
 	if c.CaseSensitive != nil {
 		res.CaseSensitive = c.CaseSensitive
@@ -287,6 +299,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		if c.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = c.Consistent.MetaFlushIntervalInMs
+		}
+		if c.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = c.Consistent.EventCollectorBatchCount
 		}
 		if c.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = c.Consistent.EncodingWorkerNum
@@ -371,9 +386,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			}
 			if c.Sink.PulsarConfig.OAuth2 != nil {
 				pulsarConfig.OAuth2 = &config.OAuth2{
-					OAuth2IssuerURL:  c.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL,
+					OAuth2IssuerURL:  util.GetOrZero(c.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL),
 					OAuth2Audience:   c.Sink.PulsarConfig.OAuth2.OAuth2Audience,
-					OAuth2PrivateKey: c.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey,
+					OAuth2PrivateKey: util.GetOrZero(c.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey),
 					OAuth2ClientID:   c.Sink.PulsarConfig.OAuth2.OAuth2ClientID,
 					OAuth2Scope:      c.Sink.PulsarConfig.OAuth2.OAuth2Scope,
 				}
@@ -401,7 +416,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				largeMessageHandle = &config.LargeMessageHandleConfig{
 					LargeMessageHandleOption:      oldConfig.LargeMessageHandleOption,
 					LargeMessageHandleCompression: oldConfig.LargeMessageHandleCompression,
-					ClaimCheckStorageURI:          oldConfig.ClaimCheckStorageURI,
+					ClaimCheckStorageURI:          util.GetOrZero(oldConfig.ClaimCheckStorageURI),
 					ClaimCheckRawValue:            oldConfig.ClaimCheckRawValue,
 				}
 			}
@@ -411,9 +426,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				glueSchemaRegistryConfig = &config.GlueSchemaRegistryConfig{
 					RegistryName:    c.Sink.KafkaConfig.GlueSchemaRegistryConfig.RegistryName,
 					Region:          c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Region,
-					AccessKey:       c.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey,
-					SecretAccessKey: c.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey,
-					Token:           c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
+					AccessKey:       util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey),
+					SecretAccessKey: util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey),
+					Token:           util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
 
@@ -639,14 +654,17 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
-		MemoryQuota:           cloned.MemoryQuota,
-		CaseSensitive:         cloned.CaseSensitive,
-		ForceReplicate:        cloned.ForceReplicate,
-		IgnoreIneligibleTable: cloned.IgnoreIneligibleTable,
-		CheckGCSafePoint:      cloned.CheckGCSafePoint,
-		EnableSyncPoint:       cloned.EnableSyncPoint,
-		EnableTableMonitor:    cloned.EnableTableMonitor,
-		BDRMode:               cloned.BDRMode,
+		PerformanceMode:          cloned.PerformanceMode,
+		MemoryQuota:              cloned.MemoryQuota,
+		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
+		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
+		CaseSensitive:            cloned.CaseSensitive,
+		ForceReplicate:           cloned.ForceReplicate,
+		IgnoreIneligibleTable:    cloned.IgnoreIneligibleTable,
+		CheckGCSafePoint:         cloned.CheckGCSafePoint,
+		EnableSyncPoint:          cloned.EnableSyncPoint,
+		EnableTableMonitor:       cloned.EnableTableMonitor,
+		BDRMode:                  cloned.BDRMode,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -723,7 +741,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				largeMessageHandle = &LargeMessageHandleConfig{
 					LargeMessageHandleOption:      oldConfig.LargeMessageHandleOption,
 					LargeMessageHandleCompression: oldConfig.LargeMessageHandleCompression,
-					ClaimCheckStorageURI:          oldConfig.ClaimCheckStorageURI,
+					ClaimCheckStorageURI:          util.AddressOf(oldConfig.ClaimCheckStorageURI),
 					ClaimCheckRawValue:            oldConfig.ClaimCheckRawValue,
 				}
 			}
@@ -733,9 +751,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				glueSchemaRegistryConfig = &GlueSchemaRegistryConfig{
 					RegistryName:    cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.RegistryName,
 					Region:          cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Region,
-					AccessKey:       cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey,
-					SecretAccessKey: cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey,
-					Token:           cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
+					AccessKey:       util.AddressOf(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey),
+					SecretAccessKey: util.AddressOf(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey),
+					Token:           util.AddressOf(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
 
@@ -823,9 +841,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			}
 			if cloned.Sink.PulsarConfig.OAuth2 != nil {
 				pulsarConfig.OAuth2 = &PulsarOAuth2{
-					OAuth2IssuerURL:  cloned.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL,
+					OAuth2IssuerURL:  util.AddressOf(cloned.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL),
 					OAuth2Audience:   cloned.Sink.PulsarConfig.OAuth2.OAuth2Audience,
-					OAuth2PrivateKey: cloned.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey,
+					OAuth2PrivateKey: util.AddressOf(cloned.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey),
 					OAuth2ClientID:   cloned.Sink.PulsarConfig.OAuth2.OAuth2ClientID,
 					OAuth2Scope:      cloned.Sink.PulsarConfig.OAuth2.OAuth2Scope,
 				}
@@ -925,6 +943,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 		if cloned.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = cloned.Consistent.MetaFlushIntervalInMs
+		}
+		if cloned.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = cloned.Consistent.EventCollectorBatchCount
 		}
 		if cloned.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = cloned.Consistent.EncodingWorkerNum
@@ -1050,11 +1071,10 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
-	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
+	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
+	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
+	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
+	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule
@@ -1066,7 +1086,6 @@ func (e EventFilterRule) ToInternalEventFilterRule() *config.EventFilterRule {
 		IgnoreUpdateNewValueExpr: &e.IgnoreUpdateNewValueExpr,
 		IgnoreUpdateOldValueExpr: &e.IgnoreUpdateOldValueExpr,
 		IgnoreDeleteValueExpr:    &e.IgnoreDeleteValueExpr,
-		IgnoreUpdateOnlyColumns:  e.IgnoreUpdateOnlyColumns,
 	}
 	if len(e.IgnoreEvent) != 0 {
 		res.IgnoreEvent = make([]bf.EventType, len(e.IgnoreEvent))
@@ -1084,10 +1103,6 @@ func ToAPIEventFilterRule(er *config.EventFilterRule) EventFilterRule {
 		IgnoreUpdateNewValueExpr: util.GetOrZero(er.IgnoreUpdateNewValueExpr),
 		IgnoreUpdateOldValueExpr: util.GetOrZero(er.IgnoreUpdateOldValueExpr),
 		IgnoreDeleteValueExpr:    util.GetOrZero(er.IgnoreDeleteValueExpr),
-	}
-	if len(er.IgnoreUpdateOnlyColumns) != 0 {
-		res.IgnoreUpdateOnlyColumns = make([]string, len(er.IgnoreUpdateOnlyColumns))
-		copy(res.IgnoreUpdateOnlyColumns, er.IgnoreUpdateOnlyColumns)
 	}
 	if len(er.Matcher) != 0 {
 		res.Matcher = make([]string, len(er.Matcher))
@@ -1164,10 +1179,10 @@ type CSVConfig struct {
 // LargeMessageHandleConfig denotes the large message handling config
 // This is the same as config.LargeMessageHandleConfig
 type LargeMessageHandleConfig struct {
-	LargeMessageHandleOption      string `json:"large_message_handle_option"`
-	LargeMessageHandleCompression string `json:"large_message_handle_compression"`
-	ClaimCheckStorageURI          string `json:"claim_check_storage_uri"`
-	ClaimCheckRawValue            bool   `json:"claim_check_raw_value"`
+	LargeMessageHandleOption      string  `json:"large_message_handle_option" toml:"large-message-handle-option"`
+	LargeMessageHandleCompression string  `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
+	ClaimCheckStorageURI          *string `json:"claim_check_storage_uri,omitempty" toml:"claim-check-storage-uri,omitempty"`
+	ClaimCheckRawValue            bool    `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
 }
 
 // DispatchRule represents partition rule for a table
@@ -1205,18 +1220,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string `json:"level,omitempty"`
-	MaxLogSize            *int64  `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64  `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64  `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int    `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int    `json:"flush_worker_num,omitempty"`
-	Storage               *string `json:"storage,omitempty"`
-	UseFileBackend        *bool   `json:"use_file_backend,omitempty"`
-	Compression           *string `json:"compression,omitempty"`
-	FlushConcurrency      *int    `json:"flush_concurrency,omitempty"`
+	Level                 *string                `json:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
+	Storage               *string                `json:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
 
-	MemoryUsage *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.
@@ -1345,6 +1361,110 @@ func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
 	return cloned, err
 }
 
+// CloneWithMaskedSensitiveData returns a clone safe for user-visible output.
+func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, error) {
+	cloned, err := info.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	cloned.Config.maskSensitiveData()
+	return cloned, nil
+}
+
+// omitSensitiveData keeps credentials out of API responses. Omitted fields are
+// retained from stored configuration when applying an update, so display masks
+// never enter read-modify-update requests as replacement credentials.
+func (c *ReplicaConfig) omitSensitiveData() {
+	if c == nil {
+		return
+	}
+	omitURI := func(field **string) {
+		if *field != nil && util.ContainsSensitiveDataInURI(**field) {
+			*field = nil
+		}
+	}
+	if c.Consistent != nil {
+		omitURI(&c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+	omitURI(&c.Sink.SchemaRegistry)
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		kafka.SASLPassword = nil
+		kafka.SASLGssAPIPassword = nil
+		kafka.SASLOAuthClientSecret = nil
+		kafka.Key = nil
+		omitURI(&kafka.SASLOAuthTokenURL)
+		if large := kafka.LargeMessageHandle; large != nil {
+			omitURI(&large.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			glue.AccessKey = nil
+			glue.SecretAccessKey = nil
+			glue.Token = nil
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		pulsar.AuthenticationToken = nil
+		pulsar.BasicPassword = nil
+		if pulsar.OAuth2 != nil {
+			pulsar.OAuth2.OAuth2PrivateKey = nil
+			omitURI(&pulsar.OAuth2.OAuth2IssuerURL)
+		}
+	}
+}
+
+// maskSensitiveData masks configured API fields without populating omitted fields.
+func (c *ReplicaConfig) maskSensitiveData() {
+	if c == nil {
+		return
+	}
+	if c.Consistent != nil && c.Consistent.Storage != nil {
+		*c.Consistent.Storage = util.MaskSensitiveDataInURI(*c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+
+	if c.Sink.SchemaRegistry != nil {
+		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
+	}
+	var sensitiveFields []*string
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		sensitiveFields = append(sensitiveFields,
+			kafka.SASLPassword,
+			kafka.SASLGssAPIPassword,
+			kafka.SASLOAuthClientSecret,
+			kafka.Key)
+		if kafka.SASLOAuthTokenURL != nil {
+			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
+		}
+		if large := kafka.LargeMessageHandle; large != nil && large.ClaimCheckStorageURI != nil {
+			*large.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(*large.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			sensitiveFields = append(sensitiveFields, glue.AccessKey, glue.SecretAccessKey, glue.Token)
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		sensitiveFields = append(sensitiveFields, pulsar.AuthenticationToken, pulsar.BasicPassword)
+		if pulsar.OAuth2 != nil {
+			sensitiveFields = append(sensitiveFields, pulsar.OAuth2.OAuth2PrivateKey)
+			if pulsar.OAuth2.OAuth2IssuerURL != nil {
+				*pulsar.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(*pulsar.OAuth2.OAuth2IssuerURL)
+			}
+		}
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = config.MaskedSensitiveValue
+		}
+	}
+}
+
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
@@ -1423,11 +1543,11 @@ type PulsarConfig struct {
 
 // PulsarOAuth2 is the configuration for OAuth2
 type PulsarOAuth2 struct {
-	OAuth2IssuerURL  string `json:"oauth2-issuer-url,omitempty"`
-	OAuth2Audience   string `json:"oauth2-audience,omitempty"`
-	OAuth2PrivateKey string `json:"oauth2-private-key,omitempty"`
-	OAuth2ClientID   string `json:"oauth2-client-id,omitempty"`
-	OAuth2Scope      string `json:"oauth2-scope,omitempty"`
+	OAuth2IssuerURL  *string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
+	OAuth2Audience   string  `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
+	OAuth2PrivateKey *string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
+	OAuth2ClientID   string  `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
+	OAuth2Scope      string  `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
 }
 
 // KafkaConfig represents a kafka sink configuration
@@ -1521,10 +1641,10 @@ type GlueSchemaRegistryConfig struct {
 	// Region of the schema registry
 	Region string `json:"region"`
 	// AccessKey of the schema registry
-	AccessKey string `json:"access_key,omitempty"`
+	AccessKey *string `json:"access_key,omitempty" toml:"access-key,omitempty"`
 	// SecretAccessKey of the schema registry
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	Token           string `json:"token,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
+	Token           *string `json:"token,omitempty" toml:"token,omitempty"`
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding

@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -64,7 +65,8 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to parse sink-uri",
-			zap.String("url", info.SinkURI), zap.Error(err))
+			zap.String("url", util.MaskSensitiveDataInURIForError(info.SinkURI)),
+			zap.Error(util.MaskSensitiveDataInURLError(err)))
 	}
 	res := &Changefeed{
 		ID:                       cfID,
@@ -175,16 +177,13 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		newStatus.CheckpointTs = old.CheckpointTs
 	})
 
-	if newStatus.CheckpointTs < old.CheckpointTs {
-		if len(newStatus.Err) == 0 {
-			return false, config.StateNormal, nil
+	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
+		// Bootstrap completion survives maintainer replacement until an explicit resume.
+		if old.BootstrapDone && !newStatus.BootstrapDone {
+			statusWithBootstrapDone := *newStatus
+			statusWithBootstrapDone.BootstrapDone = true
+			newStatus = &statusWithBootstrapDone
 		}
-		statusWithMonotonicCheckpoint := *newStatus
-		statusWithMonotonicCheckpoint.CheckpointTs = old.CheckpointTs
-		newStatus = &statusWithMonotonicCheckpoint
-	}
-
-	if newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
 
 		changed, state, err := c.backoff.checkFailedStatus(newStatus)
@@ -192,7 +191,9 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			return changed, state, err
 		}
 
-		if old.BootstrapDone != newStatus.BootstrapDone {
+		if !old.BootstrapDone && newStatus.BootstrapDone {
+			// Record accepted progress before returning without CheckStatus.
+			c.backoff.checkpointTs = newStatus.CheckpointTs
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
