@@ -838,3 +838,5 @@ func TestGetResolvedTargetTs(t *testing.T) {
 	require.Equal(t, uint64(0), targetTs5,
 		"targetTs should be 0 when currentTime - resolvedTime < resolveLockFence")
 }
+
+func (s *mockDynamicStream) CheckMemoryPressure() {}

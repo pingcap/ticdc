@@ -36,12 +36,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
+	pendingSyncPointTs       uint64
+	mode                     int64
 	id                       common.DispatcherID
 	tableSpan                *heartbeatpb.TableSpan
 	handle                   func(commonEvent.Event)
@@ -63,7 +66,7 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 }
 
 func (m *mockEventDispatcher) GetMode() int64 {
-	return common.DefaultMode
+	return m.mode
 }
 
 func (m *mockEventDispatcher) GetStartTs() uint64 {
@@ -688,4 +691,40 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 
 	require.Equal(t, totalDML, sumDML)
 	require.Equal(t, 1, maxBatch)
+}
+
+func (m *mockEventDispatcher) GetPendingSyncPointTs() uint64 { return m.pendingSyncPointTs }
+
+func TestSyncPointQuotaUsesCurrentState(t *testing.T) {
+	c := &EventCollector{ds: NewEventDynamicStream(false), redoDs: NewEventDynamicStream(true)}
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+	cf := common.NewChangefeedID4Test("default", "syncpoint-quota")
+	c.changefeedMap.Store(cf.ID(), newChangefeedStat(cf))
+	blocked := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf, pendingSyncPointTs: 100}
+	lagging := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
+	for _, target := range []*mockEventDispatcher{blocked, lagging} {
+		stat := newDispatcherStat(target, c, nil)
+		markSessionReceiving(stat.session, "broker")
+		c.dispatcherMap.Store(target.id, stat)
+		require.NoError(t, c.ds.AddPath(target.id, stat, dynstream.NewAreaSettingsWithMaxPendingSize(1<<20, dynstream.MemoryControlForEventCollector, "test")))
+	}
+	available := func() commonEvent.AvailableMemory {
+		msgs := c.newCongestionControlMessages()
+		require.Contains(t, msgs, node.ID("broker"))
+		entries := msgs["broker"].GetAvailables()
+		require.Len(t, entries, 1)
+		return entries[0]
+	}
+	before := available()
+	require.Zero(t, before.DispatcherAvailable[blocked.id])
+	require.Positive(t, before.DispatcherAvailable[lagging.id])
+	// Clearing S and immediately entering S+I must never replay a saved quota.
+	blocked.pendingSyncPointTs = 200
+	require.Zero(t, available().DispatcherAvailable[blocked.id])
+	blocked.pendingSyncPointTs = 0
+	after := available()
+	require.Positive(t, after.DispatcherAvailable[blocked.id])
+	require.Equal(t, before.Available, after.Available, "barrier pause must not change shared physical quota")
+	require.Equal(t, before.DispatcherAvailable[lagging.id], after.DispatcherAvailable[lagging.id])
 }

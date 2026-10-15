@@ -2450,3 +2450,5 @@ func TestUpdateTableInfoByDDLStateChange(t *testing.T) {
 		})
 	}
 }
+
+func (m *mockDispatcher) GetPendingSyncPointTs() uint64 { return 0 }
