@@ -171,7 +171,6 @@ func (s *basicScheduler) schedule(
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-<<<<<<< HEAD
 		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(
 			s.spanController,
 			replication,
@@ -179,9 +178,6 @@ func (s *basicScheduler) schedule(
 			heartbeatpb.OperatorType_O_Add,
 			s.operatorController.MaintainerEpoch(),
 		))
-=======
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	})
 	return len(absentReplications)
 }

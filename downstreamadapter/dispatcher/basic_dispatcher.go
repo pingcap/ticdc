@@ -1150,7 +1150,6 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.offerBlockStatus(status)
 }
 
-<<<<<<< HEAD
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		failpoint.Inject("BlockOrWaitBeforeFlush", nil)
@@ -1170,13 +1169,6 @@ func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEve
 // maintainer-side metadata updates through a separate ACK path; after maintainer
 // failover, those updates are reconstructed from the table trigger dispatcher's
 // startTs and the current route snapshot rather than from bootstrap block state.
-=======
-// GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
-//
-// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
-// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
-// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -1209,10 +1201,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	failpoint.Inject("NotReadyToCloseDispatcher", func() {
 		failpoint.Return(w, false)
 	})
-<<<<<<< HEAD
 	addTableCheckpointBlockerEmpty := d.addTableCheckpointBlocker == nil || d.addTableCheckpointBlocker.empty()
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && addTableCheckpointBlockerEmpty && !d.duringHandleEvents.Load()) {

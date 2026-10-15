@@ -132,7 +132,6 @@ func (c *Controller) FinishBootstrap(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-<<<<<<< HEAD
 	}
 
 	// Restore merge operators after task state is rebuilt from bootstrap spans/operators.
@@ -146,8 +145,6 @@ func (c *Controller) FinishBootstrap(
 	}
 	if err := c.restoreCurrentMergeOperators(allNodesResp, mergeTableSplitMaps); err != nil {
 		return nil, errors.Trace(err)
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	}
 
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
@@ -272,11 +269,7 @@ func (c *Controller) processTableSpans(
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
 	replicaSets := spanController.GetTasksByTableID(table.TableID)
-<<<<<<< HEAD
 	isTableSpanExists := len(replicaSets) > 0
-=======
-	isTableSpanExists := replicaSets != nil && len(replicaSets) > 0
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 	// During bootstrap we have two sources of "table already exists" information:
 	//   - workingTaskMap: dispatchers reported by dispatcher managers (bootstrap snapshots resp.Spans).
@@ -312,11 +305,7 @@ func (c *Controller) processTableSpans(
 
 		if c.enableTableAcrossNodes {
 			if !isTableWorking && tableSpans == nil {
-<<<<<<< HEAD
 				tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](lessBootstrapTableSpan)
-=======
-				tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 			}
 			if isTableSpanExists {
 				for _, replicaSet := range replicaSets {
@@ -380,19 +369,7 @@ func buildTableSplitMap(tables []commonEvent.Table) map[int64]bool {
 	for _, tbl := range tables {
 		tableSplitMap[tbl.TableID] = tbl.Splitable
 	}
-<<<<<<< HEAD
 	return tableSplitMap
-=======
-	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, mode)
-	// Restore current working operators first so spanController reflects "in-flight scheduling intent"
-	// captured by dispatcher managers. This avoids bootstrap creating duplicate tasks for a dispatcherID
-	// that is already being created/removed by a previous maintainer instance.
-	if err := c.restoreCurrentWorkingOperators(allNodesResp, tableSplitMap, mode); err != nil {
-		return nil, nil, err
-	}
-	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, mode)
-	return workingTaskMap, schemaInfos, nil
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
@@ -1080,7 +1057,6 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 	replicaSet *replica.SpanReplication,
 	tableSplitMap map[int64]bool,
 ) error {
-<<<<<<< HEAD
 	splitable, tableExists := tableSplitMap[span.TableID]
 	if !tableExists {
 		// The bootstrap schema-store snapshot is already taken at startTs. If the table is absent there,
@@ -1095,8 +1071,6 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 		return nil
 	}
 
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already contains
 	// the dispatcher (or maintainer already bound the span), treat it as done.
 	if spanInfo != nil {
@@ -1122,11 +1096,7 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 			span,
 			req.Config.StartTs,
 			req.Config.Mode,
-<<<<<<< HEAD
 			spanController.ShouldEnableSplit(splitable),
-=======
-			spanController.ShouldEnableSplit(tableSplitMap[span.TableID]),
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		)
 		spanController.AddAbsentReplicaSet(replicaSet)
 	}
@@ -1169,23 +1139,15 @@ func (c *Controller) restoreCurrentWorkingRemoveAction(
 		replicaSet.SetNodeID(nodeID)
 	}
 
-<<<<<<< HEAD
 	_, tableExists := tableSplitMap[span.TableID]
 	if err := c.handleCurrentWorkingRemove(req, spanController, replicaSet, nodeID, resp, tableExists); err != nil {
-=======
-	if err := c.handleCurrentWorkingRemove(req, spanController, replicaSet, nodeID, resp); err != nil {
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		return err
 	}
 
 	// If the table is already dropped (not present in schema store at startTs), keep the remove operator so the
 	// runtime dispatcher can be cleaned up, but remove the task to avoid rescheduling a table that no longer exists.
 	if req.OperatorType == heartbeatpb.OperatorType_O_Remove {
-<<<<<<< HEAD
 		if !tableExists {
-=======
-		if _, ok := tableSplitMap[span.TableID]; !ok {
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 			spanController.RemoveReplicatingSpan(replicaSet)
 		}
 	}
@@ -1213,7 +1175,6 @@ func (c *Controller) handleCurrentWorkingAdd(
 	// 3. If the original operator is split, which is a remove + add + add...,
 	// same as move, just finish the add part.
 	case heartbeatpb.OperatorType_O_Add, heartbeatpb.OperatorType_O_Move, heartbeatpb.OperatorType_O_Split:
-<<<<<<< HEAD
 		operatorController := c.getOperatorController(req.Config.Mode)
 		op := operator.NewAddDispatcherOperator(
 			spanController,
@@ -1222,10 +1183,6 @@ func (c *Controller) handleCurrentWorkingAdd(
 			heartbeatpb.OperatorType_O_Add,
 			operatorController.MaintainerEpoch(),
 		)
-=======
-		op := operator.NewAddDispatcherOperator(spanController, replicaSet, node, heartbeatpb.OperatorType_O_Add)
-		operatorController := c.getOperatorController(req.Config.Mode)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		if ok := operatorController.AddOperator(op); !ok {
 			log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
 				zap.String("nodeID", node.String()),
@@ -1247,10 +1204,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 	replicaSet *replica.SpanReplication,
 	node node.ID,
 	resp *heartbeatpb.MaintainerBootstrapResponse,
-<<<<<<< HEAD
 	tableExists bool,
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 ) error {
 	operatorController := c.getOperatorController(req.Config.Mode)
 	// handleCurrentWorkingRemove translates a bootstrap Remove request back into a maintainer-side operator.
@@ -1264,7 +1218,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 	switch req.OperatorType {
 	// 1. If the original operator is remove, just finish it directly by adding a new remove operator.
 	case heartbeatpb.OperatorType_O_Remove:
-<<<<<<< HEAD
 		var postFinish func()
 		if tableExists {
 			// The reported dispatcher is temporary coverage while its restored remove is active. A terminal
@@ -1275,18 +1228,12 @@ func (c *Controller) handleCurrentWorkingRemove(
 				c.repairBootstrapTableCoverage(replicaSet)
 			}
 		}
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		op := operator.NewRemoveDispatcherOperator(
 			spanController,
 			replicaSet,
 			heartbeatpb.OperatorType_O_Remove,
-<<<<<<< HEAD
 			operatorController.MaintainerEpoch(),
 			postFinish,
-=======
-			nil,
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		)
 		if ok := operatorController.AddOperator(op); !ok {
 			log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
@@ -1307,10 +1254,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 			spanController,
 			replicaSet,
 			req.OperatorType,
-<<<<<<< HEAD
 			operatorController.MaintainerEpoch(),
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 			func() { // post finish
 				// Mark the span absent only if it still exists. A concurrent DDL may have already removed it,
 				// and we must not reintroduce a ghost entry into spanController.
@@ -1333,7 +1277,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 	}
 	return nil
 }
-<<<<<<< HEAD
 
 // restoreCurrentMergeOperators rebuilds maintainer-side merge operators from bootstrap snapshots.
 //
@@ -1781,5 +1724,3 @@ func buildMergedSpanFromReplicas(
 		KeyspaceID: keyspaceID,
 	}, schemaID, minCheckpoint, true
 }
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))

@@ -67,7 +67,6 @@ func NewRemoveDispatcherOperator(
 	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	operatorType heartbeatpb.OperatorType,
-<<<<<<< HEAD
 	maintainerEpoch uint64,
 	postFinish func(),
 ) *removeDispatcherOperator {
@@ -79,27 +78,6 @@ func NewRemoveDispatcherOperator(
 		operatorType:    operatorType,
 		maintainerEpoch: maintainerEpoch,
 		sendThrottler:   newSendThrottler(),
-=======
-	postFinish func(),
-) *removeDispatcherOperator {
-	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		postFinish:     postFinish,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
-	}
-}
-
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, operatorType heartbeatpb.OperatorType) *removeDispatcherOperator {
-	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	}
 }
 
@@ -134,11 +112,7 @@ func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 
-<<<<<<< HEAD
 	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType, m.maintainerEpoch)
-=======
-	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.

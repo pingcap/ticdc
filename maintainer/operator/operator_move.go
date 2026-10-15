@@ -160,15 +160,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 	switch m.state {
 	case moveStateAddDest:
-<<<<<<< HEAD
 		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
 	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
 		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
-=======
-		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move)
-	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
-		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	default:
 		return nil
 	}

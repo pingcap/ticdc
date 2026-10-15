@@ -173,7 +173,6 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
 	return &e.currentOperatorMap
 }
-<<<<<<< HEAD
 
 // IsRedoEnabled reports whether redo is configured for the changefeed.
 func (e *DispatcherManager) IsRedoEnabled() bool {
@@ -188,5 +187,3 @@ func (e *DispatcherManager) IsRedoReady() bool {
 		e.redoDispatcherMap != nil &&
 		e.redoSchemaIDToDispatchers != nil
 }
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))

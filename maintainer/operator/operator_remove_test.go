@@ -28,11 +28,7 @@ import (
 func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-<<<<<<< HEAD
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
-=======
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()
@@ -59,11 +55,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-<<<<<<< HEAD
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
-=======
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	spanController.MarkSpanAbsent(replicaSet)
@@ -85,11 +77,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-<<<<<<< HEAD
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
-=======
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	waitingMergeStatus := &heartbeatpb.TableSpanStatus{
@@ -112,11 +100,7 @@ func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-<<<<<<< HEAD
 	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
-=======
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	removedStatus := &heartbeatpb.TableSpanStatus{

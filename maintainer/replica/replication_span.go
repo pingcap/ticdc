@@ -242,7 +242,6 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-<<<<<<< HEAD
 // BindCommittedCheckpointTs attaches the controller owned committed checkpoint to this span.
 func (r *SpanReplication) BindCommittedCheckpointTs(committedCheckpointTs *atomic.Uint64) {
 	r.committedCheckpointTs = committedCheckpointTs
@@ -255,23 +254,17 @@ func (r *SpanReplication) getCommittedCheckpointTs() uint64 {
 	return r.committedCheckpointTs.Load()
 }
 
-=======
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 // NewAddDispatcherMessage creates a ScheduleDispatcherRequest(Create) for this span.
 //
 // The StartTs in the request is usually the span checkpoint. However, when a dispatcher is being
 // moved/recreated during an in-flight barrier (DDL or syncpoint), starting from the raw checkpoint can
 // violate barrier semantics (e.g. replaying events that have already been acknowledged by the barrier),
 // so we adjust StartTs and (for DDL) optionally skip DML at StartTs+1.
-<<<<<<< HEAD
 func (r *SpanReplication) NewAddDispatcherMessage(
 	server node.ID,
 	operatorType heartbeatpb.OperatorType,
 	maintainerEpoch uint64,
 ) *messaging.TargetMessage {
-=======
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
 	ddlBarrierBlockTs := uint64(0)
@@ -341,37 +334,26 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				SkipDMLAsStartTs: skipDMLAsStartTs,
 				Mode:             r.GetMode(),
 			},
-<<<<<<< HEAD
 			ScheduleAction:  heartbeatpb.ScheduleAction_Create,
 			OperatorType:    operatorType,
 			MaintainerEpoch: maintainerEpoch,
-=======
-			ScheduleAction: heartbeatpb.ScheduleAction_Create,
-			OperatorType:   operatorType,
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		})
 }
 
 // NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for this span.
 // Span and OperatorType are included so a new maintainer can reconstruct intent during bootstrap/failover,
 // even if the dispatcher has already disappeared from the node span snapshot.
-<<<<<<< HEAD
 func (r *SpanReplication) NewRemoveDispatcherMessage(
 	server node.ID,
 	operatorType heartbeatpb.OperatorType,
 	maintainerEpoch uint64,
 ) *messaging.TargetMessage {
 	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType, maintainerEpoch)
-=======
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType)
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 // NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for a dispatcherID.
 // The span is optional for the dispatcher manager, but is useful for maintainer bootstrap to correlate
 // in-flight remove requests with table spans when the dispatcher no longer exists.
-<<<<<<< HEAD
 func NewRemoveDispatcherMessage(
 	server node.ID,
 	cfID common.ChangeFeedID,
@@ -381,9 +363,6 @@ func NewRemoveDispatcherMessage(
 	operatorType heartbeatpb.OperatorType,
 	maintainerEpoch uint64,
 ) *messaging.TargetMessage {
-=======
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, span *heartbeatpb.TableSpan, mode int64, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -393,13 +372,8 @@ func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispat
 				Span:         span,
 				Mode:         mode,
 			},
-<<<<<<< HEAD
 			ScheduleAction:  heartbeatpb.ScheduleAction_Remove,
 			OperatorType:    operatorType,
 			MaintainerEpoch: maintainerEpoch,
-=======
-			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
-			OperatorType:   operatorType,
->>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		})
 }
