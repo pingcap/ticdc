@@ -35,13 +35,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/tidb/br/pkg/storage"
-=======
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

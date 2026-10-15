@@ -25,22 +25,22 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
-	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
 func TestDDLWriterCloseStorageOnce(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	mockStorage := mockobjstore.NewMockStorage(ctrl)
+	mockStorage := mockstorage.NewMockExternalStorage(ctrl)
 	mockStorage.EXPECT().Close().Times(1)
 
 	oldInitExternalStorage := redo.InitExternalStorage
 	t.Cleanup(func() {
 		redo.InitExternalStorage = oldInitExternalStorage
 	})
-	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
 		return mockStorage, nil
 	}
 

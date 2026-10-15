@@ -30,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -43,7 +43,7 @@ type dmlWriter struct {
 	fileWorkers   *fileWorkerGroup
 	spool         *spool.Spool
 	spoolEntries  *chann.UnlimitedChannel[*redoSpoolEntry, any]
-	extStorage    storeapi.Storage
+	extStorage    storage.ExternalStorage
 
 	lifecycleMu sync.Mutex
 	runStarted  bool

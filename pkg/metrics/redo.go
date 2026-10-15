@@ -98,13 +98,8 @@ var (
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "worker_busy_ratio",
-<<<<<<< HEAD
-			Help:      "Busy ratio for redo sink worker.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"})
-=======
 			Help:      "Busy time in seconds for redo writer workers.",
-		}, []string{GetKeyspaceLabel(), "changefeed", "type"})
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 )
 
 func initRedoMetrics(registry *prometheus.Registry) {

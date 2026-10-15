@@ -28,15 +28,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/redo/testutil"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	"github.com/pingcap/ticdc/pkg/util"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-=======
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"

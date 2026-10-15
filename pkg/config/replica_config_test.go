@@ -18,11 +18,8 @@ import (
 	"testing"
 	"time"
 
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/errors"
-=======
 	"github.com/pingcap/ticdc/pkg/redo"
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )

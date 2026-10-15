@@ -34,8 +34,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 	ubergomock "go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
@@ -55,8 +55,8 @@ func newTestConsistentConfig(storage string) *config.ConsistentConfig {
 
 func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
 	ctrl := ubergomock.NewController(t)
-	ddlStorage := mockobjstore.NewMockStorage(ctrl)
-	dmlStorage := mockobjstore.NewMockStorage(ctrl)
+	ddlStorage := mockstorage.NewMockExternalStorage(ctrl)
+	dmlStorage := mockstorage.NewMockExternalStorage(ctrl)
 	ddlStorage.EXPECT().Close().Times(1)
 	dmlStorage.EXPECT().Close().Times(1)
 
@@ -65,7 +65,7 @@ func TestNewClosesWritersWhenDMLConstructionFails(t *testing.T) {
 		redo.InitExternalStorage = oldInitExternalStorage
 	})
 	initCalls := 0
-	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
 		initCalls++
 		if initCalls == 1 {
 			return ddlStorage, nil

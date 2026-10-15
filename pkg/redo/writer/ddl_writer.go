@@ -43,15 +43,9 @@ var _ RedoDDLWriter = (*ddlWriter)(nil)
 type ddlWriter struct {
 	mu sync.Mutex
 
-<<<<<<< HEAD:pkg/redo/writer/memory/ddl_writer.go
-	cfg        *writer.Config
-	op         *writer.LogWriterOptions
-	extStorage storage.ExternalStorage
-=======
 	cfg        *Config
 	op         *LogWriterOptions
-	extStorage storeapi.Storage
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956)):pkg/redo/writer/ddl_writer.go
+	extStorage storage.ExternalStorage
 	uuidGen    uuid.Generator
 
 	tableSchema *commonEvent.TableSchemaStore

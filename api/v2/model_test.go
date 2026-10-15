@@ -134,25 +134,18 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
-<<<<<<< HEAD
-=======
 	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
-	// output_old_value is omitted in apiCfg and must keep its default (true).
-	require.True(t, internalCfg.Sink.Debezium.OutputOldValue)
 
 	// An explicit output_old_value must be honored.
 	apiCfgDebezium := &ReplicaConfig{
 		Sink: &SinkConfig{
 			DebeziumConfig: &DebeziumConfig{
-				OutputOldValue: util.AddressOf(false),
-				IncludeStartTs: util.AddressOf(true),
+				OutputOldValue: false,
 			},
 		},
 	}
 	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
 	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
-	require.True(t, util.GetOrZero(internalDebezium.Sink.Debezium.IncludeStartTs))
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}

@@ -140,9 +140,6 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		c.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	}
 
-<<<<<<< HEAD
-	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
-=======
 	if c.SpoolDiskQuota == nil {
 		c.SpoolDiskQuota = util.AddressOf(redo.DefaultSpoolDiskQuota)
 	} else if *c.SpoolDiskQuota <= 0 {
@@ -150,8 +147,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 			"consistent.spool-disk-quota must be greater than 0")
 	}
 
-	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956))
+	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.MaskSensitiveDataInURIForError(util.GetOrZero(c.Storage))))

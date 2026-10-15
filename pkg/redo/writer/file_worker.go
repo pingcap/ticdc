@@ -99,13 +99,8 @@ func (f *fileWorkerGroup) setWriteGate(gate *writelease.Gate) {
 func newFileWorkerGroup(
 	cfg *Config,
 	inputCh chan *polymorphicRedoEvent,
-<<<<<<< HEAD:pkg/redo/writer/memory/file_worker.go
 	extStorage storage.ExternalStorage,
-	opts ...writer.Option,
-=======
-	extStorage storeapi.Storage,
 	opts ...Option,
->>>>>>> fbb2228d1 (redo: add DML two-stage ack (#5956)):pkg/redo/writer/file_worker.go
 ) *fileWorkerGroup {
 	workerNum := cfg.FlushWorkerNum()
 	if workerNum <= 0 {
