@@ -299,7 +299,7 @@ func TestFranzOAuth(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			if _, err := io.WriteString(w, `{"error":"invalid_client"}`); err != nil {
+			if _, err := io.WriteString(w, `{"error":"invalid_client","error_description":"client-secret-sentinel","error_uri":"https://example.com/client-secret-sentinel"}`); err != nil {
 				t.Errorf("write token error response: %v", err)
 			}
 		}))
@@ -311,10 +311,17 @@ func TestFranzOAuth(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrNewKafkaSink)
 		var retrieveErr *oauth2.RetrieveError
 		require.ErrorAs(t, err, &retrieveErr)
+		require.Equal(t, http.StatusUnauthorized, retrieveErr.Response.StatusCode)
+		require.Equal(t, "invalid_client", retrieveErr.ErrorCode)
+		require.Empty(t, retrieveErr.ErrorDescription)
+		require.Empty(t, retrieveErr.ErrorURI)
+		require.Empty(t, retrieveErr.Body)
+		require.NotContains(t, err.Error(), "client-secret-sentinel")
 	})
 
 	t.Run("invalid URL", func(t *testing.T) {
-		_, err := buildOAuthMechanism(t.Context(), oauth2Config{tokenURL: "http://example.com/%%"})
+		_, err := buildOAuthMechanism(t.Context(), oauth2Config{tokenURL: "http://user:password-sentinel@example.com/%%"})
 		require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+		require.NotContains(t, err.Error(), "password-sentinel")
 	})
 }
