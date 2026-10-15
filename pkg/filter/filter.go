@@ -46,7 +46,7 @@ const (
 // Filter are safe for concurrent use.
 type Filter interface {
 	// ShouldIgnoreDML returns true if the DML event should not be handled.
-	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx DMLFilterContext) (bool, error)
+	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error)
 	// ShouldIgnoreDMLByEventType returns true only when filters that do not need
 	// decoded row values can determine the DML should be ignored.
 	ShouldIgnoreDMLByEventType(dmlType common.RowType, tableInfo *common.TableInfo, startTs uint64) (bool, error)
@@ -71,13 +71,12 @@ type Filter interface {
 	ShouldIgnoreSchema(schema string) bool
 	// IsEligibleTable returns true if the table is eligible to be replicated.
 	IsEligibleTable(tableInfo *common.TableInfo) bool
+	// IsForceReplicateEnabled reports whether tables without a primary key or
+	// a non-null unique key are eligible for replication.
+	IsForceReplicateEnabled() bool
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
 	Verify(tableInfos []*common.TableInfo) error
-}
-
-type DMLFilterContext struct {
-	EnableIgnoreUpdateOnlyColumns bool
 }
 
 // filter implements Filter.
@@ -88,9 +87,6 @@ type filter struct {
 	dmlExprFilter *dmlExprFilter
 	// sqlEventFilter is used to filter out dml/ddl event by its type or query.
 	sqlEventFilter *sqlEventFilter
-	// updateOnlyColumnsFilter is used to filter out update events whose changed
-	// columns are all configured as ignorable.
-	updateOnlyColumnsFilter *updateOnlyColumnsFilter
 	// ignoreTxnStartTs is used to filter out dml/ddl event by its starsTs.
 	ignoreTxnStartTs []uint64
 	forceReplicate   bool
@@ -115,17 +111,12 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 	if err != nil {
 		return nil, err
 	}
-	updateOnlyColumnsFilter, err := newUpdateOnlyColumnsFilter(cfg, caseSensitive)
-	if err != nil {
-		return nil, err
-	}
 	return &filter{
-		tableFilter:             f,
-		dmlExprFilter:           dmlExprFilter,
-		sqlEventFilter:          sqlEventFilter,
-		updateOnlyColumnsFilter: updateOnlyColumnsFilter,
-		ignoreTxnStartTs:        cfg.IgnoreTxnStartTs,
-		forceReplicate:          forceReplicate,
+		tableFilter:      f,
+		dmlExprFilter:    dmlExprFilter,
+		sqlEventFilter:   sqlEventFilter,
+		ignoreTxnStartTs: cfg.IgnoreTxnStartTs,
+		forceReplicate:   forceReplicate,
 	}, nil
 }
 
@@ -133,21 +124,11 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // 1. By startTs.
 // 2. By table name.
 // 3. By type.
-// 4. By update-only-column config.
-// 5. By row value expression.
-func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, filterContext DMLFilterContext) (bool, error) {
+// 4. By row value expression.
+func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
 	ignore, err := f.ShouldIgnoreDMLByEventType(dmlType, tableInfo, startTs)
 	if ignore || err != nil {
 		return ignore, err
-	}
-	if filterContext.EnableIgnoreUpdateOnlyColumns {
-		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
-		if err != nil {
-			return false, err
-		}
-		if ignoreByUpdateOnlyColumns {
-			return true, nil
-		}
 	}
 	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
 }
@@ -241,6 +222,10 @@ func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
 	return tableInfo.IsEligible(f.forceReplicate)
 }
 
+func (f *filter) IsForceReplicateEnabled() bool {
+	return f.forceReplicate
+}
+
 func (f *filter) shouldIgnoreStartTs(ts uint64) bool {
 	for _, ignoreTs := range f.ignoreTxnStartTs {
 		if ignoreTs == ts {
@@ -319,7 +304,6 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 			IgnoreUpdateNewValueExpr: util.AddressOf(rule.IgnoreUpdateNewValueExpr),
 			IgnoreUpdateOldValueExpr: util.AddressOf(rule.IgnoreUpdateOldValueExpr),
 			IgnoreDeleteValueExpr:    util.AddressOf(rule.IgnoreDeleteValueExpr),
-			IgnoreUpdateOnlyColumns:  rule.IgnoreUpdateOnlyColumns,
 		}
 		for _, e := range rule.IgnoreEvent {
 			f.IgnoreEvent = append(f.IgnoreEvent, bf.EventType(e))

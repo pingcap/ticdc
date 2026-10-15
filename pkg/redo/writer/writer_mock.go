@@ -10,6 +10,7 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	event "github.com/pingcap/ticdc/pkg/common/event"
+	writelease "github.com/pingcap/ticdc/pkg/writelease"
 )
 
 // MockRedoEvent is a mock of RedoEvent interface.
@@ -131,6 +132,18 @@ func (mr *MockRedoDMLWriterMockRecorder) Run(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoDMLWriter)(nil).Run), ctx)
 }
 
+// SetWriteGate mocks base method.
+func (m *MockRedoDMLWriter) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockRedoDMLWriterMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockRedoDMLWriter)(nil).SetWriteGate), gate)
+}
+
 // MockRedoDDLWriter is a mock of RedoDDLWriter interface.
 type MockRedoDDLWriter struct {
 	ctrl     *gomock.Controller
@@ -178,6 +191,18 @@ func (m *MockRedoDDLWriter) SetTableSchemaStore(arg0 *event.TableSchemaStore) {
 func (mr *MockRedoDDLWriterMockRecorder) SetTableSchemaStore(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockRedoDDLWriter)(nil).SetTableSchemaStore), arg0)
+}
+
+// SetWriteGate mocks base method.
+func (m *MockRedoDDLWriter) SetWriteGate(gate *writelease.Gate) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetWriteGate", gate)
+}
+
+// SetWriteGate indicates an expected call of SetWriteGate.
+func (mr *MockRedoDDLWriterMockRecorder) SetWriteGate(gate interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWriteGate", reflect.TypeOf((*MockRedoDDLWriter)(nil).SetWriteGate), gate)
 }
 
 // WriteDDLEvent mocks base method.

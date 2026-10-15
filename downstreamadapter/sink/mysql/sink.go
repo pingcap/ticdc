@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -59,6 +60,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	// cfg is retained so remove cleanup can reopen a short-lived DB connection after Close.
 	cfg        *mysql.Config
+	writeGate  *writelease.Gate
 	maxTxnRows int
 	bdrMode    bool
 }
@@ -89,6 +91,7 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	keyspaceID uint32,
 ) (*Sink, error) {
 	cfg, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
@@ -106,7 +109,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode), nil
+	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, keyspaceID), nil
 }
 
 // NewMySQLSink used for test
@@ -116,12 +119,13 @@ func NewMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
 	var controlAsyncDB *sql.DB
 	if cfg.IsTiDB {
 		controlAsyncDB = db
 	}
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode, keyspaceID)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -134,12 +138,13 @@ func newMySQLSinkWithControlDB(
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
 	var controlAsyncDB *sql.DB
 	if cfg.IsTiDB {
 		controlAsyncDB = controlDB
 	}
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, keyspaceID)
 }
 
 func newMySQLSinkWithControlAsyncDB(
@@ -150,8 +155,9 @@ func newMySQLSinkWithControlAsyncDB(
 	controlDB *sql.DB,
 	controlAsyncDB *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode)
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, keyspaceID)
 }
 
 func newMySQLSinkWithDBs(
@@ -162,6 +168,7 @@ func newMySQLSinkWithDBs(
 	controlDB *sql.DB,
 	controlAsyncDB *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
 	if !cfg.IsTiDB {
 		controlAsyncDB = nil
@@ -169,8 +176,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 	result := &Sink{
 		changefeedID:   changefeedID,
 		dmlDB:          dmlDB,
@@ -304,6 +310,16 @@ func (s *Sink) SinkType() common.SinkType {
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
+}
+
+// SetWriteGate delegates admission to the transport writers, where each
+// downstream write is checked immediately before it is executed.
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	for _, writer := range s.dmlWriter {
+		writer.SetWriteGate(gate)
+	}
+	s.ddlWriter.SetWriteGate(gate)
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -459,6 +475,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 
 	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil)
 	defer cleanupWriter.Close()
+	cleanupWriter.SetWriteGate(s.writeGate)
 	return cleanupWriter.RemoveDDLTsItem()
 }
 

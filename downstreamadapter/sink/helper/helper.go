@@ -99,7 +99,7 @@ func GetProtocol(protocolStr string) (config.Protocol, error) {
 // GetFileExtension returns the extension for specific protocol
 func GetFileExtension(protocol config.Protocol) string {
 	switch protocol {
-	case config.ProtocolAvro, config.ProtocolCanalJSON, config.ProtocolMaxwell,
+	case config.ProtocolAvro, config.ProtocolDebeziumAvro, config.ProtocolCanalJSON, config.ProtocolMaxwell,
 		config.ProtocolOpen, config.ProtocolSimple:
 		return ".json"
 	case config.ProtocolCraft:

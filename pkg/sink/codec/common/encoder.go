@@ -36,7 +36,7 @@ type EventEncoder interface {
 // TxnEventEncoder is an abstraction for events encoder
 type TxnEventEncoder interface {
 	// AppendTxnEvent append a txn event into the buffer.
-	AppendTxnEvent(*commonEvent.DMLEvent) error
+	AppendTxnEvent([]*commonEvent.RowEvent) error
 	// Build builds the batch and returns the bytes of key and value.
 	// Should be called after `AppendTxnEvent`
 	Build() []*Message
