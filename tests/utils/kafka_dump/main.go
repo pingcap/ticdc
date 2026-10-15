@@ -33,7 +33,7 @@ func main() {
 	brokers := flag.String("brokers", "127.0.0.1:9092", "Comma-separated Kafka broker addresses.")
 	topic := flag.String("topic", "", "Kafka topic name.")
 	timeout := flag.Duration("timeout", 90*time.Second, "How long to wait for matching messages.")
-	untilTable := flag.String("until-table", "", "Stop after seeing this many DML messages for the table.")
+	untilTable := flag.String("until-table", "", "Table name to match when counting DML messages.")
 	untilCount := flag.Int("until-count", 1, "Number of matching table messages required to stop.")
 	registryURL := flag.String("schema-registry-uri", "", "Decode Confluent Avro keys and values using this Schema Registry.")
 	flag.Parse()
