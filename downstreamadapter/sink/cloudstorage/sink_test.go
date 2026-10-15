@@ -47,7 +47,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, cleanUpJobs)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), true, cleanUpJobs, common.DefaultKeyspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +157,6 @@ func TestBasicFunctionality(t *testing.T) {
 	require.Equal(t, count.Load(), int64(3))
 }
 
-<<<<<<< HEAD
-=======
 func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
@@ -229,7 +227,26 @@ func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
 	require.NotContains(t, string(content), "filtered")
 }
 
->>>>>>> 0697ba0ec (cloudstorage: make all DateSeparator fields use the enum instead of string (#6078))
+func TestCloudStorageColumnSelectorCaseSensitive(t *testing.T) {
+	for _, caseSensitive := range []*bool{nil, util.AddressOf(false), util.AddressOf(true)} {
+		replicaConfig := config.GetDefaultReplicaConfig()
+		replicaConfig.CaseSensitive = caseSensitive
+		replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
+			{Matcher: []string{"Test.t"}, Columns: []string{"id"}},
+		}
+		sinkURI, err := url.Parse(fmt.Sprintf("file:///%s?protocol=csv", t.TempDir()))
+		require.NoError(t, err)
+		require.NoError(t, replicaConfig.ValidateAndAdjust(sinkURI))
+		cloudStorageSink, err := newSinkForTest(t.Context(), replicaConfig, sinkURI, nil)
+		require.NoError(t, err)
+		selector := cloudStorageSink.dmlWriters.columnSelector.Get("test", "t")
+		require.True(t, selector.Select(&timodel.ColumnInfo{Name: parser_model.NewCIStr("id")}))
+		require.Equal(t, util.GetOrZero(caseSensitive),
+			selector.Select(&timodel.ColumnInfo{Name: parser_model.NewCIStr("name")}))
+		cloudStorageSink.Close()
+	}
+}
+
 func TestIgnoreCallsAfterRunError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
 	sinkURI, err := url.Parse(uri)
@@ -740,7 +757,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
-	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
 	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())

@@ -50,7 +50,7 @@ function run() {
 	done
 	s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" | grep '^ID:' | head -n1 | awk '{print $2}')
@@ -61,13 +61,17 @@ function run() {
 	run_sql "CREATE table consistent_replicate_gbk.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "consistent_replicate_gbk.GBKTABLE" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "consistent_replicate_gbk.check1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 	run_sql "create table consistent_replicate_gbk.GBKTABLE2 like consistent_replicate_gbk.GBKTABLE" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into consistent_replicate_gbk.GBKTABLE2 select * from consistent_replicate_gbk.GBKTABLE" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -78,6 +82,8 @@ function run() {
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	export GO_FAILPOINTS=''

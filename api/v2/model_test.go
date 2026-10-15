@@ -46,17 +46,20 @@ func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
 					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
 					SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
-					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: util.AddressOf("s3://bucket/prefix?access-key=claim-check-secret-sentinel")},
 					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
-						AccessKey:       "glue-access-sentinel",
-						SecretAccessKey: "glue-secret-sentinel",
-						Token:           "glue-token-sentinel",
+						AccessKey:       util.AddressOf("glue-access-sentinel"),
+						SecretAccessKey: util.AddressOf("glue-secret-sentinel"),
+						Token:           util.AddressOf("glue-token-sentinel"),
 					},
 				},
 				PulsarConfig: &PulsarConfig{
 					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
 					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
-					OAuth2:              &PulsarOAuth2{OAuth2PrivateKey: "pulsar-private-key-sentinel"},
+					OAuth2: &PulsarOAuth2{
+						OAuth2PrivateKey: util.AddressOf("pulsar-private-key-sentinel"),
+						OAuth2IssuerURL:  util.AddressOf("https://user:pulsar-issuer-secret-sentinel@oauth.example.com"),
+					},
 				},
 			},
 			Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret-sentinel")},
@@ -85,6 +88,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
+		PerformanceMode:       util.AddressOf(config.PerformanceModeLowLatency),
 		MemoryQuota:           util.AddressOf(uint64(1024)),
 		CaseSensitive:         util.AddressOf(true),
 		ForceReplicate:        util.AddressOf(true),
@@ -120,6 +124,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	}
 
 	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(internalCfg.PerformanceMode))
 	require.Equal(t, uint64(1024), util.GetOrZero(internalCfg.MemoryQuota))
 	require.True(t, util.GetOrZero(internalCfg.CaseSensitive))
 	require.True(t, util.GetOrZero(internalCfg.ForceReplicate))
@@ -151,6 +156,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 3: Conversion back to API config
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)

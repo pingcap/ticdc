@@ -503,10 +503,11 @@ function run_impl() {
 	new_maintainer_addr=$(wait_for_maintainer_move "$api_addr" "$changefeed_id" "$maintainer_addr")
 	echo "maintainer moved to $new_maintainer_addr"
 
-	disable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER"
+	# Let dispatcher managers answer bootstrap, but keep the merge unfinished
+	# until the new maintainer has restored its operator from that snapshot.
 	disable_failpoint_on_all_addrs_best_effort "$FAILPOINT_BLOCK_CREATE_DISPATCHER"
-
 	wait_for_restored_merge_operator_in_logs "$work_dir" 60
+	disable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER"
 	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before - 1))" eq "$mode" 60
 
 	set +e

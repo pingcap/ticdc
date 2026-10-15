@@ -31,6 +31,10 @@ import (
 )
 
 const (
+	// MaskedSensitiveValue is the placeholder used when exposing sensitive
+	// configuration values.
+	MaskedSensitiveValue = "******"
+
 	// DefaultMaxMessageBytes sets the default value for max-message-bytes.
 	DefaultMaxMessageBytes = 10 * 1024 * 1024 // 10M
 	// DefaultAdvanceTimeoutInSec sets the default value for advance-timeout-in-sec.
@@ -144,7 +148,8 @@ type SinkConfig struct {
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
-	// SchemaRegistry is only available when the downstream is MQ using avro protocol.
+	// SchemaRegistry is only available when the downstream is MQ using avro protocol
+	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
 	// EncoderConcurrency is only available when the downstream is MQ.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
@@ -207,7 +212,6 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -421,6 +425,8 @@ func (d DateSeparator) String() string {
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	// Rules are evaluated in order, and the first matching rule wins.
+	// MQ dispatching skips rules that only configure target schema or table names.
+	// A matcher-only rule selects the default MQ topic and partition strategy.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`
@@ -523,17 +529,23 @@ func (k *KafkaConfig) GetOutputRawChangeEvent() bool {
 
 // MaskSensitiveData masks sensitive data in KafkaConfig
 func (k *KafkaConfig) MaskSensitiveData() {
-	k.SASLPassword = aws.String("******")
-	k.SASLGssAPIPassword = aws.String("******")
-	k.SASLOAuthClientSecret = aws.String("******")
-	k.Key = aws.String("******")
+	sensitiveFields := []*string{k.SASLPassword, k.SASLGssAPIPassword, k.SASLOAuthClientSecret, k.Key}
 	if k.GlueSchemaRegistryConfig != nil {
-		k.GlueSchemaRegistryConfig.AccessKey = "******"
-		k.GlueSchemaRegistryConfig.Token = "******"
-		k.GlueSchemaRegistryConfig.SecretAccessKey = "******"
+		sensitiveFields = append(sensitiveFields,
+			&k.GlueSchemaRegistryConfig.AccessKey,
+			&k.GlueSchemaRegistryConfig.Token,
+			&k.GlueSchemaRegistryConfig.SecretAccessKey)
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = MaskedSensitiveValue
+		}
 	}
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
+	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 
@@ -694,13 +706,14 @@ func (c *PulsarConfig) GetOutputRawChangeEvent() bool {
 // MaskSensitiveData masks sensitive data in PulsarConfig
 func (c *PulsarConfig) MaskSensitiveData() {
 	if c.AuthenticationToken != nil {
-		c.AuthenticationToken = aws.String("******")
+		c.AuthenticationToken = aws.String(MaskedSensitiveValue)
 	}
 	if c.BasicPassword != nil {
-		c.BasicPassword = aws.String("******")
+		c.BasicPassword = aws.String(MaskedSensitiveValue)
 	}
 	if c.OAuth2 != nil {
-		c.OAuth2.OAuth2PrivateKey = "******"
+		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
+		c.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(c.OAuth2.OAuth2IssuerURL)
 	}
 }
 
@@ -971,7 +984,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}

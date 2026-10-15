@@ -14,7 +14,6 @@
 package mysql
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -297,15 +296,15 @@ func TestGenerateBatchSQL(t *testing.T) {
 		"args[0] should be one of the expected combinations: %v", args[0])
 
 	// Test performance with 1000 rows event
-	// Generate 1000 insert statements
-	var insertStatements []string
-	for i := 1000; i < 2000; i++ {
-		insertStatements = append(insertStatements, fmt.Sprintf("insert into t values (%d, 'test%d')", i, i))
+	// The SQL builder only needs 1000 rows, not 1000 TiDB transactions.
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1000, 'test1000')")
+	for range 999 {
+		dmlEvent.Rows.AppendRow(dmlEvent.Rows.GetRow(0))
+		dmlEvent.RowTypes = append(dmlEvent.RowTypes, common.RowTypeInsert)
+		dmlEvent.RowKeys = append(dmlEvent.RowKeys, dmlEvent.RowKeys[0])
 	}
-
-	// Create a single event with 1000 rows
-	dmlEvent := helper.DML2Event("test", "t", insertStatements...)
-	require.Equal(t, int32(1000), dmlEvent.Length, "Event should contain 1000 rows")
+	dmlEvent.Length = 1000
+	require.Equal(t, 1000, dmlEvent.Rows.NumRows(), "Event should contain 1000 rows")
 
 	// Set configuration for batch processing
 	writer.cfg.MaxTxnRow = 1000

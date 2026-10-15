@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -61,6 +62,7 @@ type consumer struct {
 	replicationCfg  *config.ReplicaConfig
 	dateSeparator   config.DateSeparator
 	codecCfg        *common.Config
+	columnSelectors *columnselector.ColumnSelectors
 	externalStorage storage.ExternalStorage
 	fileExtension   string
 	sink            sink.Sink
@@ -124,6 +126,10 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	if err != nil {
 		return nil, err
 	}
+	columnSelectors, err := columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
+	if err != nil {
+		return nil, err
+	}
 
 	extension := helper.GetFileExtension(protocol)
 
@@ -140,7 +146,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
+	sink, err := sink.New(
+		stdCtx,
+		cfg,
+		commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName),
+		commonType.DefaultKeyspaceID,
+	)
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -150,6 +161,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		replicationCfg:    replicaConfig,
 		dateSeparator:     dateSeparator,
 		codecCfg:          codecConfig,
+		columnSelectors:   columnSelectors,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
@@ -292,7 +304,15 @@ func (c *consumer) appendDMLEvents(
 	var decoder common.Decoder
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
-		decoder, err = csv.NewDecoder(ctx, c.codecCfg, schemaFile.TableInfo(), content)
+		tableInfo := schemaFile.TableInfo()
+		// CSV rows contain selected values without column names, so decode with the same selector.
+		decoder, err = csv.NewDecoderWithColumnSelector(
+			ctx,
+			c.codecCfg,
+			tableInfo,
+			content,
+			c.columnSelectors.GetForTableInfo(tableInfo),
+		)
 		if err != nil {
 			return errors.Trace(err)
 		}

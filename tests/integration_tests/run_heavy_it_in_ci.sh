@@ -52,7 +52,7 @@ mysql_groups=(
 	# G10
 	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G11
-	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
+	'multi_changefeeds ddl_wait ddl_reentrant ddl_whitelist force_replicate_table multi_source'
 	# G12
 	'ddl_with_random_move_table cli_tls_with_auth http_api_tls'
 	# G13
@@ -89,7 +89,7 @@ kafka_groups=(
 	# G09
 	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro multi_source'
 	# G10
-	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
+	'column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
 	'fail_over region_merge multi_changefeeds'
 	# G12
@@ -170,9 +170,9 @@ storage_groups=(
 	# G13
 	'fail_over region_merge multi_changefeeds'
 	# G14
-	'fail_over_ddl_mix'
+	'column_selector fail_over_ddl_mix'
 	# G15
-	'random_drop_message'
+	'csv_storage_column_selector random_drop_message'
 )
 
 # Source shared functions and check test coverage

@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/model"
@@ -58,7 +59,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -127,7 +128,7 @@ func TestWriterRun(t *testing.T) {
 			TableInfo:       tableInfo,
 			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
 		}
-		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask := newDMLTask(tableName, dmlEvent, nil)
 		tableTask.encodedMsgs = []*common.Message{
 			{
 				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
@@ -200,6 +201,7 @@ func TestWriterFlushMarker(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
@@ -263,6 +265,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msgA := common.NewMsg(nil, []byte(`{"id":"a"}`))
 	msgA.SetRowsCount(1)
@@ -291,6 +294,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 				},
 			}),
 		},
+		nil,
 	)
 	msgB := common.NewMsg(nil, []byte(`{"id":"b"}`))
 	msgB.SetRowsCount(1)
@@ -360,6 +364,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 			DispatcherID:     dispatcherID,
 		},
 		dmlEvent,
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{
 		{
@@ -383,7 +388,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+func TestWriterPostFlushDoesNotRunPausedPostEnqueue(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
@@ -410,21 +415,13 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 
 	var secondFlushed atomic.Int64
 	var secondEnqueued atomic.Int64
-	secondCallbacks := &txnCallbacks{
-		flushed: []func(){
-			func() {
-				secondFlushed.Add(1)
-			},
-		},
-		enqueued: []func(){
-			func() {
-				secondEnqueued.Add(1)
-			},
-		},
-	}
 	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
-	secondMsg.Callback = secondCallbacks.postFlush
-	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	secondMsg.Callback = func() {
+		secondFlushed.Add(1)
+	}
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, func() {
+		secondEnqueued.Add(1)
+	})
 	require.NoError(t, err)
 	defer spoolBuffer.Release(secondEntry)
 	require.Equal(t, int64(0), secondEnqueued.Load())
@@ -441,7 +438,7 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 	}
 
 	require.Equal(t, int64(1), secondFlushed.Load())
-	require.Equal(t, int64(1), secondEnqueued.Load())
+	require.Equal(t, int64(0), secondEnqueued.Load())
 
 	spoolBuffer.Release(firstEntry)
 	require.Equal(t, int64(1), secondEnqueued.Load())
@@ -482,7 +479,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -512,6 +509,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -599,6 +597,12 @@ type failOnIndexStorage struct {
 	storage.ExternalStorage
 }
 
+type fenceAfterDataStorage struct {
+	storage.ExternalStorage
+	dataFile string
+	gate     *writelease.Gate
+}
+
 type failOnCloseStorage struct {
 	storage.ExternalStorage
 }
@@ -612,6 +616,53 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 		return errors.New("index write failed")
 	}
 	return s.ExternalStorage.WriteFile(ctx, name, data)
+}
+
+func (s *fenceAfterDataStorage) WriteFile(ctx context.Context, name string, data []byte) error {
+	if err := s.ExternalStorage.WriteFile(ctx, name, data); err != nil {
+		return err
+	}
+	if name == s.dataFile {
+		s.gate.Fence()
+	}
+	return nil
+}
+
+func TestWriterChecksWriteGateBeforePublishingIndex(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+	gate := writelease.NewGate()
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+
+	dataFile := "data.json"
+	indexFile := "meta/data.index"
+	d.storage = &fenceAfterDataStorage{
+		ExternalStorage: d.storage,
+		dataFile:        dataFile,
+		gate:            gate,
+	}
+	d.setWriteGate(gate)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.writeDataFile(ctx, dataFile, indexFile, &payload{
+			data:      []byte(`{"id":1}`),
+			rowsCount: 1,
+			nBytes:    8,
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path.Join(parentDir, dataFile))
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+	_, err := os.Stat(path.Join(parentDir, indexFile))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func (s *failOnCloseStorage) Create(
@@ -650,7 +701,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -677,6 +728,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -715,7 +767,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -742,6 +794,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 
 	var callbackCount atomic.Int64
