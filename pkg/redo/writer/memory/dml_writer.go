@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/writelease"
@@ -69,10 +70,17 @@ func (l *dmlWriter) Run(ctx context.Context) error {
 	eg.Go(func() error {
 		return l.fileWorkers.Run(egCtx)
 	})
-	return eg.Wait()
+	err := eg.Wait()
+	if ctxErr := context.Cause(ctx); ctxErr != nil && errors.Is(err, errors.ErrRedoWriterStopped) {
+		return errors.Trace(ctxErr)
+	}
+	return err
 }
 
 func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
+	if ctxErr := context.Cause(ctx); ctxErr != nil {
+		return errors.Trace(ctxErr)
+	}
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",

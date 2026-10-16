@@ -14,6 +14,8 @@
 package kafka
 
 import (
+	"context"
+	stderrors "errors"
 	"strconv"
 	"strings"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"go.uber.org/zap"
 )
 
@@ -47,18 +50,16 @@ type saramaClusterAdmin interface {
 	Close() error
 }
 
-func (a *saramaAdminClient) GetAllBrokers() []Broker {
+func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
 	brokers := a.client.Brokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
-		result = append(result, Broker{
-			ID: broker.ID(),
-		})
+		result = append(result, Broker{ID: broker.ID()})
 	}
 	return result
 }
 
-func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, bool, error) {
+func (a *saramaAdminClient) GetBrokerConfig(_ context.Context, configName string) (string, bool, error) {
 	_, controller, err := a.admin.DescribeCluster()
 	if err != nil {
 		if IsAuthorizationFailed(err) {
@@ -90,7 +91,7 @@ func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, bool, er
 	return "", false, nil
 }
 
-func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) (string, bool, error) {
+func (a *saramaAdminClient) GetTopicConfig(_ context.Context, topicName string, configName string) (string, bool, error) {
 	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
 		Type:        sarama.TopicResource,
 		Name:        topicName,
@@ -114,7 +115,7 @@ func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) 
 	return "", false, nil
 }
 
-func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+func (a *saramaAdminClient) GetTopicsMeta(_ context.Context, topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 
 	metaList, err := a.admin.DescribeTopics(topics)
@@ -156,10 +157,10 @@ func IsAuthorizationFailed(err error) bool {
 		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
 }
 
-// IsUnretryableKafkaError reports whether err is not retryable.
+// IsUnretryableSaramaError reports whether a Sarama error is not retryable.
 // See Apache Kafka protocol error definitions:
 // https://kafka.apache.org/38/generated/protocol_errors.html
-func IsUnretryableKafkaError(err error) bool {
+func IsUnretryableSaramaError(err error) bool {
 	if IsAuthorizationFailed(err) ||
 		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
 		errors.Is(err, sarama.ErrInvalidTopic) ||
@@ -172,11 +173,25 @@ func IsUnretryableKafkaError(err error) bool {
 		return true
 	}
 
-	var configErr sarama.ConfigurationError
-	return errors.As(err, &configErr)
+	_, ok := stderrors.AsType[sarama.ConfigurationError](err)
+	return ok
 }
 
-func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+// IsUnretryableKafkaError reports whether a Kafka error is not retryable.
+func IsUnretryableKafkaError(err error) bool {
+	if errors.Is(err, errors.ErrKafkaAuthorizationFailed) ||
+		errors.Is(err, errors.ErrKafkaInvalidConfig) {
+		return true
+	}
+
+	if kafkaErr, ok := stderrors.AsType[*kerr.Error](err); ok {
+		return !kafkaErr.Retriable
+	}
+
+	return IsUnretryableSaramaError(err)
+}
+
+func (a *saramaAdminClient) GetTopicsPartitionsNum(_ context.Context, topics []string) (map[string]int32, error) {
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		partition, err := a.client.Partitions(topic)
@@ -192,7 +207,7 @@ func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]
 	return result, nil
 }
 
-func (a *saramaAdminClient) CreateTopic(detail *TopicDetail) error {
+func (a *saramaAdminClient) CreateTopic(_ context.Context, detail *TopicDetail) error {
 	request := &sarama.TopicDetail{
 		NumPartitions:     detail.NumPartitions,
 		ReplicationFactor: detail.ReplicationFactor,

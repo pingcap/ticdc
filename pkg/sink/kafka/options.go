@@ -14,6 +14,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -40,7 +41,22 @@ const (
 	defaultMaxRetry = 5
 	// defaultTimeout is the default timeout for Kafka connections.
 	defaultTimeout = 10 * time.Second
+	// KafkaClientFranz is the franz-go based Kafka client implementation.
+	KafkaClientFranz = "franz"
+	// KafkaClientSarama is the default Kafka client implementation.
+	KafkaClientSarama = "sarama"
 )
+
+const (
+	minFranzTimeout = 10 * time.Second
+	// franz-go rejects RequestTimeoutOverhead values above 15m. Both sink
+	// timeout options use this ceiling to keep their effective range consistent.
+	maxFranzTimeout = 15 * time.Minute
+)
+
+func normalizeTimeout(timeout time.Duration) time.Duration {
+	return max(minFranzTimeout, min(timeout, maxFranzTimeout))
+}
 
 const (
 	// BrokerMessageMaxBytesConfigName specifies the largest record batch size allowed by
@@ -108,6 +124,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 }
 
 type urlConfig struct {
+	KafkaClient                  *string `form:"kafka-client"`
 	PartitionNum                 *int32  `form:"partition-num"`
 	ReplicationFactor            *int16  `form:"replication-factor"`
 	KafkaVersion                 *string `form:"kafka-version"`
@@ -140,6 +157,7 @@ type urlConfig struct {
 
 // options stores user specified configurations
 type options struct {
+	Client          string
 	Topic           string
 	BrokerEndpoints []string
 
@@ -165,7 +183,7 @@ type options struct {
 	EnableTLS          bool
 	Credential         *security.Credential
 	InsecureSkipVerify bool
-	SASL               *security.SASL
+	sasl               *saslConfig
 
 	// Timeout for network configurations, default to `10s`
 	DialTimeout  time.Duration
@@ -176,6 +194,7 @@ type options struct {
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
 	return &options{
+		Client:             KafkaClientSarama,
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,
@@ -185,7 +204,7 @@ func NewOptions() *options {
 		RequiredAcks:       WaitForAll,
 		Credential:         &security.Credential{},
 		InsecureSkipVerify: false,
-		SASL:               &security.SASL{},
+		sasl:               &saslConfig{},
 		AutoCreate:         true,
 		DialTimeout:        defaultTimeout,
 		WriteTimeout:       defaultTimeout,
@@ -262,6 +281,12 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 		o.MaxMessageBytes = *urlParameter.MaxMessageBytes
 	}
 	o.MaxBatchedBytes = o.MaxMessageBytes
+	if urlParameter.KafkaClient != nil {
+		o.Client = strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+	}
+	if o.Client != KafkaClientFranz && o.Client != KafkaClientSarama {
+		return errors.ErrKafkaInvalidConfig.GenWithStack("invalid kafka-client %q, only support franz and sarama", o.Client)
+	}
 
 	if urlParameter.MaxRetry != nil && *urlParameter.MaxRetry >= 0 {
 		o.MaxRetry = *urlParameter.MaxRetry
@@ -337,6 +362,11 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	err = o.applyTLS(urlParameter)
 	if err != nil {
 		return err
+	}
+	if o.Client == KafkaClientFranz {
+		// Store the effective timeouts so the configuration log matches franz-go.
+		o.WriteTimeout = normalizeTimeout(o.WriteTimeout)
+		o.ReadTimeout = normalizeTimeout(o.ReadTimeout)
 	}
 
 	return nil
@@ -430,56 +460,56 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
 	if urlParameter.SASLUser != nil && *urlParameter.SASLUser != "" {
-		o.SASL.SASLUser = *urlParameter.SASLUser
+		o.sasl.user = *urlParameter.SASLUser
 	}
 
 	if urlParameter.SASLPassword != nil && *urlParameter.SASLPassword != "" {
-		o.SASL.SASLPassword = *urlParameter.SASLPassword
+		o.sasl.password = *urlParameter.SASLPassword
 	}
 
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
-		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
+		mechanism, err := saslMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
-			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return err
 		}
-		o.SASL.SASLMechanism = mechanism
+		o.sasl.mechanism = mechanism
 	}
 
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
-		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
+		authType, err := gssapiAuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
-			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return err
 		}
-		o.SASL.GSSAPI.AuthType = authType
+		o.sasl.gssapi.authType = authType
 	}
 
 	if urlParameter.SASLGssAPIKeytabPath != nil && *urlParameter.SASLGssAPIKeytabPath != "" {
-		o.SASL.GSSAPI.KeyTabPath = *urlParameter.SASLGssAPIKeytabPath
+		o.sasl.gssapi.keyTabPath = *urlParameter.SASLGssAPIKeytabPath
 	}
 
 	if urlParameter.SASLGssAPIKerberosConfigPath != nil &&
 		*urlParameter.SASLGssAPIKerberosConfigPath != "" {
-		o.SASL.GSSAPI.KerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
+		o.sasl.gssapi.kerberosConfigPath = *urlParameter.SASLGssAPIKerberosConfigPath
 	}
 
 	if urlParameter.SASLGssAPIServiceName != nil && *urlParameter.SASLGssAPIServiceName != "" {
-		o.SASL.GSSAPI.ServiceName = *urlParameter.SASLGssAPIServiceName
+		o.sasl.gssapi.serviceName = *urlParameter.SASLGssAPIServiceName
 	}
 
 	if urlParameter.SASLGssAPIUser != nil && *urlParameter.SASLGssAPIUser != "" {
-		o.SASL.GSSAPI.Username = *urlParameter.SASLGssAPIUser
+		o.sasl.gssapi.username = *urlParameter.SASLGssAPIUser
 	}
 
 	if urlParameter.SASLGssAPIPassword != nil && *urlParameter.SASLGssAPIPassword != "" {
-		o.SASL.GSSAPI.Password = *urlParameter.SASLGssAPIPassword
+		o.sasl.gssapi.password = *urlParameter.SASLGssAPIPassword
 	}
 
 	if urlParameter.SASLGssAPIRealm != nil && *urlParameter.SASLGssAPIRealm != "" {
-		o.SASL.GSSAPI.Realm = *urlParameter.SASLGssAPIRealm
+		o.sasl.gssapi.realm = *urlParameter.SASLGssAPIRealm
 	}
 
 	if urlParameter.SASLGssAPIDisablePafxfast != nil {
-		o.SASL.GSSAPI.DisablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
+		o.sasl.gssapi.disablePAFXFAST = *urlParameter.SASLGssAPIDisablePafxfast
 	}
 
 	if sinkConfig != nil && sinkConfig.KafkaConfig != nil {
@@ -488,7 +518,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if clientID == "" {
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
-			o.SASL.OAuth2.ClientID = clientID
+			o.sasl.oauth2.clientID = clientID
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
@@ -503,7 +533,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			if err != nil {
 				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client secret is not base64 encoded")
 			}
-			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
+			o.sasl.oauth2.clientSecret = string(decodedClientSecret)
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
@@ -512,32 +542,34 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
-			o.SASL.OAuth2.TokenURL = tokenURL
+			o.sasl.oauth2.tokenURL = tokenURL
 		}
 
-		if o.SASL.OAuth2.IsEnable() {
-			if o.SASL.SASLMechanism != security.OAuthMechanism {
+		if o.sasl.oauth2.clientID != "" ||
+			o.sasl.oauth2.clientSecret != "" ||
+			o.sasl.oauth2.tokenURL != "" {
+			if o.sasl.mechanism != oauthMechanism {
 				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
-					o.SASL.SASLMechanism)
+					o.sasl.mechanism)
 			}
 
-			if err := o.SASL.OAuth2.Validate(); err != nil {
-				return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			if err := o.sasl.oauth2.validate(); err != nil {
+				return err
 			}
-			o.SASL.OAuth2.SetDefault()
+			o.sasl.oauth2.grantType = "client_credentials"
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthScopes != nil {
-			o.SASL.OAuth2.Scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
+			o.sasl.oauth2.scopes = sinkConfig.KafkaConfig.SASLOAuthScopes
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthGrantType != nil {
-			o.SASL.OAuth2.GrantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
+			o.sasl.oauth2.grantType = *sinkConfig.KafkaConfig.SASLOAuthGrantType
 		}
 
 		if sinkConfig.KafkaConfig.SASLOAuthAudience != nil {
-			o.SASL.OAuth2.Audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
+			o.sasl.oauth2.audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
 		}
 	}
 
@@ -563,12 +595,12 @@ func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 
 // ValidateReplicationFactor checks whether a topic created with this config
 // can satisfy the configured acknowledgment requirement.
-func (c *AutoCreateTopicConfig) ValidateReplicationFactor(admin AdminClient) error {
+func (c *AutoCreateTopicConfig) ValidateReplicationFactor(ctx context.Context, admin AdminClient) error {
 	if c.RequiredAcks != WaitForAll {
 		return nil
 	}
 
-	raw, found, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
+	raw, found, err := admin.GetBrokerConfig(ctx, MinInsyncReplicasConfigName)
 	if err != nil {
 		log.Warn("kafka broker configuration lookup failed, skipping replication factor validation",
 			zap.String("configName", MinInsyncReplicasConfigName),
@@ -625,15 +657,10 @@ func NewKafkaClientID(captureAddr string,
 // adjustOptions adjusts options with Kafka runtime metadata.
 // It overwrites MaxMessageBytes with the final producer message limit derived
 // from the topic or broker configuration.
-func adjustOptions(
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	topic string,
-) error {
+func adjustOptions(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, topic string) error {
 	// The topic may not exist yet and will be created later by the topic manager,
 	// so ignore per-topic metadata errors here.
-	topics, err := admin.GetTopicsMeta([]string{topic}, true)
+	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
 	if err != nil {
 		return err
 	}
@@ -642,9 +669,9 @@ func adjustOptions(
 	// once we have found the topic, no matter `auto-create-topic`,
 	// make sure user input parameters are valid.
 	if exists {
-		err = adjustExistingTopicOption(changefeedID, admin, options, info)
+		err = adjustExistingTopicOption(ctx, changefeedID, admin, options, info)
 	} else {
-		adjustNewTopicOptions(changefeedID, admin, options)
+		adjustNewTopicOptions(ctx, admin, changefeedID, options)
 	}
 	if err != nil {
 		return err
@@ -654,13 +681,8 @@ func adjustOptions(
 	return nil
 }
 
-func adjustExistingTopicOption(
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-	info TopicDetail,
-) error {
-	maxMessageBytes, found, err := getTopicMaxMessageBytes(admin, info.Name)
+func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFeedID, admin AdminClient, options *options, info TopicDetail) error {
+	maxMessageBytes, found, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil || !found {
 		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
@@ -669,20 +691,13 @@ func adjustExistingTopicOption(
 	}
 	options.MaxMessageBytes = maxMessageBytes
 
-	if err = options.setPartitionNum(changefeedID, info.NumPartitions); err != nil {
-		return err
-	}
-	return nil
+	return options.setPartitionNum(changefeedID, info.NumPartitions)
 }
 
-func adjustNewTopicOptions(
-	changefeedID common.ChangeFeedID,
-	admin AdminClient,
-	options *options,
-) {
+func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID common.ChangeFeedID, options *options) {
 	// when create the topic, `max.message.bytes` is decided by the broker,
 	// it would use broker's `message.max.bytes` to set topic's `max.message.bytes`.
-	messageMaxBytes, found, err := getBrokerMaxMessageBytes(admin)
+	messageMaxBytes, found, err := getBrokerMaxMessageBytes(ctx, admin)
 	if err != nil || !found {
 		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
 			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
@@ -697,15 +712,8 @@ func adjustNewTopicOptions(
 	}
 }
 
-func getTopicMaxMessageBytes(
-	admin AdminClient,
-	topic string,
-) (int, bool, error) {
-	raw, found, err := getTopicConfig(
-		admin, topic,
-		TopicMaxMessageBytesConfigName,
-		BrokerMessageMaxBytesConfigName,
-	)
+func getTopicMaxMessageBytes(ctx context.Context, admin AdminClient, topic string) (int, bool, error) {
+	raw, found, err := getTopicConfig(ctx, admin, topic, TopicMaxMessageBytesConfigName, BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
 	}
@@ -720,8 +728,8 @@ func getTopicMaxMessageBytes(
 	return maxMessageBytes, true, nil
 }
 
-func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
-	raw, found, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
+func getBrokerMaxMessageBytes(ctx context.Context, admin AdminClient) (int, bool, error) {
+	raw, found, err := admin.GetBrokerConfig(ctx, BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		return 0, false, err
 	}
@@ -740,16 +748,11 @@ func getBrokerMaxMessageBytes(admin AdminClient) (int, bool, error) {
 // If the topic does not have this configuration,
 // we will try to get it from the broker's configuration.
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
-func getTopicConfig(
-	admin AdminClient,
-	topicName string,
-	topicConfigName string,
-	brokerConfigName string,
-) (string, bool, error) {
-	c, found, err := admin.GetTopicConfig(topicName, topicConfigName)
+func getTopicConfig(ctx context.Context, admin AdminClient, topicName, topicConfigName, brokerConfigName string) (string, bool, error) {
+	c, found, err := admin.GetTopicConfig(ctx, topicName, topicConfigName)
 	if err == nil && found {
 		return c, true, nil
 	}
 
-	return admin.GetBrokerConfig(brokerConfigName)
+	return admin.GetBrokerConfig(ctx, brokerConfigName)
 }
