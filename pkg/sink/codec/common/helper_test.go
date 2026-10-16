@@ -21,14 +21,12 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -251,23 +249,4 @@ func TestQueryRowChecksumGBK(t *testing.T) {
 	encoded = append(binary.LittleEndian.AppendUint32(encoded, uint32(len(blob))), blob...)
 	require.Equal(t, crc32.ChecksumIEEE(encoded), actual)
 	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestVerifySparseChecksums(t *testing.T) {
-	column := &model.ColumnInfo{ID: 1, Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}
-	tableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{ID: 1, Name: parser_model.NewCIStr("t"), Columns: []*model.ColumnInfo{column}})
-	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 3)
-	for i := range 3 {
-		rows.AppendInt64(0, int64(i+1))
-	}
-	checksum, err := calculateChecksum(rows.GetRow(1), tableInfo.GetColumns(), nil)
-	require.NoError(t, err)
-	event := &commonEvent.DMLEvent{
-		TableInfo: tableInfo, Rows: rows, Length: 3,
-		RowTypes: []commonType.RowType{commonType.RowTypeInsert, commonType.RowTypeInsert, commonType.RowTypeInsert},
-		Checksum: []*integrity.Checksum{nil, {Current: checksum}, nil},
-	}
-	require.NoError(t, VerifyChecksum(event, nil, nil, nil))
-	event.Checksum[1].Current++
-	require.ErrorContains(t, VerifyChecksum(event, nil, nil, nil), "current checksum mismatch")
 }

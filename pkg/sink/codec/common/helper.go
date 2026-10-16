@@ -222,9 +222,6 @@ func queryRowChecksum(
 			event.Rewind()
 			break
 		}
-		if row.Checksum == nil {
-			continue
-		}
 		columns := event.TableInfo.GetColumns()
 		if row.Checksum.Current != 0 {
 			conditions := make(map[string]any)
@@ -395,8 +392,7 @@ func queryRowChecksumFromColumns(
 	return checksum, errors.WrapError(errors.ErrDecodeFailed, err)
 }
 
-// MustSnapshotQuery queries a snapshot at commitTs. An optional SQL projection
-// replaces SELECT *; callers must build it from trusted, quoted column names.
+// MustSnapshotQuery query the db by the snapshot read with the given commitTs
 func MustSnapshotQuery(
 	ctx context.Context, db *sql.DB, commitTs uint64, schema, table string, conditions map[string]interface{},
 ) *ColumnsHolder {
