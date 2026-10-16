@@ -53,7 +53,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 }
 
 func (t *HeartBeatTask) Execute() time.Time {
-	if t.manager.closed.Load() {
+	if t.manager.getState() >= dispatcherManagerFinalizing {
 		return time.Time{}
 	}
 	executeInterval := heartbeatInterval(t.manager)
@@ -135,7 +135,7 @@ func newMergeCheckTask(manager *DispatcherManager, mergedDispatcher dispatcher.D
 }
 
 func (t *MergeCheckTask) Execute() time.Time {
-	if t.manager.closed.Load() {
+	if t.manager.getState() >= dispatcherManagerFinalizing {
 		return time.Time{}
 	}
 
@@ -504,7 +504,7 @@ type RemoveDispatcherTask struct {
 
 func (t *RemoveDispatcherTask) Execute() time.Time {
 	// Check if manager is closed
-	if t.manager.closed.Load() {
+	if t.manager.getState() >= dispatcherManagerFinalizing {
 		return time.Time{}
 	}
 	// If the dispatcher is removing, we don't need to remove it again

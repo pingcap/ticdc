@@ -45,7 +45,7 @@ type DispatcherOrchestrator struct {
 	// initializingDispatcherManagers tracks managers that have been allocated
 	// but are not yet visible in dispatcherManagers.
 	initializingDispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
-	// closedMaintainerEpochs remembers the highest epoch that closed a manager.
+	// closedMaintainerEpochs remembers the highest epoch that started closing a manager.
 	// Map presence is meaningful because epoch 0 is a valid compatibility epoch.
 	// The tombstone prevents a delayed old bootstrap from recreating the manager after close.
 	closedMaintainerEpochs map[common.ChangeFeedID]uint64
@@ -197,14 +197,45 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	closedEpoch, closed := m.closedMaintainerEpochs[cfId]
 	m.mutex.Unlock()
 
+	if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
+		log.Warn("drop stale maintainer bootstrap request after close",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("closedMaintainerEpoch", closedEpoch))
+		return nil
+	}
+	if exists {
+		manager.MaintainerFenceMu.Lock()
+		if !manager.IsReusable() {
+			// A closing manager cannot be revived by changing its maintainer.
+			// Let the new maintainer's bootstrap retries wait for complete cleanup.
+			if !manager.CanUpdateMaintainer(from, maintainerEpoch) || !manager.TryClose(false) {
+				manager.MaintainerFenceMu.Unlock()
+				return nil
+			}
+			m.mutex.Lock()
+			if m.dispatcherManagers[cfId] != manager {
+				m.mutex.Unlock()
+				manager.MaintainerFenceMu.Unlock()
+				return nil
+			}
+			delete(m.dispatcherManagers, cfId)
+			m.recordClosedMaintainerEpochLocked(cfId, manager.GetMaintainerEpoch(), false)
+			closedEpoch, closed = m.closedMaintainerEpochs[cfId]
+			m.mutex.Unlock()
+			manager.MaintainerFenceMu.Unlock()
+			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+			exists = false
+		} else {
+			manager.MaintainerFenceMu.Unlock()
+		}
+	}
+
 	var err error
 	if !exists {
+		// Retirement may have recorded a tombstone for a manager closed locally.
 		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
-			log.Warn("drop stale maintainer bootstrap request after close",
-				zap.String("changefeed", cfId.Name()),
-				zap.String("from", from.String()),
-				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
-				zap.Uint64("closedMaintainerEpoch", closedEpoch))
 			return nil
 		}
 		cfConfig := &config.ChangefeedConfig{}
@@ -267,6 +298,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 
 	manager.MaintainerFenceMu.Lock()
+	if !manager.IsReusable() {
+		manager.MaintainerFenceMu.Unlock()
+		return nil
+	}
 	if !manager.CanUpdateMaintainer(from, maintainerEpoch) {
 		log.Warn("drop stale maintainer bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -668,16 +703,19 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		decGauge := false
 		manager.MaintainerFenceMu.Lock()
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
-			if closed := manager.TryClose(req.Removed); closed {
-				m.mutex.Lock()
-				delete(m.dispatcherManagers, cfId)
+			closed := manager.TryClose(req.Removed)
+			m.mutex.Lock()
+			if m.dispatcherManagers[cfId] == manager {
+				// Fence old bootstrap requests as soon as shutdown starts, including
+				// the interval before the manager can be removed from the map.
 				m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
-				m.mutex.Unlock()
-				decGauge = true
-				response.Success = true
-			} else {
-				response.Success = false
+				if closed {
+					delete(m.dispatcherManagers, cfId)
+					decGauge = true
+				}
 			}
+			m.mutex.Unlock()
+			response.Success = closed
 		} else {
 			// The active manager belongs to a newer maintainer. Do not close it, but
 			// acknowledge the stale sender so removal-only maintainers can stop retrying.
