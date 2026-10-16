@@ -119,19 +119,19 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			return p.handleProducerError(err)
+			return p.handleProducerError(err.Err, extractLogInfo(err.Msg))
 		}
 	}
 }
 
-func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
+func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommon.MessageLogInfo) error {
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
 		zap.String("eventContext", BuildEventLogContext(
-			p.changefeedID.Keyspace(), p.changefeedID.Name(), extractLogInfo(err.Msg))),
-		zap.Error(err.Err))
-	return errors.WrapError(errors.ErrKafkaSendMessage, err.Err)
+			p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)),
+		zap.Error(err))
+	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
 // AsyncSend is the input channel for the user to write messages to that they

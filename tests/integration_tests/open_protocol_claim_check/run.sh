@@ -18,7 +18,10 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	TOPIC_NAME="open-protocol-claim-check"
+	TOPIC_NAME="open-protocol-claim-check-$RANDOM"
+	CLAIM_CHECK_DIR="/tmp/open-protocol-claim-check"
+	rm -rf "$CLAIM_CHECK_DIR"
+	kafka_topic --topic "$TOPIC_NAME" --max-message-bytes 2048
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -40,6 +43,10 @@ function run() {
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	if ! find "$CLAIM_CHECK_DIR" -type f -print -quit | grep -q .; then
+		echo "claim-check did not write any file to $CLAIM_CHECK_DIR"
+		exit 1
+	fi
 
 	cleanup_process $CDC_BINARY
 }

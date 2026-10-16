@@ -50,7 +50,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
@@ -72,7 +72,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	return writer, db, mock
@@ -373,6 +373,26 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLReturnsStatusQueryError(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = true
+
+	event := &commonEvent.DDLEvent{
+		Type:          byte(timodel.ActionExchangeTablePartition),
+		FinishedTs:    2,
+		BlockedTables: &commonEvent.InfluencedTables{TableIDs: []int64{1}},
+	}
+	query := fmt.Sprintf("SELECT * FROM tidb_cdc.ddl_ts_v1 "+
+		"WHERE (ticdc_cluster_id, changefeed, table_id, ddl_ts, finished) "+
+		"IN (('%s', '%s', 1, 2, 1))",
+		config.GetGlobalServerConfig().ClusterID, writer.ChangefeedID.String())
+	mock.ExpectQuery(query).WillReturnError(context.DeadlineExceeded)
+
+	require.ErrorIs(t, writer.execDDL(event), context.DeadlineExceeded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
 	router, err := routing.NewRouter(
 		common.NewChangefeedID4Test("test", "test"),
@@ -571,9 +591,12 @@ func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *tes
 }
 
 // Test the async ddl can be write successfully
-func TestMysqlWriter_AsyncDDL(t *testing.T) {
+func TestWriterAsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
 	defer db.Close()
+	// waitDDLDone polls a running downstream DDL; keeping the production interval
+	// would make this test wait a full 5s before the first state check.
+	writer.ddlPollInterval = 10 * time.Millisecond
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -642,7 +665,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	log.Info("before add index")
 	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(10 * time.Second).WillReturnError(mysql.ErrInvalidConn)
+	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(200 * time.Millisecond).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
 	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).

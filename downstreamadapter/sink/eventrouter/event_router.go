@@ -21,7 +21,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
 
@@ -40,7 +39,7 @@ type EventRouter struct {
 
 // NewEventRouter creates a new EventRouter.
 func NewEventRouter(
-	sinkConfig *config.SinkConfig, defaultTopic string, isPulsar bool, isAvro bool,
+	sinkConfig *config.SinkConfig, caseSensitive bool, defaultTopic string, isPulsar bool, isAvro bool,
 ) (*EventRouter, error) {
 	// If an event does not match any dispatching rules in the config file,
 	// it will be dispatched by the default partition dispatcher and
@@ -53,11 +52,17 @@ func NewEventRouter(
 
 	rules := make([]Rule, 0, len(ruleConfigs))
 	for _, ruleConfig := range ruleConfigs {
+		// Table routing alone must not select the default MQ dispatchers.
+		if (ruleConfig.TargetSchema != "" || ruleConfig.TargetTable != "") &&
+			ruleConfig.DispatcherRule == "" && ruleConfig.PartitionRule == "" &&
+			ruleConfig.IndexName == "" && len(ruleConfig.Columns) == 0 && ruleConfig.TopicRule == "" {
+			continue
+		}
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
 		}
-		if !util.GetOrZero(sinkConfig.CaseSensitive) {
+		if !caseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
 		d := partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)

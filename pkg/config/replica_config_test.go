@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -255,6 +256,10 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.Error(t, config.ValidateAndAdjust(sinkURI))
+	config.Consistent.Storage = util.AddressOf("s3://bucket/%zz?secret-access-key=redo-secret-sentinel")
+	err = config.ValidateAndAdjust(sinkURI)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+	require.NotContains(t, err.Error(), "redo-secret-sentinel")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {

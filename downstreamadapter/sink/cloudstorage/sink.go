@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,7 +79,7 @@ type sink struct {
 	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -88,7 +89,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
+		return err
+	}
+	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
 	if err != nil {
 		return err
 	}
@@ -102,8 +106,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
+	keyspaceID uint32,
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
@@ -118,9 +123,13 @@ func New(
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
-	// the last param maxMsgBytes is mainly to limit the size of a single message for
-	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	// Message size limits are mainly for MQ batch protocols. Cloud storage uses
+	// max int for both the final message limit and the batch threshold.
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
+	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
@@ -128,14 +137,14 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
 	defer func() {
 		if err != nil {
 			statistics.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
 	if err != nil {
 		return nil, err
 	}
