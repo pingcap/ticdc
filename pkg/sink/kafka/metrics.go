@@ -82,6 +82,18 @@ var (
 
 // InitMetrics registers all metrics in this file.
 func InitMetrics(registry *prometheus.Registry) {
+<<<<<<< HEAD
+=======
+	registry.MustRegister(
+		outgoingBytesTotal,
+		requestsTotal,
+		requestDuration,
+		throttleTime,
+		recordsPerBatch,
+		batchesPerRequest,
+		compressionRatio,
+	)
+>>>>>>> 2449aa474 (kafka: franz-go timeout normalize to 10s ~ 15m (#6358))
 	registry.MustRegister(compressionRatioGauge)
 	registry.MustRegister(recordsPerRequestGauge)
 	registry.MustRegister(OutgoingByteRateGauge)
