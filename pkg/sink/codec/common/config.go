@@ -41,9 +41,12 @@ type Config struct {
 
 	Protocol config.Protocol
 
-	// control batch behavior, only for `open-protocol` and `craft` at the moment.
 	MaxMessageBytes int
-	MaxBatchSize    int
+
+	// MaxBatchedBytes controls open-protocol encoder's maximum number of bytes for a batched message.
+	MaxBatchedBytes int
+	// MaxBatchedSize controls open-protocol encoder's maximum number of events for a batched message.
+	MaxBatchSize int
 
 	// DeleteOnlyHandleKeyColumns is true, for the delete event only output the handle key columns.
 	DeleteOnlyHandleKeyColumns bool
@@ -55,7 +58,8 @@ type Config struct {
 
 	OutputRowKey bool
 
-	// avro only
+	// avro and debezium-avro only
+	// protocol when Confluent Avro encoding is enabled.
 	AvroConfluentSchemaRegistry    string
 	AvroDecimalHandlingMode        string
 	AvroBigintUnsignedHandlingMode string
@@ -94,20 +98,11 @@ type Config struct {
 	DebeziumDisableSchema bool
 	// Debezium only. Whether before value should be included in the output.
 	DebeziumOutputOldValue bool
-<<<<<<< HEAD
-=======
-	// Debezium only. Whether the transaction start_ts should be included in
-	// the source block of the output. JSON protocol only.
-	DebeziumIncludeStartTs bool
 	// Debezium JSON only. Use string to preserve the full precision of numeric values.
 	DebeziumDecimalHandlingMode        string
 	DebeziumBigintUnsignedHandlingMode string
 	// Debezium JSON only. Controls the representation of binary columns.
 	DebeziumBinaryHandlingMode string
-	// Simple only. Whether the transaction start_ts should be included in
-	// Simple JSON DML messages. Encoding-format=avro rejects this option.
-	SimpleIncludeStartTs bool
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	// CSV only. Whether header should be included in the output.
 	CSVOutputFieldHeader bool
 }
@@ -128,6 +123,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		Protocol: protocol,
 
 		MaxMessageBytes: config.DefaultMaxMessageBytes,
+		MaxBatchedBytes: config.DefaultMaxMessageBytes,
 		MaxBatchSize:    defaultMaxBatchSize,
 
 		EnableTiDBExtension: false,
@@ -149,22 +145,13 @@ func NewConfig(protocol config.Protocol) *Config {
 		TimeZone: time.Local,
 
 		// default value is true
-<<<<<<< HEAD
-		DebeziumOutputOldValue: true,
-		OpenOutputOldValue:     true,
-		DebeziumDisableSchema:  false,
-		CSVOutputFieldHeader:   false,
-=======
-		DebeziumOutputOldValue:             true,
-		OpenOutputOldValue:                 true,
-		DebeziumDisableSchema:              false,
-		DebeziumIncludeStartTs:             false,
 		DebeziumDecimalHandlingMode:        "double",
 		DebeziumBigintUnsignedHandlingMode: BigintUnsignedHandlingModeLong,
 		DebeziumBinaryHandlingMode:         BinaryHandlingModeBase64,
-		SimpleIncludeStartTs:               false,
+		DebeziumOutputOldValue:             true,
+		OpenOutputOldValue:                 true,
+		DebeziumDisableSchema:              false,
 		CSVOutputFieldHeader:               false,
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	}
 }
 
@@ -202,7 +189,7 @@ type urlConfig struct {
 	AvroDecimalHandlingMode        *string `form:"avro-decimal-handling-mode"`
 	AvroBigintUnsignedHandlingMode *string `form:"avro-bigint-unsigned-handling-mode"`
 
-	// AvroEnableWatermark is the option for enabling watermark in avro protocol
+	// AvroEnableWatermark is the option for enabling watermark in avro and debezium-avro protocol
 	// only used for internal testing, do not set this in the production environment since the
 	// confluent official consumer cannot handle watermark.
 	AvroEnableWatermark *bool `form:"avro-enable-watermark"`
@@ -211,16 +198,10 @@ type urlConfig struct {
 	OnlyOutputUpdatedColumns *bool  `form:"only-output-updated-columns"`
 	ContentCompatible        *bool  `form:"content-compatible"`
 
-<<<<<<< HEAD
-	DebeziumDisableSchema *bool `form:"debezium-disable-schema"`
-=======
 	DebeziumDisableSchema              *bool   `form:"debezium-disable-schema"`
-	DebeziumIncludeStartTs             *bool   `form:"debezium-include-start-ts"`
 	DebeziumDecimalHandlingMode        *string `form:"debezium-decimal-handling-mode"`
 	DebeziumBigintUnsignedHandlingMode *string `form:"debezium-bigint-unsigned-handling-mode"`
 	DebeziumBinaryHandlingMode         *string `form:"debezium-binary-handling-mode"`
-	SimpleIncludeStartTs               *bool   `form:"simple-include-start-ts"`
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
@@ -238,13 +219,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
 		return errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
-<<<<<<< HEAD
-=======
-	// Keep the raw URI parameters: mergeConfig uses mergo, which cannot
-	// override non-zero file values with explicit zero values (false or an
-	// empty string) from the sink URI, so explicit URI values take precedence.
+	// Explicit URI values take precedence, including empty strings.
 	rawURLParameter := urlParameter
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
 	}
@@ -275,7 +251,8 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		c.AvroBigintUnsignedHandlingMode = *urlParameter.AvroBigintUnsignedHandlingMode
 	}
 	if urlParameter.AvroEnableWatermark != nil {
-		if c.EnableTiDBExtension && c.Protocol == config.ProtocolAvro {
+		if c.EnableTiDBExtension &&
+			(c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) {
 			c.AvroEnableWatermark = *urlParameter.AvroEnableWatermark
 		}
 	}
@@ -286,9 +263,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		sinkConfig.KafkaConfig.GlueSchemaRegistryConfig != nil {
 		c.AvroGlueSchemaRegistry = sinkConfig.KafkaConfig.GlueSchemaRegistryConfig
 	}
-	if c.Protocol == config.ProtocolAvro && util.GetOrZero(sinkConfig.ForceReplicate) {
+	if (c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro) &&
+		util.GetOrZero(sinkConfig.ForceReplicate) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
-			`force-replicate must be disabled, when using avro protocol`)
+			`force-replicate must be disabled, when using avro or debezium-avro protocol`)
 	}
 
 	if sinkConfig != nil {
@@ -347,17 +325,6 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 			}
 		}
 	}
-	if urlParameter.DebeziumDisableSchema != nil {
-		c.DebeziumDisableSchema = *urlParameter.DebeziumDisableSchema
-	}
-<<<<<<< HEAD
-=======
-	if urlParameter.DebeziumIncludeStartTs != nil {
-		c.DebeziumIncludeStartTs = *urlParameter.DebeziumIncludeStartTs
-	}
-	if rawURLParameter.DebeziumIncludeStartTs != nil {
-		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
-	}
 	if rawURLParameter.DebeziumDecimalHandlingMode != nil {
 		c.DebeziumDecimalHandlingMode = *rawURLParameter.DebeziumDecimalHandlingMode
 	} else if urlParameter.DebeziumDecimalHandlingMode != nil {
@@ -373,13 +340,9 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	} else if urlParameter.DebeziumBinaryHandlingMode != nil {
 		c.DebeziumBinaryHandlingMode = *urlParameter.DebeziumBinaryHandlingMode
 	}
-	if urlParameter.SimpleIncludeStartTs != nil {
-		c.SimpleIncludeStartTs = *urlParameter.SimpleIncludeStartTs
+	if urlParameter.DebeziumDisableSchema != nil {
+		c.DebeziumDisableSchema = *urlParameter.DebeziumDisableSchema
 	}
-	if rawURLParameter.SimpleIncludeStartTs != nil {
-		c.SimpleIncludeStartTs = *rawURLParameter.SimpleIncludeStartTs
-	}
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 
 	return nil
 }
@@ -408,21 +371,14 @@ func mergeConfig(
 				dest.EncodingFormatType = codecConfig.EncodingFormat
 			}
 		}
-		if sinkConfig.DebeziumDisableSchema != nil {
-			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
-		}
-<<<<<<< HEAD
-=======
 		if sinkConfig.Debezium != nil {
-			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
 			dest.DebeziumDecimalHandlingMode = sinkConfig.Debezium.DecimalHandlingMode
 			dest.DebeziumBigintUnsignedHandlingMode = sinkConfig.Debezium.BigintUnsignedHandlingMode
 			dest.DebeziumBinaryHandlingMode = sinkConfig.Debezium.BinaryHandlingMode
 		}
-		if sinkConfig.Simple != nil && sinkConfig.Simple.IncludeStartTs != nil {
-			dest.SimpleIncludeStartTs = sinkConfig.Simple.IncludeStartTs
+		if sinkConfig.DebeziumDisableSchema != nil {
+			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
 		}
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, err
@@ -436,6 +392,12 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 	return c
 }
 
+// WithMaxBatchedBytes sets the maximum batched message bytes.
+func (c *Config) WithMaxBatchedBytes(bytes int) *Config {
+	c.MaxBatchedBytes = bytes
+	return c
+}
+
 // WithChangefeedID set the `changefeedID`
 func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 	c.ChangefeedID = id
@@ -445,16 +407,14 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-		!(c.Protocol == config.ProtocolCanalJSON || c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebezium) {
+		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro &&
+			c.Protocol != config.ProtocolDebezium && c.Protocol != config.ProtocolDebeziumAvro) {
 		log.Warn("ignore invalid config, enable-tidb-extension"+
-			"only supports canal-json/avro/debezium protocol",
+			"only supports canal-json/avro/debezium/debezium-avro protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
 	}
 
-<<<<<<< HEAD
-	if c.Protocol == config.ProtocolAvro {
-=======
 	if c.Protocol == config.ProtocolDebezium &&
 		(c.AvroConfluentSchemaRegistry != "" || c.AvroGlueSchemaRegistry != nil) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -462,11 +422,6 @@ func (c *Config) Validate() error {
 		)
 	}
 
-	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
-		return errors.ErrCodecInvalidConfig.GenWithStack(
-			`debezium-include-start-ts only takes effect with protocol "debezium"`,
-		)
-	}
 	if c.Protocol == config.ProtocolDebezium {
 		if c.DebeziumDecimalHandlingMode != "double" &&
 			c.DebeziumDecimalHandlingMode != DecimalHandlingModeString {
@@ -496,37 +451,36 @@ func (c *Config) Validate() error {
 			`debezium-binary-handling-mode only takes effect with protocol "debezium"`)
 	}
 
-	if c.SimpleIncludeStartTs {
-		if c.Protocol != config.ProtocolSimple {
-			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`simple-include-start-ts only takes effect with protocol "simple"`,
-			)
-		}
-		if c.EncodingFormat == EncodingFormatAvro {
-			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`simple-include-start-ts is not supported with encoding-format "avro"`,
-			)
-		}
-	}
-
 	if c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebeziumAvro {
->>>>>>> d1a3a8dd1 ( sink: add Debezium numeric and binary handling modes (#6263))
 		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires only one of "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
 		if c.AvroConfluentSchemaRegistry == "" && c.AvroGlueSchemaRegistry == nil {
+			protocol := "Avro"
+			if c.Protocol == config.ProtocolDebeziumAvro {
+				protocol = "Debezium Avro"
+			}
 			return errors.ErrCodecInvalidConfig.GenWithStack(
-				`Avro protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				`%s protocol requires parameter "%s" or "%s" to specify the schema registry`,
+				protocol,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
 			)
 		}
 
+	}
+
+	if c.Protocol == config.ProtocolAvro {
 		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
 			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
 			return errors.ErrCodecInvalidConfig.GenWithStack(
@@ -560,8 +514,36 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Protocol == config.ProtocolDebeziumAvro {
+		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
+			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroDecimalHandlingMode,
+				DecimalHandlingModeString,
+				DecimalHandlingModePrecise,
+			)
+		}
+
+		if c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeLong &&
+			c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeString {
+			return errors.ErrCodecInvalidConfig.GenWithStack(
+				`%s value could only be "%s" or "%s"`,
+				codecOPTAvroBigintUnsignedHandlingMode,
+				BigintUnsignedHandlingModeLong,
+				BigintUnsignedHandlingModeString,
+			)
+		}
+	}
+
 	if c.MaxMessageBytes <= 0 {
 		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-message-bytes %d", c.MaxMessageBytes)
+	}
+	if c.MaxBatchedBytes < 0 {
+		return errors.ErrCodecInvalidConfig.GenWithStack("invalid max-batch-message-bytes %d", c.MaxBatchedBytes)
+	}
+	if c.MaxBatchedBytes > c.MaxMessageBytes {
+		return errors.ErrCodecInvalidConfig.GenWithStack("max-batch-message-bytes %d cannot be greater than max-message-bytes %d", c.MaxBatchedBytes, c.MaxMessageBytes)
 	}
 
 	if c.MaxBatchSize <= 0 {

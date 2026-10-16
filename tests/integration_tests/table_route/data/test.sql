@@ -105,6 +105,31 @@ CREATE VIEW `source_extra_db`.`users_view_from_default` AS
 CREATE VIEW `source_extra_db`.`orders_column_view_from_default` AS
     SELECT `orders`.`id`, `orders`.`amount` FROM `orders` WHERE `orders`.`id` IN (1, 3);
 
+-- Correlated columns must resolve through the outer SELECT scope.
+CREATE VIEW `source_extra_db`.`correlated_users_view` AS
+    SELECT `users`.`id` FROM `users`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` WHERE `orders`.`user_id` = `users`.`id`
+    );
+
+-- Aliases are the range variable, so correlated references must keep them.
+CREATE VIEW `source_extra_db`.`aliased_correlated_view` AS
+    SELECT `u`.`id` FROM `users` AS `u`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` AS `o` WHERE `o`.`user_id` = `u`.`id`
+    );
+
+-- A correlated reference two SELECTs out must still follow the outer table.
+CREATE VIEW `source_extra_db`.`nested_correlated_view` AS
+    SELECT `users`.`id` FROM `users`
+    WHERE EXISTS (
+        SELECT 1 FROM `orders` AS `o1`
+        WHERE `o1`.`user_id` = `users`.`id`
+          AND EXISTS (
+              SELECT 1 FROM `orders` AS `o2` WHERE `o2`.`id` = `o1`.`id`
+          )
+    );
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)
@@ -159,6 +184,63 @@ CREATE VIEW `source_db`.`transient_view` AS
     SELECT `id`, `name` FROM `source_db`.`users`;
 
 DROP VIEW `source_db`.`transient_view`;
+
+-- CTE references must retain their names while the underlying users table is routed.
+CREATE VIEW source_db.cte_view AS
+    WITH selected_users AS (SELECT id FROM users WHERE id <= 2)
+    SELECT id FROM selected_users;
+
+-- The CTE shadows the real orders table, whose rows differ from users.
+CREATE VIEW source_db.cte_shadow_view AS
+    WITH orders AS (SELECT id FROM users WHERE id <= 2)
+    SELECT id FROM orders;
+
+-- SQL identifier case must not affect the case-sensitive routing matcher.
+CREATE VIEW source_db.case_qualified_view AS
+    SELECT SOURCE_DB.ORDERS.id FROM source_db.orders;
+CREATE VIEW source_db.case_table_view AS
+    SELECT ORDERS.id FROM source_db.orders;
+CREATE VIEW source_db.case_wildcard_view AS
+    SELECT SOURCE_DB.ORDERS.* FROM source_db.orders;
+-- FROM spelling must resolve to the same metadata name used for DML routing.
+CREATE VIEW source_db.case_from_view AS
+    SELECT ORDERS.id FROM SOURCE_DB.ORDERS;
+CREATE VIEW source_db.case_view_dependency AS
+    SELECT CASE_FROM_VIEW.id FROM SOURCE_DB.CASE_FROM_VIEW;
+
+-- Same-named tables with different rows make a lost correlation observable.
+CREATE TABLE source_extra_db.users (id INT PRIMARY KEY);
+INSERT INTO source_extra_db.users VALUES (1), (3);
+-- The CTE definition sees the true outer users, not its consumer's FROM.
+CREATE VIEW source_db.cte_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        WITH c AS (SELECT users.id AS id)
+        SELECT 1 FROM source_extra_db.users JOIN c ON c.id = source_extra_db.users.id
+    );
+-- A non-lateral derived table has the same consumer-scope boundary.
+CREATE VIEW source_db.derived_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users
+        JOIN (SELECT users.id AS id) AS c ON c.id = source_extra_db.users.id
+    );
+-- LATERAL sees preceding FROM items.
+CREATE VIEW source_db.lateral_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users
+        JOIN LATERAL (SELECT users.id AS id) AS c ON c.id = source_extra_db.users.id
+        WHERE c.id = source_db.users.id
+    );
+-- A later FROM item must not shadow the true outer users inside LATERAL.
+CREATE VIEW source_db.lateral_forward_scope_view AS
+    SELECT users.id FROM source_db.users
+    WHERE EXISTS (
+        SELECT 1 FROM source_extra_db.users AS u
+        JOIN LATERAL (SELECT users.id AS id) AS c ON c.id = u.id
+        JOIN source_extra_db.users ON source_extra_db.users.id = c.id
+    );
 
 -- ============================================
 -- DDL: PARTITION TABLE
@@ -231,6 +313,22 @@ UPDATE products SET name = 'Super Widget', price = 12.99 WHERE id = 1;
 
 -- Delete with condition
 DELETE FROM products WHERE price < 15.00;
+
+-- Prepare both sides of EXCHANGE PARTITION. The MySQL case waits for the
+-- initial sync-diff before executing exchange_partition.sql.
+CREATE TABLE source_db.exchange_partitioned (
+    id INT PRIMARY KEY,
+    note VARCHAR(64)
+) PARTITION BY RANGE (id) (
+    PARTITION p0 VALUES LESS THAN (100),
+    PARTITION p1 VALUES LESS THAN MAXVALUE
+);
+CREATE TABLE source_extra_db.exchange_normal (
+    id INT PRIMARY KEY,
+    note VARCHAR(64)
+);
+INSERT INTO source_db.exchange_partitioned VALUES (1, 'partition_before');
+INSERT INTO source_extra_db.exchange_normal VALUES (2, 'normal_before');
 
 -- ============================================
 -- Create finish marker table

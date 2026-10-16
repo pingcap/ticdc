@@ -38,6 +38,17 @@ var defaultOpts = []goleak.Option{
 	goleak.IgnoreTopFunction("github.com/lestrrat-go/httprc.runFetchWorker"),
 }
 
+// cleanups release test resources that are intentionally shared for the whole
+// test binary, and therefore keep background goroutines alive. They run after
+// all tests finished and before the goroutine leak check.
+var cleanups []func()
+
+// AddCleanup registers a function that runs before the leak check. Register it
+// before SetUpLeakTest.
+func AddCleanup(cleanup func()) {
+	cleanups = append(cleanups, cleanup)
+}
+
 // VerifyNone verifies that no unexpected leaks occur
 // Note that this function is incompatible with `t.Parallel()`
 func VerifyNone(t *testing.T, options ...goleak.Option) {
@@ -49,5 +60,17 @@ func VerifyNone(t *testing.T, options ...goleak.Option) {
 // options can be used to implement other ignore items
 func SetUpLeakTest(m *testing.M, options ...goleak.Option) {
 	options = append(options, defaultOpts...)
-	goleak.VerifyTestMain(m, options...)
+	goleak.VerifyTestMain(&testMainWithCleanup{m: m}, options...)
+}
+
+type testMainWithCleanup struct {
+	m *testing.M
+}
+
+func (t *testMainWithCleanup) Run() int {
+	code := t.m.Run()
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
+	return code
 }

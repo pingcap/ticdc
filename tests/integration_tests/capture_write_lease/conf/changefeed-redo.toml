@@ -1,0 +1,7 @@
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/capture_write_lease/redo"
+meta-flush-interval = 200
+
+[filter]
+rules = ["capture_write_lease_redo.*"]

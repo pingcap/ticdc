@@ -14,6 +14,7 @@
 package debezium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -268,6 +269,7 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Nil(err)
 
 	helper := NewSQLTestHelper(s.T(), "foo", string(dataDDL))
+	defer helper.Close()
 
 	helper.MustExec(`SET sql_mode='';`)
 	helper.MustExec(`SET time_zone='UTC';`)
@@ -296,4 +298,18 @@ func (s *debeziumSuite) TestDataTypes() {
 	s.Require().Len(messages, 1)
 	s.requireDebeziumJSONEq(dataDbzOutput, messages[0].Value)
 	s.requireDebeziumJSONEq(keyDbzOutput, messages[0].Key)
+}
+
+// schemaFieldsByName returns the sub-schema object of a field inside a Debezium
+// struct schema, or nil when the field is not declared.
+func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[string]any {
+	fields, ok := schema["fields"].([]any)
+	require.True(t, ok)
+	for _, f := range fields {
+		fm := f.(map[string]any)
+		if fm["field"] == name {
+			return fm
+		}
+	}
+	return nil
 }

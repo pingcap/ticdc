@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
@@ -283,6 +284,90 @@ func TestNewWriter(t *testing.T) {
 	require.Equal(t, w.running.Load(), false)
 }
 
+func TestSyncWriteReturnsRotationError(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return(os.ErrPermission)
+	mockStorage.EXPECT().Close()
+
+	writerCfg := newTestWriterConfig(t,
+		common.NewChangeFeedIDWithName("test-rotation-error", common.DefaultKeyspaceName), nil)
+	w, err := newWriter(writerCfg, redo.RedoRowLogFileType, mockStorage)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, w.Close()) })
+
+	flushed := false
+	event := &pevent.RedoRowEvent{
+		StartTs:  1,
+		CommitTs: 2,
+		Callback: func() { flushed = true },
+	}
+	require.ErrorIs(t, w.SyncWrite(context.Background(), event), os.ErrPermission)
+	require.False(t, flushed)
+}
+
+func TestWriterFlushWaitsForWriteGate(t *testing.T) {
+	dir := t.TempDir()
+	writerCfg := newTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		&config.ConsistentConfig{Storage: util.AddressOf("file://" + dir)},
+	)
+	w, err := NewFileWriter(t.Context(), writerCfg, redo.RedoRowLogFileType)
+	require.NoError(t, err)
+	w.AdvanceTs(1)
+	_, err = w.Write([]byte("redo-event"))
+	require.NoError(t, err)
+	gate := writelease.NewGate()
+	w.SetWriteGate(gate)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.flushWithContext(t.Context())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("redo file flush returned while the capture write gate was closed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*"+redo.LogEXT))
+	require.NoError(t, err)
+	require.Empty(t, files)
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo file flush did not resume after the capture write gate reopened")
+	}
+	files, err = filepath.Glob(filepath.Join(dir, "*"+redo.LogEXT))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	require.NoError(t, w.Close())
+}
+
+func TestWriterCloseDoesNotPublishWithClosedWriteGate(t *testing.T) {
+	dir := t.TempDir()
+	writerCfg := newTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
+		&config.ConsistentConfig{Storage: util.AddressOf("file://" + dir)},
+	)
+	w, err := NewFileWriter(t.Context(), writerCfg, redo.RedoRowLogFileType)
+	require.NoError(t, err)
+	w.AdvanceTs(1)
+	_, err = w.Write([]byte("redo-event"))
+	require.NoError(t, err)
+	w.SetWriteGate(writelease.NewGate())
+
+	require.NoError(t, w.Close())
+	files, err := filepath.Glob(filepath.Join(dir, "*"+redo.LogEXT))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
 func TestNewLocalFileWriterKeepsLocalOnlySemantics(t *testing.T) {
 	t.Parallel()
 
@@ -359,13 +444,13 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	_, err := w.Write([]byte("test"))
 	require.Nil(t, err)
 
-	err = w.rotate()
+	err = w.rotate(context.Background())
 	require.Nil(t, err)
 
 	w.AdvanceTs(100)
 	_, err = w.Write([]byte("test"))
 	require.Nil(t, err)
-	err = w.rotate()
+	err = w.rotate(context.Background())
 	require.Nil(t, err)
 
 	w.Close()
@@ -424,13 +509,13 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	_, err := w.Write([]byte("test"))
 	require.Nil(t, err)
 
-	err = w.rotate()
+	err = w.rotate(context.Background())
 	require.Nil(t, err)
 
 	w.AdvanceTs(100)
 	_, err = w.Write([]byte("test"))
 	require.Nil(t, err)
-	err = w.rotate()
+	err = w.rotate(context.Background())
 	require.Nil(t, err)
 
 	w.Close()
