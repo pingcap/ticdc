@@ -110,7 +110,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	defer claimCheck.Close()
 
-	isAvroLike := protocol == config.ProtocolAvro
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	if _, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, false, isAvroLike); err != nil {
 		return err
 	}

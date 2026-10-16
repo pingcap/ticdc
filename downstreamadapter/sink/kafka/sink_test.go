@@ -142,6 +142,52 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
+func TestVerifyAvroProtocols(t *testing.T) {
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolDebeziumAvro} {
+		t.Run(protocol.String(), func(t *testing.T) {
+			var connectionChecks atomic.Int64
+			schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				connectionChecks.Inc()
+				_, _ = w.Write([]byte("{}"))
+			}))
+			defer schemaRegistry.Close()
+
+			protocolName := protocol.String()
+			sinkConfig := &config.SinkConfig{
+				Protocol:       &protocolName,
+				SchemaRegistry: &schemaRegistry.URL,
+			}
+			sinkURI, err := url.Parse("kafka://127.0.0.1:9092/" + kafkaSinkTestTopic +
+				"?protocol=" + protocolName + "&kafka-version=2.4.1&partition-num=1&max-message-bytes=10485760" +
+				"&enable-tidb-extension=true&avro-enable-watermark=true" +
+				"&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string")
+			require.NoError(t, err)
+
+			ctrl := gomock.NewController(t)
+			adminClient := kafka.NewMockAdminClient(ctrl)
+			factory := kafka.NewMockFactory(ctrl)
+			gomock.InOrder(
+				factory.EXPECT().AdminClient(gomock.Any()).Return(adminClient, nil),
+				adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, false).Return(
+					map[string]kafka.TopicDetail{kafkaSinkTestTopic: {Name: kafkaSinkTestTopic, NumPartitions: 1}}, nil),
+				adminClient.EXPECT().Close(),
+			)
+
+			originalCreateKafkaFactory := createKafkaFactory
+			createKafkaFactory = func(_ func() (kafka.Factory, error)) (kafka.Factory, error) {
+				return factory, nil
+			}
+			t.Cleanup(func() {
+				createKafkaFactory = originalCreateKafkaFactory
+			})
+
+			changefeedID := common.NewChangefeedID4Test("test", "verify-avro-protocols")
+			require.NoError(t, Verify(t.Context(), changefeedID, sinkURI, sinkConfig, false))
+			require.Equal(t, int64(1), connectionChecks.Load())
+		})
+	}
+}
+
 func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 	ctx := t.Context()
 
