@@ -103,6 +103,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+			DebeziumConfig: &DebeziumConfig{
+				DecimalHandlingMode:        util.AddressOf("string"),
+				BigintUnsignedHandlingMode: util.AddressOf("string"),
+				BinaryHandlingMode:         util.AddressOf("hex"),
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -136,6 +141,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -145,6 +153,22 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+	// The release API uses a bool, so an omitted output_old_value remains false.
+	require.False(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: false,
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.Nil(t, internalDebezium.Sink.Debezium.DecimalHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -164,6 +188,10 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
+	require.False(t, apiCfgBack.Sink.DebeziumConfig.OutputOldValue)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
