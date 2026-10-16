@@ -143,6 +143,9 @@ func WithSegmentBytes(segmentBytes int64) func(*options) {
 
 func WithMemoryRatio(memoryRatio float64) func(*options) {
 	return func(options *options) {
+		if memoryRatio == 0 {
+			return
+		}
 		if memoryRatio < 0 || memoryRatio >= 1 {
 			log.Warn(
 				"spool option is invalid, use default",

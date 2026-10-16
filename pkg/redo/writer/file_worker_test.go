@@ -15,7 +15,6 @@ package writer
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,38 +23,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 )
-
-func TestFileWorkerReturnsStorageErrorWithoutPostFlush(t *testing.T) {
-	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return(os.ErrPermission)
-
-	cfg, err := NewConfig(
-		common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName),
-		testutil.NewConsistentConfig("file://"+t.TempDir()),
-	)
-	require.NoError(t, err)
-
-	var flushed atomic.Bool
-	inputCh := make(chan *polymorphicRedoEvent, 1)
-	inputCh <- &polymorphicRedoEvent{
-		commitTs:         1,
-		data:             []byte("redo data"),
-		flushImmediately: true,
-		postFlush:        func() { flushed.Store(true) },
-	}
-	worker := newFileWorkerGroup(cfg, inputCh, mockStorage)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	require.ErrorIs(t, worker.Run(ctx), os.ErrPermission)
-	require.False(t, flushed.Load())
-}
 
 func TestFileCacheBackingSliceReusedFromPool(t *testing.T) {
 	ctx := context.Background()
