@@ -72,22 +72,23 @@ func (s *sink) SinkType() commonType.SinkType {
 	return commonType.PulsarSinkType
 }
 
-func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	comp, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
+func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
+	comp, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig, caseSensitive)
 	defer comp.close()
 	return err
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
 	return newWithComponent(
 		ctx,
 		changefeedID,
+		keyspaceID,
 		sinkConfig,
 		comp,
 		protocol,
@@ -123,6 +124,7 @@ func newPulsarDDLProducer(
 func newWithComponent(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
+	keyspaceID uint32,
 	sinkConfig *config.SinkConfig,
 	comp component,
 	protocol config.Protocol,
@@ -150,7 +152,7 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, "pulsar")
+	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -426,41 +428,10 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.Get(schema, table)
-			rowsCount := uint64(event.Len())
-			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
-			rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
-
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					event.Rewind()
-					break
-				}
-
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
-				if err != nil {
-					return errors.Trace(err)
-				}
-
-				events = append(events, &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				})
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return errors.Trace(err)
 			}
 			s.rowChan.Push(events...)
 		}

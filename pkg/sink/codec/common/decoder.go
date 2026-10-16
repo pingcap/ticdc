@@ -14,12 +14,7 @@
 package common
 
 import (
-<<<<<<< HEAD
-=======
-	"sync/atomic"
-
 	"github.com/pingcap/log"
->>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"

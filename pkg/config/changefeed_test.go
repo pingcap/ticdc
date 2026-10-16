@@ -67,49 +67,41 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
 
-<<<<<<< HEAD
-=======
-func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
-	info := &ChangeFeedInfo{
-		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-		Config:       replicaConfig,
+func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		protocol     Protocol
+		keepRegistry bool
+	}{
+		{protocol: ProtocolAvro, keepRegistry: true},
+		{protocol: ProtocolDebeziumAvro, keepRegistry: true},
+		{protocol: ProtocolDebezium, keepRegistry: false},
 	}
 
-	changefeedConfig := info.ToChangefeedConfig()
-	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
-	require.True(t, changefeedConfig.IsLowLatencyMode())
-}
+	for _, tt := range tests {
+		t.Run(tt.protocol.String(), func(t *testing.T) {
+			t.Parallel()
 
-func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	info := &ChangeFeedInfo{Config: replicaConfig}
-	for _, level := range []string{CheckLevelCorrectness, CheckLevelNone} {
-		replicaConfig.Integrity.IntegrityCheckLevel = new(level)
-		replicaConfig.Integrity.CorruptionHandleLevel = new(CorruptionHandleLevelError)
-		converted := info.ToChangefeedConfig()
-		require.Equal(t, level, converted.SinkConfig.Integrity.IntegrityCheckLevel)
-		require.Equal(t, CorruptionHandleLevelError, converted.SinkConfig.Integrity.CorruptionHandleLevel)
-		require.NotSame(t, replicaConfig.Sink, converted.SinkConfig)
-		require.Nil(t, replicaConfig.Sink.Integrity)
-		data, err := json.Marshal(converted)
-		require.NoError(t, err)
-		var wireConfig map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(data, &wireConfig))
-		require.NotContains(t, wireConfig, "integrity")
-		var decodedSink SinkConfig
-		require.NoError(t, json.Unmarshal(wireConfig["sink_config"], &decodedSink))
-		require.Equal(t, converted.SinkConfig.Integrity, decodedSink.Integrity)
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.Protocol = util.AddressOf(tt.protocol.String())
+			cfg.Sink.SchemaRegistry = util.AddressOf("http://127.0.0.1:8088")
+			info := &ChangeFeedInfo{
+				SinkURI: "kafka://127.0.0.1:9092/topic",
+				Config:  cfg,
+			}
+
+			info.RmUnusedFields()
+			if tt.keepRegistry {
+				require.NotNil(t, info.Config.Sink.SchemaRegistry)
+				require.Equal(t, "http://127.0.0.1:8088", *info.Config.Sink.SchemaRegistry)
+			} else {
+				require.Nil(t, info.Config.Sink.SchemaRegistry)
+			}
+		})
 	}
-	replicaConfig.Integrity = nil
-	require.Same(t, replicaConfig.Sink, info.ToChangefeedConfig().SinkConfig)
-	require.Nil(t, info.ToChangefeedConfig().SinkConfig.Integrity)
-	replicaConfig.Sink = nil
-	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
 }
 
->>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
@@ -154,4 +146,64 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	changefeedConfig := info.ToChangefeedConfig()
 	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
 	require.True(t, changefeedConfig.IsLowLatencyMode())
+}
+
+func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
+	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
+		t.Run(sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.DispatchRules = []*DispatchRule{
+				nil,
+				{
+					Matcher:        []string{"sales.*", "!sales.tmp"},
+					TargetSchema:   "archive",
+					TargetTable:    "{schema}_{table}",
+					DispatcherRule: "ts",
+					PartitionRule:  "index-value",
+					IndexName:      "primary",
+					Columns:        []string{"id"},
+					TopicRule:      "sales-events",
+				},
+			}
+			info := &ChangeFeedInfo{SinkURI: sinkURI, Config: cfg}
+
+			info.RmUnusedFields()
+
+			require.Equal(t, []*DispatchRule{
+				nil,
+				{
+					Matcher:      []string{"sales.*", "!sales.tmp"},
+					TargetSchema: "archive",
+					TargetTable:  "{schema}_{table}",
+				},
+			}, info.Config.Sink.DispatchRules)
+		})
+	}
+}
+
+func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	info := &ChangeFeedInfo{Config: replicaConfig}
+	for _, level := range []string{CheckLevelCorrectness, CheckLevelNone} {
+		replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(level)
+		replicaConfig.Integrity.CorruptionHandleLevel = util.AddressOf(CorruptionHandleLevelError)
+		converted := info.ToChangefeedConfig()
+		require.Equal(t, level, converted.SinkConfig.Integrity.IntegrityCheckLevel)
+		require.Equal(t, CorruptionHandleLevelError, converted.SinkConfig.Integrity.CorruptionHandleLevel)
+		require.NotSame(t, replicaConfig.Sink, converted.SinkConfig)
+		require.Nil(t, replicaConfig.Sink.Integrity)
+		data, err := json.Marshal(converted)
+		require.NoError(t, err)
+		var wireConfig map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &wireConfig))
+		require.NotContains(t, wireConfig, "integrity")
+		var decodedSink SinkConfig
+		require.NoError(t, json.Unmarshal(wireConfig["sink_config"], &decodedSink))
+		require.Equal(t, converted.SinkConfig.Integrity, decodedSink.Integrity)
+	}
+	replicaConfig.Integrity = nil
+	require.Same(t, replicaConfig.Sink, info.ToChangefeedConfig().SinkConfig)
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig.Integrity)
+	replicaConfig.Sink = nil
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
 }

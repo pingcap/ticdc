@@ -14,12 +14,13 @@
 package columnselector
 
 import (
+	"slices"
+
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	filter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
@@ -75,10 +76,10 @@ type ColumnSelectors struct {
 }
 
 // New return a column selectors
-func New(sinkConfig *config.SinkConfig) (*ColumnSelectors, error) {
+func New(sinkConfig *config.SinkConfig, caseSensitive bool) (*ColumnSelectors, error) {
 	selectors := make([]*ColumnSelector, 0, len(sinkConfig.ColumnSelectors))
 	for _, r := range sinkConfig.ColumnSelectors {
-		selector, err := newColumnSelector(r, util.GetOrZero(sinkConfig.CaseSensitive))
+		selector, err := newColumnSelector(r, caseSensitive)
 		if err != nil {
 			return nil, err
 		}
@@ -99,9 +100,18 @@ func (c *ColumnSelectors) Get(schema, table string) *ColumnSelector {
 	return &ColumnSelector{}
 }
 
+func (c *ColumnSelectors) GetForTableInfo(tableInfo *common.TableInfo) *ColumnSelector {
+	if c == nil || tableInfo == nil {
+		return NewDefaultColumnSelector()
+	}
+	return c.Get(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+}
+
 // VerifyTables return the error if any given table cannot satisfy the column selector constraints.
 // 1. if the column is filter out, it must not be a part of handle key or the unique key.
 // 2. if the filtered out column is used in the column dispatcher, return error.
+//
+// The column dispatcher check is only applied when eventRouter is not nil.
 func (c *ColumnSelectors) VerifyTables(
 	infos []*common.TableInfo, eventRouter *eventrouter.EventRouter,
 ) error {
@@ -123,17 +133,17 @@ func (c *ColumnSelectors) VerifyTables(
 					continue
 				}
 
-				partitionDispatcher := eventRouter.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
-				switch v := partitionDispatcher.(type) {
-				case *partition.ColumnsPartitionGenerator:
-					for _, col := range v.Columns {
-						if col == columnInfo.Name.O {
+				if eventRouter != nil {
+					partitionDispatcher := eventRouter.GetPartitionGenerator(table.TableName.Schema, table.TableName.Table)
+					switch v := partitionDispatcher.(type) {
+					case *partition.ColumnsPartitionGenerator:
+						if slices.Contains(v.Columns, columnInfo.Name.O) {
 							return errors.ErrColumnSelectorFailed.GenWithStack(
 								"the filtered out column is used in the column dispatcher, "+
 									"table: %v, column: %s", table.TableName, columnInfo.Name)
 						}
+					default:
 					}
-				default:
 				}
 			}
 
@@ -151,16 +161,18 @@ func (c *ColumnSelectors) VerifyTables(
 func verifyIndices(table *common.TableInfo, retainedColumns map[string]struct{}) bool {
 	primaryKeyColumns := table.GetPrimaryKeyColumnNames()
 
-	retained := true
-	for _, name := range primaryKeyColumns {
-		if _, ok := retainedColumns[name]; !ok {
-			retained = false
-			break
+	if len(primaryKeyColumns) > 0 {
+		retained := true
+		for _, name := range primaryKeyColumns {
+			if _, ok := retainedColumns[name]; !ok {
+				retained = false
+				break
+			}
 		}
-	}
-	// primary key columns are retained, return true.
-	if retained {
-		return true
+		// primary key columns are retained, return true.
+		if retained {
+			return true
+		}
 	}
 
 	// at least one unique key columns are retained, return true.
@@ -169,7 +181,7 @@ func verifyIndices(table *common.TableInfo, retainedColumns map[string]struct{})
 			continue
 		}
 
-		retained = true
+		retained := true
 		for _, col := range index.Columns {
 			if _, ok := retainedColumns[col.Name.O]; !ok {
 				retained = false

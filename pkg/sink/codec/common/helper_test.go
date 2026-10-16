@@ -21,12 +21,14 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +46,7 @@ func TestSanitizeName(t *testing.T) {
 }
 
 func TestQueryRowChecksumQueryErrors(t *testing.T) {
-	columns := []*model.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}}
+	columns := []*model.ColumnInfo{{ID: 1, Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}}
 	for _, name := range []string{"permission denied", "other unsupported function", "missing row", "invalid value"} {
 		t.Run(name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -154,7 +156,7 @@ func TestQueryRowChecksumPreservesNumericPrecision(t *testing.T) {
 		ft := types.NewFieldType(typesList[i])
 		ft.SetFlen(10)
 		ft.SetDecimal(0)
-		columns[i] = &model.ColumnInfo{ID: int64(i + 1), Name: ast.NewCIStr(name), FieldType: *ft}
+		columns[i] = &model.ColumnInfo{ID: int64(i + 1), Name: parser_model.NewCIStr(name), FieldType: *ft}
 	}
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -179,9 +181,9 @@ func TestQueryRowChecksumPreservesNumericPrecision(t *testing.T) {
 
 func TestQueryRowChecksumEnumAndSet(t *testing.T) {
 	columns := []*model.ColumnInfo{
-		{ID: 3, Name: ast.NewCIStr("s"), FieldType: *types.NewFieldType(mysql.TypeSet)},
-		{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-		{ID: 2, Name: ast.NewCIStr("e"), FieldType: *types.NewFieldType(mysql.TypeEnum)},
+		{ID: 3, Name: parser_model.NewCIStr("s"), FieldType: *types.NewFieldType(mysql.TypeSet)},
+		{ID: 1, Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		{ID: 2, Name: parser_model.NewCIStr("e"), FieldType: *types.NewFieldType(mysql.TypeEnum)},
 	}
 	for _, null := range []bool{false, true} {
 		t.Run(map[bool]string{false: "numeric values", true: "null values"}[null], func(t *testing.T) {
@@ -223,9 +225,9 @@ func TestQueryRowChecksumGBK(t *testing.T) {
 	ft.SetCharset("gbk")
 	ft.SetCollate("gbk_bin")
 	columns := []*model.ColumnInfo{
-		{ID: 1, Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-		{ID: 2, Name: ast.NewCIStr("name"), FieldType: *ft},
-		{ID: 3, Name: ast.NewCIStr("image"), FieldType: *types.NewFieldType(mysql.TypeTinyBlob)},
+		{ID: 1, Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		{ID: 2, Name: parser_model.NewCIStr("name"), FieldType: *ft},
+		{ID: 3, Name: parser_model.NewCIStr("image"), FieldType: *types.NewFieldType(mysql.TypeTinyBlob)},
 	}
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -249,4 +251,23 @@ func TestQueryRowChecksumGBK(t *testing.T) {
 	encoded = append(binary.LittleEndian.AppendUint32(encoded, uint32(len(blob))), blob...)
 	require.Equal(t, crc32.ChecksumIEEE(encoded), actual)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifySparseChecksums(t *testing.T) {
+	column := &model.ColumnInfo{ID: 1, Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLonglong)}
+	tableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{ID: 1, Name: parser_model.NewCIStr("t"), Columns: []*model.ColumnInfo{column}})
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 3)
+	for i := range 3 {
+		rows.AppendInt64(0, int64(i+1))
+	}
+	checksum, err := calculateChecksum(rows.GetRow(1), tableInfo.GetColumns(), nil)
+	require.NoError(t, err)
+	event := &commonEvent.DMLEvent{
+		TableInfo: tableInfo, Rows: rows, Length: 3,
+		RowTypes: []commonType.RowType{commonType.RowTypeInsert, commonType.RowTypeInsert, commonType.RowTypeInsert},
+		Checksum: []*integrity.Checksum{nil, {Current: checksum}, nil},
+	}
+	require.NoError(t, VerifyChecksum(event, nil, nil, nil))
+	event.Checksum[1].Current++
+	require.ErrorContains(t, VerifyChecksum(event, nil, nil, nil), "current checksum mismatch")
 }

@@ -289,7 +289,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		}
 	}
 	return &ChangefeedConfig{
-<<<<<<< HEAD
 		ChangefeedID:             info.ChangefeedID,
 		PerformanceMode:          util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                  info.StartTs,
@@ -297,7 +296,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SinkURI:                  info.SinkURI,
 		CaseSensitive:            util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:           util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:               info.Config.Sink,
+		SinkConfig:               sinkConfig,
 		Filter:                   info.Config.Filter,
 		EnableSyncPoint:          util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:        util.GetOrZero(info.Config.SyncPointInterval),
@@ -311,32 +310,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		TimeZone:                 GetGlobalServerConfig().TZ,
 		Consistent:               info.Config.Consistent,
 		EnableTableAcrossNodes:   util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
-=======
-		ChangefeedID:                  info.ChangefeedID,
-		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
-		StartTS:                       info.StartTs,
-		TargetTS:                      info.TargetTs,
-		SinkURI:                       info.SinkURI,
-		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
-		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:                    sinkConfig,
-		Filter:                        info.Config.Filter,
-		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
-		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
-		EventCollectorBatchCount:      info.Config.EventCollectorBatchCount,
-		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
-		Epoch:                         info.Epoch,
-		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
-		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
-		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
-		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
-		TimeZone:                      GetGlobalServerConfig().TZ,
-		Consistent:                    info.Config.Consistent,
-		EnableTableAcrossNodes:        util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
->>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 		// other fields are not necessary for dispatcherManager
 	}
 }
@@ -532,8 +505,9 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
-		// protocol other than avro
-		if util.GetOrZero(info.Config.Sink.Protocol) != ProtocolAvro.String() {
+		// protocol other than avro or debezium-avro
+		protocol := util.GetOrZero(info.Config.Sink.Protocol)
+		if protocol != ProtocolAvro.String() && protocol != ProtocolDebeziumAvro.String() {
 			info.Config.Sink.SchemaRegistry = nil
 		}
 	}

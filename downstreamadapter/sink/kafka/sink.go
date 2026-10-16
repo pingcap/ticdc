@@ -74,7 +74,11 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
+	return createSaramaFactory()
+}
+
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
@@ -91,7 +95,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	}
 	options.Topic = topic
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, uri, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, uri, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
 	if err != nil {
 		return err
 	}
@@ -103,15 +110,17 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	defer claimCheck.Close()
 
 	isAvroLike := protocol == config.ProtocolAvro
-	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+	if _, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, false, isAvroLike); err != nil {
 		return err
 	}
 
-	if _, err = columnselector.New(sinkConfig); err != nil {
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 
-	factory, err := kafka.NewSaramaFactory(ctx, options, changefeedID)
+	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
+		return kafka.NewSaramaFactory(ctx, options, changefeedID)
+	})
 	if err != nil {
 		return err
 	}
@@ -135,22 +144,23 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
+	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -224,6 +234,9 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.isNormal.Load() {
+		return
+	}
 	s.eventChan.Push(event)
 }
 
@@ -259,6 +272,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) close() {
+	s.isNormal.Store(false)
 	s.eventChan.Close()
 	s.rowChan.Close()
 }
@@ -312,40 +326,15 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.Get(schema, table)
-			rowsCount := uint64(event.Len())
-			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
-			rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
-
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					event.Rewind()
-					break
-				}
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(
-					&row, partitionNum, event.TableInfo, event.CommitTs)
-				if err != nil {
-					return err
-				}
-				events = append(events, &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				})
+			selector := s.comp.columnSelector.GetForTableInfo(event.TableInfo)
+			events, err := helper.NewMQRowEvents(event, topic, partitionNum, partitionGenerator, selector)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
 			}
 			s.rowChan.Push(events...)
 		}
@@ -617,6 +606,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close() {
+	s.close()
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.comp.close()

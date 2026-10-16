@@ -148,7 +148,8 @@ type SinkConfig struct {
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
-	// SchemaRegistry is only available when the downstream is MQ using avro protocol.
+	// SchemaRegistry is only available when the downstream is MQ using avro protocol
+	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
 	// EncoderConcurrency is only available when the downstream is MQ.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
@@ -211,7 +212,6 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -411,6 +411,8 @@ func (d DateSeparator) String() string {
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	// Rules are evaluated in order, and the first matching rule wins.
+	// MQ dispatching skips rules that only configure target schema or table names.
+	// A matcher-only rule selects the default MQ topic and partition strategy.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`
@@ -976,7 +978,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}

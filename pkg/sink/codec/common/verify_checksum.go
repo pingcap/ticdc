@@ -44,6 +44,9 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB, timeZones, preTimeZ
 			event.Rewind()
 			break
 		}
+		if row.Checksum == nil {
+			continue
+		}
 		if row.Checksum.Current != 0 {
 			checksum, err := calculateChecksum(row.Row, columns, timeZones)
 			if err != nil {

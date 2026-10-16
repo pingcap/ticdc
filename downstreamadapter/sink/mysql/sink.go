@@ -87,6 +87,7 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	keyspaceID uint32,
 ) (*Sink, error) {
 	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
@@ -104,7 +105,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, keyspaceID), nil
 }
 
 func NewMySQLSink(
@@ -113,8 +114,9 @@ func NewMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
+	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode, keyspaceID)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -127,8 +129,9 @@ func newMySQLSinkWithControlDB(
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
-	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 	result := &Sink{
 		changefeedID: changefeedID,
 		dmlDB:        dmlDB,

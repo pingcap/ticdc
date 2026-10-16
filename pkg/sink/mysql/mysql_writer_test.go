@@ -50,7 +50,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
@@ -72,7 +72,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
+	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	return writer, db, mock
@@ -371,6 +371,26 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriterExecDDLReturnsStatusQueryError(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = true
+
+	event := &commonEvent.DDLEvent{
+		Type:          byte(timodel.ActionExchangeTablePartition),
+		FinishedTs:    2,
+		BlockedTables: &commonEvent.InfluencedTables{TableIDs: []int64{1}},
+	}
+	query := fmt.Sprintf("SELECT * FROM tidb_cdc.ddl_ts_v1 "+
+		"WHERE (ticdc_cluster_id, changefeed, table_id, ddl_ts, finished) "+
+		"IN (('%s', '%s', 1, 2, 1))",
+		config.GetGlobalServerConfig().ClusterID, writer.ChangefeedID.String())
+	mock.ExpectQuery(query).WillReturnError(context.DeadlineExceeded)
+
+	require.ErrorIs(t, writer.execDDL(event), context.DeadlineExceeded)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {

@@ -25,10 +25,10 @@ import (
 	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -222,6 +222,9 @@ func queryRowChecksum(
 			event.Rewind()
 			break
 		}
+		if row.Checksum == nil {
+			continue
+		}
 		columns := event.TableInfo.GetColumns()
 		if row.Checksum.Current != 0 {
 			conditions := make(map[string]any)
@@ -320,9 +323,6 @@ func queryRowChecksumAux(
 	return result
 }
 
-<<<<<<< HEAD
-// MustSnapshotQuery query the db by the snapshot read with the given commitTs
-=======
 func queryRowChecksumFromColumns(
 	ctx context.Context, conn *sql.Conn, query string, columns []*model.ColumnInfo,
 ) (checksum uint32, err error) {
@@ -397,7 +397,6 @@ func queryRowChecksumFromColumns(
 
 // MustSnapshotQuery queries a snapshot at commitTs. An optional SQL projection
 // replaces SELECT *; callers must build it from trusted, quoted column names.
->>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
 func MustSnapshotQuery(
 	ctx context.Context, db *sql.DB, commitTs uint64, schema, table string, conditions map[string]interface{},
 ) *ColumnsHolder {

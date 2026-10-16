@@ -20,6 +20,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -223,7 +225,7 @@ func TestDMLEventAppendSparseChecksums(t *testing.T) {
 		{name: "update checksum", checksums: []*integrity.Checksum{nil, nil, {Current: 456}, nil, nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tableInfo := newTestTableInfo(t, false, false)
+			tableInfo := newChecksumTestTableInfo()
 			input := NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 100, 200, tableInfo)
 			batch := NewBatchDMLEvent()
 			require.NoError(t, batch.AppendDMLEvent(input))
@@ -245,7 +247,7 @@ func TestDMLEventAppendSparseChecksums(t *testing.T) {
 					}
 					return count, tc.checksums[i], nil
 				}
-				require.NoError(t, input.AppendRow(raw, decode, nil, filter.DMLFilterContext{}))
+				require.NoError(t, input.AppendRow(raw, decode, nil))
 			}
 			require.EqualValues(t, 5, input.Length)
 			require.Len(t, input.RowTypes, 6, "updates contain two physical rows")
@@ -279,7 +281,7 @@ func TestDMLEventAppendSparseChecksums(t *testing.T) {
 }
 
 func TestBatchDMLEventChecksumEncodeAndDecode(t *testing.T) {
-	tableInfo := newTestTableInfo(t, false, false)
+	tableInfo := newChecksumTestTableInfo()
 	batch := NewBatchDMLEvent()
 	for _, checksums := range [][]*integrity.Checksum{
 		{{Current: 123, Version: 1}, {Current: 456, Previous: 123, Version: 2, Corrupted: true}, {Previous: 456, Version: 1}},
@@ -287,7 +289,7 @@ func TestBatchDMLEventChecksumEncodeAndDecode(t *testing.T) {
 		{nil, {Current: 789, Version: 2}, nil},
 		nil,
 	} {
-		dml := newDMLEventForTest(t, tableInfo,
+		dml := newChecksumTestDMLEvent(tableInfo,
 			[]common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeDelete},
 			[][]any{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}})
 		dml.Checksum = checksums
@@ -450,6 +452,8 @@ func TestBatchDMLEventAssembleRowsKeepsOriginalTableInfoForLocalRowsWithoutRouti
 	require.Equal(t, "t", batchDMLEvent.TableInfo.GetTargetTableName())
 }
 
+// TestBatchDMLEventAssembleRowsDecodesRemoteRawRows verifies size accounting
+// before and after a remotely received batch decodes its raw row payload.
 func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
@@ -467,6 +471,9 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 		Rows:          dmlEvent.Rows,
 		TableInfo:     dmlEvent.TableInfo,
 	}
+	require.Equal(t, batchDMLEvent.Rows.MemoryUsage(), batchDMLEvent.GetSize())
+	require.Positive(t, batchDMLEvent.GetSize())
+
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
 
@@ -475,10 +482,13 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, reverseEvents.Rows)
 	require.NotEmpty(t, reverseEvents.RawRows)
+	require.Equal(t, int64(len(reverseEvents.RawRows)), reverseEvents.GetSize())
 
 	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
 
 	require.Nil(t, reverseEvents.RawRows)
+	require.Equal(t, reverseEvents.Rows.MemoryUsage(), reverseEvents.GetSize())
+	require.Positive(t, reverseEvents.GetSize())
 	require.Same(t, batchDMLEvent.TableInfo, reverseEvents.TableInfo)
 	require.Equal(t, batchDMLEvent.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()), reverseEvents.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()))
 }
@@ -697,6 +707,7 @@ func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
 	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
 	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
+	t.Run("detach callbacks", verifyDMLEventDetachPostCallbacks)
 }
 
 func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
@@ -762,4 +773,50 @@ func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int64(1), enqueueCalled.Load())
+}
+
+func verifyDMLEventDetachPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	require.Empty(t, event.PostTxnFlushed)
+	require.Empty(t, event.PostTxnEnqueued)
+
+	postFlush()
+	postEnqueue()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue"}, order)
+}
+
+func newChecksumTestTableInfo() *common.TableInfo {
+	return common.NewTableInfo4Decoder("test", &model.TableInfo{
+		ID: 1, Name: parser_model.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{{ID: 1, Name: parser_model.NewCIStr("id"), State: model.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
+	})
+}
+
+func newChecksumTestDMLEvent(tableInfo *common.TableInfo, rowTypes []common.RowType, values [][]any) *DMLEvent {
+	e := NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 100, 200, tableInfo)
+	e.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), len(values))
+	e.Length = int32(len(rowTypes))
+	for _, rowType := range rowTypes {
+		e.RowTypes = append(e.RowTypes, rowType)
+		if rowType == common.RowTypeUpdate {
+			e.RowTypes = append(e.RowTypes, rowType)
+		}
+	}
+	for _, row := range values {
+		e.Rows.AppendInt64(0, row[0].(int64))
+	}
+	return e
 }
