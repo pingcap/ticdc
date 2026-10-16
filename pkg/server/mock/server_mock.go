@@ -14,7 +14,7 @@ import (
 	liveness "github.com/pingcap/ticdc/pkg/liveness"
 	node "github.com/pingcap/ticdc/pkg/node"
 	server "github.com/pingcap/ticdc/pkg/server"
-	pd "github.com/tikv/pd/client"
+	client "github.com/tikv/pd/client"
 )
 
 // MockServer is a mock of Server interface.
@@ -111,10 +111,10 @@ func (mr *MockServerMockRecorder) GetMaintainerManager() *gomock.Call {
 }
 
 // GetPdClient mocks base method.
-func (m *MockServer) GetPdClient() pd.Client {
+func (m *MockServer) GetPdClient() client.Client {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPdClient")
-	ret0, _ := ret[0].(pd.Client)
+	ret0, _ := ret[0].(client.Client)
 	return ret0
 }
 
