@@ -300,6 +300,7 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 		mysqlConfig             *config.MySQLConfig
 		expectedReadTimeout     string
 		expectedAsyncDDLTimeout string
+		expectedError           bool
 	}{
 		{
 			name:                    "default async ddl timeout",
@@ -332,6 +333,23 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 			expectedAsyncDDLTimeout: "30m",
 		},
 		{
+			name: "invalid config async ddl timeout",
+			uri:  "mysql://127.0.0.1:3306/",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("invalid"),
+			},
+			expectedError: true,
+		},
+		{
+			name: "sink uri overrides invalid config async ddl timeout",
+			uri:  "mysql://127.0.0.1:3306/?async-ddl-timeout=30m",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("invalid"),
+			},
+			expectedReadTimeout:     defaultReadTimeout,
+			expectedAsyncDDLTimeout: "30m",
+		},
+		{
 			name: "config read timeout does not change async ddl timeout",
 			uri:  "mysql://127.0.0.1:3306/",
 			mysqlConfig: &config.MySQLConfig{
@@ -350,6 +368,10 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 			require.NoError(t, err)
 			cfg := New()
 			err = cfg.Apply(uri, common.NewChangefeedID4Test("default", "changefeed-01"), newChangefeedConfig(tc.mysqlConfig))
+			if tc.expectedError {
+				require.ErrorContains(t, err, "ErrMySQLInvalidConfig")
+				return
+			}
 			require.NoError(t, err)
 
 			require.Equal(t, tc.expectedReadTimeout, cfg.ReadTimeout)

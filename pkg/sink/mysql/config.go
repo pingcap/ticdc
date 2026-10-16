@@ -277,6 +277,9 @@ func (c *Config) Apply(
 	if err = getDuration(query, "async-ddl-timeout", &c.AsyncDDLTimeout); err != nil {
 		return err
 	}
+	if _, err = time.ParseDuration(c.AsyncDDLTimeout); err != nil {
+		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+	}
 	if err = getBatchDMLEnable(query, &c.BatchDMLEnable); err != nil {
 		return err
 	}
