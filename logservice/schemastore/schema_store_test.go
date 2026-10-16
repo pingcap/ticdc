@@ -14,10 +14,12 @@
 package schemastore
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -28,6 +30,56 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:                    lifecycleCtx,
+		cancel:                 lifecycleCancel,
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
+	}
+	initializationCtx, cancel := store.newInitializationContext(context.Background())
+	defer cancel()
+
+	// Registration holds this lock while loading the initial snapshot. Close
+	// must cancel that work before waiting for the lock.
+	store.keyspaceLocker.Lock()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close(context.Background())
+	}()
+	select {
+	case <-initializationCtx.Done():
+		require.ErrorIs(t, initializationCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		store.keyspaceLocker.Unlock()
+		require.FailNow(t, "keyspace initialization context was not canceled")
+	}
+	store.keyspaceLocker.Unlock()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema store did not close after registration finished")
+	}
+}
+
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	storage := newPersistentStorageForTest(t.TempDir(), nil)
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {dataStorage: storage},
+		},
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
 
 func TestIgnoreDDLByCommitTs(t *testing.T) {
 	// 1. Setup a mock SchemaStore.
