@@ -794,3 +794,7 @@ func TestReceiveAndDispatchChangeEventsEOFIsRetriable(t *testing.T) {
 		})
 	}
 }
+
+func (m *recordingRegionEventDynamicStream) CheckMemoryPressure() {}
+
+func (m *mockRegionEventDynamicStream) CheckMemoryPressure() {}

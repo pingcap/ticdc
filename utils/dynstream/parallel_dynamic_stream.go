@@ -258,6 +258,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	}
 }
 
+func (s *parallelDynamicStream[A, P, T, D, H]) CheckMemoryPressure() {
+	if !s.closed.Load() && s.memControl != nil {
+		s.memControl.checkMemoryPressure()
+	}
+}
+
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
 	metrics := Metrics[A, P]{}
 	for _, ds := range s.streams {

@@ -76,6 +76,9 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 	if !appended {
 		return
 	}
+	if event.eventType.Droppable && event.eventType.Property != PeriodicSignal {
+		path.reclaimed.Store(false)
+	}
 	addSignal()
 }
 
@@ -83,6 +86,11 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 	path *pathInfo[A, P, T, D, H],
 	notifyDrop bool,
 ) {
+	if !notifyDrop && path.areaMemStat != nil &&
+		path.areaMemStat.settings.Load().algorithm == MemoryControlForEventCollector {
+		q.reclaimBlockedPath(path)
+		return
+	}
 	for {
 		event, ok := path.pendingQueue.PopFront()
 		if !ok {
@@ -99,6 +107,48 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 	}
 
 	path.pendingSize.Store(0)
+}
+
+// reclaimBlockedPath runs only on the queue owner. Keep recovery notifications
+// and watermarks so a later Wake can recover even without new upstream events.
+func (q *eventQueue[A, P, T, D, H]) reclaimBlockedPath(path *pathInfo[A, P, T, D, H]) {
+	if path.removed.Load() || !path.blocking.Load() {
+		return
+	}
+	releasedBytes := int64(0)
+	count := path.pendingQueue.Length()
+	for i := 0; i < count; i++ {
+		e, _ := path.pendingQueue.PopFront()
+		if e.eventType.Droppable && e.eventType.Property != PeriodicSignal {
+			if replacement := q.handler.OnDrop(e.event); replacement != nil {
+				recoveryEvent := replacement.(T)
+				// Preserve the wrapper overhead included in the original size.
+				recoverySize := e.eventSize - q.handler.GetSize(e.event) + q.handler.GetSize(recoveryEvent)
+				if recoverySize < e.eventSize {
+					releasedBytes += int64(e.eventSize - recoverySize)
+					e.event = recoveryEvent
+					e.eventSize = recoverySize
+					e.eventType = q.handler.GetType(recoveryEvent)
+				}
+			}
+		}
+		path.pendingQueue.PushBack(e)
+	}
+	path.reclaimed.Store(true)
+	for releasedBytes > 0 {
+		pending := path.pendingSize.Load()
+		// RemovePath concurrently transfers the remaining accounting out of
+		// this path. Claim only bytes still owned here, avoiding a double
+		// decrement against other paths in the same area.
+		if path.removed.Load() || pending < releasedBytes {
+			return
+		}
+		if path.pendingSize.CompareAndSwap(pending, pending-releasedBytes) {
+			path.areaMemStat.decPendingSize(path, releasedBytes)
+			path.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
+			return
+		}
+	}
 }
 
 func (q *eventQueue[A, P, T, D, H]) blockPath(path *pathInfo[A, P, T, D, H]) {
@@ -149,8 +199,8 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 			// The signal could contain more events than the pendingQueue,
 			// which is possible when the path is removed or recovered from blocked.
 			// We should ignore the signal completely.
-			q.signalQueue.PopFront()
 			q.totalPendingLength.Add(-int64(signal.eventCount))
+			q.signalQueue.PopFront()
 			continue
 		}
 		firstGroup := firstEvent.eventType.DataGroup

@@ -762,6 +762,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	request := requestResult.request
 
+	// A syncpoint-blocked consumer needs no more DML scans. Keep ready,
+	// handshake and no-data progress above this gate, without spending scan
+	// tokens or reserving shared memory needed by lagging dispatchers.
+	if task.availableMemoryQuota.Load() == 0 {
+		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		return
+	}
+
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.

@@ -57,6 +57,7 @@ type DispatcherService interface {
 	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
+	GetPendingSyncPointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
 	EnableIgnoreUpdateOnlyColumns() bool
@@ -1340,6 +1341,20 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,
 		Stage:                blockStage,
 	}
+}
+
+// GetPendingSyncPointTs reports a barrier already being handled by this
+// dispatcher. It does not include redo-watermark waits or queued syncpoints.
+func (d *BasicDispatcher) GetPendingSyncPointTs() uint64 {
+	if common.IsRedoMode(d.GetMode()) {
+		return 0
+	}
+	pending, stage := d.blockEventStatus.getEventAndStage()
+	if pending == nil || pending.GetType() != commonEvent.TypeSyncPointEvent ||
+		(stage != heartbeatpb.BlockStage_WAITING && stage != heartbeatpb.BlockStage_WRITING) {
+		return 0
+	}
+	return pending.GetCommitTs()
 }
 
 func (d *BasicDispatcher) Remove() {
