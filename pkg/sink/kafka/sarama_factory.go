@@ -83,7 +83,7 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (ClusterAdminClient, error) {
+func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (AdminClient, error) {
 	start := time.Now()
 	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start)
@@ -119,7 +119,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
@@ -183,7 +183,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 }
 
 func (f *saramaFactory) MetricsCollector(
-	adminClient ClusterAdminClient,
+	adminClient AdminClient,
 ) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,

@@ -156,7 +156,7 @@ function run() {
 	start_tidb_cluster --workdir "$WORK_DIR"
 
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	local sink_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 	local changefeed_id="redo-table-route-test"
@@ -172,9 +172,11 @@ function run() {
 	local pre_redo_users_count
 	pre_redo_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	write_redo_only_dml
 
@@ -184,6 +186,8 @@ function run() {
 	current_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	ensure 50 check_redo_resolved_ts "$changefeed_id" "$current_tso" "$storage_path" "$tmp_download_path/meta"
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 	export GO_FAILPOINTS=''
 
@@ -203,11 +207,13 @@ function run() {
 
 	verify_redo_apply_route
 
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 	run_sql "INSERT INTO source_db.users VALUES (101, 'after_redo', 'after_redo@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	wait_query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed WHERE id = 101 AND name = 'after_redo';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "1" 30
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process "$CDC_BINARY"
 }
 

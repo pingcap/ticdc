@@ -36,7 +36,7 @@ type components struct {
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
-	adminClient    kafka.ClusterAdminClient
+	adminClient    kafka.AdminClient
 	factory        kafka.Factory
 	claimCheck     *claimcheck.ClaimCheck
 }
@@ -58,6 +58,7 @@ func newKafkaSinkComponent(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -90,14 +91,14 @@ func newKafkaSinkComponent(
 		return comp, protocol, err
 	}
 
-	isAvroLike := protocol == config.ProtocolAvro
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	comp.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, isAvroLike)
+		sinkConfig, caseSensitive, topic, false, isAvroLike)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	comp.columnSelector, err = columnselector.New(sinkConfig)
+	comp.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return comp, protocol, err
 	}

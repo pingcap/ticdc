@@ -366,7 +366,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
-		area.pathMap.Range(func(k, v interface{}) bool {
+		area.pathMap.Range(func(k, v any) bool {
 			usedMemory := v.(*pathInfo[A, P, T, D, H]).pendingSize.Load()
 			availableMemory := max(0, areaMetric.PathMaxMemoryValue-usedMemory)
 			areaMetric.PathAvailableMemory[k.(P)] = availableMemory

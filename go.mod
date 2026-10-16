@@ -44,7 +44,7 @@ require (
 	github.com/integralist/go-findroot v0.0.0-20160518114804-ac90681525dc
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.18.6
 	github.com/linkedin/goavro/v2 v2.14.0
 	github.com/mailru/easyjson v0.9.1
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
@@ -59,6 +59,7 @@ require (
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260730162841-dc0024f088cb
 	github.com/pingcap/tiflow v0.0.0-20260731065716-b558e06929bf
 	github.com/prometheus/client_golang v1.23.0
+	github.com/prometheus/client_model v0.6.2
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9
 	github.com/robfig/cron v1.2.0
@@ -72,6 +73,9 @@ require (
 	github.com/tikv/pd v1.1.0-beta.0.20260611085009-4ae8cc5777be
 	github.com/tikv/pd/client v0.0.0-20260611085009-4ae8cc5777be
 	github.com/tinylib/msgp v1.5.0
+	github.com/twmb/franz-go v1.21.1
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
 	github.com/zeebo/assert v1.3.0
@@ -298,7 +302,6 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/qri-io/jsonpointer v0.1.1 // indirect

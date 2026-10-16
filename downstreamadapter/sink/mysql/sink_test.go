@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, common.DefaultKeyspaceID)
 	return ctx, sink, mock
 }
 
@@ -55,7 +56,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, common.DefaultKeyspaceID)
 	return ctx, sink, mock
 }
 
@@ -75,7 +76,7 @@ func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false)
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, common.DefaultKeyspaceID)
 	return ctx, sink, dmlMock, controlMock
 }
 
@@ -128,8 +129,23 @@ func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
 	mock.ExpectCommit()
 }
 
+func TestMysqlSinkBatchConfig(t *testing.T) {
+	cfg := mysql.New()
+	cfg.MaxTxnRow = 128
+	cfg.MaxAllowedPacket = 4096
+
+	sink := &Sink{
+		cfg:        cfg,
+		maxTxnRows: cfg.MaxTxnRow,
+		dmlWriter:  make([]*mysql.Writer, 3),
+	}
+
+	require.Equal(t, 384, sink.BatchCount())
+	require.Equal(t, 4096, sink.BatchBytes())
+}
+
 // Test callback and tableProgress works as expected after AddDMLEvent
-func TestMysqlSinkBasicFunctionality(t *testing.T) {
+func TestMysqlSinkFlushEvents(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
 	var count atomic.Int64
@@ -188,7 +204,9 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
 	ddlEvent2.PostFlush()
 
@@ -275,7 +293,9 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	sink.AddDMLEvent(dmlEvent)
 
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return !sink.IsNormal()
+	}, 5*time.Second, 10*time.Millisecond, "the sink should stop being normal after the error")
 
 	err := mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -409,7 +429,9 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	sink.AddDMLEvent(dmlEvent2)
 
 	// Wait for processing
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "both DML events should be flushed")
 
 	// Verify all expectations were met
 	err := mock.ExpectationsWereMet()
@@ -493,8 +515,35 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectClose() // Expect database close when sink.Close() is called
 
-	// Call GetTableRecoveryInfo with removeDDLTs=true
-	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	sink.SetWriteGate(gate)
+
+	type recoveryResult struct {
+		startTsList   []int64
+		skipSyncpoint []bool
+		skipDML       []bool
+		err           error
+	}
+	resultCh := make(chan recoveryResult, 1)
+	go func() {
+		startTsList, skipSyncpoint, skipDML, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+		resultCh <- recoveryResult{startTsList, skipSyncpoint, skipDML, err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("DDL-ts cleanup passed through a closed capture write gate: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	result := <-resultCh
+	resultStartTsList := result.startTsList
+	skipSyncpointList := result.skipSyncpoint
+	skipDMLList := result.skipDML
+	err := result.err
 
 	require.NoError(t, err)
 	require.Len(t, resultStartTsList, 3)

@@ -16,7 +16,7 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-default-value-test-$RANDOM"
 	case $SINK_TYPE in
@@ -53,7 +53,10 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	# ticdc cost too much sink DDL, just leave more time here
 	check_table_exists mark.finish_mark_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 600
 	check_table_exists mark.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	check_logs $WORK_DIR
 fi

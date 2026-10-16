@@ -65,13 +65,14 @@ const (
 	// The upper limit of max multi update row size(8KB).
 	maxMaxMultiUpdateRowSize = 8192
 
-	defaultTiDBTxnMode    = txnModeOptimistic
-	defaultReadTimeout    = "2m"
-	defaultWriteTimeout   = "2m"
-	defaultDialTimeout    = "2m"
-	defaultSafeMode       = false
-	defaultTxnIsolationRC = "READ-COMMITTED"
-	defaultCharacterSet   = "utf8mb4"
+	defaultTiDBTxnMode     = txnModeOptimistic
+	defaultReadTimeout     = "2m"
+	defaultWriteTimeout    = "2m"
+	defaultDialTimeout     = "2m"
+	defaultAsyncDDLTimeout = "2m"
+	defaultSafeMode        = false
+	defaultTxnIsolationRC  = "READ-COMMITTED"
+	defaultCharacterSet    = "utf8mb4"
 
 	// BackoffBaseDelay indicates the base delay time for retrying.
 	BackoffBaseDelay = 100 * time.Millisecond
@@ -336,7 +337,7 @@ func NewMysqlConfigAndDBs(
 func newMysqlConfigAndDB(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
 ) (cfg *Config, db *sql.DB, dsnStr string, err error) {
-	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
+	log.Info("create db connection", zap.String("sinkURI", util.MaskSensitiveDataInURIForError(sinkURI.String())))
 	// create db connection
 	cfg = New()
 	err = cfg.Apply(sinkURI, changefeedID, config)

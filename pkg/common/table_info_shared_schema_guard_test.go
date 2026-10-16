@@ -79,13 +79,13 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"PKIsHandle", "IsCommonHandle", "CommonHandleVersion",
 				"Comment", "AutoIncID", "AutoIncIDExtra", "AutoIDCache", "AutoRandID",
 				"MaxColumnID", "MaxIndexID", "MaxForeignKeyID", "MaxConstraintID", "UpdateTS", "AutoIDSchemaID",
-				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions", "TableSplitPolicy",
+				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions",
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
 				"Revision", "DBID",
 				// These table-level storage settings do not affect the shared column schema.
-				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
+				"Mode",
 			},
 		},
 		{
@@ -106,8 +106,8 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 			typeName:        "IndexInfo",
 			expectedFields: []string{
 				"ID", "Name", "Table", "Columns", "State", "BackfillState", "Comment", "Tp", "Unique", "Primary",
-				"Invisible", "Global", "MVIndex", "VectorInfo", "InvertedInfo", "FullTextInfo",
-				"ConditionExprString", "AffectColumn", "RegionSplitPolicy", "GlobalIndexVersion",
+				"Invisible", "Global", "MVIndex", "VectorInfo",
+				"ConditionExprString", "AffectColumn", "GlobalIndexVersion",
 			},
 		},
 		{
@@ -210,7 +210,7 @@ func buildRequiredTypesByPackage(cases []structGuardCase) map[packageKey][]strin
 func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 	t.Helper()
 
-	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@master")
+	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@release-8.5")
 	output, cmdErr := cmd.CombinedOutput()
 	mod, decodeErr := decodeModuleInfo(output)
 	require.NoError(t, decodeErr, "unmarshal module metadata for %s failed", modulePath)
