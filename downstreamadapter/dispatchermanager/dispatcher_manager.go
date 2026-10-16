@@ -291,7 +291,7 @@ func NewDispatcherManager(
 		}
 	}
 
-	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID)
+	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID, manager.keyspaceID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -316,7 +316,7 @@ func NewDispatcherManager(
 
 	router, err := routing.NewRouter(
 		manager.changefeedID,
-		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.CaseSensitive,
 		manager.config.SinkConfig.DispatchRules,
 	)
 	if err != nil {

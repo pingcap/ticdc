@@ -598,7 +598,7 @@ func (w *Writer) flushAndRotateFile(ctx context.Context) error {
 	// which could cause considerable network bandwidth waste.
 	err = w.rotate(ctx)
 	if err != nil {
-		return nil
+		return err
 	}
 	w.metricFlushAllDuration.Observe(time.Since(start).Seconds())
 

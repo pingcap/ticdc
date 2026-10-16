@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -201,6 +202,55 @@ func newAdminForTest(t *testing.T, rules []*config.DispatchRule) *Admin {
 	)
 	require.NoError(t, err)
 	return admin
+}
+
+// TestAdminCaseSensitivity checks that admission state is keyed by table identity,
+// so a differently spelled release only matches when the changefeed is
+// case-insensitive.
+func TestAdminCaseSensitivity(t *testing.T) {
+	t.Parallel()
+
+	newAdmin := func(t *testing.T, caseSensitive bool) *Admin {
+		t.Helper()
+		admin, err := NewAdmin(
+			common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+			&config.ReplicaConfig{
+				CaseSensitive: util.AddressOf(caseSensitive),
+				Sink:          &config.SinkConfig{DispatchRules: routeAllTo("target", "t")},
+			},
+			nil,
+			[]commonEvent.Table{{
+				SchemaID: 1,
+				TableID:  1,
+				SchemaTableName: &commonEvent.SchemaTableName{
+					SchemaName: "db1",
+					TableName:  "t",
+				},
+			}},
+		)
+		require.NoError(t, err)
+		return admin
+	}
+
+	t.Run("case insensitive release matches another spelling", func(t *testing.T) {
+		t.Parallel()
+		admin := newAdmin(t, false)
+		admissions := []Admission{release("DB1", "T")}
+		require.True(t, admin.Precheck(10, admissions))
+		require.True(t, admin.Apply(10, admissions))
+		require.Empty(t, admin.activeRoutes)
+		require.Empty(t, admin.registry.source2Target)
+	})
+
+	t.Run("case sensitive release needs the exact spelling", func(t *testing.T) {
+		t.Parallel()
+		admin := newAdmin(t, true)
+		admissions := []Admission{release("DB1", "T")}
+		require.True(t, admin.Precheck(10, admissions))
+		require.True(t, admin.Apply(10, admissions))
+		require.Len(t, admin.activeRoutes, 1)
+		require.Len(t, admin.registry.source2Target, 1)
+	})
 }
 
 func admit(schema, table, targetSchema, targetTable string) Admission {

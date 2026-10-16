@@ -284,6 +284,28 @@ func TestNewWriter(t *testing.T) {
 	require.Equal(t, w.running.Load(), false)
 }
 
+func TestSyncWriteReturnsRotationError(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return(os.ErrPermission)
+	mockStorage.EXPECT().Close()
+
+	writerCfg := newTestWriterConfig(t,
+		common.NewChangeFeedIDWithName("test-rotation-error", common.DefaultKeyspaceName), nil)
+	w, err := newWriter(writerCfg, redo.RedoRowLogFileType, mockStorage)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, w.Close()) })
+
+	flushed := false
+	event := &pevent.RedoRowEvent{
+		StartTs:  1,
+		CommitTs: 2,
+		Callback: func() { flushed = true },
+	}
+	require.ErrorIs(t, w.SyncWrite(context.Background(), event), os.ErrPermission)
+	require.False(t, flushed)
+}
+
 func TestWriterFlushWaitsForWriteGate(t *testing.T) {
 	dir := t.TempDir()
 	writerCfg := newTestWriterConfig(
