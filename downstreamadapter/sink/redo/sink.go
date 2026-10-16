@@ -159,8 +159,8 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := uint64(event.Len())
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 	postEnqueue, postFlush := event.DetachPostCallbacks()
-	rowPostEnqueue := helper.NewRowCallback(uint64(rowsCount), postEnqueue)
-	rowPostFlush := helper.NewRowCallback(uint64(rowsCount), postFlush)
+	rowPostEnqueue := helper.NewRowCallback(rowsCount, postEnqueue)
+	rowPostFlush := helper.NewRowCallback(rowsCount, postFlush)
 
 	var (
 		startTs         = event.GetStartTs()

@@ -45,7 +45,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
 		if err != nil {
-			return nil
+			return err
 		}
 		if flag {
 			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
