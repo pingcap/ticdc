@@ -156,7 +156,7 @@ type SinkConfig struct {
 	// Terminator is NOT available when the downstream is DB.
 	Terminator *string `toml:"terminator" json:"terminator,omitempty"`
 	// DateSeparator is only available when the downstream is Storage.
-	DateSeparator *string `toml:"date-separator" json:"date-separator,omitempty"`
+	DateSeparator *DateSeparator `toml:"date-separator" json:"date-separator,omitempty"`
 	// EnablePartitionSeparator is only available when the downstream is Storage.
 	EnablePartitionSeparator *bool `toml:"enable-partition-separator" json:"enable-partition-separator,omitempty"`
 	// FileIndexWidth is only available when the downstream is Storage
@@ -372,6 +372,20 @@ func (d *DateSeparator) FromString(separator string) error {
 		return cerror.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(separator)
 	}
 
+	return nil
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (d DateSeparator) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (d *DateSeparator) UnmarshalText(text []byte) error {
+	if err := d.FromString(string(text)); err != nil {
+		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid date separator %q", text)
+	}
 	return nil
 }
 
@@ -733,6 +747,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `toml:"write-timeout" json:"write-timeout,omitempty"`
 	ReadTimeout                  *string `toml:"read-timeout" json:"read-timeout,omitempty"`
 	Timeout                      *string `toml:"timeout" json:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `toml:"async-ddl-timeout" json:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `toml:"enable-batch-dml" json:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `toml:"enable-multi-statement" json:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `toml:"enable-cache-prepared-statement" json:"enable-cache-prepared-statement,omitempty"`
@@ -883,14 +898,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	// validate storage sink related config
 	if sinkURI != nil && IsStorageScheme(sinkURI.Scheme) {
-		// validate date separator
-		if len(util.GetOrZero(s.DateSeparator)) > 0 {
-			var separator DateSeparator
-			if err := separator.FromString(util.GetOrZero(s.DateSeparator)); err != nil {
-				return cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
-			}
-		}
-
 		// File index width should be in [minFileIndexWidth, maxFileIndexWidth].
 		// In most scenarios, the user does not need to change this configuration,
 		// so the default value of this parameter is not set and just make silent

@@ -208,7 +208,7 @@ func (d *BasicDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 }
 
 func (d *BasicDispatcher) GetStartTs() uint64 {
-	return d.startTs
+	return atomic.LoadUint64(&d.startTs)
 }
 
 func (d *BasicDispatcher) SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs bool) {
