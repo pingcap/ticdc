@@ -116,8 +116,12 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 	}
 
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastRowTypeCount := len(lastDMLEvent.RowTypes)
 		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
 		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.RowKeys = appendOptionalDMLValues(lastDMLEvent.RowKeys, row.RowKeys, lastRowTypeCount, len(row.RowTypes))
+		// Checksums follow logical rows; updates occupy two physical row slots.
+		lastDMLEvent.Checksum = appendOptionalDMLValues(lastDMLEvent.Checksum, row.Checksum, int(lastDMLEvent.Length), int(row.Length))
 		lastDMLEvent.Length += row.Length
 		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
 		return events
@@ -127,4 +131,13 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 		zap.Int64("tableID", row.GetTableID()),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 	return events
+}
+
+func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeCount int) []T {
+	if len(last) == 0 && len(row) != 0 {
+		last = make([]T, lastRowTypeCount)
+	} else if len(last) != 0 && len(row) == 0 {
+		row = make([]T, rowRowTypeCount)
+	}
+	return append(last, row...)
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -31,7 +32,8 @@ import (
 )
 
 // VerifyChecksum calculate the checksum value, and compare it with the expected one, return error if not identical.
-func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
+// Timestamp locations are keyed by column name. Missing locations use the local time zone.
+func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB, timeZones, preTimeZones map[string]string) error {
 	// if expected is 0, it means the checksum is not enabled, so we don't need to verify it.
 	// the data maybe restored by br, and the checksum is not enabled, so no expected here.
 	columns := event.TableInfo.GetColumns()
@@ -43,7 +45,7 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 			break
 		}
 		if row.Checksum.Current != 0 {
-			checksum, err := calculateChecksum(row.Row, columns)
+			checksum, err := calculateChecksum(row.Row, columns, timeZones)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -60,7 +62,7 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 			}
 		}
 		if row.Checksum.Previous != 0 {
-			checksum, err := calculateChecksum(row.PreRow, columns)
+			checksum, err := calculateChecksum(row.PreRow, columns, preTimeZones)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -87,7 +89,7 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 
 // calculate the checksum, caller should make sure all columns is ordered by the column's id.
 // by follow: https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/util/rowcodec/common.go#L294
-func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo) (uint32, error) {
+func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo, timeZones map[string]string) (uint32, error) {
 	var (
 		checksum uint32
 		err      error
@@ -97,7 +99,7 @@ func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo) (uint32, e
 		if len(buf) > 0 {
 			buf = buf[:0]
 		}
-		buf, err = buildChecksumBytes(buf, row, idx, col)
+		buf, err = buildChecksumBytes(buf, row, idx, col, timeZones[col.Name.O])
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
@@ -108,7 +110,7 @@ func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo) (uint32, e
 
 // buildChecksumBytes append value to the buf, mysqlType is used to convert value interface to concrete type.
 // by follow: https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/util/rowcodec/common.go#L308
-func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *model.ColumnInfo) ([]byte, error) {
+func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *model.ColumnInfo, location string) ([]byte, error) {
 	if row.IsNull(idx) {
 		return buf, nil
 	}
@@ -133,8 +135,17 @@ func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *model.ColumnInf
 	case mysql.TypeBit:
 		number := MustBinaryLiteralToInt(row.GetBytes(idx))
 		buf = binary.LittleEndian.AppendUint64(buf, number)
+	case mysql.TypeTimestamp:
+		// Match the legacy consumer: normalize timestamps to UTC using the
+		// location carried by Simple messages, or the local time zone for Avro.
+		ts, err := util.ConvertTimezone(d.GetMysqlTime().String(), location)
+		if err != nil {
+			log.Panic("convert timestamp to timezone failed",
+				zap.String("location", location), zap.Error(err))
+		}
+		buf = appendLengthValue(buf, []byte(ts))
 	case mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,
-		mysql.TypeDatetime, mysql.TypeDate, mysql.TypeTimestamp, mysql.TypeNewDate, mysql.TypeDuration,
+		mysql.TypeDatetime, mysql.TypeDate, mysql.TypeNewDate, mysql.TypeDuration,
 		mysql.TypeNewDecimal, mysql.TypeJSON, mysql.TypeTiDBVectorFloat32:
 		buf = appendLengthValue(buf, UnsafeStringToBytes(fmt.Sprintf("%v", d.GetValue())))
 	case mysql.TypeNull, mysql.TypeGeometry:

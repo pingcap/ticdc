@@ -214,8 +214,11 @@ func (d *decoder) assembleDMLEventFromDecoded(
 		}
 	}
 	if found {
-		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-			return nil
+		if err = common.VerifyChecksum(event, d.upstreamTiDB, nil, nil); err != nil {
+			log.Panic("verify row checksum failed",
+				zap.String("schema", event.TableInfo.GetSchemaName()),
+				zap.String("table", event.TableInfo.GetTableName()),
+				zap.Uint64("commitTs", event.GetCommitTs()), zap.Error(err))
 		}
 	}
 
@@ -301,6 +304,12 @@ func assembleEvent(
 		}
 		tiCol.SetType(mysqlType)
 		tiCol.SetFlag(flag)
+		switch value := value.(type) {
+		case types.Time:
+			tiCol.SetDecimal(value.Fsp())
+		case types.Duration:
+			tiCol.SetDecimal(value.Fsp)
+		}
 		columns = append(columns, tiCol)
 	}
 
@@ -467,13 +476,14 @@ func getColumnValue(
 			value = types.NewDecFromFloatForTest(v)
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.MaxFsp)
+		// Fractional precision is preserved in the Avro string and affects the checksum.
+		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), mysqlType, types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		value = val
 	case mysql.TypeDuration:
-		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.MaxFsp)
+		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), types.GetFsp(value.(string)))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
