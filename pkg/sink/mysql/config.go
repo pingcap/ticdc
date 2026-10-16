@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -108,12 +107,9 @@ type Config struct {
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
 	TidbTxnMode            string
-	// tidbTxnModeSpecified indicates whether TidbTxnMode is explicitly set by user via sink URI or changefeed config.
-	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
-	tidbTxnModeSpecified bool
-	ReadTimeout          string
-	WriteTimeout         string
-	DialTimeout          string
+	ReadTimeout            string
+	WriteTimeout           string
+	DialTimeout            string
 	// AsyncDDLTimeout controls the read timeout for the async DDL DB pool.
 	// If it is not explicitly set, it defaults to defaultAsyncDDLTimeout.
 	AsyncDDLTimeout string
@@ -228,12 +224,12 @@ func (c *Config) Apply(
 ) (err error) {
 	if sinkURI == nil {
 		log.Error("empty SinkURI")
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
+		return errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
 	}
 	c.sinkURI = sinkURI
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsMySQLCompatibleScheme(scheme) {
-		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
+		return errors.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 
 	if cfg != nil {
@@ -278,7 +274,7 @@ func (c *Config) Apply(
 		return err
 	}
 	if _, err = time.ParseDuration(c.AsyncDDLTimeout); err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if err = getBatchDMLEnable(query, &c.BatchDMLEnable); err != nil {
 		return err
@@ -500,12 +496,12 @@ func configureControlDBConn(db *sql.DB) {
 // IsSinkSafeMode returns whether the sink is in safe mode.
 func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool, error) {
 	if sinkURI == nil {
-		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
+		return false, errors.ErrMySQLInvalidConfig.GenWithStack("fail to open MySQL sink, empty SinkURI")
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsMySQLCompatibleScheme(scheme) {
-		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
+		return false, errors.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
 	var safeMode bool
@@ -523,10 +519,10 @@ func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *b
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid worker-count %d, which must be greater than 0", c))
 	}
 	if c > maxWorkerCount {
@@ -548,10 +544,10 @@ func getMaxTxnRow(values url.Values, maxTxnRow *int) error {
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-txn-row %d, which must be greater than 0", c))
 	}
 	if c > maxMaxTxnRow {
@@ -571,10 +567,10 @@ func getMaxMultiUpdateRowCount(values url.Values, maxMultiUpdateRow *int) error 
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-multi-update-row %d, which must be greater than 0", c))
 	}
 	if c > maxMaxMultiUpdateRowCount {
@@ -594,10 +590,10 @@ func getMaxMultiUpdateRowSize(values url.Values, maxMultiUpdateRowSize *int) err
 
 	c, err := strconv.Atoi(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if c < 0 {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig,
+		return errors.WrapError(errors.ErrMySQLInvalidConfig,
 			fmt.Errorf("invalid max-multi-update-row-size %d, "+
 				"which must be greater than or equal to 0", c))
 	}
@@ -655,7 +651,7 @@ func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, t
 	name := fmt.Sprintf("cdc_mysql_tls%s_%s", changefeedID.Keyspace(), changefeedID.ID())
 	err = dmysql.RegisterTLSConfig(name, tlsCfg)
 	if err != nil {
-		return cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 	*tls = "?tls=" + name
 	return nil
@@ -682,13 +678,13 @@ func getTimezone(serverTimezone string, values url.Values, timezone *string) err
 
 	changefeedTimezone, err := util.GetTimezone(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	*timezone = fmt.Sprintf(`"%s"`, changefeedTimezone.String())
 	// We need to check whether the timezone of the TiCDC server and the sink-uri are consistent.
 	// If they are inconsistent, it may cause the data to be inconsistent.
 	if changefeedTimezone.String() != serverTimezone {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, errors.Errorf(
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, errors.Errorf(
 			"the timezone of the TiCDC server and the sink-uri are inconsistent. "+
 				"TiCDC server timezone: %s, sink-uri timezone: %s. "+
 				"Please make sure that the timezone of the TiCDC server, "+
@@ -706,7 +702,7 @@ func getDuration(values url.Values, key string, target *string) error {
 	}
 	_, err := time.ParseDuration(s)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	*target = s
 	return nil
@@ -745,7 +741,7 @@ func getBool(values url.Values, key string, target *bool) error {
 	if len(s) > 0 {
 		enable, err := strconv.ParseBool(s)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+			return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 		}
 		*target = enable
 	}

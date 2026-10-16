@@ -48,10 +48,9 @@ const (
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
-	id     int
-	ctx    context.Context
-	cancel context.CancelFunc
-	db     *sql.DB
+	id  int
+	ctx context.Context
+	db  *sql.DB
 	// asyncDB is used only by the TiDB ADD INDEX execution path, whose
 	// read timeout is intentionally independent from the regular DB.
 	asyncDB      *sql.DB
