@@ -130,6 +130,11 @@ func (e *encodingWorkerGroup) AddEvent(ctx context.Context, event *commonEvent.R
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
 	case err := <-e.closed:
+		// ctx.Done and e.closed can become ready together when the caller cancels
+		// the writer, so prefer the cancellation over the stopped-worker error.
+		if ctxErr := context.Cause(ctx); ctxErr != nil {
+			return errors.Trace(ctxErr)
+		}
 		return errors.WrapError(errors.ErrRedoWriterStopped, err)
 	case e.inputChs[idx] <- event:
 	}
@@ -156,6 +161,10 @@ func (e *encodingWorkerGroup) runWorker(ctx context.Context, idx int) error {
 			case <-ctx.Done():
 				return errors.Trace(context.Cause(ctx))
 			case err := <-e.closed:
+				// Prefer the cancellation when both cases fire, see AddEvent.
+				if ctxErr := context.Cause(ctx); ctxErr != nil {
+					return errors.Trace(ctxErr)
+				}
 				return errors.WrapError(errors.ErrRedoWriterStopped, err)
 			case e.outputCh <- redoLogEvent:
 			}
