@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +53,11 @@ type Barrier struct {
 	// routeAdmin gates route-affecting DDLs before Barrier emits WRITE/PASS
 	// actions. A nil value keeps Barrier on the normal non-route path.
 	routeAdmin *routing.Admin
+
+	// lastSyncPointTs is the commitTs of the latest syncpoint whose writer dispatcher
+	// reported it done, i.e. it has been written to the downstream. It is read by the
+	// maintainer's checkpoint goroutine for metrics, so it must be atomic.
+	lastSyncPointTs atomic.Uint64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -422,6 +428,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
+		if event.isSyncPoint {
+			b.updateLastSyncPointTs(event.commitTs)
+		}
 	}
 
 	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
@@ -557,6 +566,23 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	}
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 	return event, nil, "", true
+}
+
+// updateLastSyncPointTs advances lastSyncPointTs to ts if ts is larger.
+// The writer DONE status can be resent, so this must be idempotent and never move backwards.
+func (b *Barrier) updateLastSyncPointTs(ts uint64) {
+	for {
+		old := b.lastSyncPointTs.Load()
+		if ts <= old || b.lastSyncPointTs.CompareAndSwap(old, ts) {
+			return
+		}
+	}
+}
+
+// GetLastSyncPointTs returns the commitTs of the latest syncpoint written to the downstream,
+// or 0 if no syncpoint has been written since the barrier was created.
+func (b *Barrier) GetLastSyncPointTs() uint64 {
+	return b.lastSyncPointTs.Load()
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
