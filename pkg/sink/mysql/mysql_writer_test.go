@@ -39,6 +39,7 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,6 +279,7 @@ func TestMysqlWriterFlushFilteredEvents(t *testing.T) {
 				writer, db, mock := newTestMysqlWriter(t)
 				defer db.Close()
 				writer.cfg.SafeMode = false
+				writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
 				writer.cfg.MultiStmtEnable = multiStmtEnable
 				writer.cfg.CachePrepStmts = false
 				writer.cfg.DMLMaxRetry = 0
@@ -299,7 +301,7 @@ func TestMysqlWriterFlushFilteredEvents(t *testing.T) {
 				}
 
 				const (
-					updateSQL  = "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1"
+					updateSQL  = "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
 					insertSQL  = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
 					replaceSQL = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
 				)
