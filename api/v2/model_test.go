@@ -13,12 +13,25 @@
 package v2
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSinkConfigDateSeparator(t *testing.T) {
+	t.Parallel()
+
+	var sinkConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date_separator":"DAY"}`), &sinkConfig))
+	require.Equal(t, config.DateSeparatorDay, util.GetOrZero(sinkConfig.DateSeparator))
+
+	err := json.Unmarshal([]byte(`{"date_separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
 
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
