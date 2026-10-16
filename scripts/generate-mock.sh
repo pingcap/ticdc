@@ -47,6 +47,9 @@ run_mockgen() {
 run_mockgen -source coordinator/changefeed/changefeed_db_backend.go -destination coordinator/changefeed/mock/changefeed_db_backend.go
 run_mockgen -source pkg/etcd/etcd.go -destination pkg/etcd/etcd_mock.go -package etcd
 run_mockgen -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -package etcd
+
+# Server mock generation queries pkg/etcd, whose mocks must be complete.
+wait_for_batch
 run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock
 run_mockgen -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 run_mockgen -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
@@ -69,7 +72,3 @@ run_mockgen -source downstreamadapter/sink/sink.go -destination downstreamadapte
 run_mockgen -source downstreamadapter/sink/topicmanager/topic_manager.go -destination downstreamadapter/sink/topicmanager/topic_manager_mock.go -package topicmanager
 
 wait_for_batch
-
-# MockGen falls back to the import path basename if package name lookup fails.
-# Keep the PD client alias consistent with the server interface in either case.
-gofmt -w -r 'client -> pd' pkg/server/mock/server_mock.go
