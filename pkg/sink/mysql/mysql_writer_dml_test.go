@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -21,10 +22,12 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	tidbmodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -332,6 +335,260 @@ func TestGenerateBatchSQL(t *testing.T) {
 
 	// Verify args length
 	require.Equal(t, 2000, len(args[0]), "Should have 2000 arguments (1000 rows * 2 columns)")
+}
+
+func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32), unique key uk_name (name));"))
+
+	deleteEvent := helper.DML2DeleteEvent("test", "t", "insert into t values (1, 'deleted')", "delete from t where id = 1")
+	insertEvent := helper.DML2Event("test", "t", "insert into t values (1, 'first')")
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'updated' where id = 1")
+	// Omit the delete event to reproduce DELETE filtering before a same-key insert.
+	helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+	insertEvent2 := helper.DML2Event("test", "t", "insert into t values (1, 'last')", "insert into t values (2, 'other')")
+	insertEvent3 := helper.DML2Event("test", "t", "insert into t values (3, 'third')")
+
+	const (
+		updateSQL   = "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
+		deleteSQL   = "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
+		insertSQL   = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+		insertsSQL  = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+		replaceSQL  = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+		replacesSQL = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+	)
+	tests := []struct {
+		name            string
+		events          []*commonEvent.DMLEvent
+		unsafeSQLs      []string
+		safeSQLs        []string
+		args            [][]any
+		rowTypes        []common.RowType
+		disableBatch    bool
+		invalidSequence bool
+	}{
+		{
+			name:       "single update keeps legacy semantics",
+			events:     []*commonEvent.DMLEvent{updateEvent},
+			unsafeSQLs: []string{updateSQL},
+			safeSQLs:   []string{updateSQL},
+			args:       [][]any{{int64(1), "updated", int64(1)}},
+			rowTypes:   []common.RowType{common.RowTypeUpdate},
+		},
+		{
+			name:         "single update without batching keeps legacy semantics",
+			events:       []*commonEvent.DMLEvent{updateEvent},
+			unsafeSQLs:   []string{updateSQL},
+			safeSQLs:     []string{updateSQL},
+			args:         [][]any{{int64(1), "updated", int64(1)}},
+			rowTypes:     []common.RowType{common.RowTypeUpdate},
+			disableBatch: true,
+		},
+		{
+			name:       "distinct inserts stay in separate events",
+			events:     []*commonEvent.DMLEvent{insertEvent, insertEvent3},
+			unsafeSQLs: []string{insertSQL, insertSQL},
+			safeSQLs:   []string{replaceSQL, replaceSQL},
+			args:       [][]any{{int64(1), "first"}, {int64(3), "third"}},
+			rowTypes:   []common.RowType{common.RowTypeInsert, common.RowTypeInsert},
+		},
+		{
+			name:            "update then insert",
+			events:          []*commonEvent.DMLEvent{updateEvent, insertEvent2},
+			unsafeSQLs:      []string{updateSQL, insertsSQL},
+			safeSQLs:        []string{updateSQL, replacesSQL},
+			args:            [][]any{{int64(1), "updated", int64(1)}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeUpdate, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+		{
+			name:            "insert then insert",
+			events:          []*commonEvent.DMLEvent{insertEvent, insertEvent2},
+			unsafeSQLs:      []string{insertSQL, insertsSQL},
+			safeSQLs:        []string{replaceSQL, replacesSQL},
+			args:            [][]any{{int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeInsert, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+		{
+			name:            "delete then insert then insert",
+			events:          []*commonEvent.DMLEvent{deleteEvent, insertEvent, insertEvent2},
+			unsafeSQLs:      []string{deleteSQL, insertSQL, insertsSQL},
+			safeSQLs:        []string{deleteSQL, replaceSQL, replacesSQL},
+			args:            [][]any{{int64(1)}, {int64(1), "first"}, {int64(1), "last", int64(2), "other"}},
+			rowTypes:        []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert},
+			invalidSequence: true,
+		},
+	}
+
+	for _, mode := range []string{"unsafe", "configured safe mode", "error caused safe mode", "recovery safe mode"} {
+		t.Run(mode, func(t *testing.T) {
+			writer.cfg.SafeMode = mode == "configured safe mode"
+			writer.isInErrorCausedSafeMode = mode == "error caused safe mode"
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					writer.cfg.BatchDMLEnable = !tt.disableBatch
+					for i, event := range tt.events {
+						event.CommitTs = uint64(i + 2)
+						event.ReplicatingTs = 1
+						if mode == "recovery safe mode" {
+							event.ReplicatingTs = 10
+						}
+					}
+					// Preparing twice verifies every event is rewound for retries.
+					for range 2 {
+						require.NotPanics(t, func() {
+							dmls, err := writer.prepareDMLs(tt.events)
+							defer dmlsPool.Put(dmls)
+							require.NoError(t, err)
+							if mode == "unsafe" {
+								require.Equal(t, tt.unsafeSQLs, dmls.sqls)
+							} else {
+								require.Equal(t, tt.safeSQLs, dmls.sqls)
+							}
+							require.Equal(t, tt.args, dmls.values)
+							require.Equal(t, tt.rowTypes, dmls.rowTypes)
+						})
+					}
+				})
+			}
+		})
+	}
+
+	// The same incomplete sequences without delete filtering must still expose
+	// an invariant violation instead of silently switching SQL generation paths.
+	writer.cfg.deleteEventFilters = nil
+	writer.isInErrorCausedSafeMode = false
+	for _, safeMode := range []bool{false, true} {
+		writer.cfg.SafeMode = safeMode
+		for _, tt := range tests {
+			if !tt.invalidSequence {
+				continue
+			}
+			for _, event := range tt.events {
+				event.CommitTs = 2
+				event.ReplicatingTs = 1
+			}
+			expectedPanic := "invalid rows when generating batch SQL in unsafe mode"
+			if safeMode {
+				expectedPanic = "invalid row changes"
+			}
+			require.PanicsWithValue(t, expectedPanic, func() { writer.generateBatchSQL(tt.events) })
+		}
+	}
+}
+
+func TestDeleteFilterSelectsTableDMLMode(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	filters, err := buildDeleteEventFilters(&config.ChangefeedConfig{
+		Filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.filtered"}, IgnoreDeleteValueExpr: new("id > 0")},
+		}},
+	})
+	require.NoError(t, err)
+	writer.cfg.deleteEventFilters = filters
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	var inserts, updates []*commonEvent.DMLEvent
+	for _, table := range []string{"filtered", "regular"} {
+		require.NotNil(t, helper.DDL2Job("create table "+table+" (id int primary key, name varchar(32));"))
+		inserts = append(inserts,
+			helper.DML2Event("test", table, "insert into "+table+" values (1, 'first')"),
+			helper.DML2Event("test", table, "insert into "+table+" values (2, 'second')"))
+		update, _ := helper.DML2UpdateEvent("test", table,
+			"insert into "+table+" values (3, 'before')", "update "+table+" set name = 'after' where id = 3")
+		updates = append(updates, update)
+	}
+	for _, event := range append(inserts, updates...) {
+		event.CommitTs = 2
+		event.ReplicatingTs = 1
+	}
+	checkSQLs := func(t *testing.T, events []*commonEvent.DMLEvent, expected map[string][][]any) {
+		t.Helper()
+		dmls, err := writer.prepareDMLs(events)
+		require.NoError(t, err)
+		defer dmlsPool.Put(dmls)
+		actual := make(map[string][][]any)
+		for i, sql := range dmls.sqls {
+			actual[sql] = append(actual[sql], dmls.values[i])
+		}
+		require.Len(t, actual, len(expected))
+		for sql, want := range expected {
+			got, ok := actual[sql]
+			require.True(t, ok, "missing SQL: %s", sql)
+			if strings.HasSuffix(sql, "VALUES (?,?),(?,?)") {
+				// Cross-event safe-mode batching may reorder independent rows.
+				require.Len(t, got, 1)
+				require.Len(t, got[0], 4)
+				require.ElementsMatch(t, [][]any{want[0][:2], want[0][2:]}, [][]any{got[0][:2], got[0][2:]})
+			} else {
+				// Per-event statements must preserve their original order.
+				require.Equal(t, want, got, "SQL: %s", sql)
+			}
+		}
+	}
+	for _, safeMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("safeMode=%t", safeMode), func(t *testing.T) {
+			writer.cfg.SafeMode = safeMode
+			insert := "INSERT"
+			if safeMode {
+				insert = "REPLACE"
+			}
+			// Both tables share one flush; only the unfiltered table merges events.
+			checkSQLs(t, inserts, map[string][][]any{
+				insert + " INTO `test`.`filtered` (`id`,`name`) VALUES (?,?)":      {{int64(1), "first"}, {int64(2), "second"}},
+				insert + " INTO `test`.`regular` (`id`,`name`) VALUES (?,?),(?,?)": {{int64(1), "first", int64(2), "second"}},
+			})
+			expected := map[string][][]any{
+				"UPDATE `test`.`filtered` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1": {{int64(3), "after", int64(3)}},
+			}
+			if safeMode {
+				expected["DELETE FROM `test`.`regular` WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3)}}
+				expected["REPLACE INTO `test`.`regular` (`id`,`name`) VALUES (?,?)"] = [][]any{{int64(3), "after"}}
+			} else {
+				expected["UPDATE `test`.`regular` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3), "after", int64(3)}}
+			}
+			checkSQLs(t, updates, expected)
+		})
+	}
+}
+
+func TestGenerateBatchSQLKeyMismatch(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+
+	updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'after' where id = 1")
+	insertEvent := helper.DML2Event("test", "t", "insert into t values (2, 'other')")
+	// A primary-key change must have been split before reaching the batch merger.
+	updateEvent.Rows.TruncateTo(1)
+	updateEvent.Rows.AppendRow(insertEvent.Rows.GetRow(0))
+	for _, event := range []*commonEvent.DMLEvent{updateEvent, insertEvent} {
+		event.CommitTs = 2
+		event.ReplicatingTs = 1
+	}
+
+	for _, events := range [][]*commonEvent.DMLEvent{
+		{updateEvent, insertEvent},
+		{insertEvent, insertEvent, updateEvent},
+	} {
+		require.PanicsWithValue(t, "invalid rows when generating batch SQL in unsafe mode", func() {
+			writer.generateBatchSQL(events)
+		})
+	}
 }
 
 func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {

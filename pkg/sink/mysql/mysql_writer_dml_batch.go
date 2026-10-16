@@ -42,7 +42,7 @@ type rowChangeWithKeys struct {
 
 // ===== Normal SQL (one row -> one statement) =====
 
-// generateNormalSQLs simply iterates each event and produces SQLs without batching.
+// generateNormalSQLs produces SQLs without batching for tables without delete filtering.
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	var (
 		queries  []string
@@ -55,7 +55,7 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 			continue
 		}
 
-		queryList, argsList, rowTypesList := w.generateNormalSQL(event)
+		queryList, argsList, rowTypesList := w.generateNormalSQL(event, false)
 		queries = append(queries, queryList...)
 		args = append(args, argsList...)
 		rowTypes = append(rowTypes, rowTypesList...)
@@ -64,7 +64,8 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 // generateNormalSQL converts a single DMLEvent into SQL statements, respecting safe mode.
-func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
+// keepUpdate preserves UPDATE statements for tables with delete filtering.
+func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent, keepUpdate bool) ([]string, [][]any, []common.RowType) {
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
 	log.Debug("inSafeMode",
@@ -94,7 +95,9 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		)
 		switch row.RowType {
 		case common.RowTypeUpdate:
-			if inSafeMode {
+			// The legacy sink keeps UPDATE statements even in safe mode. Preserve
+			// that behavior with delete filtering, regardless of the batch size.
+			if inSafeMode && !keepUpdate {
 				query, args = buildDelete(event.TableInfo, row)
 				if query != "" {
 					queries = append(queries, query)
@@ -240,6 +243,14 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 		}
 	}
 
+	// Validate all updates before merging so a filtered duplicate cannot hide
+	// an unexpected, unsplit primary-key change later in the batch.
+	for _, row := range rowLists {
+		if row.rowChange.RowType == common.RowTypeUpdate && !compareKeys(row.preRowKeys, row.rowKeys) {
+			return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+		}
+	}
+
 	// Step 2 combine the rows until there is no change
 	// Consider we will split the event if PK is changed, so the Update will not change the PK
 	// for the rows comparation, there are six situations:
@@ -282,9 +293,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-						}
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
 							preRowChange := rowLists[j].rowChange
@@ -303,9 +311,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					}
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].rowKeys
-					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
-						return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
 							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
@@ -328,9 +333,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
-							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-								return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-							}
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].rowChange.PreRow,
 								Row:     rowLists[j].rowChange.Row,
