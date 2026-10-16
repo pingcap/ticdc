@@ -192,6 +192,36 @@ EOF
 	config_path="--config $merged_config_file"
 fi
 
+# Use franz-go by default in CI while preserving explicit test configuration.
+server_config_file="${workdir}/cdc_franz${logsuffix}_server.toml"
+existing_config=/dev/null
+if [ -n "$config_path" ]; then
+	existing_config=${config_path#--config }
+fi
+awk '
+	/^[[:space:]]*\[/ {
+		if (in_debug && !configured) {
+			print "enable-kafka-franz-go = true"
+		}
+		in_debug = $0 ~ /^[[:space:]]*\[debug\][[:space:]]*(#.*)?$/
+		seen_debug = seen_debug || in_debug
+	}
+	in_debug && /^[[:space:]]*enable-kafka-franz-go[[:space:]]*=/ {
+		configured = 1
+	}
+	{ print }
+	END {
+		if (!seen_debug) {
+			print "\n[debug]"
+		}
+		if (!configured && (in_debug || !seen_debug)) {
+			print "enable-kafka-franz-go = true"
+		}
+	}
+' "$existing_config" >"${server_config_file}.tmp"
+mv "${server_config_file}.tmp" "$server_config_file"
+config_path="--config $server_config_file"
+
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
 pid=$$
