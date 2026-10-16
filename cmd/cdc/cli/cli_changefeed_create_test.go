@@ -76,6 +76,9 @@ func TestTomlFileToApiModel(t *testing.T) {
 	content := `
 	[filter]
 	rules = ['*.*', '!test.*']
+
+	[sink.mysql-config]
+	async-ddl-timeout = "45m"
 `
 	err := os.WriteFile(path, []byte(content), 0o644)
 	require.Nil(t, err)

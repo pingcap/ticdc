@@ -16,11 +16,13 @@ package util
 import (
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
@@ -180,6 +182,54 @@ func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
 	require.Same(t, m1, messages[1])
 	require.Same(t, m3, messages[2])
 	require.Empty(t, group.messages)
+}
+
+func BenchmarkEventsGroupResolveInto(b *testing.B) {
+	const messageCount = 16 * 1024
+
+	messages := make([]*codeccommon.DMLMessage, messageCount)
+	for i := range messages {
+		messages[i] = newTestDMLMessage(uint64(i + 1))
+	}
+
+	benchmarks := []struct {
+		name       string
+		resolveTs  uint64
+		outOfOrder bool
+	}{
+		{name: "ordered/noop", resolveTs: 0},
+		{name: "ordered/half", resolveTs: messageCount / 2},
+		{name: "ordered/all", resolveTs: messageCount},
+		{name: "out-of-order/all", resolveTs: messageCount, outOfOrder: true},
+	}
+
+	oldLogLevel := log.GetLevel()
+	log.SetLevel(zapcore.FatalLevel)
+	b.Cleanup(func() { log.SetLevel(oldLogLevel) })
+
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			source := messages
+			if benchmark.outOfOrder {
+				source = append([]*codeccommon.DMLMessage(nil), messages...)
+				lastIndex := len(source) - 1
+				source[lastIndex-1], source[lastIndex] = source[lastIndex], source[lastIndex-1]
+			}
+			group := NewEventsGroup(0, 1)
+			group.messages = make([]*codeccommon.DMLMessage, 0, messageCount)
+			dst := make([]*codeccommon.DMLMessage, 0, messageCount)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if len(group.messages) != messageCount {
+					group.messages = append(group.messages[:0], source...)
+					group.outOfOrder = benchmark.outOfOrder
+				}
+				dst = group.ResolveInto(benchmark.resolveTs, dst[:0])
+			}
+		})
+	}
 }
 
 func TestAppendOrMergeDMLEventMergesSameCommitTs(t *testing.T) {
