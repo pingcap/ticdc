@@ -262,7 +262,7 @@ func newProfileServer(enabled bool) *http.Server {
 	}
 }
 
-func (c *consumer) consume(ctx context.Context) {
+func (c *consumer) consume(ctx context.Context) error {
 	c.g, ctx = errgroup.WithContext(ctx)
 	if c.profileServer != nil {
 		c.g.Go(func() error {
@@ -289,6 +289,7 @@ func (c *consumer) consume(ctx context.Context) {
 	<-ctx.Done()
 	// Stop dispatching before the caller closes the sink.
 	<-writeDone
+	return context.Cause(ctx)
 }
 
 func (c *consumer) stop() {

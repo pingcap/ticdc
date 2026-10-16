@@ -121,9 +121,10 @@ func (r *reader) start(ctx context.Context, results chan<- []*readData) error {
 	for {
 		data, err := r.client.Read(ctx)
 		if err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer read failed", zap.Error(err))
+			if ctx.Err() != nil {
+				return context.Cause(ctx)
 			}
+			log.Error("consumer read failed", zap.Error(err))
 			return err
 		}
 		select {

@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -131,10 +133,13 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	committing, release := make(chan struct{}), make(chan struct{})
 	cluster.ControlKey(int16(kmsg.OffsetCommit), func(kmsg.Request) (kmsg.Response, error, bool) {
 		close(committing)
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
+		// Yield the broker loop so produce and fetch requests can still run.
+		cluster.SleepControl(func() {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		})
 		cluster.DropControl()
 		return nil, nil, false
 	})
@@ -201,6 +206,61 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	require.EqualValues(t, 1, second.record.refs.Load())
 	cancel()
 	require.ErrorIs(t, <-writeErrors, context.Canceled)
+}
+
+func TestKafkaConfirmationCommitsFlushedPrefix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	const topic = "confirm-after-flush"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	t.Cleanup(cluster.Close)
+	r := newKafkaReader(ctx, &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic}, topic, newMemoryUsage(), config.GetDefaultReplicaConfig(), nil)
+	t.Cleanup(r.Close)
+	require.NoError(t, r.client.ProduceSync(ctx,
+		&kgo.Record{Topic: topic, Value: []byte("a")},
+		&kgo.Record{Topic: topic, Value: []byte("b")},
+	).FirstErr())
+	var inputs []*readData
+	for len(inputs) < 2 {
+		batch, err := r.Read(ctx)
+		require.NoError(t, err)
+		inputs = append(inputs, batch...)
+	}
+	committed := make(chan int64, 1)
+	cluster.ControlKey(int16(kmsg.OffsetCommit), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		commit := request.(*kmsg.OffsetCommitRequest)
+		committed <- commit.Topics[0].Partitions[0].Offset
+		cluster.DropControl()
+		return nil, nil, false
+	})
+	// The first input produces two downstream writes, the second produces one.
+	writes := make([]*event.DMLEvent, 3)
+	for i, input := range []*readData{inputs[0], inputs[0], inputs[1]} {
+		writes[i] = &event.DMLEvent{}
+		input.record.refs.Inc()
+		writes[i].AddPostFlushFunc(input.record.release)
+	}
+	for _, input := range inputs {
+		input.record.decoded(128)
+	}
+	require.NoError(t, r.Confirm(ctx))
+	require.Len(t, committed, 0, "unflushed offsets must not be committed")
+	// Neither a later input nor a partial flush may advance the commit prefix.
+	for _, write := range []*event.DMLEvent{writes[2], writes[0]} {
+		write.PostFlush()
+		require.NoError(t, r.Confirm(ctx))
+		require.Len(t, committed, 0)
+		require.Len(t, r.partitions[0].records, 2)
+	}
+	writes[1].PostFlush()
+	require.NoError(t, r.Confirm(ctx))
+	select {
+	case offset := <-committed:
+		require.EqualValues(t, 2, offset)
+	default:
+		t.Fatal("completed inputs were not committed")
+	}
+	require.Empty(t, r.partitions[0].records)
 }
 
 func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
@@ -1327,24 +1387,99 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	require.EqualValues(t, 128, memory.bytes.Load())
 }
 
+func TestConsumerCommandReturnsReadError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(path.Join(dir, "metadata"), []byte("{"), 0o600))
+	upstreamURI := &url.URL{Scheme: "file", Path: dir, RawQuery: "protocol=csv"}
+	command := newCommand()
+	command.SetArgs([]string{
+		"--upstream-uri", upstreamURI.String(),
+		"--downstream-uri", "blackhole://",
+		"--log-file", path.Join(dir, "consumer.log"),
+		"--log-level", "error",
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err := command.ExecuteContext(ctx)
+	require.ErrorIs(t, err, errors.ErrCodecDecode)
+	require.ErrorContains(t, err, "decode Storage metadata")
+}
+
+func TestConsumerCommandReturnsConfirmationError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	const topic = "confirm-error"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	t.Cleanup(cluster.Close)
+	cluster.ControlKey(int16(kmsg.OffsetCommit), func(request kmsg.Request) (kmsg.Response, error, bool) {
+		commit := request.(*kmsg.OffsetCommitRequest)
+		response := commit.ResponseKind().(*kmsg.OffsetCommitResponse)
+		for _, topic := range commit.Topics {
+			result := kmsg.NewOffsetCommitResponseTopic()
+			result.Topic = topic.Topic
+			for _, partition := range topic.Partitions {
+				result.Partitions = append(result.Partitions, kmsg.OffsetCommitResponseTopicPartition{
+					Partition: partition.Partition,
+					ErrorCode: kerr.GroupAuthorizationFailed.Code,
+				})
+			}
+			response.Topics = append(response.Topics, result)
+		}
+		return response, nil, true
+	})
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...))
+	require.NoError(t, err)
+	t.Cleanup(producer.Close)
+	require.NoError(t, producer.ProduceSync(ctx, &kgo.Record{
+		Topic: topic,
+		Value: []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":10}}`),
+	}).FirstErr())
+	upstreamURI := &url.URL{Scheme: "kafka", Host: cluster.ListenAddrs()[0], Path: topic, RawQuery: "protocol=canal-json&enable-tidb-extension=true"}
+	command := newCommand()
+	command.SetArgs([]string{
+		"--upstream-uri", upstreamURI.String(),
+		"--downstream-uri", "blackhole://",
+		"--log-file", path.Join(t.TempDir(), "consumer.log"),
+		"--log-level", "error",
+	})
+	err = command.ExecuteContext(ctx)
+	require.ErrorIs(t, err, kerr.GroupAuthorizationFailed)
+	require.ErrorContains(t, err, "commit Kafka offsets")
+}
+
+func TestConsumerReturnsSinkError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir(), RawQuery: "protocol=csv"}
+	c := newConsumer(ctx, &options{upstreamURI: upstreamURI.String(), downstreamURI: "blackhole://", timezone: "UTC", logLevel: "error"})
+	c.writer.downstream.Close()
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	c.writer.downstream = downstream
+	want := errors.ErrInternalCheckFailed.GenWithStackByArgs("sink failed")
+	downstream.EXPECT().Run(gomock.Any()).Return(want)
+	downstream.EXPECT().Close()
+	err := c.consume(ctx)
+	cancel()
+	c.stop()
+	require.ErrorIs(t, err, want)
+}
+
 func TestConsumerCancellationDuringStartup(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	upstreamURI := &url.URL{Scheme: "file", Path: t.TempDir(), RawQuery: "protocol=csv"}
 	options := &options{upstreamURI: upstreamURI.String(), downstreamURI: "blackhole://", timezone: "UTC", logLevel: "error"}
 	var wg sync.WaitGroup
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	wg.Go(func() {
-		start(ctx, options)
-		close(done)
+		done <- start(ctx, options)
 	})
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(5 * time.Second):
 		t.Fatal("consumer did not stop after cancellation")
 	}
 	wg.Wait()
-	require.ErrorIs(t, context.Cause(ctx), context.Canceled)
-	require.False(t, errors.Is(context.Cause(ctx), context.DeadlineExceeded))
 }

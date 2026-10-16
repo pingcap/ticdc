@@ -45,7 +45,6 @@ func main() {
 	if err := newCommand().ExecuteContext(ctx); err != nil {
 		log.Error("consumer command failed", zap.Error(err))
 	}
-	_ = log.Sync()
 }
 
 func newCommand() *cobra.Command {
@@ -56,8 +55,8 @@ func newCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
-		Run: func(command *cobra.Command, _ []string) {
-			start(command.Context(), options)
+		RunE: func(command *cobra.Command, _ []string) error {
+			return start(command.Context(), options)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -75,10 +74,11 @@ func newCommand() *cobra.Command {
 	return command
 }
 
-func start(ctx context.Context, options *options) {
+func start(ctx context.Context, options *options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c := newConsumer(ctx, options)
-	c.consume(ctx)
+	err := c.consume(ctx)
 	cancel()
 	c.stop()
+	return err
 }
