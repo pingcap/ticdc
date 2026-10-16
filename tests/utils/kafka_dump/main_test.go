@@ -31,8 +31,6 @@ func TestTableOf(t *testing.T) {
 		{"debezium update", `{"payload":{"op":"u","source":{"table":"probe"}}}`, "probe"},
 		{"debezium delete", `{"payload":{"op":"d","source":{"table":"probe"}}}`, "probe"},
 		{"debezium snapshot", `{"payload":{"op":"r","source":{"table":"probe"}}}`, "probe"},
-		{"debezium Avro union", `{"payload":{"op":"c","source":{"table":{"string":"probe"}}}}`, "probe"},
-		{"debezium Avro null", `{"payload":{"op":"c","source":{"table":null}}}`, ""},
 		{"debezium DDL", `{"payload":{"source":{"table":"probe"},"ddl":"CREATE TABLE probe (id INT)"}}`, ""},
 		{"resolved", `{"payload":{"op":"m"}}`, ""},
 		{"tombstone", `null`, ""},

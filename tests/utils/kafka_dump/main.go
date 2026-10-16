@@ -185,7 +185,7 @@ func tableOf(raw []byte) string {
 		Payload struct {
 			Op     string `json:"op"`
 			Source struct {
-				Table any `json:"table"`
+				Table string `json:"table"`
 			} `json:"source"`
 		} `json:"payload"`
 	}
@@ -198,17 +198,7 @@ func tableOf(raw []byte) string {
 	// Debezium also includes source.table in DDL messages. Only count row events.
 	switch msg.Payload.Op {
 	case "c", "u", "d", "r":
-		switch table := msg.Payload.Source.Table.(type) {
-		case string:
-			return table
-		case map[string]any:
-			// Nullable Avro strings are wrapped in a union branch.
-			if len(table) == 1 {
-				name, _ := table["string"].(string)
-				return name
-			}
-		}
-		return ""
+		return msg.Payload.Source.Table
 	default:
 		return ""
 	}
