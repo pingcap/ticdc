@@ -69,3 +69,7 @@ run_mockgen -source downstreamadapter/sink/sink.go -destination downstreamadapte
 run_mockgen -source downstreamadapter/sink/topicmanager/topic_manager.go -destination downstreamadapter/sink/topicmanager/topic_manager_mock.go -package topicmanager
 
 wait_for_batch
+
+# MockGen falls back to the import path basename if package name lookup fails.
+# Keep the PD client alias consistent with the server interface in either case.
+gofmt -w -r 'client -> pd' pkg/server/mock/server_mock.go
