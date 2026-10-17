@@ -94,9 +94,9 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	captureGroup.GET("", api.ListCaptures)
 
 	verifyTableGroup := v2.Group("/verify_table")
-	verifyTableGroup.POST("", api.VerifyTable)
+	verifyTableGroup.POST("", keyspaceCheckerMiddleware, authenticateMiddleware, api.VerifyTable)
 	getAllTablesGroup := v2.Group("/get_all_tables")
-	getAllTablesGroup.POST("", api.GetAllTables)
+	getAllTablesGroup.POST("", keyspaceCheckerMiddleware, authenticateMiddleware, api.GetAllTables)
 
 	// processor apis
 	// Note: They are not useful in new arch cdc,

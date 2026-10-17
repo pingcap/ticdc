@@ -387,6 +387,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if len(changefeeds) > 0 {
+		info := changefeeds[0]
+		middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+			Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+			Name:     info.ChangefeedID.Keyspace(),
+		})
+	} else {
+		setKeyspaceInContextForAuthentication(c)
+	}
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
@@ -465,6 +477,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -543,6 +559,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 

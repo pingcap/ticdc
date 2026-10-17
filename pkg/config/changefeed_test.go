@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +79,111 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	changefeedConfig := info.ToChangefeedConfig()
 	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
 	require.True(t, changefeedConfig.IsLowLatencyMode())
+}
+
+func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	data, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			masked, err := MaskChangefeedInfo([]byte(data))
+			require.NoError(t, err)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(masked)))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+}
+
+func TestChangeFeedInfoStringRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(info.String())))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
 }
 
 func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {

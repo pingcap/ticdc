@@ -120,7 +120,19 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
-		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+		if len(msg.Message) == 0 {
+			log.Warn("ignore invalid block status request",
+				zap.String("from", msg.From.String()),
+				zap.String("reason", "missing request payload"))
+			return nil
+		}
+		req, ok := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+		if !ok || req == nil || req.ChangefeedID == nil {
+			log.Warn("ignore invalid block status request",
+				zap.String("from", msg.From.String()),
+				zap.String("reason", "missing changefeed ID"))
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
