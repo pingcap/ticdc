@@ -408,8 +408,12 @@ def verify_table():
         }
     })
     headers = {"Content-Type": "application/json"}
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.unauthorized
+
     for i in range(RETRY_TIME):
-        resp = rq.post(url, data=data, headers=headers,
+        resp = rq.post(url, data=data, auth=Auth, headers=headers,
                        cert=CERT, verify=VERIFY)
         if resp.status_code == rq.codes.ok:
             break
