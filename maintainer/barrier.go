@@ -93,7 +93,10 @@ func (b *Barrier) HandleStatus(from node.ID,
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	invalidStatusCount := 0
 	for _, status := range request.BlockStatuses {
-		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
+		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 ||
+			(status.State.IsBlocked &&
+				status.State.Stage != heartbeatpb.BlockStage_DONE &&
+				status.State.BlockTables == nil) {
 			invalidStatusCount++
 			continue
 		}

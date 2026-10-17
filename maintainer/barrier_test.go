@@ -79,6 +79,17 @@ func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
 				State: &heartbeatpb.State{},
 			},
 		},
+		{
+			name: "nil block tables for blocked status",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					Stage:     heartbeatpb.BlockStage_WAITING,
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
