@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package schemamanager
 
 import (
 	"encoding/json"
@@ -34,7 +34,8 @@ type mockRegistry struct {
 	newID    int
 }
 
-func startHTTPInterceptForTestingRegistry() {
+// SetupTestingRegistry starts an in-memory Schema Registry HTTP interceptor.
+func SetupTestingRegistry() {
 	httpmock.Activate()
 
 	registry := mockRegistry{
@@ -144,6 +145,7 @@ func startHTTPInterceptForTestingRegistry() {
 		})
 }
 
-func stopHTTPInterceptForTestingRegistry() {
+// TeardownTestingRegistry stops the Schema Registry HTTP interceptor.
+func TeardownTestingRegistry() {
 	httpmock.DeactivateAndReset()
 }
