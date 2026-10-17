@@ -16,17 +16,16 @@ package mysql
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	perrors "github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSequenceExecuteRedactsArgs(t *testing.T) {
-	originalMode := perrors.RedactLogEnabled.Load()
-	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
 
 	const rowValue = "sensitive-row-value"
 	for _, tt := range []struct {
@@ -34,11 +33,11 @@ func TestSequenceExecuteRedactsArgs(t *testing.T) {
 		mode        string
 		containsRow bool
 	}{
-		{name: "redaction disabled", mode: perrors.RedactLogDisable, containsRow: true},
-		{name: "redaction enabled", mode: perrors.RedactLogEnable, containsRow: false},
+		{name: "redaction disabled", mode: errors.RedactLogDisable, containsRow: true},
+		{name: "redaction enabled", mode: errors.RedactLogEnable, containsRow: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			perrors.RedactLogEnabled.Store(tt.mode)
+			errors.RedactLogEnabled.Store(tt.mode)
 			db, mock := newTestMockDB(t)
 			defer db.Close()
 
@@ -55,7 +54,7 @@ func TestSequenceExecuteRedactsArgs(t *testing.T) {
 			writer := &Writer{ctx: context.Background(), cfg: cfg}
 			dmls := &preparedDMLs{
 				sqls:   []string{"INSERT INTO t VALUES (?)"},
-				values: [][]interface{}{{rowValue}},
+				values: [][]any{{rowValue}},
 			}
 
 			err = writer.sequenceExecute(dmls, tx, time.Second)
@@ -73,8 +72,8 @@ func TestSequenceExecuteRedactsArgs(t *testing.T) {
 }
 
 func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
-	originalMode := perrors.RedactLogEnabled.Load()
-	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
 
 	const (
 		rowValue = "sensitive-row-value"
@@ -85,11 +84,11 @@ func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
 		mode        string
 		containsRow bool
 	}{
-		{name: "redaction disabled", mode: perrors.RedactLogDisable, containsRow: true},
-		{name: "redaction enabled", mode: perrors.RedactLogEnable, containsRow: false},
+		{name: "redaction disabled", mode: errors.RedactLogDisable, containsRow: true},
+		{name: "redaction enabled", mode: errors.RedactLogEnable, containsRow: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			perrors.RedactLogEnabled.Store(tt.mode)
+			errors.RedactLogEnabled.Store(tt.mode)
 			db, mock := newTestMockDB(t)
 			defer db.Close()
 
@@ -104,7 +103,7 @@ func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
 			writer := &Writer{ctx: context.Background()}
 			dmls := &preparedDMLs{
 				sqls:   []string{"INSERT INTO t VALUES (?)"},
-				values: [][]interface{}{{rowValue}},
+				values: [][]any{{rowValue}},
 			}
 
 			err = writer.multiStmtExecute(conn, dmls, time.Second)
