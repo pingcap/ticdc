@@ -89,6 +89,55 @@ func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
 	require.False(t, coordinator.removeCalled)
 }
 
+func TestGetChangefeedRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	const keyspaceID = uint32(42)
+	coordinator := &resumeNormalCoordinator{
+		info: &config.ChangeFeedInfo{
+			ChangefeedID: common.NewChangeFeedIDWithName("test", "keyspace-a"),
+			KeyspaceID:   keyspaceID,
+			State:        config.StateFailed,
+			Error: &config.RunningError{
+				Message: "sensitive-row-value",
+			},
+		},
+		status: &config.ChangeFeedStatus{},
+	}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds/test?keyspace=keyspace-a",
+		nil,
+	)
+	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "test"}}
+
+	handler.GetChangeFeed(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.NotContains(t, w.Body.String(), "sensitive-row-value")
+	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
+}
+
 func TestLoadKeyspaceInContext(t *testing.T) {
 	if !kerneltype.IsNextGen() {
 		t.Skip("keyspace authentication context is only needed in next-gen")

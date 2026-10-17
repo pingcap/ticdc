@@ -382,6 +382,12 @@ func MaskChangefeedInfo(data []byte) (string, error) {
 	if info.Config != nil {
 		info.Config.MaskSensitiveData()
 	}
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 	return info.Marshal()
 }
 
