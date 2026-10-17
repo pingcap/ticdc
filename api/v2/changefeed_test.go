@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -157,6 +158,41 @@ func TestLoadKeyspaceInContext(t *testing.T) {
 	loadKeyspaceInContext(c, keyspaceManager)
 
 	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
+}
+
+func TestVerifyTableSkipsRedoStorageIOCheck(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+	t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
+	manager := keyspace.NewMockManager(gomock.NewController(t))
+	manager.EXPECT().GetStorage(gomock.Any(), common.DefaultKeyspaceName).
+		Return(nil, errors.New("stop after replica config validation"))
+	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, manager)
+
+	storageDir := filepath.Join(t.TempDir(), "redo")
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.Consistent.Level = new("eventual")
+	replicaConfig.Consistent.Storage = new("nfs://" + storageDir)
+	body, err := json.Marshal(&ChangefeedConfig{
+		SinkURI:       "blackhole://",
+		ReplicaConfig: replicaConfig,
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v2/verify_table?keyspace="+common.DefaultKeyspaceName,
+		strings.NewReader(string(body)),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	(&OpenAPIV2{}).VerifyTable(c)
+
+	require.Len(t, c.Errors, 1)
+	require.NoDirExists(t, storageDir)
 }
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before

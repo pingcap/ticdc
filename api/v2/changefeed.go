@@ -460,6 +460,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = util.AddressOf(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
