@@ -133,6 +133,59 @@ func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
 	}
 }
 
+func TestChangeFeedInfoStringRedactsErrorMessages(t *testing.T) {
+	originalMode := perrors.RedactLogEnabled.Load()
+	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            perrors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            perrors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            perrors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			perrors.RedactLogEnabled.Store(tt.mode)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(info.String())))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
 	replicaConfig := GetDefaultReplicaConfig()
 	info := &ChangeFeedInfo{Config: replicaConfig}

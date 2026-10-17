@@ -74,6 +74,37 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	})
 }
 
+func TestManagerIgnoresInvalidBlockStatusRequest(t *testing.T) {
+	manager := &Manager{}
+	tests := []struct {
+		name    string
+		message []messaging.IOTypeT
+	}{
+		{name: "missing payload"},
+		{
+			name:    "nil request",
+			message: []messaging.IOTypeT{(*heartbeatpb.BlockStatusRequest)(nil)},
+		},
+		{
+			name:    "missing changefeed ID",
+			message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &messaging.TargetMessage{
+				From:    "node1",
+				Type:    messaging.TypeBlockStatusRequest,
+				Message: tt.message,
+			}
+			require.NotPanics(t, func() {
+				require.NoError(t, manager.recvMessages(context.Background(), msg))
+			})
+		})
+	}
+}
+
 func newAddMaintainerRequestForEpoch(
 	t *testing.T,
 	cfID common.ChangeFeedID,

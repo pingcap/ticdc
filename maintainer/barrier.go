@@ -79,6 +79,12 @@ func NewBarrier(spanController *span.Controller,
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) []*messaging.TargetMessage {
+	if request == nil || request.ChangefeedID == nil {
+		log.Warn("ignore invalid block status request",
+			zap.String("from", from.String()),
+			zap.Int64("mode", b.mode))
+		return nil
+	}
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
@@ -87,7 +93,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	invalidStatusCount := 0
 	for _, status := range request.BlockStatuses {
-		if status == nil || status.ID == nil || status.State == nil {
+		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
 			invalidStatusCount++
 			continue
 		}
@@ -367,7 +373,7 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 }
 
 func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
-	if status == nil || status.ID == nil || status.State == nil {
+	if changefeedID == nil || status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
 		return nil, nil, "", false
 	}
 	cfID := common.NewChangefeedIDFromPB(changefeedID)

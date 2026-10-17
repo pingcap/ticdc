@@ -140,6 +140,11 @@ function run() {
 		sleep 1
 	done
 
+	# This case removes the upstream keyspace, so it must run last.
+	if [ "${NEXT_GEN:-0}" == "1" ]; then
+		python3 $CUR/util/test_case.py list_changefeeds_after_keyspace_deleted $TLS_DIR
+	fi
+
 	cleanup_process $CDC_BINARY
 }
 

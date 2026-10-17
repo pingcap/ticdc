@@ -50,6 +50,10 @@ func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	require.NotPanics(t, func() {
+		require.Nil(t, barrier.HandleStatus("node1", nil))
+		require.Nil(t, barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{}))
+	})
 
 	tests := []struct {
 		name   string
@@ -68,6 +72,13 @@ func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
 				ID: tableTriggerEventDispatcherID.ToPB(),
 			},
 		},
+		{
+			name: "zero block ts",
+			status: &heartbeatpb.TableSpanBlockStatus{
+				ID:    tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -84,6 +95,8 @@ func TestHandleStatusIgnoresInvalidBlockStatus(t *testing.T) {
 			resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 			require.Empty(t, resp.DispatcherStatuses)
 			require.Zero(t, barrier.blockedEvents.Len())
+			require.Equal(t, uint64(1), ddlSpan.GetStatus().CheckpointTs)
+			require.Nil(t, ddlSpan.GetBlockState())
 		})
 	}
 }

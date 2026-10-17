@@ -139,6 +139,56 @@ func TestGetChangefeedRequiresAuthentication(t *testing.T) {
 	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
 }
 
+func TestListChangefeedsRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	const keyspaceID = uint32(42)
+	coordinator := &resumeNormalCoordinator{
+		listInfos: []*config.ChangeFeedInfo{
+			{
+				ChangefeedID: common.NewChangeFeedIDWithName("test", "deleted-keyspace"),
+				KeyspaceID:   keyspaceID,
+				State:        config.StateFailed,
+				Error: &config.RunningError{
+					Message: "sensitive-row-value",
+				},
+			},
+		},
+		listStatuses: []*config.ChangeFeedStatus{{CheckpointTs: 1}},
+	}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds?keyspace=deleted-keyspace",
+		nil,
+	)
+
+	handler.ListChangeFeeds(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.NotContains(t, w.Body.String(), "sensitive-row-value")
+	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
+}
+
 func TestLoadKeyspaceInContext(t *testing.T) {
 	if !kerneltype.IsNextGen() {
 		t.Skip("keyspace authentication context is only needed in next-gen")
@@ -278,6 +328,8 @@ type resumeNormalCoordinator struct {
 	resumeCalled bool
 	info         *config.ChangeFeedInfo
 	status       *config.ChangeFeedStatus
+	listInfos    []*config.ChangeFeedInfo
+	listStatuses []*config.ChangeFeedStatus
 	updated      *config.ChangeFeedInfo
 }
 
@@ -286,7 +338,7 @@ func (c *resumeNormalCoordinator) Stop() {}
 func (c *resumeNormalCoordinator) Run(ctx context.Context) error { return nil }
 
 func (c *resumeNormalCoordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
-	return nil, nil, nil
+	return c.listInfos, c.listStatuses, nil
 }
 
 func (c *resumeNormalCoordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
