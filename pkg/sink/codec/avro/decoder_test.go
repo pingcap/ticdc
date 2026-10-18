@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
@@ -231,4 +232,33 @@ func TestChecksumFailureStopsDecode(t *testing.T) {
 				},
 			}, false, 0)
 	})
+}
+
+func TestDecoderCodecCacheIsBounded(t *testing.T) {
+	const schema = "{\"type\":\"record\",\"name\":\"test\",\"fields\":[{\"name\":\"id\",\"type\":\"int\"}]}"
+	codec, err := GenCodec(schema)
+	require.NoError(t, err)
+	decoder := NewDecoder(nil, 0, nil, "topic", nil).(*decoder)
+
+	var firstID, secondID schemamanager.SchemaID
+	for i := 1; i <= decoderCodecCacheSize; i++ {
+		schemaID := schemamanager.NewConfluentSchemaID(i)
+		decoder.codecs.Add(schemaID, codec)
+		switch i {
+		case 1:
+			firstID = schemaID
+		case 2:
+			secondID = schemaID
+		}
+	}
+
+	// Keep the first schema hot, so adding one more schema evicts the second one.
+	_, ok := decoder.codecs.Get(firstID)
+	require.True(t, ok)
+	extraID := schemamanager.NewConfluentSchemaID(decoderCodecCacheSize + 1)
+	decoder.codecs.Add(extraID, codec)
+
+	require.Equal(t, decoderCodecCacheSize, decoder.codecs.Len())
+	require.True(t, decoder.codecs.Contains(firstID))
+	require.False(t, decoder.codecs.Contains(secondID))
 }

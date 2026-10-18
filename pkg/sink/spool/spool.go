@@ -1,0 +1,1012 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package spool
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/atomic"
+	"go.uber.org/zap"
+)
+
+const (
+	defaultDirectoryName = "cloudstorage-sink-spool"
+	segmentFilePrefix    = "segment-"
+	segmentFileExt       = ".log"
+
+	// Use the same order of magnitude as the storage sink's default file size.
+	// One segment is large enough for sequential local writes, but still small
+	// enough to roll over and reclaim files without waiting too long.
+	defaultSegmentCapacity = int64(64 * 1024 * 1024)
+
+	// Keep enough local disk space for temporary downstream slowdowns by
+	// default, while still requiring operators to size the quota explicitly
+	// for larger workloads.
+	defaultDiskQuotaBytes = int64(10 * 1024 * 1024 * 1024)
+
+	// Keep only a small hot working set in memory. Most queued data can move to
+	// local files so the writer is less likely to keep growing memory usage.
+	defaultMemoryRatio = 0.2
+
+	// Pause PostEnqueue callbacks only after local usage is already fairly high,
+	// so the upstream side is not slowed down too early.
+	defaultHighWatermarkRatio = 0.8
+
+	// Resume pending PostEnqueue callbacks only after usage has dropped enough
+	// to avoid bouncing immediately back into the paused state.
+	defaultLowWatermarkRatio = 0.6
+
+	// Retry asynchronously so a transient filesystem error cannot leave disk
+	// quota charged forever after its entry has already been released.
+	segmentReclaimRetryInterval = time.Second
+)
+
+type options struct {
+	// rootDir is the base directory used to build one changefeed's spool
+	// directory. If empty, use TiCDC's data dir as the base directory.
+	rootDir string
+	// namespace and captureID give each spool owner an independent directory
+	// below rootDir before the changefeed path is appended.
+	namespace string
+	captureID string
+
+	// diskQuotaBytes is the disk budget for local spool files.
+	// spool still derives in-memory and watermark thresholds from it, but the
+	// runtime contract exposed by spool-disk-quota only constrains spilled bytes.
+	diskQuotaBytes int64
+
+	// segmentCapacity is the largest size of one segment file before spool rolls to the next file.
+	segmentCapacity int64
+
+	// memoryRatio is the fraction of diskQuotaBytes kept in memory before spilling to disk.
+	memoryRatio float64
+	// highWatermarkRatio is the ratio that starts pausing PostEnqueue callbacks.
+	highWatermarkRatio float64
+	// lowWatermarkRatio is the ratio that resumes pending PostEnqueue callbacks.
+	lowWatermarkRatio float64
+
+	metrics *Metrics
+}
+
+func WithRootDir(rootDir string) func(*options) {
+	return func(options *options) {
+		options.rootDir = rootDir
+	}
+}
+
+// WithDirectoryNamespace isolates one spool owner and capture below the base
+// directory. Callers that can share a base directory should always set it.
+func WithDirectoryNamespace(namespace, captureID string) func(*options) {
+	return func(options *options) {
+		options.namespace = namespace
+		options.captureID = captureID
+	}
+}
+
+func WithDiskQuotaBytes(quotaBytes int64) func(*options) {
+	return func(options *options) {
+		if quotaBytes == 0 {
+			return
+		}
+		if quotaBytes < 0 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "quota-bytes"),
+				zap.Int64("original", quotaBytes),
+				zap.Int64("default", defaultDiskQuotaBytes),
+			)
+			return
+		}
+		options.diskQuotaBytes = quotaBytes
+	}
+}
+
+func WithSegmentBytes(segmentBytes int64) func(*options) {
+	return func(options *options) {
+		if segmentBytes == 0 {
+			return
+		}
+		if segmentBytes < 0 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "segment-bytes"),
+				zap.Int64("original", segmentBytes),
+				zap.Int64("default", defaultSegmentCapacity),
+			)
+			return
+		}
+		options.segmentCapacity = segmentBytes
+	}
+}
+
+func WithMemoryRatio(memoryRatio float64) func(*options) {
+	return func(options *options) {
+		if memoryRatio == 0 {
+			return
+		}
+		if memoryRatio < 0 || memoryRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "memory-ratio"),
+				zap.Float64("original", memoryRatio),
+				zap.Float64("default", defaultMemoryRatio),
+			)
+			return
+		}
+		options.memoryRatio = memoryRatio
+	}
+}
+
+func WithHighWatermarkRatio(highWatermarkRatio float64) func(*options) {
+	return func(options *options) {
+		if highWatermarkRatio == 0 {
+			return
+		}
+		if highWatermarkRatio < 0 || highWatermarkRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "high-watermark-ratio"),
+				zap.Float64("original", highWatermarkRatio),
+				zap.Float64("default", defaultHighWatermarkRatio),
+			)
+			return
+		}
+		options.highWatermarkRatio = highWatermarkRatio
+	}
+}
+
+func WithLowWatermarkRatio(lowWatermarkRatio float64) func(*options) {
+	return func(options *options) {
+		if lowWatermarkRatio == 0 {
+			return
+		}
+		if lowWatermarkRatio < 0 || lowWatermarkRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "low-watermark-ratio"),
+				zap.Float64("original", lowWatermarkRatio),
+				zap.Float64("default", defaultLowWatermarkRatio),
+			)
+			return
+		}
+		options.lowWatermarkRatio = lowWatermarkRatio
+	}
+}
+
+// Metrics contains component-owned metric handles updated by a spool.
+type Metrics struct {
+	MemoryBytes        prometheus.Gauge
+	DiskBytes          prometheus.Gauge
+	PendingPostEnqueue prometheus.Gauge
+	DiskQuotaWaiters   prometheus.Gauge
+	DiskQuotaWait      prometheus.Observer
+	LoadedBytes        prometheus.Observer
+	RotatedCount       prometheus.Counter
+	SegmentCount       prometheus.Gauge
+	Close              func()
+}
+
+// WithMetrics supplies component-owned metrics to the shared spool.
+func WithMetrics(metrics *Metrics) func(*options) {
+	return func(options *options) {
+		options.metrics = metrics
+	}
+}
+
+type segmentID uint64
+
+// Spool keeps encoded sink messages after the sink has accepted them and before
+// it has flushed them to external storage. A sink releases an entry only after
+// a successful flush, or discards it when the corresponding data is ignored.
+type Spool struct {
+	keyspace   string
+	changefeed string
+
+	// workDir is where this spool instance keeps its temporary segment files.
+	workDir string
+
+	// mu protects the mutable runtime state below:
+	// quota state transitions, nextSegmentID, activeSegment, segments, and the
+	// per-segment metadata updated during append, load, release, and rotate.
+	mu sync.Mutex
+
+	// closed makes Close idempotent and blocks new writes after shutdown starts.
+	closed atomic.Bool
+
+	// quota tracks bytes through budget and applies spool-specific wake and metrics policy.
+	quota *quotaController
+	// segmentCapacity is the size limit for a single segment file.
+	segmentCapacity int64
+	// metricLoadedBytes records the byte distribution of loads from spilled files.
+	metricLoadedBytes prometheus.Observer
+	// metricRotatedCount records how many times spool rolls to a new segment.
+	metricRotatedCount prometheus.Counter
+	// metricSegmentCount records how many live segment files this spool currently owns.
+	metricSegmentCount prometheus.Gauge
+
+	// nextSegmentID is the next local file sequence number to allocate.
+	nextSegmentID segmentID
+	// activeSegment is the current append target for spilled blobs.
+	activeSegment *segment
+	// segments keeps every live segment so Load/Release can find it by ID.
+	segments map[segmentID]*segment
+
+	// truncateFile and removeFile perform the filesystem operations used to
+	// reclaim segment bytes. They are fields so retry behavior can be tested
+	// without changing process-wide filesystem state.
+	truncateFile func(*os.File, int64) error
+	removeFile   func(string) error
+
+	// reclaimCh schedules immediate reclamation of zero-reference segments.
+	// reclaimStopCh stops the background retry loop during Close.
+	reclaimCh     chan struct{}
+	reclaimStopCh chan struct{}
+}
+
+// segment is one append-only local file that stores spilled message batches.
+type segment struct {
+	// id becomes part of the segment file name and lookup key.
+	id segmentID
+	// path is the on-disk location of this segment file.
+	path string
+	// file is the opened segment file handle.
+	file *os.File
+	// size is the current file size in bytes.
+	size int64
+	// refCnt counts how many entries still point to this segment.
+	refCnt int64
+}
+
+// segmentLocation tells Load and Release where one spilled batch lives inside a segment file.
+type segmentLocation struct {
+	// id tells which segment file stores this blob.
+	id segmentID
+	// offset is the starting byte offset inside the segment file.
+	offset int64
+	// length is the blob length in bytes.
+	length int64
+}
+
+// Entry is the handle the writer keeps after putting one encoded batch into spool.
+type Entry struct {
+	// memoryMsgs holds encoded messages directly when the entry stays in memory.
+	memoryMsgs []*common.Message
+	// location points to the on-disk blob when the entry has been spilled.
+	location *segmentLocation
+
+	// postFlushCallbacks are detached from encoded messages and kept until the
+	// entry is either acknowledged by a successful flush or discarded.
+	postFlushCallbacks []func()
+
+	// accountingBytes is the size charged against the spool quota.
+	accountingBytes int64
+	// fileBytes is the payload size that will later be written to the final data file.
+	fileBytes uint64
+}
+
+type entrySize struct {
+	accountingBytes int64
+	fileBytes       uint64
+}
+
+// EnqueueAction tells the caller how spool wants the next encoded batch to proceed.
+type EnqueueAction int
+
+const (
+	// EnqueueActionAccepted means spool has accepted the batch and returned an entry.
+	EnqueueActionAccepted EnqueueAction = iota
+	// EnqueueActionAcceptedOversized means spool accepted the batch in memory
+	// because the batch itself is larger than the configured disk quota and
+	// should be flushed immediately.
+	EnqueueActionAcceptedOversized
+	// EnqueueActionWaitDiskQuota means the caller should flush what it already has,
+	// wait for disk quota to be released, and then retry the enqueue.
+	EnqueueActionWaitDiskQuota
+)
+
+// FileBytes returns the payload bytes counted towards writer task sizing.
+func (e *Entry) FileBytes() uint64 {
+	if e == nil {
+		return 0
+	}
+	return e.fileBytes
+}
+
+// IsSpilled returns whether this entry is persisted in local segment files.
+func (e *Entry) IsSpilled() bool {
+	return e != nil && e.location != nil
+}
+
+// InMemory returns whether this entry is still held in memory.
+func (e *Entry) InMemory() bool {
+	return e != nil && e.memoryMsgs != nil
+}
+
+// New return a spool that manages unflushed data.
+func New(
+	changefeedID commonType.ChangeFeedID,
+	opts ...func(*options),
+) (*Spool, error) {
+	cfg := defaultOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	normalizeOptions(cfg)
+	workDir := resolveWorkDir(changefeedID, cfg.rootDir, cfg.namespace, cfg.captureID)
+	if err := prepareWorkDir(workDir); err != nil {
+		return nil, err
+	}
+
+	var (
+		keyspace   = changefeedID.Keyspace()
+		changefeed = changefeedID.Name()
+	)
+	spoolMetrics := normalizeMetrics(cfg.metrics)
+	spool := &Spool{
+		keyspace:           keyspace,
+		changefeed:         changefeed,
+		workDir:            workDir,
+		quota:              newQuotaController(cfg),
+		segmentCapacity:    cfg.segmentCapacity,
+		metricLoadedBytes:  spoolMetrics.LoadedBytes,
+		metricRotatedCount: spoolMetrics.RotatedCount,
+		metricSegmentCount: spoolMetrics.SegmentCount,
+		segments:           make(map[segmentID]*segment),
+		truncateFile: func(file *os.File, size int64) error {
+			return file.Truncate(size)
+		},
+		removeFile:    os.Remove,
+		reclaimCh:     make(chan struct{}, 1),
+		reclaimStopCh: make(chan struct{}),
+	}
+	go spool.runSegmentReclaimer()
+	return spool, nil
+}
+
+func normalizeMetrics(spoolMetrics *Metrics) *Metrics {
+	if spoolMetrics == nil {
+		spoolMetrics = &Metrics{}
+	}
+	if spoolMetrics.MemoryBytes == nil {
+		spoolMetrics.MemoryBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskBytes == nil {
+		spoolMetrics.DiskBytes = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.PendingPostEnqueue == nil {
+		spoolMetrics.PendingPostEnqueue = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWaiters == nil {
+		spoolMetrics.DiskQuotaWaiters = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.DiskQuotaWait == nil {
+		spoolMetrics.DiskQuotaWait = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.LoadedBytes == nil {
+		spoolMetrics.LoadedBytes = prometheus.NewHistogram(prometheus.HistogramOpts{})
+	}
+	if spoolMetrics.RotatedCount == nil {
+		spoolMetrics.RotatedCount = prometheus.NewCounter(prometheus.CounterOpts{})
+	}
+	if spoolMetrics.SegmentCount == nil {
+		spoolMetrics.SegmentCount = prometheus.NewGauge(prometheus.GaugeOpts{})
+	}
+	if spoolMetrics.Close == nil {
+		spoolMetrics.Close = func() {}
+	}
+	return spoolMetrics
+}
+
+func defaultOptions() *options {
+	return &options{
+		diskQuotaBytes:     defaultDiskQuotaBytes,
+		segmentCapacity:    defaultSegmentCapacity,
+		memoryRatio:        defaultMemoryRatio,
+		highWatermarkRatio: defaultHighWatermarkRatio,
+		lowWatermarkRatio:  defaultLowWatermarkRatio,
+	}
+}
+
+func normalizeOptions(cfg *options) {
+	if cfg.lowWatermarkRatio < cfg.highWatermarkRatio {
+		return
+	}
+	log.Warn(
+		"spool watermark ratio is invalid, use default",
+		zap.Float64("low", cfg.lowWatermarkRatio),
+		zap.Float64("high", cfg.highWatermarkRatio),
+		zap.Float64("defaultLow", defaultLowWatermarkRatio),
+		zap.Float64("defaultHigh", defaultHighWatermarkRatio),
+	)
+	cfg.lowWatermarkRatio = defaultLowWatermarkRatio
+	cfg.highWatermarkRatio = defaultHighWatermarkRatio
+}
+
+func resolveWorkDir(
+	changefeedID commonType.ChangeFeedID, rootDir, namespace, captureID string,
+) string {
+	baseDir := rootDir
+	if baseDir == "" {
+		baseDir = config.GetGlobalServerConfig().DataDir
+		if baseDir == "" {
+			baseDir = os.TempDir()
+		}
+		if namespace == "" {
+			namespace = defaultDirectoryName
+		}
+	}
+
+	return filepath.Join(
+		baseDir,
+		namespace,
+		captureID,
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+	)
+}
+
+// prepareWorkDir recreates the changefeed-specific spool directory from
+// scratch. The final workDir is fully owned by one spool instance, so startup
+// can clear the whole directory before creating fresh segment files.
+func prepareWorkDir(workDir string) error {
+	if err := os.RemoveAll(workDir); err != nil {
+		return errors.WrapError(errors.ErrCheckDirValid, err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return errors.WrapError(errors.ErrCheckDirValid, err)
+	}
+	return nil
+}
+
+// TryEnqueue decides how spool should handle the next batch under one lock.
+// It either accepts the batch normally, accepts it as an oversized in-memory
+// batch that should be flushed immediately, or asks the caller to wait for disk
+// quota and retry.
+func (s *Spool) TryEnqueue(
+	msgs []*common.Message,
+	postEnqueue func(),
+) (EnqueueAction, *Entry, error) {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return EnqueueActionAccepted, &Entry{}, nil
+	}
+
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return EnqueueActionAccepted, nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
+	}
+	shouldSpill := s.quota.shouldSpill(size.accountingBytes)
+	if shouldSpill && s.quota.entryExceedsDiskQuota(size.accountingBytes) {
+		entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
+		s.mu.Unlock()
+		if postEnqueueToRun != nil {
+			postEnqueueToRun()
+		}
+		return EnqueueActionAcceptedOversized, entry, err
+	}
+	if shouldSpill && s.quota.spillWouldExceedDiskQuota(size.accountingBytes) {
+		s.mu.Unlock()
+		return EnqueueActionWaitDiskQuota, nil, nil
+	}
+
+	entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	s.mu.Unlock()
+	if postEnqueueToRun != nil {
+		postEnqueueToRun()
+	}
+	return EnqueueActionAccepted, entry, err
+}
+
+// WaitForDiskQuota waits until the next spilled entry of the same size would
+// fit into the configured local spool disk budget.
+func (s *Spool) WaitForDiskQuota(ctx context.Context, msgs []*common.Message) error {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		s.quota.metricDiskQuotaWait.Observe(time.Since(start).Seconds())
+	}()
+	for {
+		s.mu.Lock()
+		if s.closed.Load() {
+			s.mu.Unlock()
+			return errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
+		}
+		if !s.quota.spillWouldExceedDiskQuota(size.accountingBytes) {
+			s.mu.Unlock()
+			return nil
+		}
+		waiterID, waitCh := s.quota.addDiskQuotaWaiter()
+		s.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			s.quota.removeDiskQuotaWaiter(waiterID)
+			return errors.Trace(context.Cause(ctx))
+		case <-waitCh:
+		}
+	}
+}
+
+// Enqueue appends encoded messages to spool.
+func (s *Spool) Enqueue(
+	msgs []*common.Message,
+	postEnqueue func(),
+) (*Entry, error) {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return &Entry{}, nil
+	}
+
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
+	}
+	entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	s.mu.Unlock()
+	if postEnqueueToRun != nil {
+		postEnqueueToRun()
+	}
+	return entry, err
+}
+
+func (s *Spool) acceptEntryLocked(
+	msgs []*common.Message,
+	postEnqueue func(),
+	size entrySize,
+	forceInMemory bool,
+) (*Entry, func(), error) {
+	entry := &Entry{
+		accountingBytes: size.accountingBytes,
+		fileBytes:       size.fileBytes,
+	}
+	shouldSpill := !forceInMemory && s.quota.shouldSpill(entry.accountingBytes)
+	if shouldSpill {
+		blob := serializeMessages(msgs)
+		location, err := s.appendBlobLocked(blob)
+		if err != nil {
+			return nil, nil, err
+		}
+		entry.location = location
+	}
+	if !shouldSpill {
+		entry.memoryMsgs = msgs
+	}
+	entry.postFlushCallbacks = detachPostFlushCallbacks(msgs)
+	postEnqueueToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
+	return entry, postEnqueueToRun, nil
+}
+
+func detachPostFlushCallbacks(msgs []*common.Message) []func() {
+	var postFlushCallbacks []func()
+	for _, msg := range msgs {
+		if msg.Callback != nil {
+			postFlushCallbacks = append(postFlushCallbacks, msg.Callback)
+			msg.Callback = nil
+		}
+	}
+	return postFlushCallbacks
+}
+
+type MessageReader struct {
+	memoryMsgs         []*common.Message
+	memoryIndex        int
+	serializedReader   *serializedMessageReader
+	postFlushCallbacks []func()
+}
+
+func (r *MessageReader) Next() (key, value []byte, rowCount int, ok bool, err error) {
+	if r == nil {
+		return nil, nil, 0, false, nil
+	}
+	if r.memoryMsgs != nil {
+		if r.memoryIndex >= len(r.memoryMsgs) {
+			return nil, nil, 0, false, nil
+		}
+		msg := r.memoryMsgs[r.memoryIndex]
+		r.memoryIndex++
+		return msg.Key, msg.Value, msg.GetRowsCount(), true, nil
+	}
+	if r.serializedReader == nil {
+		return nil, nil, 0, false, nil
+	}
+	return r.serializedReader.next()
+}
+
+func (r *MessageReader) PostFlushCallbacks() []func() {
+	if r == nil {
+		return nil
+	}
+	return r.postFlushCallbacks
+}
+
+func (s *Spool) NewMessageReader(entry *Entry) (*MessageReader, error) {
+	if entry == nil {
+		return &MessageReader{}, nil
+	}
+	if entry.memoryMsgs != nil {
+		return &MessageReader{
+			memoryMsgs:         entry.memoryMsgs,
+			postFlushCallbacks: entry.postFlushCallbacks,
+		}, nil
+	}
+	if entry.location == nil {
+		return &MessageReader{
+			postFlushCallbacks: entry.postFlushCallbacks,
+		}, nil
+	}
+
+	s.mu.Lock()
+	spoolSegment := s.segments[entry.location.id]
+	if spoolSegment == nil {
+		s.mu.Unlock()
+		return nil, errors.ErrInternalCheckFailed.GenWithStack(
+			"spool segment %d not found",
+			entry.location.id,
+		)
+	}
+	file := spoolSegment.file
+	offset := entry.location.offset
+	length := entry.location.length
+	s.mu.Unlock()
+
+	buf := make([]byte, length)
+	if _, err := file.ReadAt(buf, offset); err != nil {
+		return nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
+	}
+	reader, err := newSerializedMessageReader(buf)
+	if err != nil {
+		return nil, err
+	}
+	s.metricLoadedBytes.Observe(float64(length))
+	return &MessageReader{
+		serializedReader:   reader,
+		postFlushCallbacks: entry.postFlushCallbacks,
+	}, nil
+}
+
+// Release releases memory or spilled bytes held by an entry.
+func (s *Spool) Release(entry *Entry) {
+	if entry == nil || entryConsumed(entry) {
+		return
+	}
+	location, accountingBytes, spilled := consumeEntry(entry)
+
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return
+	}
+
+	releasedBytes := accountingBytes
+	reclaimed := true
+	if spilled {
+		releasedBytes = 0
+		seg := s.segments[location.id]
+		if seg != nil {
+			seg.refCnt--
+			if seg.refCnt == 0 {
+				releasedBytes, reclaimed = s.reclaimSegmentLocked(seg)
+			}
+		}
+	}
+	var postEnqueueCallbacks []func()
+	if releasedBytes > 0 {
+		postEnqueueCallbacks = s.quota.release(releasedBytes, spilled)
+	}
+	s.mu.Unlock()
+	if !reclaimed {
+		s.scheduleSegmentReclaim()
+	}
+
+	runCallbacks(postEnqueueCallbacks)
+}
+
+// Discard runs the entry postFlush callbacks and then releases its local spool
+// resources. It's called when the corresponding flushed data should be ignored.
+func (s *Spool) Discard(entry *Entry) {
+	if entry == nil {
+		return
+	}
+
+	for _, postFlushCallback := range takePostFlushCallbacks(entry) {
+		if postFlushCallback != nil {
+			postFlushCallback()
+		}
+	}
+	s.Release(entry)
+}
+
+// Close closes spool and removes the segment files created by this spool instance.
+func (s *Spool) Close() {
+	if !s.closed.CompareAndSwap(false, true) {
+		return
+	}
+	close(s.reclaimStopCh)
+
+	s.mu.Lock()
+	for _, seg := range s.segments {
+		if seg.file != nil {
+			if err := seg.file.Close(); err != nil {
+				log.Warn("close spool segment failed",
+					zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+					zap.String("path", seg.path), zap.Error(err))
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	if err := os.RemoveAll(s.workDir); err != nil {
+		log.Warn("remove spool files failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", s.workDir), zap.Error(err))
+	}
+	s.quota.deleteMetrics()
+}
+
+func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
+	seg, err := s.getWritableSegmentLocked(int64(len(blob)))
+	if err != nil {
+		return nil, err
+	}
+	offset := seg.size
+	n, err := seg.file.Write(blob)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrUnexpected, err, "write spool segment file")
+	}
+	if n != len(blob) {
+		return nil, errors.ErrUnexpected.GenWithStack(
+			"short write to spool segment, expected %d got %d",
+			len(blob),
+			n,
+		)
+	}
+	seg.size += int64(n)
+	seg.refCnt++
+
+	return &segmentLocation{
+		id:     seg.id,
+		offset: offset,
+		length: int64(n),
+	}, nil
+}
+
+func (s *Spool) getWritableSegmentLocked(needBytes int64) (*segment, error) {
+	if s.activeSegment != nil && s.activeSegment.size+needBytes <= s.segmentCapacity {
+		return s.activeSegment, nil
+	}
+
+	if err := s.rotateLocked(); err != nil {
+		return nil, err
+	}
+	return s.activeSegment, nil
+}
+
+func (s *Spool) rotateLocked() error {
+	oldSegment := s.activeSegment
+	s.nextSegmentID++
+	segmentID := s.nextSegmentID
+	path := filepath.Join(
+		s.workDir,
+		fmt.Sprintf("%s%06d%s", segmentFilePrefix, segmentID, segmentFileExt),
+	)
+	// External damage to the spool directory becomes fatal here. Once spool
+	// needs a new segment and cannot create it, it can no longer promise that
+	// new pending data will stay locally readable until flush.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	if err != nil {
+		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
+	}
+	seg := &segment{
+		id:   segmentID,
+		path: path,
+		file: file,
+	}
+	s.segments[segmentID] = seg
+	s.activeSegment = seg
+	if oldSegment != nil && oldSegment.refCnt == 0 {
+		// A non-empty zero-reference segment can only remain after an earlier
+		// truncate failure. Let the reclaimer remove it and release its disk
+		// quota instead of dropping the accounting result here.
+		if oldSegment.size == 0 {
+			if !s.removeSegmentLocked(oldSegment) {
+				s.scheduleSegmentReclaim()
+			}
+		} else {
+			s.scheduleSegmentReclaim()
+		}
+	}
+	s.metricRotatedCount.Inc()
+	s.metricSegmentCount.Set(float64(len(s.segments)))
+	return nil
+}
+
+func (s *Spool) reclaimSegmentLocked(seg *segment) (int64, bool) {
+	if seg == nil || seg.refCnt != 0 {
+		return 0, true
+	}
+	if s.activeSegment == seg {
+		return s.truncateSegmentLocked(seg)
+	}
+
+	releasedBytes := seg.size
+	if !s.removeSegmentLocked(seg) {
+		return 0, false
+	}
+	s.metricSegmentCount.Set(float64(len(s.segments)))
+	return releasedBytes, true
+}
+
+func (s *Spool) truncateSegmentLocked(seg *segment) (int64, bool) {
+	if seg == nil || seg.size == 0 {
+		return 0, true
+	}
+	releasedBytes := seg.size
+	if err := s.truncateFile(seg.file, 0); err != nil {
+		log.Warn(
+			"truncate active spool segment file failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", seg.path), zap.Error(err),
+		)
+		return 0, false
+	}
+	seg.size = 0
+	return releasedBytes, true
+}
+
+func (s *Spool) removeSegmentLocked(seg *segment) bool {
+	if seg == nil {
+		return false
+	}
+	if seg.file != nil {
+		if err := seg.file.Close(); err != nil {
+			log.Warn("close spool segment file failed",
+				zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+				zap.Error(err))
+		}
+		seg.file = nil
+	}
+	if err := s.removeFile(seg.path); err != nil && !os.IsNotExist(err) {
+		log.Warn(
+			"remove spool segment file failed",
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", seg.path), zap.Error(err))
+		return false
+	}
+	delete(s.segments, seg.id)
+	return true
+}
+
+func (s *Spool) scheduleSegmentReclaim() {
+	select {
+	case s.reclaimCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Spool) runSegmentReclaimer() {
+	var retryCh <-chan time.Time
+	for {
+		select {
+		case <-s.reclaimStopCh:
+			return
+		case <-s.reclaimCh:
+		case <-retryCh:
+		}
+
+		if !s.reclaimReleasedSegments() {
+			retryCh = time.After(segmentReclaimRetryInterval)
+		} else {
+			retryCh = nil
+		}
+	}
+}
+
+// reclaimReleasedSegments retries physical reclamation independently of
+// Release. This is required because Release consumes the entry before a
+// truncate or remove can fail, so no caller remains to retry the operation.
+// It returns true when every zero-reference segment was reclaimed.
+func (s *Spool) reclaimReleasedSegments() bool {
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return true
+	}
+
+	var releasedBytes int64
+	reclaimed := true
+	for _, seg := range s.segments {
+		if seg.refCnt != 0 {
+			continue
+		}
+		segmentBytes, segmentReclaimed := s.reclaimSegmentLocked(seg)
+		releasedBytes += segmentBytes
+		reclaimed = reclaimed && segmentReclaimed
+	}
+	var postEnqueueCallbacks []func()
+	if releasedBytes > 0 {
+		postEnqueueCallbacks = s.quota.release(releasedBytes, true)
+	}
+	s.mu.Unlock()
+
+	runCallbacks(postEnqueueCallbacks)
+	return reclaimed
+}
+
+func runCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		if callback != nil {
+			callback()
+		}
+	}
+}
+
+func takePostFlushCallbacks(entry *Entry) []func() {
+	postFlushCallbacks := entry.postFlushCallbacks
+	entry.postFlushCallbacks = nil
+	return postFlushCallbacks
+}
+
+func entryConsumed(entry *Entry) bool {
+	return entry.location == nil &&
+		entry.memoryMsgs == nil &&
+		entry.accountingBytes == 0 &&
+		entry.fileBytes == 0 &&
+		entry.postFlushCallbacks == nil
+}
+
+func consumeEntry(entry *Entry) (*segmentLocation, int64, bool) {
+	location := entry.location
+	accountingBytes := entry.accountingBytes
+	spilled := location != nil
+
+	entry.memoryMsgs = nil
+	entry.location = nil
+	entry.postFlushCallbacks = nil
+	entry.accountingBytes = 0
+	entry.fileBytes = 0
+	return location, accountingBytes, spilled
+}
+
+func calculateEntrySize(msgs []*common.Message) entrySize {
+	size := entrySize{}
+	if len(msgs) == 0 {
+		return size
+	}
+
+	size.accountingBytes = serializedMessageCountBytes
+	for _, msg := range msgs {
+		size.accountingBytes += int64(serializedMessageHeaderBytes + len(msg.Key) + len(msg.Value))
+		size.fileBytes += uint64(len(msg.Value))
+	}
+	return size
+}
