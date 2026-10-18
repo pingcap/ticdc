@@ -26,7 +26,7 @@
   - Functions: use camel case and **do not** include `_` (e.g. `getPartitionNum`, not `get_partition_num`).
   - Variables: use lowerCamelCase (e.g. `flushInterval`, not `flush_interval`).
 - Logging: structured logs via `github.com/pingcap/log` + `zap` fields; message strings should **not** include function names and should avoid `-` (use spaces instead).
-- Errors: when an error comes from a third party/library call, wrap it immediately with `errors.Trace(err)` or `errors.WrapError(...)` to attach a stack trace; upstream callers should propagate wrapped errors without wrapping again.
+- Errors: when an error comes from a third party/library call, wrap it immediately with `errors.Trace(err)` or `errors.WrapError(...)` to attach a stack trace; upstream callers should propagate wrapped errors without wrapping again. Avoid using `errors.New` to create error objects; instead, utilize the predefined objects available in the `cerrors` package.
 
 ## Testing Guidelines
 
