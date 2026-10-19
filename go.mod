@@ -418,3 +418,8 @@ replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-
 replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc
 
 replace github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
+
+// etcd 3.5 uses UnaryServerInterceptor, which otelgrpc removed in v0.61.0.
+// Remove this replace after upgrading etcd to v3.6.1 or later, which uses
+// NewServerHandler, and verifying compatibility with the selected otelgrpc version.
+replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.60.0
