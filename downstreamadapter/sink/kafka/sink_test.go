@@ -128,6 +128,39 @@ func TestVerifyInvalidConfig(t *testing.T) {
 	require.ErrorContains(t, err, "ErrAvroSchemaAPIError")
 }
 
+func TestVerifyAvroProtocols(t *testing.T) {
+	for _, protocol := range []config.Protocol{config.ProtocolAvro, config.ProtocolDebeziumAvro} {
+		for _, client := range []string{kafka.KafkaClientSarama, kafka.KafkaClientFranz} {
+			t.Run(protocol.String()+"/"+client, func(t *testing.T) {
+				cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, kafkaSinkTestTopic))
+				defer cluster.Close()
+
+				var connectionChecks atomic.Int64
+				schemaRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					connectionChecks.Inc()
+					_, _ = w.Write([]byte("{}"))
+				}))
+				defer schemaRegistry.Close()
+
+				protocolName := protocol.String()
+				sinkConfig := &config.SinkConfig{
+					Protocol:       &protocolName,
+					SchemaRegistry: &schemaRegistry.URL,
+				}
+				sinkURI, err := url.Parse("kafka://" + cluster.ListenAddrs()[0] + "/" + kafkaSinkTestTopic +
+					"?protocol=" + protocolName + "&kafka-version=2.4.1&partition-num=1&max-message-bytes=10485760" +
+					"&enable-tidb-extension=true&avro-enable-watermark=true" +
+					"&avro-decimal-handling-mode=precise&avro-bigint-unsigned-handling-mode=string&kafka-client=" + client)
+				require.NoError(t, err)
+
+				changefeedID := common.NewChangefeedID4Test("test", "verify-avro-protocols")
+				require.NoError(t, Verify(t.Context(), changefeedID, sinkURI, sinkConfig, false))
+				require.Equal(t, int64(1), connectionChecks.Load())
+			})
+		}
+	}
+}
+
 func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 	ctx := t.Context()
 
@@ -665,9 +698,9 @@ func newKafkaSinkForTest(
 	require.NoError(t, err)
 	encoderConfig := codecCommon.NewConfig(protocol).WithChangefeedID(changefeedID)
 	encoderConfig.MaxBatchSize = 1
-	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	encoderGroup, err := codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	require.NoError(t, err)
-	encoder, err := codec.NewEventEncoder(ctx, encoderConfig, nil)
+	encoder, err := codec.NewEventEncoder(encoderConfig, nil, nil)
 	require.NoError(t, err)
 	topicManager := topicmanager.NewMockTopicManager(ctrl)
 	asyncProducer := kafka.NewMockAsyncProducer(ctrl)

@@ -373,6 +373,26 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLReturnsStatusQueryError(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = true
+
+	event := &commonEvent.DDLEvent{
+		Type:          byte(timodel.ActionExchangeTablePartition),
+		FinishedTs:    2,
+		BlockedTables: &commonEvent.InfluencedTables{TableIDs: []int64{1}},
+	}
+	query := fmt.Sprintf("SELECT * FROM tidb_cdc.ddl_ts_v1 "+
+		"WHERE (ticdc_cluster_id, changefeed, table_id, ddl_ts, finished) "+
+		"IN (('%s', '%s', 1, 2, 1))",
+		config.GetGlobalServerConfig().ClusterID, writer.ChangefeedID.String())
+	mock.ExpectQuery(query).WillReturnError(context.DeadlineExceeded)
+
+	require.ErrorIs(t, writer.execDDL(event), context.DeadlineExceeded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
 	router, err := routing.NewRouter(
 		common.NewChangefeedID4Test("test", "test"),
@@ -568,6 +588,79 @@ func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *tes
 
 	writer.waitAsyncDDLDone(event)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestExecDDLUsesControlAsyncDBOnlyForTiDBAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriterForTiDB(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlAsyncMock.ExpectBegin()
+	controlAsyncMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "30m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+	require.NoError(t, controlMock.ExpectationsWereMet())
+
+	addColumnEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddColumn),
+		Query:      "alter table t add column age int;",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addColumnEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addColumnEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+}
+
+func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriter(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
 }
 
 // Test the async ddl can be write successfully

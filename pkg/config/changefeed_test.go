@@ -14,6 +14,7 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -178,4 +179,31 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 			}, info.Config.Sink.DispatchRules)
 		})
 	}
+}
+
+func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	info := &ChangeFeedInfo{Config: replicaConfig}
+	for _, level := range []string{CheckLevelCorrectness, CheckLevelNone} {
+		replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(level)
+		replicaConfig.Integrity.CorruptionHandleLevel = util.AddressOf(CorruptionHandleLevelError)
+		converted := info.ToChangefeedConfig()
+		require.Equal(t, level, converted.SinkConfig.Integrity.IntegrityCheckLevel)
+		require.Equal(t, CorruptionHandleLevelError, converted.SinkConfig.Integrity.CorruptionHandleLevel)
+		require.NotSame(t, replicaConfig.Sink, converted.SinkConfig)
+		require.Nil(t, replicaConfig.Sink.Integrity)
+		data, err := json.Marshal(converted)
+		require.NoError(t, err)
+		var wireConfig map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &wireConfig))
+		require.NotContains(t, wireConfig, "integrity")
+		var decodedSink SinkConfig
+		require.NoError(t, json.Unmarshal(wireConfig["sink_config"], &decodedSink))
+		require.Equal(t, converted.SinkConfig.Integrity, decodedSink.Integrity)
+	}
+	replicaConfig.Integrity = nil
+	require.Same(t, replicaConfig.Sink, info.ToChangefeedConfig().SinkConfig)
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig.Integrity)
+	replicaConfig.Sink = nil
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
 }

@@ -497,3 +497,14 @@ func (d *singleDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 func (d *singleDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
+
+func TestMessageWithPartitionCheckRejectsNilEvent(t *testing.T) {
+	w := &writer{}
+	message := codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return nil
+	})
+	checked := w.messageWithPartitionCheck(message, 1, 27)
+	require.PanicsWithValue(t, "DML message decoded to nil event", func() {
+		checked.ToDMLEvent()
+	})
+}

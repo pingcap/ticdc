@@ -321,6 +321,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = c.Consistent.FlushConcurrency
 		}
+		if c.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = c.Consistent.SpoolDiskQuota
+		}
 
 		if c.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &config.ConsistentMemoryUsage{
@@ -487,6 +490,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				WriteTimeout:                 c.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  c.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      c.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              c.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               c.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         c.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: c.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -512,6 +516,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Sink.DebeziumConfig != nil {
 			debeziumConfig = &config.DebeziumConfig{
 				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
+			}
+			if c.Sink.DebeziumConfig.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.DecimalHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BigintUnsignedHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
@@ -812,6 +825,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				WriteTimeout:                 cloned.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  cloned.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      cloned.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              cloned.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               cloned.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         cloned.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: cloned.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -869,6 +883,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
 				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+			}
+			if cloned.Sink.Debezium.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*cloned.Sink.Debezium.DecimalHandlingMode)
+			}
+			if cloned.Sink.Debezium.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BigintUnsignedHandlingMode)
+			}
+			if cloned.Sink.Debezium.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
@@ -964,6 +987,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 		if cloned.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = cloned.Consistent.FlushConcurrency
+		}
+		if cloned.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = cloned.Consistent.SpoolDiskQuota
 		}
 		if cloned.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &ConsistentMemoryUsage{
@@ -1132,17 +1158,17 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty"`
+	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string               `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty"`
@@ -1220,17 +1246,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string                `json:"level,omitempty"`
-	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
-	Storage               *string                `json:"storage,omitempty"`
-	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
-	Compression           *string                `json:"compression,omitempty"`
-	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
-	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	Level                 *string                `json:"level,omitempty" toml:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty" toml:"max-log-size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty" toml:"flush-interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty" toml:"meta-flush-interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty" toml:"encoding-worker-num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty" toml:"flush-worker-num,omitempty"`
+	Storage               *string                `json:"storage,omitempty" toml:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty" toml:"use-file-backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
+	SpoolDiskQuota        *int64                 `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
+	SpoolBaseDir          *string                `json:"spool_base_dir,omitempty" toml:"spool-base-dir,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
 	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
@@ -1593,21 +1621,22 @@ type KafkaConfig struct {
 
 // MySQLConfig represents a MySQL sink configuration
 type MySQLConfig struct {
-	WorkerCount                  *int    `json:"worker_count,omitempty"`
-	MaxTxnRow                    *int    `json:"max_txn_row,omitempty"`
-	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty"`
-	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty"`
-	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty"`
-	SSLCa                        *string `json:"ssl_ca,omitempty"`
-	SSLCert                      *string `json:"ssl_cert,omitempty"`
-	SSLKey                       *string `json:"ssl_key,omitempty"`
-	TimeZone                     *string `json:"time_zone,omitempty"`
-	WriteTimeout                 *string `json:"write_timeout,omitempty"`
-	ReadTimeout                  *string `json:"read_timeout,omitempty"`
-	Timeout                      *string `json:"timeout,omitempty"`
-	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty"`
-	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty"`
-	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty"`
+	WorkerCount                  *int    `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
+	MaxTxnRow                    *int    `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
+	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty" toml:"max-multi-update-row-size,omitempty"`
+	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty" toml:"max-multi-update-row-count,omitempty"`
+	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty" toml:"tidb-txn-mode,omitempty"`
+	SSLCa                        *string `json:"ssl_ca,omitempty" toml:"ssl-ca,omitempty"`
+	SSLCert                      *string `json:"ssl_cert,omitempty" toml:"ssl-cert,omitempty"`
+	SSLKey                       *string `json:"ssl_key,omitempty" toml:"ssl-key,omitempty"`
+	TimeZone                     *string `json:"time_zone,omitempty" toml:"time-zone,omitempty"`
+	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
+	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
+	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
+	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
+	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
+	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration
@@ -1654,7 +1683,10 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue             bool    `json:"output_old_value" toml:"output-old-value"`
+	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
+	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
+	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
 }
 
 type DispatcherCount struct {

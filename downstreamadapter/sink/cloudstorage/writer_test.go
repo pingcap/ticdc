@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -34,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -53,7 +53,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.NoError(t, err)
@@ -467,7 +467,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		// Keep the quota larger than this encoded batch so the controller still
 		// spills it to local spool files instead of taking the oversized in-memory fast path.
@@ -694,7 +694,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
@@ -759,7 +759,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
