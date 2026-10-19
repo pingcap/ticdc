@@ -1,0 +1,333 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package schemamanager
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/glue"
+	"github.com/aws/aws-sdk-go-v2/service/glue/types"
+	"github.com/google/uuid"
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
+)
+
+// ---------- Glue schema manager
+// schemaManager is used to register Avro Schemas to the Registry server,
+// look up local cache according to the table's name, and fetch from the Registry
+// in cache the local cache entry is missing.
+type glueSchemaManager struct {
+	registryName string
+	client       glueClient
+
+	cache        *schemaCache
+	registryType string
+}
+
+// NewGlueSchemaManager creates a new schema manager for AWS Glue Schema Registry
+// It will load the default AWS credentials if no credentials are provided.
+// It will check if the registry exists, if not, it will return an error.
+func NewGlueSchemaManager(
+	ctx context.Context,
+	cfg *config.GlueSchemaRegistryConfig,
+) (SchemaManager, error) {
+	var awsCfg aws.Config
+	var err error
+	if cfg.NoCredentials() {
+		awsCfg, err = awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			log.Info("LoadDefaultConfig failed", zap.Error(err))
+			return nil, errors.Trace(err)
+		}
+	} else {
+		awsCfg = *aws.NewConfig()
+		awsCfg.Region = cfg.Region
+		awsCfg.Credentials = credentials.
+			NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretAccessKey, cfg.Token)
+	}
+	client := glue.NewFromConfig(awsCfg)
+	res := &glueSchemaManager{
+		registryName: cfg.RegistryName,
+		client:       client,
+		cache:        newSchemaCache(),
+		registryType: common.SchemaRegistryTypeGlue,
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	registry, err := res.client.GetRegistry(
+		ctx,
+		&glue.GetRegistryInput{
+			RegistryId: &types.RegistryId{
+				RegistryName: &cfg.RegistryName,
+			},
+		},
+	)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	log.Info("Glue schema registry initialized", zap.Any("registry", registry))
+	return res, nil
+}
+
+// Register a schema into schema registry, no cache
+func (m *glueSchemaManager) Register(
+	ctx context.Context,
+	schemaName string,
+	schemaDefinition string,
+) (SchemaID, error) {
+	id := SchemaID{}
+	ok, _, err := m.getSchemaByName(ctx, schemaName)
+	if err != nil {
+		return id, errors.Trace(err)
+	}
+	if ok {
+		log.Info("Schema already exists in registry, update it", zap.String("schemaName", schemaName))
+		schemaID, err := m.updateSchema(ctx, schemaName, schemaDefinition)
+		if err != nil {
+			return id, errors.Trace(err)
+		}
+		log.Info("Schema updated", zap.String("schemaName", schemaName),
+			zap.String("schemaID", schemaID))
+		id.glueSchemaID = schemaID
+		return id, nil
+	}
+	log.Info("Schema does not exist, create it", zap.String("schemaName", schemaName))
+	schemaID, err := m.createSchema(ctx, schemaName, schemaDefinition)
+	if err != nil {
+		return id, errors.Trace(err)
+	}
+	id.glueSchemaID = schemaID
+	return id, nil
+}
+
+func (m *glueSchemaManager) Lookup(
+	ctx context.Context,
+	schemaName string,
+	schemaID SchemaID,
+) (string, error) {
+	cacheKey := newDecodeCacheKey(schemaName)
+	entry, exists := m.cache.load(cacheKey)
+	if exists && entry.schemaID.glueSchemaID == schemaID.glueSchemaID {
+		log.Debug("Avro schema lookup cache hit",
+			zap.String("key", schemaName),
+			zap.String("schemaID", entry.schemaID.glueSchemaID))
+		return entry.schemaDefinition, nil
+	}
+
+	log.Info("Avro schema lookup cache miss",
+		zap.String("key", schemaName),
+		zap.String("schemaID", schemaID.glueSchemaID))
+
+	ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	if !ok {
+		return "", errors.ErrAvroSchemaAPIError.
+			GenWithStackByArgs("schema not found in registry, name: %s, id: %s", schemaName, schemaID.glueSchemaID)
+	}
+
+	header, err := m.getMsgHeader(schemaID.glueSchemaID)
+	if err != nil {
+		log.Error("could not get message header", zap.Error(err))
+		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
+	}
+
+	m.cache.store(cacheKey, &schemaCacheEntry{
+		schemaID:         schemaID,
+		schemaDefinition: schema,
+		header:           header,
+	})
+
+	return schema, nil
+}
+
+// GetCachedOrRegister checks if the suitable Avro schema has been cached.
+// If not, a new schema is generated, registered and cached.
+// Re-registering an existing schema shall return the same id(and version), so even if the
+// cache is out-of-sync with schema registry, we could reload it.
+func (m *glueSchemaManager) GetCachedOrRegister(
+	ctx context.Context,
+	schemaName string,
+	schemaIdentity string,
+	schemaVersion uint64,
+	schemaDefinition string,
+) ([]byte, error) {
+	entry, cached, err := m.cache.getOrCreate(
+		schemaName, schemaIdentity, schemaVersion,
+		func() (*schemaCacheEntry, error) {
+			log.Info("Schema lookup cache miss",
+				zap.String("schemaName", schemaName),
+				zap.String("schemaIdentity", schemaIdentity),
+				zap.Uint64("schemaVersion", schemaVersion))
+
+			log.Info(fmt.Sprintf("The schema to be registered: %#v", schemaDefinition))
+
+			id, err := m.Register(ctx, schemaName, schemaDefinition)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
+				return nil, errors.Trace(err)
+			}
+
+			header, err := m.getMsgHeader(id.glueSchemaID)
+			if err != nil {
+				log.Error("GetCachedOrRegister: Could not get message header", zap.Error(err))
+				return nil, errors.Trace(err)
+			}
+
+			return &schemaCacheEntry{
+				schemaVersion:    schemaVersion,
+				schemaID:         id,
+				schemaDefinition: schemaDefinition,
+				header:           header,
+			}, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !cached {
+		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
+			zap.String("schemaName", schemaName),
+			zap.Uint64("schemaVersion", schemaVersion),
+			zap.String("schemaID", entry.schemaID.glueSchemaID))
+	}
+
+	return entry.header, nil
+}
+
+// ClearRegistry implements SchemaManager, it is not used.
+func (m *glueSchemaManager) ClearRegistry(ctx context.Context, schemaSubject string) error {
+	return nil
+}
+
+func (m *glueSchemaManager) RegistryType() string {
+	return m.registryType
+}
+
+func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
+	createSchemaInput := &glue.CreateSchemaInput{
+		RegistryId: &types.RegistryId{
+			RegistryName: &m.registryName,
+		},
+		SchemaName:       aws.String(schemaName),
+		DataFormat:       types.DataFormatAvro,
+		SchemaDefinition: aws.String(schemaDefinition),
+		// cdc don't need to set compatibility check for schema registry
+		// TiDB do the schema compatibility check for us, we need to accept all schema changes
+		// otherwise, we some schema changes will be failed
+		Compatibility: types.CompatibilityNone,
+	}
+
+	output, err := m.client.CreateSchema(ctx, createSchemaInput)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return *output.SchemaVersionId, nil
+}
+
+func (m *glueSchemaManager) updateSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
+	input := &glue.RegisterSchemaVersionInput{
+		SchemaId: &types.SchemaId{
+			RegistryName: aws.String(m.registryName),
+			SchemaName:   &schemaName,
+		},
+		SchemaDefinition: aws.String(schemaDefinition),
+	}
+
+	resp, err := m.client.RegisterSchemaVersion(ctx, input)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return *resp.SchemaVersionId, nil
+}
+
+func (m *glueSchemaManager) getSchemaByName(ctx context.Context, schemaName string) (bool, string, error) {
+	input := &glue.GetSchemaVersionInput{
+		SchemaId: &types.SchemaId{
+			RegistryName: aws.String(m.registryName),
+			SchemaName:   aws.String(schemaName),
+		},
+		SchemaVersionNumber: &types.SchemaVersionNumber{LatestVersion: true},
+	}
+	result, err := m.client.GetSchemaVersion(ctx, input)
+	if err != nil {
+		if strings.Contains(err.Error(), "EntityNotFoundException") {
+			return false, "", nil
+		}
+		return false, "", errors.Trace(err)
+	}
+	return true, *result.SchemaDefinition, nil
+}
+
+func (m *glueSchemaManager) getSchemaByID(ctx context.Context, schemaID string) (bool, string, error) {
+	input := &glue.GetSchemaVersionInput{
+		SchemaVersionId: aws.String(schemaID),
+	}
+	result, err := m.client.GetSchemaVersion(ctx, input)
+	if err != nil {
+		if strings.Contains(err.Error(), "EntityNotFoundException") {
+			return false, "", nil
+		}
+		return false, "", errors.Trace(err)
+	}
+	return true, *result.SchemaDefinition, nil
+}
+
+// This is the header of the glue message, ref:
+// https://github.com/awslabs/aws-glue-schema-registry/blob/
+// master/common/src/main/java/com/amazonaws/services/
+// schemaregistry/utils/AWSSchemaRegistryConstants.java
+const (
+	// GlueHeaderVersionByte is fixed at 3 for the Glue wire format.
+	GlueHeaderVersionByte = uint8(3)
+	// GlueCompressionDefaultByte indicates that the Glue payload is not compressed.
+	GlueCompressionDefaultByte = uint8(0)
+)
+
+func (m *glueSchemaManager) getMsgHeader(schemaID string) ([]byte, error) {
+	return BuildGlueWireHeader(schemaID)
+}
+
+// BuildGlueWireHeader builds an AWS Glue Avro wire header.
+func BuildGlueWireHeader(schemaID string) ([]byte, error) {
+	header := []byte{}
+	header = append(header, GlueHeaderVersionByte)
+	header = append(header, GlueCompressionDefaultByte)
+	uuid, err := uuid.ParseBytes([]byte(schemaID))
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
+	}
+	header = append(header, uuid[:]...)
+	return header, nil
+}
+
+// GetGlueSchemaIDFromHeader extracts a schema ID from an AWS Glue wire header.
+func GetGlueSchemaIDFromHeader(header []byte) (string, error) {
+	if len(header) < 18 {
+		return "", errors.ErrDecodeFailed.GenWithStackByArgs("header is too short")
+	}
+	uuid := uuid.UUID(header[2:18])
+	return uuid.String(), nil
+}

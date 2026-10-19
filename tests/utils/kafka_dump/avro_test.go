@@ -28,7 +28,7 @@ import (
 
 func TestAvroMessageDecoder(t *testing.T) {
 	schema := `{"type":"record","name":"event","fields":[
-		{"name":"source","type":{"type":"record","name":"source","fields":[{"name":"table","type":"string"}]}},
+		{"name":"source","type":{"type":"record","name":"source","fields":[{"name":"table","type":["null","string"]}]}},
 		{"name":"op","type":"string"},
 		{"name":"id","type":"long"},
 		{"name":"data","type":"bytes"},
@@ -50,7 +50,7 @@ func TestAvroMessageDecoder(t *testing.T) {
 	amount, ok := new(big.Rat).SetString("12345678901234567890123456789012345.123456789012345678901234567890")
 	require.True(t, ok)
 	payload := map[string]any{
-		"source": map[string]any{"table": "probe"}, "op": "c",
+		"source": map[string]any{"table": goavro.Union("string", "probe")}, "op": "c",
 		"id": int64(9007199254740993), "data": []byte{0xfb, 0xff}, "amount": amount,
 	}
 	wire, err := codec.BinaryFromNative([]byte{0, 0, 0, 0, 1}, payload)
