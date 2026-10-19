@@ -181,7 +181,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 			}
 			c.readSequence++
 			partition.sequence = c.readSequence
-			bytes := int64(len(record.Key) + len(record.Value) + 128)
+			bytes := int64(len(record.Key) + len(record.Value))
 			c.memory.release(bytes)
 			state := newAck(c.memory, bytes, c.confirmable)
 			partition.mu.Lock()
@@ -191,13 +191,12 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 			})
 			partition.mu.Unlock()
 			data := &readData{
-				key:           record.Key,
-				value:         record.Value,
-				stream:        partitionID,
-				ddlCopy:       partitionID != 0,
-				record:        state,
-				retainedBytes: 128,
-				dmlBoundary:   c.control,
+				key:         record.Key,
+				value:       record.Value,
+				stream:      partitionID,
+				ddlCopy:     partitionID != 0,
+				record:      state,
+				dmlBoundary: c.control,
 			}
 			if partitionID == 0 {
 				data.dmlBoundary = &readBoundary{
@@ -237,7 +236,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 			record := iterator.Next()
 			partition := c.partitions[record.Partition]
 			partition.polled = append(partition.polled, record)
-			bytes += int64(len(record.Key) + len(record.Value) + 128)
+			bytes += int64(len(record.Key) + len(record.Value))
 		}
 		c.memory.reserve(bytes)
 	}
@@ -348,7 +347,7 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 		inputs := partition.records
 		var count int
 		for _, record := range inputs {
-			if record.ack.refs.Load() != 0 {
+			if !record.ack.ready() {
 				break
 			}
 			count++
@@ -373,9 +372,6 @@ func (c *kafkaReader) Confirm(ctx context.Context) error {
 	for partition, count := range counts {
 		partition.mu.Lock()
 		inputs := partition.records
-		for _, record := range inputs[:count] {
-			record.ack.confirm()
-		}
 		clear(inputs[:count])
 		partition.records = inputs[count:]
 		partition.mu.Unlock()
@@ -477,4 +473,9 @@ func (c *kafkaReader) nextPartition() int32 {
 func (c *kafkaReader) Close() {
 	c.client.Close()
 	c.memory.release(c.prefetchedBytes)
+	for _, partition := range c.partitions {
+		for _, record := range partition.polled {
+			c.memory.release(int64(len(record.Key) + len(record.Value)))
+		}
+	}
 }

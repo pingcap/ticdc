@@ -218,7 +218,6 @@ func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
 	if result.onFlush != nil {
 		result.onFlush()
 	}
-	w.memory.release(result.bytes)
 	return nil
 }
 
@@ -247,7 +246,6 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			if result.onFlush != nil {
 				result.onFlush()
 			}
-			w.memory.release(result.bytes)
 			w.pendingDDL[0] = nil
 			w.pendingDDL = w.pendingDDL[1:]
 			w.progressChanged = true
@@ -388,7 +386,7 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 		}
 		if filtered != item.dml {
 			// The original chunk stays alive through its decoder callbacks.
-			copyBytes := filtered.Rows.MemoryUsage() + int64(len(filtered.RowTypes))*64 + 256
+			copyBytes := filtered.Rows.MemoryUsage()
 			w.memory.reserve(copyBytes)
 			batch.bytes += copyBytes
 		}

@@ -163,7 +163,7 @@ func (a *assembler) arrange(ctx context.Context, inputs <-chan []*readData, outp
 				result.record = result.data.record
 			}
 			if result.record != nil {
-				result.record.retainDecode()
+				result.record.retain()
 			}
 			pending = append(pending, result)
 			if len(pending) >= batchRows || result.waiting || result.ddl != nil || result.hasWatermark || result.data.control != nil || result.data.groupEnd {
@@ -204,7 +204,7 @@ func (a *assembler) acceptBatch(ctx context.Context, batch []decodedData) error 
 			}
 		}
 		if result.record != nil {
-			result.record.decoded(result.data.retainedBytes)
+			result.record.release()
 		}
 	}
 	a.reader.Advance(updates)
@@ -313,7 +313,7 @@ type writeEvent struct {
 	decoding     *decodeTask
 	ddl          *event.DDLEvent
 	onFlush      func()
-	bytes        int64
+	bytes        int64 // Row chunks owned by this event and released by the writer.
 	watermark    uint64
 	hasWatermark bool
 	sequential   bool // Preserve table batch order when metadata cannot describe every conflict key.
@@ -375,17 +375,10 @@ func (a *assembler) prepare(items []*writeEvent) []*writeEvent {
 			remaining = remaining[1:]
 			continue
 		}
-		var (
-			rows  int
-			bytes int64 = 256
-		)
+		var rows int
 		for _, part := range remaining[:end] {
 			rows += len(part.dml.RowTypes)
-			bytes += part.dml.Rows.MemoryUsage() + int64(len(part.dml.RowTypes))*64
 		}
-		// Original chunks remain live through their flush callbacks. Account for
-		// the merged copy separately before allocating it.
-		a.memory.reserve(bytes)
 		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
 		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
 		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
@@ -419,6 +412,8 @@ func (a *assembler) prepare(items []*writeEvent) []*writeEvent {
 			dml.AddPostEnqueueFunc(part.PostEnqueue)
 			dml.AddPostFlushFunc(part.PostFlush)
 		}
+		bytes := dml.Rows.MemoryUsage()
+		a.memory.reserve(bytes)
 		prepared = append(prepared, &writeEvent{
 			dml:        dml,
 			bytes:      retained + bytes,
@@ -480,11 +475,9 @@ type ddlInput struct {
 
 func (a *assembler) queueDML(item *writeEvent, record *ack, boundary *readBoundary) {
 	dml := item.dml
-	bytes := int64(256)
-	a.memory.reserve(bytes)
-	record.refs.Inc()
+	record.retain()
 	dml.AddPostFlushFunc(record.release)
-	item.bytes, item.sequential, item.boundary = bytes, a.mergeRows, boundary
+	item.sequential, item.boundary = a.mergeRows, boundary
 	if len(a.pendingDML) == 0 {
 		a.scanInvalid = true
 	}
@@ -547,12 +540,9 @@ func (a *assembler) queueDDL(ddl *event.DDLEvent, record *ack) *ddlInput {
 	if a.waitingKnown && ddl.GetCommitTs() <= a.waitingWatermark {
 		a.waitingCount++
 	}
-	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName) + 1024)
-	a.memory.reserve(bytes)
-	record.refs.Add(1)
+	record.retain()
 	a.pendingDDL = append(a.pendingDDL, &writeEvent{
 		ddl:     ddl,
-		bytes:   bytes,
 		onFlush: record.release,
 	})
 	if a.ddlInputs == nil {
@@ -589,7 +579,6 @@ func (a *assembler) nextReady(watermark uint64) *writeEvent {
 		// its canonical input was confirmed before this run. Retire the replica.
 		head.awaitingDDL = false
 		head.onFlush()
-		a.memory.release(head.bytes)
 		a.popDDL()
 		a.scanInvalid = true
 		head = nil
@@ -1055,7 +1044,6 @@ func (a *assembler) queueWatermark(watermark uint64, records []*ack) {
 			for _, record := range records {
 				record.release()
 			}
-			a.memory.release(int64(len(records)) * 128)
 			for completed := a.completedWatermark.Load(); completed < watermark; completed = a.completedWatermark.Load() {
 				if a.completedWatermark.CAS(completed, watermark) {
 					break
@@ -1152,13 +1140,9 @@ func (a *assembler) decode(ctx context.Context, data *readData) iter.Seq2[decode
 			}, nil) {
 				return
 			}
-			data.record.decoded(data.retainedBytes)
+			data.record.release()
 			return
 		}
-		// Row decoders retain parsed records alongside the encoded file until
-		// the input is exhausted. Include their scratch space in its lifetime.
-		bytes := int64(len(data.value))*3 + 256
-		data.record.retain(bytes)
 		switch a.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			table := data.schema.tableInfo()
@@ -1187,7 +1171,7 @@ func (a *assembler) decodePending() iter.Seq2[decodedData, error] {
 		for {
 			messageType, hasNext := a.currentDecoder.HasNext()
 			if !hasNext {
-				data.record.decoded(data.retainedBytes)
+				data.record.release()
 				a.current, a.currentDecoder = nil, nil
 				return
 			}
@@ -1242,8 +1226,7 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 		stream := a.streams[data.stream]
 		stream.watermark = max(stream.watermark, result.watermark)
 		stream.hasWatermark = true
-		a.memory.reserve(128)
-		data.record.refs.Inc()
+		data.record.retain()
 		a.controls = append(a.controls, &readControl{
 			watermark: result.watermark,
 			records:   []*ack{data.record},
@@ -1263,11 +1246,10 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 				SchemaName: result.message.Schema,
 				TableName:  result.message.Table,
 			},
-			record:        result.record,
-			done:          make(chan struct{}),
-			table:         table,
-			tableID:       dml.PhysicalTableID,
-			retainedBytes: data.retainedBytes,
+			record:  result.record,
+			done:    make(chan struct{}),
+			table:   table,
+			tableID: dml.PhysicalTableID,
 		}
 		item := &writeEvent{
 			dml:      dml,
@@ -1306,7 +1288,7 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 			item := input.event
 			item.awaitingDDL, item.ddl, item.boundary = false, ddl, data.ddlBoundary
 			onFlush := item.onFlush
-			data.record.refs.Inc()
+			data.record.retain()
 			item.onFlush = func() {
 				onFlush()
 				data.record.release()
@@ -1315,8 +1297,7 @@ func (a *assembler) accept(ctx context.Context, result decodedData) error {
 			return nil
 		}
 		if exists {
-			a.memory.reserve(128)
-			data.record.refs.Inc()
+			data.record.retain()
 			if a.ddlCopies == nil {
 				a.ddlCopies = make(map[uint64][]*ack)
 			}
@@ -1344,7 +1325,7 @@ func (a *assembler) decodeCachedMessages(ctx context.Context) error {
 			if err := a.decoder.submit(ctx, cached.task); err != nil {
 				return err
 			}
-			cached.data.record.decoded(cached.data.retainedBytes)
+			cached.data.record.release()
 		}
 	}
 	return nil
@@ -1354,8 +1335,6 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 	return func(yield func(decodedData, error) bool) {
 		stream := a.streams[data.stream]
 		record := data.record
-		bytes := int64(len(data.key)+len(data.value))*3 + 256
-		record.retain(bytes)
 		stream.decoder.AddKeyValue(data.key, data.value)
 		for {
 			messageType, hasNext := stream.decoder.HasNext()
@@ -1368,7 +1347,7 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 				if message == nil {
 					decoder := stream.decoder.(*simple.Decoder)
 					message = decoder.PendingDMLMessage
-					record.retainDecode()
+					record.retain()
 					if stream.cachedRecords == nil {
 						stream.cachedRecords = make(map[*codecCommon.DMLMessage]*cachedInput)
 					}
@@ -1420,6 +1399,6 @@ func (a *assembler) decodeMessages(ctx context.Context, data *readData) iter.Seq
 		}, nil) {
 			return
 		}
-		record.decoded(data.retainedBytes)
+		record.release()
 	}
 }

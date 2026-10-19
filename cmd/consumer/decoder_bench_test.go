@@ -92,19 +92,18 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 				for i := range tasks {
 					id := i % tables
 					task := &decodeTask{
-						message:       messages[id],
-						record:        record,
-						done:          make(chan struct{}),
-						table:         metadata[id],
-						tableID:       int64(id + 1),
-						retainedBytes: 128,
+						message: messages[id],
+						record:  record,
+						done:    make(chan struct{}),
+						table:   metadata[id],
+						tableID: int64(id + 1),
 					}
 					tasks[i] = task
 					if err := d.submit(ctx, task); err != nil {
 						b.Fatal(err)
 					}
 				}
-				record.decoded(128)
+				record.release()
 				for _, task := range tasks {
 					select {
 					case <-task.done:
@@ -114,7 +113,6 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 					task.dml.PostFlush()
 					memory.release(task.bytes)
 				}
-				record.confirm()
 			}
 		})
 	}
@@ -208,17 +206,16 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 							}
 							message := decoder.NextDMLMessage()
 							task := &decodeTask{
-								message:       message,
-								record:        record,
-								done:          make(chan struct{}),
-								retainedBytes: 128,
+								message: message,
+								record:  record,
+								done:    make(chan struct{}),
 							}
 							tasks[i] = task
 							if err := groups[uint64(message.TableID)%uint64(len(groups))].submit(ctx, task); err != nil {
 								b.Fatal(err)
 							}
 						}
-						record.decoded(128)
+						record.release()
 						for _, task := range tasks {
 							select {
 							case <-task.done:
@@ -228,7 +225,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 							task.dml.PostFlush()
 							memory.release(task.bytes)
 						}
-						record.confirm()
 					}
 				})
 			}

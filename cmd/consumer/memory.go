@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -25,6 +24,8 @@ import (
 
 const maxMemoryBytes = 1 << 30
 
+// memoryUsage is a soft backpressure budget for input contents and decoded rows.
+// It uses existing data sizes; it does not model process or object overhead.
 type memoryUsage struct {
 	limit   int64
 	bytes   atomic.Int64
@@ -43,28 +44,7 @@ func (m *memoryUsage) used() int64 {
 	return m.bytes.Load()
 }
 
-// Wait before admitting new input. Already admitted work reserves without
-// waiting so decoding and downstream writes can drain a full soft budget.
-func (m *memoryUsage) wait(ctx context.Context) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if m.used() < m.limit {
-			return nil
-		}
-		changed := m.changes()
-		if m.used() < m.limit {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-changed:
-		}
-	}
-}
-
+// Already admitted work can reserve space without waiting so it can finish.
 func (m *memoryUsage) reserve(bytes int64) {
 	if bytes < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))

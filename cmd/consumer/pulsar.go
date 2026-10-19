@@ -45,12 +45,11 @@ type pulsarPartition struct {
 
 type pulsarReader struct {
 	*readLimit
-	client        pulsar.Client
-	consumer      pulsar.Consumer
-	memory        *memoryUsage
-	prefetchBytes int64
-	partitions    map[string]*pulsarPartition
-	confirmable   chan<- struct{}
+	client      pulsar.Client
+	consumer    pulsar.Consumer
+	memory      *memoryUsage
+	partitions  map[string]*pulsarPartition
+	confirmable chan<- struct{}
 }
 
 func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader) {
@@ -170,21 +169,17 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	if err != nil {
 		log.Panic("Pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
-	// Reserve SDK prefetch headroom inside the shared soft budget. Its queues
-	// scale down under the client memory limit; oversized messages may exceed it.
-	memory.reserve(clientOptions.MemoryLimitBytes)
 	partitions := make(map[string]*pulsarPartition, len(topics))
 	for _, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{}
 	}
 	c := &pulsarReader{
-		readLimit:     newReadLimit(memory),
-		client:        client,
-		consumer:      consumer,
-		memory:        memory,
-		prefetchBytes: clientOptions.MemoryLimitBytes,
-		partitions:    partitions,
-		confirmable:   confirmable,
+		readLimit:   newReadLimit(memory),
+		client:      client,
+		consumer:    consumer,
+		memory:      memory,
+		partitions:  partitions,
+		confirmable: confirmable,
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c
@@ -207,7 +202,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
 	for {
 		partition := c.partitions[message.Topic()]
 		messageID := message.ID()
-		size := int64(len(message.Key()) + len(message.Payload()) + len(messageID.Serialize()) + 256)
+		size := int64(len(message.Key()) + len(message.Payload()))
 		record := newAck(c.memory, size, c.confirmable)
 		partition.mu.Lock()
 		partition.records = append(partition.records, pulsarRecord{
@@ -216,12 +211,11 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
 		})
 		partition.mu.Unlock()
 		batch = append(batch, &readData{
-			key:           []byte(message.Key()),
-			value:         message.Payload(),
-			record:        record,
-			retainedBytes: 256,
-			dmlBoundary:   &readBoundary{reached: true},
-			ddlOrder:      commitOrder,
+			key:         []byte(message.Key()),
+			value:       message.Payload(),
+			record:      record,
+			dmlBoundary: &readBoundary{reached: true},
+			ddlOrder:    commitOrder,
 		})
 		bytes += size
 		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
@@ -250,7 +244,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		partition.mu.Lock()
 		var count int
 		for _, record := range partition.records {
-			if record.ack.refs.Load() != 0 {
+			if !record.ack.ready() {
 				break
 			}
 			count++
@@ -269,9 +263,6 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		}
 		partition.mu.Lock()
 		records := partition.records
-		for _, record := range records[:count] {
-			record.ack.confirm()
-		}
 		clear(records[:count])
 		partition.records = records[count:]
 		partition.mu.Unlock()
@@ -282,5 +273,4 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
-	c.memory.release(c.prefetchBytes)
 }

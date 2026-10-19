@@ -129,7 +129,7 @@ func TestWriterReplayConfirmationWaitsForFlush(t *testing.T) {
 		result := buffer.nextReady(100)
 		w.pendingDML = append(w.pendingDML, result)
 	}
-	record.refs.Add(-1)
+	record.release()
 	require.NoError(t, w.flushDML(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -305,12 +305,12 @@ func TestWriterDDLReplay(t *testing.T) {
 		record := newAck(memory, 128, nil)
 		a.queueDDL(ddl, record)
 		w.consume(a.nextReady(ddl.GetCommitTs()))
-		record.decoded(128)
+		record.release()
 		require.NoError(t, w.flushDML(ctx))
 		if index == 2 || index == 5 {
 			require.Empty(t, w.ddlJobs, "a replay must not execute again")
 			require.Zero(t, record.refs.Load())
-			record.confirm()
+
 			continue
 		}
 		require.Len(t, w.ddlJobs, 1)
@@ -320,7 +320,7 @@ func TestWriterDDLReplay(t *testing.T) {
 			duplicate = newAck(memory, 128, nil)
 			a.queueDDL(ddl, duplicate)
 			w.consume(a.nextReady(ddl.GetCommitTs()))
-			duplicate.decoded(128)
+			duplicate.release()
 			require.NoError(t, w.flushDML(ctx))
 			require.EqualValues(t, 1, duplicate.refs.Load(), "a replay must wait for the original write")
 		}
@@ -330,10 +330,9 @@ func TestWriterDDLReplay(t *testing.T) {
 		require.NoError(t, w.flushDML(ctx))
 		require.Empty(t, w.ddlJobs)
 		require.Zero(t, record.refs.Load())
-		record.confirm()
+
 		if duplicate != nil {
 			require.Zero(t, duplicate.refs.Load())
-			duplicate.confirm()
 		}
 	}
 	// Equality stays protected by the replay identity. Once progress passes it,
@@ -349,12 +348,12 @@ func TestWriterDDLReplay(t *testing.T) {
 	record := newAck(memory, 128, nil)
 	a.queueDDL(first, record)
 	w.consume(a.nextReady(300))
-	record.decoded(128)
+	record.release()
 	require.NoError(t, w.flushDML(ctx))
 	require.True(t, checkpoint, "retiring the last replay must unblock the watermark")
 	require.Empty(t, w.ddlJobs)
 	require.Zero(t, record.refs.Load())
-	record.confirm()
+
 	require.Zero(t, memory.used())
 	w.consume(&writeEvent{watermark: 301, hasWatermark: true})
 	require.NoError(t, w.flushDML(ctx))
@@ -362,11 +361,11 @@ func TestWriterDDLReplay(t *testing.T) {
 	record = newAck(memory, 128, nil)
 	a.queueDDL(truncate, record)
 	w.consume(a.nextReady(301))
-	record.decoded(128)
+	record.release()
 	require.NoError(t, w.flushDML(ctx))
 	require.Empty(t, w.ddlJobs)
 	require.Zero(t, record.refs.Load())
-	record.confirm()
+
 	require.Zero(t, memory.used())
 }
 

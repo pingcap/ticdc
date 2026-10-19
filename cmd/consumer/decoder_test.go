@@ -80,7 +80,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				return d.start(ctx)
 			})
 			record := newAck(memory, 4096, nil)
-			data := &readData{record: record, retainedBytes: 128, dmlBoundary: &readBoundary{reached: true}}
+			data := &readData{record: record, dmlBoundary: &readBoundary{reached: true}}
 			r := &pulsarReader{memory: memory}
 			release := make(chan struct{})
 			for i, id := range []int64{1, 1, 2} {
@@ -129,14 +129,14 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 				a.collectWatermarks()
 				a.decoding = append(a.decoding, a.nextReady(0))
 			}
-			record.decoded(128)
+			record.release()
 			select {
 			case <-a.decoding[2].decoding.done:
 			case <-ctx.Done():
 				t.Fatal("independent table could not convert while table a was blocked")
 			}
 			// An input shared by several rows retains its memory and remains unconfirmed.
-			require.EqualValues(t, 4096, record.bytes.Load())
+			require.GreaterOrEqual(t, memory.used(), int64(4096))
 			require.Greater(t, record.refs.Load(), int64(0))
 			watermark := &writeEvent{watermark: 20, hasWatermark: true}
 			items, err := a.assemble(ctx, nil, watermark)
@@ -157,7 +157,7 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 					t.Fatal("table a conversion did not finish")
 				}
 			}
-			require.EqualValues(t, 128, record.bytes.Load())
+			require.GreaterOrEqual(t, memory.used(), int64(4096))
 			require.Greater(t, record.refs.Load(), int64(0))
 			items = a.collectDecoded()
 			for _, item := range items {
@@ -167,14 +167,26 @@ func TestDecoderGroupOrderingAndConfirmation(t *testing.T) {
 			require.Equal(t, []string{"b", "a", "a"}, written)
 			require.Equal(t, []uint64{12, 10, 11}, commits)
 			require.Empty(t, a.decoding)
-			require.Zero(t, record.refs.Load())
+			require.True(t, record.ready())
+			require.Zero(t, memory.used())
 			require.EqualValues(t, 20, w.writtenBefore)
 			for _, table := range metadata {
 				require.Zero(t, table.UpdateTS)
 			}
-			record.confirm()
 		})
 	}
+}
+
+func TestDecoderSubmitCancellationReleasesInput(t *testing.T) {
+	memory := newMemoryUsage()
+	record := newAck(memory, 128, nil)
+	d := &decoderGroup{input: make(chan *decodeTask)}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, d.submit(ctx, &decodeTask{record: record}), context.Canceled)
+	record.release()
+	require.True(t, record.ready())
+	require.Zero(t, memory.used())
 }
 
 func TestDecodingDDLScope(t *testing.T) {

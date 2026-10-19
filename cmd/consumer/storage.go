@@ -449,7 +449,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 
 func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *readData {
 	c.pendingSchema = make(chan struct{})
-	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table) + 1024)
+	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table))
 	record := newAck(c.memory, size, c.confirmable)
 	c.mu.Lock()
 	c.records = append(c.records, record)
@@ -470,12 +470,11 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema)
 		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 	}
 	return &readData{
-		format:        rowFormat,
-		schema:        schema,
-		ddl:           ddl,
-		record:        record,
-		retainedBytes: 256,
-		ddlBoundary:   &readBoundary{reached: true},
+		format:      rowFormat,
+		schema:      schema,
+		ddl:         ddl,
+		record:      record,
+		ddlBoundary: &readBoundary{reached: true},
 	}
 }
 
@@ -494,9 +493,10 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
-	record := newAck(c.memory, size+256, c.confirmable)
+	record := newAck(c.memory, size, c.confirmable)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(file, data); err != nil {
+		record.release()
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	c.mu.Lock()
@@ -504,13 +504,12 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	c.mu.Unlock()
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
 	return &readData{
-		format:        rowFormat,
-		value:         data,
-		schema:        schema,
-		group:         c.group,
-		record:        record,
-		retainedBytes: 256,
-		dmlBoundary:   c.group.boundary,
+		format:      rowFormat,
+		value:       data,
+		schema:      schema,
+		group:       c.group,
+		record:      record,
+		dmlBoundary: c.group.boundary,
 	}, nil
 }
 
@@ -545,10 +544,9 @@ func (c *storageReader) Confirm(_ context.Context) error {
 	defer c.mu.Unlock()
 	var count int
 	for _, record := range c.records {
-		if record.refs.Load() != 0 {
+		if !record.ready() {
 			break
 		}
-		record.confirm()
 		count++
 	}
 	clear(c.records[:count])

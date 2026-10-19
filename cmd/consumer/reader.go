@@ -175,21 +175,21 @@ const (
 // readData carries encoded contents, logical decoding context and input proofs.
 // Physical offsets, message IDs and file paths remain private to each reader.
 type readData struct {
-	format        readFormat
-	key           []byte
-	value         []byte
-	stream        int32
-	ddlCopy       bool // A replica awaits its canonical DDL before downstream execution.
-	record        *ack
-	retainedBytes int64
-	schema        *readSchema
-	ddl           *event.DDLEvent
-	control       *readControl
-	group         *readGroup
-	groupEnd      bool
-	dmlBoundary   *readBoundary
-	ddlBoundary   *readBoundary
-	ddlOrder      readOrder
+	format  readFormat
+	key     []byte
+	value   []byte
+	stream  int32
+	ddlCopy bool // A replica awaits its canonical DDL before downstream execution.
+	record  *ack
+
+	schema      *readSchema
+	ddl         *event.DDLEvent
+	control     *readControl
+	group       *readGroup
+	groupEnd    bool
+	dmlBoundary *readBoundary
+	ddlBoundary *readBoundary
+	ddlOrder    readOrder
 }
 
 // Group inputs are contiguous. An unordered group must be completely decoded

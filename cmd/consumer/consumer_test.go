@@ -129,7 +129,7 @@ func TestKafkaConfirmationKeepsConcurrentInput(t *testing.T) {
 	require.Len(t, batch, 1)
 	first := batch[0]
 	r.Advance([]readUpdate{{data: first, decoded: true}})
-	first.record.decoded(128)
+	first.record.release()
 	committing, release := make(chan struct{}), make(chan struct{})
 	cluster.ControlKey(int16(kmsg.OffsetCommit), func(kmsg.Request) (kmsg.Response, error, bool) {
 		close(committing)
@@ -237,11 +237,11 @@ func TestKafkaConfirmationCommitsFlushedPrefix(t *testing.T) {
 	writes := make([]*event.DMLEvent, 3)
 	for i, input := range []*readData{inputs[0], inputs[0], inputs[1]} {
 		writes[i] = &event.DMLEvent{}
-		input.record.refs.Inc()
+		input.record.retain()
 		writes[i].AddPostFlushFunc(input.record.release)
 	}
 	for _, input := range inputs {
-		input.record.decoded(128)
+		input.record.release()
 	}
 	require.NoError(t, r.Confirm(ctx))
 	require.Len(t, committed, 0, "unflushed offsets must not be committed")
@@ -294,15 +294,14 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	rows := make(map[string]*ack)
 	for id, table := range []string{"a", "b"} {
 		value := []byte(`{"version":1,"database":"test","table":"` + table + `","tableID":` + strconv.Itoa(id+1) + `,"type":"INSERT","commitTs":101,"schemaVersion":100,"data":{"id":"1"}}`)
-		record := newAck(memory, int64(len(value)+256), completed)
+		record := newAck(memory, int64(len(value)), completed)
 		records = append(records, record)
 		rows[table] = record
 		batch = append(batch, &readData{
-			value:         value,
-			stream:        int32(id + 1),
-			record:        record,
-			retainedBytes: 256,
-			dmlBoundary:   &readBoundary{reached: true},
+			value:       value,
+			stream:      int32(id + 1),
+			record:      record,
+			dmlBoundary: &readBoundary{reached: true},
 		})
 	}
 	// Another stream supplies the first schemas. Their later replicas must
@@ -310,23 +309,22 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	for _, stream := range []int32{0, 1} {
 		for id, table := range []string{"a", "b"} {
 			value := []byte(`{"version":1,"type":"BOOTSTRAP","tableSchema":{"schema":"test","table":"` + table + `","tableID":` + strconv.Itoa(id+1) + `,"version":100,"columns":[{"name":"id","dataType":{"mysqlType":"bigint","charset":"binary","collate":"binary","length":20}}]}}`)
-			record := newAck(memory, int64(len(value)+256), completed)
+			record := newAck(memory, int64(len(value)), completed)
 			records = append(records, record)
 			batch = append(batch, &readData{
-				value:         value,
-				stream:        stream,
-				record:        record,
-				retainedBytes: 256,
-				dmlBoundary:   &readBoundary{reached: true},
+				value:       value,
+				stream:      stream,
+				record:      record,
+				dmlBoundary: &readBoundary{reached: true},
 			})
 		}
 	}
 	inputs := make(chan []*readData, 1)
 	ready := make(chan *writeEvent, 4)
-	g.Go(func() error {
-		return a.arrange(ctx, inputs, ready)
-	})
 	inputs <- batch
+	close(inputs)
+	// Finish parsing before checking that a flush releases the last input reference.
+	require.NoError(t, a.arrange(ctx, inputs, ready))
 	written := make(map[string]bool)
 	for len(written) != len(rows) {
 		select {
@@ -364,7 +362,6 @@ func TestSimpleCacheConfirmsEachInputIndependently(t *testing.T) {
 	}
 	for _, record := range records {
 		require.Zero(t, record.refs.Load())
-		record.confirm()
 	}
 	require.Zero(t, memory.used())
 }
@@ -555,24 +552,24 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 			for offset, ddl := range input {
 				message, err := encoder.EncodeDDLEvent(ddl)
 				require.NoError(t, err)
-				record := newAck(memory, int64(len(message.Key)+len(message.Value)+128), nil)
+				record := newAck(memory, int64(len(message.Key)+len(message.Value)), nil)
 				r.partitions[partitionID].records = append(r.partitions[partitionID].records, kafkaRecord{
 					ack:    record,
 					offset: int64(offset),
 				})
-				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, ddlCopy: partitionID != 0, key: message.Key, value: message.Value, record: record, retainedBytes: 128}) {
+				for result, err := range c.decode(t.Context(), &readData{stream: partitionID, ddlCopy: partitionID != 0, key: message.Key, value: message.Value, record: record}) {
 					require.NoError(t, err)
 					require.NoError(t, c.accept(t.Context(), result))
 					r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
 					c.collectWatermarks()
 				}
 			}
-			record := newAck(memory, int64(len(watermark.Key)+len(watermark.Value)+128), nil)
+			record := newAck(memory, int64(len(watermark.Key)+len(watermark.Value)), nil)
 			r.partitions[partitionID].records = append(r.partitions[partitionID].records, kafkaRecord{
 				ack:    record,
 				offset: int64(len(input)),
 			})
-			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, key: watermark.Key, value: watermark.Value, record: record, retainedBytes: 128}) {
+			for result, err := range c.decode(t.Context(), &readData{stream: partitionID, key: watermark.Key, value: watermark.Value, record: record}) {
 				require.NoError(t, err)
 				require.NoError(t, c.accept(t.Context(), result))
 				r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
@@ -604,14 +601,12 @@ func TestKafkaReaderSplitRenameDDL(t *testing.T) {
 		require.EqualValues(t, 11, result.watermark)
 		require.NotNil(t, result.onFlush)
 		result.onFlush()
-		var remainingBytes int64
 		for _, partition := range r.partitions {
 			for _, record := range partition.records {
-				require.Zero(t, record.ack.refs.Load())
-				remainingBytes += record.ack.bytes.Load()
+				require.True(t, record.ack.ready())
 			}
 		}
-		require.Equal(t, remainingBytes, memory.bytes.Load())
+		require.Zero(t, memory.used())
 	}
 }
 
@@ -625,7 +620,7 @@ func TestReaderDDLNormalization(t *testing.T) {
 	buffer.queueDDL(ddl, first)
 	result := buffer.nextReady(9)
 	require.Nil(t, result)
-	first.refs.Add(-1)
+	first.release()
 	beforeDDL := &event.DMLEvent{CommitTs: 10}
 	afterDDL := &event.DMLEvent{CommitTs: 11}
 	buffer.pendingDML = []*writeEvent{{dml: beforeDDL}, {dml: afterDDL}}
@@ -645,7 +640,7 @@ func TestReaderDDLNormalization(t *testing.T) {
 	require.Zero(t, first.refs.Load())
 	result = buffer.nextReady(11)
 	require.Same(t, afterDDL, result.dml)
-	require.EqualValues(t, 128, memory.bytes.Load())
+	require.Zero(t, memory.used())
 }
 
 func TestAssemblerCombinesInputWatermarks(t *testing.T) {
@@ -661,9 +656,8 @@ func TestAssemblerCombinesInputWatermarks(t *testing.T) {
 	require.EqualValues(t, 10, a.watermark)
 	a.streams[1].hasWatermark = false
 	record := newAck(memory, 128, nil)
-	record.refs.Inc()
-	record.decoded(128)
-	memory.reserve(128)
+	record.retain()
+	record.release()
 	a.controls = []*readControl{{watermark: 20, records: []*ack{record}}}
 	a.collectWatermarks()
 	require.Empty(t, a.pendingWatermarks)
@@ -677,7 +671,7 @@ func TestAssemblerCombinesInputWatermarks(t *testing.T) {
 	require.Positive(t, record.refs.Load())
 	a.pendingWatermarks[0].onFlush()
 	require.Zero(t, record.refs.Load())
-	record.confirm()
+
 	require.Zero(t, memory.used())
 	a.pendingWatermarks = nil
 	a.collectWatermarks()
@@ -693,8 +687,8 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 	a := newAssembler(t.Context(), decoding, nil, config.GetDefaultReplicaConfig(), memory, nil, r, simple.NewTableInfoCache())
 	for _, watermark := range []string{"100", "90"} {
 		value := []byte(`{"isDdl":false,"type":"TIDB_WATERMARK","_tidb":{"watermarkTs":` + watermark + `}}`)
-		record := newAck(memory, int64(len(value)+256), nil)
-		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
+		record := newAck(memory, int64(len(value)), nil)
+		for result, err := range a.decode(t.Context(), &readData{value: value, record: record, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
 			require.NoError(t, a.accept(t.Context(), result))
 			r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
@@ -707,7 +701,6 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		require.EqualValues(t, 1, record.refs.Load())
 		result.onFlush()
 		require.Zero(t, record.refs.Load())
-		record.confirm()
 	}
 	require.Zero(t, memory.used())
 	queries := []string{
@@ -716,8 +709,8 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 		`{"database":"test","table":"a","isDdl":true,"type":"ALTER","sql":"ALTER TABLE test.a ADD COLUMN z INT","_tidb":{"commitTs":200}}`,
 	}
 	for _, query := range queries {
-		record := newAck(memory, int64(len(query)+256), nil)
-		for result, err := range a.decode(t.Context(), &readData{value: []byte(query), record: record, retainedBytes: 256, ddlOrder: commitOrder}) {
+		record := newAck(memory, int64(len(query)), nil)
+		for result, err := range a.decode(t.Context(), &readData{value: []byte(query), record: record, ddlOrder: commitOrder}) {
 			require.NoError(t, err)
 			require.NoError(t, a.accept(t.Context(), result))
 			r.Advance([]readUpdate{{data: result.data, decoded: result.decoded, progress: result.watermark}})
@@ -735,10 +728,8 @@ func TestPulsarControlsUseTopicProgress(t *testing.T) {
 func TestKafkaReaderDDLWaitsForBufferedDML(t *testing.T) {
 	dml := &event.DMLEvent{CommitTs: 20}
 	ddl := &event.DDLEvent{FinishedTs: 30}
-	copyRecord := &ack{}
-	copyRecord.refs.Store(1)
 	memory := newMemoryUsage()
-	memory.bytes.Store(128)
+	copyRecord := newAck(memory, 128, nil)
 	c := &assembler{
 		memory:     memory,
 		pendingDML: []*writeEvent{{dml: dml}},
@@ -769,12 +760,13 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 	memory := newMemoryUsage()
 	file := newAck(memory, 256, nil)
 	later := newAck(memory, 256, nil)
-	later.refs.Add(-1)
-	file.refs.Add(2)
+	later.release()
+	file.retain()
+	file.retain()
 	firstDML, secondDML := &event.DMLEvent{}, &event.DMLEvent{}
 	for _, dml := range []*event.DMLEvent{firstDML, secondDML} {
 		dml.AddPostFlushFunc(func() {
-			file.refs.Add(-1)
+			file.release()
 		})
 	}
 	first := &writeBatch{events: []*event.DMLEvent{firstDML}, done: make(chan struct{})}
@@ -790,14 +782,16 @@ func TestInputCompletionAcrossBatches(t *testing.T) {
 	w.finishBatches()
 	require.NoError(t, input.Confirm(t.Context()))
 	require.EqualValues(t, 2, file.refs.Load())
+	require.EqualValues(t, 256, memory.used())
 	firstDML.PostFlush()
 	close(first.done)
 	w.finishBatches()
 	require.NoError(t, input.Confirm(t.Context()))
 	require.EqualValues(t, 1, file.refs.Load())
+	require.EqualValues(t, 256, memory.used())
 	require.Len(t, input.records, 2)
 	// Both batches are durable, but the decoder may still register more rows.
-	file.refs.Add(-1)
+	file.release()
 	w.finishBatches()
 	require.NoError(t, input.Confirm(t.Context()))
 	require.Empty(t, input.records)
@@ -812,7 +806,7 @@ func TestWatermarkConfirmationWaitsForWrites(t *testing.T) {
 	w := &writer{
 		memory: memory, inFlight: []*writeBatch{batch}, progressChanged: true,
 		pendingWatermarks: []*writeEvent{{watermark: 10, onFlush: func() {
-			record.refs.Add(-1)
+			record.release()
 		}}},
 	}
 	w.finishBatches()
@@ -844,7 +838,7 @@ func TestReadyDMLFlushDoesNotNeedAnotherWatermark(t *testing.T) {
 	}
 	record := newAck(memory, 128, nil)
 	buffer.queueDML(&writeEvent{dml: dml}, record, nil)
-	record.refs.Add(-1)
+	record.release()
 	result := buffer.nextReady(10)
 	input := &storageReader{memory: buffer.memory, records: []*ack{record}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
@@ -877,34 +871,54 @@ func TestStorageProgressDoesNotRejectUnreadRows(t *testing.T) {
 	require.Nil(t, filtered)
 }
 
-func TestMemoryBudgetIncludesInFlightMemory(t *testing.T) {
+func TestMemoryBudgetWaitsForDownstreamFlush(t *testing.T) {
 	memory := newMemoryUsage()
-	record := newAck(memory, 128, nil)
-	memory.reserve(maxMemoryBytes - 128)
+	memory.limit = 128
+	limit := newReadLimit(memory)
+	record := newAck(memory, memory.limit, nil)
+	input := &storageReader{memory: memory, records: []*ack{record}}
+	dml := &event.DMLEvent{}
+	record.retain()
+	dml.AddPostFlushFunc(record.release)
+	// Parsing can finish while the downstream still holds the input.
+	record.release()
+	require.NoError(t, input.Confirm(t.Context()))
+	require.Len(t, input.records, 1)
+	require.Equal(t, memory.limit, memory.used())
+
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.ErrorIs(t, memory.wait(ctx), context.Canceled)
+	require.ErrorIs(t, limit.wait(ctx), context.Canceled)
 	ctx, cancel = context.WithTimeout(t.Context(), 50*time.Millisecond)
-	require.ErrorIs(t, memory.wait(ctx), context.DeadlineExceeded)
+	require.ErrorIs(t, limit.wait(ctx), context.DeadlineExceeded)
 	cancel()
 	ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
 	wg.Go(func() {
-		done <- memory.wait(ctx)
+		done <- limit.wait(ctx)
 	})
 	require.Eventually(t, func() bool {
 		memory.mu.Lock()
 		defer memory.mu.Unlock()
 		return memory.changed != nil
 	}, time.Second, time.Millisecond)
-	memory.release(128)
+	select {
+	case err := <-done:
+		t.Fatalf("reading passed the budget before the downstream flush: %v", err)
+	default:
+	}
+
+	dml.PostFlush()
 	require.NoError(t, <-done)
 	wg.Wait()
-	record.decoded(128)
-	record.confirm()
-	memory.release(maxMemoryBytes - 256)
+	require.True(t, record.ready())
+	require.Zero(t, memory.used())
+	// Upstream confirmation consumes the completed prefix without a second release.
+	require.NoError(t, input.Confirm(t.Context()))
+	require.NoError(t, input.Confirm(t.Context()))
+	require.Empty(t, input.records)
 	require.Zero(t, memory.used())
 }
 
@@ -913,14 +927,32 @@ func TestOversizedInputCanComplete(t *testing.T) {
 	record := newAck(memory, maxMemoryBytes+(64<<20), nil)
 	require.Greater(t, memory.used(), int64(maxMemoryBytes))
 	memory.reserve(1024)
-	record.decoded(256)
+	record.release()
 	require.Zero(t, record.refs.Load())
-	record.confirm()
+
 	memory.release(1024)
 	require.Zero(t, memory.used())
 	require.Panics(t, func() {
 		memory.reserve(-1)
 	})
+	require.Zero(t, memory.used())
+}
+
+func TestKafkaReaderCloseReleasesBufferedInput(t *testing.T) {
+	client, err := kgo.NewClient()
+	require.NoError(t, err)
+	memory := newMemoryUsage()
+	record := &kgo.Record{Key: []byte("key"), Value: []byte("value")}
+	r := &kafkaReader{
+		client:          client,
+		memory:          memory,
+		prefetchedBytes: 128,
+		partitions: map[int32]*kafkaPartition{
+			0: {polled: []*kgo.Record{record}},
+		},
+	}
+	memory.reserve(r.prefetchedBytes + int64(len(record.Key)+len(record.Value)))
+	r.Close()
 	require.Zero(t, memory.used())
 }
 
@@ -1136,7 +1168,7 @@ func TestDDLReplicaFencesOnlyItsScope(t *testing.T) {
 		},
 		ddl: ddl,
 	}))
-	copyRecord.decoded(128)
+	copyRecord.release()
 	require.Same(t, before, a.nextReady(0).dml)
 	require.Same(t, independent, a.nextReady(0).dml)
 	require.Nil(t, a.nextReady(0), "post-DDL rows must wait for canonical input")
@@ -1148,7 +1180,7 @@ func TestDDLReplicaFencesOnlyItsScope(t *testing.T) {
 		},
 		ddl: ddl,
 	}))
-	canonical.decoded(128)
+	canonical.release()
 	a.advanceReading()
 	result := a.nextReady(0)
 	require.Same(t, ddl, result.ddl, "scoped replicas prove preceding input without a new global watermark")
@@ -1157,8 +1189,7 @@ func TestDDLReplicaFencesOnlyItsScope(t *testing.T) {
 	require.Zero(t, copyRecord.refs.Load())
 	require.Zero(t, canonical.refs.Load())
 	require.Same(t, after, a.nextReady(0).dml)
-	copyRecord.confirm()
-	canonical.confirm()
+
 	require.Zero(t, memory.used())
 }
 
@@ -1372,7 +1403,7 @@ func TestDDLCancellationLeavesInputUnconfirmed(t *testing.T) {
 	batch := &writeBatch{items: []*writeEvent{{dml: &event.DMLEvent{CommitTs: 9, TableInfo: table}}}, done: make(chan struct{})}
 	ddl := &event.DDLEvent{SchemaName: "test", TableName: "t", Query: "alter table t add column v int", FinishedTs: 10}
 	result := &writeEvent{ddl: ddl, onFlush: func() {
-		record.refs.Add(-1)
+		record.release()
 	}}
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	w := &writer{downstream: downstream, memory: memory, inFlight: []*writeBatch{batch}, inFlightEvents: len(batch.items)}

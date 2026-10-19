@@ -88,15 +88,14 @@ type decoderGroup struct {
 }
 
 type decodeTask struct {
-	message       *codecCommon.DMLMessage
-	name          event.SchemaTableName
-	record        *ack
-	dml           *event.DMLEvent
-	bytes         int64
-	done          chan struct{}
-	table         *common.TableInfo
-	tableID       int64
-	retainedBytes int64
+	message *codecCommon.DMLMessage
+	name    event.SchemaTableName
+	record  *ack
+	dml     *event.DMLEvent
+	bytes   int64
+	done    chan struct{}
+	table   *common.TableInfo
+	tableID int64
 }
 
 func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup {
@@ -110,7 +109,7 @@ func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup
 }
 
 func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
-	task.record.retainDecode()
+	task.record.retain()
 	// Conversion can finish out of order. The assembler joins results in table
 	// order before allowing controls or writes to pass them.
 	select {
@@ -122,6 +121,7 @@ func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	case d.input <- task:
 		return nil
 	case <-ctx.Done():
+		task.record.release()
 		return context.Cause(ctx)
 	}
 }
@@ -174,10 +174,10 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		bytes := dml.Rows.MemoryUsage() + int64(len(dml.RowTypes))*64
+		bytes := dml.Rows.MemoryUsage()
 		d.memory.reserve(bytes)
 		task.dml, task.bytes = dml, bytes
-		task.record.decoded(task.retainedBytes)
+		task.record.release()
 		task.message, task.record, task.table = nil, nil, nil
 		close(task.done)
 		select {

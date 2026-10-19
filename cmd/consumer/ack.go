@@ -22,22 +22,20 @@ import (
 
 // An input can be confirmed after decoding and downstream writes release all refs.
 type ack struct {
-	refs    atomic.Int64
-	decodes atomic.Int64
-	bytes   atomic.Int64 // This input's allocation balance, returned to the shared budget.
-	memory  *memoryUsage
-	done    chan<- struct{}
+	refs   atomic.Int64
+	bytes  int64 // Input size, held until parsing and all associated writes finish.
+	memory *memoryUsage
+	done   chan<- struct{}
 }
 
 func newAck(memory *memoryUsage, bytes int64, done chan<- struct{}) *ack {
 	memory.reserve(bytes)
 	record := &ack{
 		memory: memory,
+		bytes:  bytes,
 		done:   done,
 	}
-	record.bytes.Store(bytes)
 	record.refs.Store(1)
-	record.decodes.Store(1)
 	return record
 }
 
@@ -47,6 +45,7 @@ func (a *ack) release() {
 		log.Panic("consumer input completed more than once", zap.Int64("refs", refs))
 	}
 	if refs == 0 {
+		a.memory.release(a.bytes)
 		select {
 		case a.done <- struct{}{}:
 		default:
@@ -54,24 +53,11 @@ func (a *ack) release() {
 	}
 }
 
-// A decoding operation keeps both the input and its parsed contents alive.
-func (a *ack) retainDecode() {
-	a.decodes.Inc()
+// retain registers another parser, conversion or downstream write using this input.
+func (a *ack) retain() {
 	a.refs.Inc()
 }
 
-func (a *ack) retain(bytes int64) {
-	a.memory.reserve(bytes)
-	a.bytes.Add(bytes)
-}
-
-func (a *ack) decoded(retainedBytes int64) {
-	if a.decodes.Dec() == 0 {
-		a.memory.release(a.bytes.Swap(retainedBytes) - retainedBytes)
-	}
-	a.release()
-}
-
-func (a *ack) confirm() {
-	a.memory.release(a.bytes.Load())
+func (a *ack) ready() bool {
+	return a.refs.Load() == 0
 }
