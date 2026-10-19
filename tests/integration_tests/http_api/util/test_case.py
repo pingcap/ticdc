@@ -160,7 +160,7 @@ def create_changefeed(sink_uri):
     resp = rq.post(url, data=data, headers=headers)
     assert "ErrDispatcherFailed" in resp.text, f"{resp.text}"
 
-    # create changefeed fail because glue schema config is invalid
+    # create changefeed fails when Kafka is unavailable with Glue configured
     url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
@@ -178,9 +178,8 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    expected_error = "CDC:ErrKafkaNewProducer" if os.getenv(
-        "TICDC_NEWARCH") == "false" else "CDC:ErrNewKafkaSink"
-    assert expected_error in resp.text, f"{resp.text}"
+    assert_status_code(resp, rq.codes.bad_request, url)
+    assert resp.json()["error_code"] == "CDC:ErrSinkURIInvalid", f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")
