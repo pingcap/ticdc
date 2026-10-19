@@ -10,6 +10,9 @@ SINK_TYPE=$1
 TLS_DIR=$(cd $CUR/../_certificates && pwd)
 MAX_RETRIES=20
 
+export TICDC_USER=ticdc
+export TICDC_PASSWORD=ticdc_secret
+
 function run() {
 	# storage and kafka are the same as mysql
 	if [ "$SINK_TYPE" != "mysql" ]; then
