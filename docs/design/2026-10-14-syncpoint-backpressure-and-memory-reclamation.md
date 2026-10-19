@@ -1,4 +1,4 @@
-# Sync-point Backpressure and Memory Reclamation
+# Sync-point and Redo-wait Backpressure and Memory Reclamation
 
 ## Scope
 
@@ -10,9 +10,9 @@ Two changes work together:
 
 1. Check for stalled EventCollector memory periodically, independently of new
    events, and retain a recovery event when reclaiming queued data.
-2. Advertise zero scan quota for a dispatcher actually waiting for, or writing,
-   a sync-point. Resume advertising its available memory after successful
-   Write/Pass completion.
+2. Advertise zero scan quota for an ordinary dispatcher actually waiting for,
+   or writing, a sync-point, or caching a batch above the redo watermark.
+   Resume advertising its available memory when that wait is satisfied.
 
 The design does not add another broker prepare/commit protocol, change
 maintainer barrier coverage, skip non-replicating members, or alter transaction
@@ -29,6 +29,15 @@ to scan up to S. If A consumes the shared quota, a cycle exists:
 ```text
 A waits for B at S -> B needs shared quota -> quota needs A to drain -> A waits
 ```
+
+Redo introduces another dependency: an ordinary dispatcher caches its active
+batch until `redoGlobalTs` reaches the batch's final commit TS. Its pending queue
+can fill with later events. Collector changefeed availability is the minimum
+of ordinary and redo stream availability, so a full ordinary stream can stop a
+lagging redo dispatcher from scanning. That dispatcher then pins the global
+redo watermark needed to drain the ordinary stream. Periodic reclamation frees
+pending payload; stopping prefetch on the waiting ordinary path prevents it
+from immediately consuming that space again.
 
 Current reclamation is invoked from `areaMemStat.appendEvent`. It requires
 recent input, more than five seconds without ordinary event consumption or
@@ -49,7 +58,9 @@ reacts later than a prepare fence, so reclamation is still necessary.
 
 ## Invariants
 
-- Only a non-redo dispatcher in sync-point WAITING/WRITING is paused by this rule.
+- Only an ordinary dispatcher in sync-point WAITING/WRITING or with an actual
+  cached batch above the redo watermark is paused by this rule. Redo dispatchers
+  produce that watermark and must remain eligible to scan.
 - WAITING retries, Write/Pass, heartbeats, registration, handshake and reset must
   remain usable while scan quota is zero.
 - Reclamation cannot discard the active barrier or events already owned by the sink.
@@ -145,23 +156,34 @@ A handles S and blocks
 This retains the existing sequence checks as another recovery defense without
 requiring a future message to reveal a gap.
 
-## Sync-point scan backpressure
+## Dispatcher scan backpressure
 
 ### Derive state from the existing barrier
 
-Expose a lightweight `DispatcherService.GetPendingSyncPointTs() uint64`. Under
-the existing barrier mutex, return the pending sync-point TS only for a
-non-redo dispatcher in WAITING or WRITING; otherwise return zero. Do not copy
-large protobuf status objects or maintain an independently cleared pause flag.
-Do not perform I/O or stream operations under that mutex.
+Expose a lightweight `DispatcherService.ShouldPauseScan() bool`. The basic
+dispatcher checks the existing barrier under its mutex and returns true only
+for a non-redo dispatcher handling a sync-point in WAITING or WRITING. Do not
+copy large protobuf status objects or perform I/O or stream operations under
+that mutex.
 
-Pre-WAITING asynchronous flush and redo-watermark caching are outside the pause
-condition. This leaves a feedback window but uses a well-defined existing state.
+The ordinary event dispatcher also checks its redo cache. An atomic required TS
+is stored before publishing a cached batch and cleared before retrying it. A
+retry that still needs redo progress republishes the required TS. Clearing
+before handling or Wake prevents completion of an old batch from clearing a
+new batch's wait. Removal clears the required TS under the existing cache
+mutex; a concurrent retry cannot cache another batch after removal.
+
+Pause for redo only when redo is enabled and the cached required TS exceeds
+the current `redoGlobalTs`. A low watermark without a cached batch is not a
+pause condition. Reaching the required TS removes the redo pause even before
+the cache retry runs, so no paired resume notification or new scanned event
+is required. Pre-WAITING asynchronous sync-point flush remains outside the
+pause condition.
 
 Each one-second congestion snapshot computes:
 
 ```text
-path quota = 0                      if pending sync-point TS != 0
+path quota = 0                      if ShouldPauseScan()
 path quota = actual available bytes otherwise
 ```
 
@@ -188,6 +210,12 @@ stream. The next periodic snapshot advertises actual availability without
 waiting for checkpoint advancement or new input. If the next sync-point is
 already pending, continuing to advertise zero is correct. A failed write must
 not clear the barrier.
+
+Redo watermark forwarding already calls `HandleCacheEvents()` after advancing
+`redoGlobalTs`. This retries the active batch and wakes the stream when it can
+continue. If processing enters a sync-point barrier, that barrier independently
+keeps the scan pause active. Do not gate the actual redo dispatcher on
+`redoGlobalTs`, since its progress is needed to advance that value.
 
 Current quota messages do not carry a per-path epoch. A delayed zero snapshot
 can temporarily overwrite a newer value, but periodic current snapshots
@@ -246,6 +274,8 @@ adding sync-point-derived zero quota. Cover:
 - Retained data-loss markers and idle resolved watermarks; Wake without new input.
 - Non-droppable events and multiple sources/epochs; removal/shutdown races.
 - Puller exclusion, redo separation and WAITING/WRITING eligibility.
+- Redo cache waits, partial/sufficient watermark advances, consecutive waits,
+  concurrent removal and handoff to sync-point backpressure.
 - Successful/failed completion, delayed/lost quota reports and consecutive barriers.
 - Zero-quota rate/shared-budget preservation, cursor safety and local advance.
 - Shared A/B starvation followed by barrier completion and checksum-correct replay.
@@ -289,6 +319,15 @@ after faults are removed; calibrate any revised bound before comparison. Run at
 least three comparisons, then complete three further sync-points and checksums
 of all test tables. Include insert/update/delete, normal load, redo, DDL,
 move/scale, reset and maintainer failover as subsequent regressions.
+
+For the redo-wait case, first disable sync-points and enable redo. Use a bounded
+delay on one redo participant while fast ordinary paths cache batches above
+the global redo watermark. After removing the delay and stopping input, verify
+pending-memory reclamation, the slow redo participant's scan/checkpoint,
+durable redo meta progress, ordinary cache retry and checkpoint-correct replay.
+Repeat with sync-points enabled and same-broker/cross-broker placements. This
+validates the watermark dependency cycle, not fairness among continuously
+runnable redo paths competing for scan-rate tokens.
 
 Identical bounded test hooks may establish otherwise rare legal interleavings,
 but must not disable baseline reclamation or alter quota/barrier outcomes. Label

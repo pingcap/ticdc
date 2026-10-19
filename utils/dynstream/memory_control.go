@@ -233,7 +233,10 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		}
 	}
 	if requestedBytes > 0 {
-		log.Info("request memory reclamation", zap.Any("area", as.area), zap.Int64("requestedBytes", requestedBytes), zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
+		log.Info("request memory reclamation",
+			zap.Any("area", as.area),
+			zap.Int64("requestedBytes", requestedBytes),
+			zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
 	}
 }
 

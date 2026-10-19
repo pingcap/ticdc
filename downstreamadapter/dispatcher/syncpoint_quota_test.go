@@ -23,19 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPendingSyncPointFollowsBarrierLifecycle(t *testing.T) {
+func TestScanPauseFollowsSyncPointLifecycle(t *testing.T) {
 	d := &BasicDispatcher{}
-	require.Zero(t, d.GetPendingSyncPointTs())
+	require.False(t, d.ShouldPauseScan())
 	sp := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 100, 1, 1)
 	for _, stage := range []heartbeatpb.BlockStage{heartbeatpb.BlockStage_WAITING, heartbeatpb.BlockStage_WRITING} {
 		d.blockEventStatus.setBlockEvent(sp, stage)
-		require.Equal(t, uint64(100), d.GetPendingSyncPointTs())
+		require.True(t, d.ShouldPauseScan())
 	}
 	d.blockEventStatus.clear()
-	require.Zero(t, d.GetPendingSyncPointTs())
+	require.False(t, d.ShouldPauseScan())
 	d.blockEventStatus.setBlockEvent(&commonEvent.DDLEvent{FinishedTs: 101}, heartbeatpb.BlockStage_WAITING)
-	require.Zero(t, d.GetPendingSyncPointTs(), "DDL must not activate the syncpoint quota override")
+	require.False(t, d.ShouldPauseScan(), "DDL must not activate the syncpoint quota override")
 	d.blockEventStatus.setBlockEvent(sp, heartbeatpb.BlockStage_WAITING)
 	d.mode = common.RedoMode
-	require.Zero(t, d.GetPendingSyncPointTs(), "redo must remain able to reach the barrier")
+	require.False(t, d.ShouldPauseScan(), "redo must remain able to reach the barrier")
 }

@@ -43,7 +43,7 @@ import (
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	pendingSyncPointTs       uint64
+	pauseScan                bool
 	mode                     int64
 	id                       common.DispatcherID
 	tableSpan                *heartbeatpb.TableSpan
@@ -693,21 +693,24 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 	require.Equal(t, 1, maxBatch)
 }
 
-func (m *mockEventDispatcher) GetPendingSyncPointTs() uint64 { return m.pendingSyncPointTs }
+func (m *mockEventDispatcher) ShouldPauseScan() bool { return m.pauseScan }
 
-func TestSyncPointQuotaUsesCurrentState(t *testing.T) {
+func TestScanPauseQuotaUsesCurrentState(t *testing.T) {
 	c := &EventCollector{ds: NewEventDynamicStream(false), redoDs: NewEventDynamicStream(true)}
 	defer c.ds.Close()
 	defer c.redoDs.Close()
 	cf := common.NewChangefeedID4Test("default", "syncpoint-quota")
 	c.changefeedMap.Store(cf.ID(), newChangefeedStat(cf))
-	blocked := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf, pendingSyncPointTs: 100}
+	blocked := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
 	lagging := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
-	for _, target := range []*mockEventDispatcher{blocked, lagging} {
+	// Even a synthetic pause reported for a redo target must not stop the
+	// producer of the watermark the ordinary dispatcher is waiting for.
+	redo := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf, mode: common.RedoMode, pauseScan: true}
+	for _, target := range []*mockEventDispatcher{blocked, lagging, redo} {
 		stat := newDispatcherStat(target, c, nil)
 		markSessionReceiving(stat.session, "broker")
 		c.dispatcherMap.Store(target.id, stat)
-		require.NoError(t, c.ds.AddPath(target.id, stat, dynstream.NewAreaSettingsWithMaxPendingSize(1<<20, dynstream.MemoryControlForEventCollector, "test")))
+		require.NoError(t, c.getDynamicStream(target.mode).AddPath(target.id, stat, dynstream.NewAreaSettingsWithMaxPendingSize(1<<20, dynstream.MemoryControlForEventCollector, "test")))
 	}
 	available := func() commonEvent.AvailableMemory {
 		msgs := c.newCongestionControlMessages()
@@ -717,14 +720,17 @@ func TestSyncPointQuotaUsesCurrentState(t *testing.T) {
 		return entries[0]
 	}
 	before := available()
-	require.Zero(t, before.DispatcherAvailable[blocked.id])
+	require.Positive(t, before.DispatcherAvailable[blocked.id])
 	require.Positive(t, before.DispatcherAvailable[lagging.id])
-	// Clearing S and immediately entering S+I must never replay a saved quota.
-	blocked.pendingSyncPointTs = 200
-	require.Zero(t, available().DispatcherAvailable[blocked.id])
-	blocked.pendingSyncPointTs = 0
+	require.Positive(t, before.DispatcherAvailable[redo.id])
+	blocked.pauseScan = true
+	paused := available()
+	require.Zero(t, paused.DispatcherAvailable[blocked.id])
+	require.Equal(t, before.Available, paused.Available, "pausing a path must not change shared physical quota")
+	require.Equal(t, before.DispatcherAvailable[lagging.id], paused.DispatcherAvailable[lagging.id])
+	require.Equal(t, before.DispatcherAvailable[redo.id], paused.DispatcherAvailable[redo.id])
+	blocked.pauseScan = false
 	after := available()
-	require.Positive(t, after.DispatcherAvailable[blocked.id])
-	require.Equal(t, before.Available, after.Available, "barrier pause must not change shared physical quota")
-	require.Equal(t, before.DispatcherAvailable[lagging.id], after.DispatcherAvailable[lagging.id])
+	require.Equal(t, before.Available, after.Available)
+	require.Equal(t, before.DispatcherAvailable, after.DispatcherAvailable, "resume must use current quotas without new input")
 }

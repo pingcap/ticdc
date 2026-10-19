@@ -744,7 +744,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 		// get available memory for this dispatcher
 		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
-			if !common.IsRedoMode(stat.target.GetMode()) && stat.target.GetPendingSyncPointTs() != 0 {
+			if !common.IsRedoMode(stat.target.GetMode()) && stat.target.ShouldPauseScan() {
 				pathMemory = 0
 			}
 			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = pathMemory

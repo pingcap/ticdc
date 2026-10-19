@@ -762,9 +762,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	request := requestResult.request
 
-	// A syncpoint-blocked consumer needs no more DML scans. Keep ready,
-	// handshake and no-data progress above this gate, without spending scan
-	// tokens or reserving shared memory needed by lagging dispatchers.
+	// A consumer waiting for a syncpoint or redo watermark needs no more DML
+	// scans. Keep ready, handshake and no-data progress above this gate, without
+	// spending scan tokens or reserving shared memory needed by lagging dispatchers.
 	if task.availableMemoryQuota.Load() == 0 {
 		c.sendSignalResolvedTs(task)
 		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()

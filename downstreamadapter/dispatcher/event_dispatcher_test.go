@@ -502,10 +502,10 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 6,
 	}
-	var pendingAtSyncPointWake atomic.Uint64
-	pendingAtSyncPointWake.Store(syncPointEvent.CommitTs)
+	var pausedAtSyncPointWake atomic.Bool
+	pausedAtSyncPointWake.Store(true)
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, func() {
-		pendingAtSyncPointWake.Store(dispatcher.GetPendingSyncPointTs())
+		pausedAtSyncPointWake.Store(dispatcher.ShouldPauseScan())
 		callback()
 	})
 	require.Equal(t, true, block)
@@ -519,7 +519,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
-	require.Equal(t, syncPointEvent.CommitTs, dispatcher.GetPendingSyncPointTs())
+	require.True(t, dispatcher.ShouldPauseScan())
 	// not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
@@ -556,8 +556,8 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		return count.Load() == int32(6)
 	}, 5*time.Second, 10*time.Millisecond)
 
-	require.Zero(t, pendingAtSyncPointWake.Load(), "successful Pass must clear the pause before Wake")
-	require.Zero(t, dispatcher.GetPendingSyncPointTs())
+	require.False(t, pausedAtSyncPointWake.Load(), "successful Pass must clear the pause before Wake")
+	require.False(t, dispatcher.ShouldPauseScan())
 
 	// ===== resolved event =====
 	checkpointTs = dispatcher.GetCheckpointTs()
