@@ -101,9 +101,8 @@ func TestPeriodicReclamationWithoutInput(t *testing.T) {
 		require.False(t, area.checkDeadlock(), "the append-driven check cannot help a silent producer")
 
 		var wg sync.WaitGroup
-		for i := 0; i < 16; i++ {
-			wg.Add(1)
-			go func() { defer wg.Done(); mc.checkMemoryPressure() }()
+		for range 16 {
+			wg.Go(mc.checkMemoryPressure)
 		}
 		wg.Wait()
 		if algorithm == MemoryControlForPuller {

@@ -117,7 +117,7 @@ func (q *eventQueue[A, P, T, D, H]) reclaimBlockedPath(path *pathInfo[A, P, T, D
 	}
 	releasedBytes := int64(0)
 	count := path.pendingQueue.Length()
-	for i := 0; i < count; i++ {
+	for range count {
 		e, _ := path.pendingQueue.PopFront()
 		if e.eventType.Droppable && e.eventType.Property != PeriodicSignal {
 			if replacement := q.handler.OnDrop(e.event); replacement != nil {
