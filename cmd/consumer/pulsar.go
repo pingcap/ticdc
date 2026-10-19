@@ -191,11 +191,11 @@ type pulsarInput struct {
 	record  *ack
 }
 
-func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[assemblyInput, error] {
+func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[task, error] {
 		scope := inputScope{record: input.record, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
 		return parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload())
-	}, output)
+	}, tasks)
 }
 
 func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {

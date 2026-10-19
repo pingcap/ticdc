@@ -28,10 +28,10 @@ import (
 )
 
 // Run owns source reading and parsing. Advance and Confirm may run concurrently.
-// Boundary is assembler-owned. Close runs after all callers have stopped.
+// Boundary is conductor-owned. Close runs after all callers have stopped.
 // ContinueReading lets an unfinished dependency advance past the soft budget.
 type Reader interface {
-	Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error
+	Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error
 	Advance(updates []readUpdate)
 	// Boundary requests event progress through commitTs. Nil covers every input;
 	// an empty, nonnil selection covers the control stream. Zero clears the request.
@@ -112,11 +112,11 @@ func newReader(
 	}
 }
 
-func (r *reader) start(ctx context.Context, parser *inputParser, results chan<- []assemblyInput) error {
+func (r *reader) start(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
 	r.g, ctx = errgroup.WithContext(ctx)
 	r.g.Go(func() error { return r.confirm(ctx) })
-	defer close(results)
-	err := r.client.Run(ctx, parser, results)
+	defer close(tasks)
+	err := r.client.Run(ctx, parser, tasks)
 	if ctx.Err() != nil {
 		return context.Cause(ctx)
 	}
@@ -128,7 +128,7 @@ func (r *reader) start(ctx context.Context, parser *inputParser, results chan<- 
 
 // Each source keeps its native input type through reading and parsing. The
 // bounded queue lets I/O run while the source parser publishes logical work.
-func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, error), parse func(context.Context, T) iter.Seq2[assemblyInput, error], output chan<- []assemblyInput) error {
+func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, error), parse func(context.Context, T) iter.Seq2[task, error], tasks chan<- []task) error {
 	g, ctx := errgroup.WithContext(ctx)
 	inputs := make(chan []T, 1)
 	g.Go(func() error {
@@ -146,14 +146,14 @@ func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, e
 		}
 	})
 	g.Go(func() error {
-		pending := make([]assemblyInput, 0, batchRows)
+		pending := make([]task, 0, batchRows)
 		flush := func() error {
 			if len(pending) == 0 {
 				return nil
 			}
 			select {
-			case output <- pending:
-				pending = make([]assemblyInput, 0, batchRows)
+			case tasks <- pending:
+				pending = make([]task, 0, batchRows)
 				return nil
 			case <-ctx.Done():
 				return context.Cause(ctx)
@@ -168,12 +168,12 @@ func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, e
 					return flush()
 				}
 				for _, data := range batch {
-					for input, err := range parse(ctx, data) {
+					for work, err := range parse(ctx, data) {
 						if err != nil {
 							return err
 						}
-						pending = append(pending, input)
-						_, row := input.(*decodeTask)
+						pending = append(pending, work)
+						_, row := work.(*decodeTask)
 						if len(pending) == batchRows || !row {
 							if err := flush(); err != nil {
 								return err
@@ -234,7 +234,7 @@ type readControl struct {
 }
 
 // A boundary either completes a finite input scope or exposes a shared control
-// watermark. Only assembly advances these facts.
+// watermark. Only the conductor advances these facts.
 type readBoundary struct {
 	reached   bool
 	watermark *uint64

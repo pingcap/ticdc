@@ -50,7 +50,7 @@ const (
 type consumer struct {
 	g             *errgroup.Group
 	reader        *reader
-	assembler     *assembler
+	conductor     *conductor
 	parser        *inputParser
 	writer        *writer
 	upstreamDB    *sql.DB
@@ -140,12 +140,12 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 		}
 	}
 	parsing := newInputParser(ctx, decoding, upstreamDB, replicaConfig, streams, tables)
-	assembler := newAssembler(memory, reader.client, parsing)
+	conductor := newConductor(memory, reader.client, parsing)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
 		parser:        parsing,
-		assembler:     assembler,
+		conductor:     conductor,
 		writer:        writer,
 		upstreamDB:    upstreamDB,
 		profileServer: newProfileServer(options.enableProfiling),
@@ -195,7 +195,7 @@ func loadReplicaConfig(configFile string) *config.ReplicaConfig {
 	return replicaConfig
 }
 
-// Resolve transport-specific defaults and requirements before constructing the assembler.
+// Resolve transport-specific defaults and requirements before constructing the conductor.
 func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig) *decodeConfig {
 	source := sourceTypeFromURI(upstreamURI)
 	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
@@ -316,14 +316,14 @@ func (c *consumer) consume(ctx context.Context) error {
 			return nil
 		})
 	}
-	inputs := make(chan []assemblyInput, 1)
+	tasks := make(chan []task, 1)
 	writeDone := make(chan struct{})
 	c.g.Go(func() error {
-		return c.reader.start(ctx, c.parser, inputs)
+		return c.reader.start(ctx, c.parser, tasks)
 	})
 	c.g.Go(func() error {
 		defer close(writeDone)
-		return c.assembler.start(ctx, inputs, c.writer)
+		return c.conductor.start(ctx, tasks, c.writer)
 	})
 	c.g.Go(func() error {
 		return c.writer.start(ctx)
@@ -342,7 +342,7 @@ func (c *consumer) stop() {
 	}
 	_ = c.g.Wait()
 	c.writer.close()
-	c.assembler.close()
+	c.conductor.close()
 	c.reader.close()
 	if c.upstreamDB != nil {
 		if closeErr := c.upstreamDB.Close(); closeErr != nil {

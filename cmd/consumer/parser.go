@@ -55,13 +55,13 @@ type inputScope struct {
 	ddlOrder    readOrder
 }
 
-type assemblyInput interface{ assemblyInput() }
+type task interface{ isTask() }
 
-func (*decodeTask) assemblyInput()    {}
-func (*inputDDL) assemblyInput()      {}
-func (*inputProgress) assemblyInput() {}
-func (*checkpoint) assemblyInput()    {}
-func (*resumeTask) assemblyInput()    {}
+func (*decodeTask) isTask()    {}
+func (*inputDDL) isTask()      {}
+func (*inputProgress) isTask() {}
+func (*checkpoint) isTask()    {}
+func (*resumeTask) isTask()    {}
 
 type inputDDL struct {
 	ddl        *event.DDLEvent
@@ -104,7 +104,7 @@ func newInputParser(ctx context.Context, decoding *decodeConfig, upstreamDB *sql
 }
 
 func (p *inputParser) messageTask(scope inputScope, message *codecCommon.DMLMessage) *decodeTask {
-	scope.record.retain() // Transferred to assembly before the parser releases its lease.
+	scope.record.retain() // Transferred to the conductor before the parser releases its lease.
 	return &decodeTask{
 		message: message, name: event.SchemaTableName{SchemaName: message.Schema, TableName: message.Table},
 		commitTs: message.GetCommitTs(), tableID: message.TableID, stream: scope.stream,
@@ -112,8 +112,8 @@ func (p *inputParser) messageTask(scope inputScope, message *codecCommon.DMLMess
 	}
 }
 
-func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, value []byte) iter.Seq2[assemblyInput, error] {
-	return func(yield func(assemblyInput, error) bool) {
+func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, value []byte) iter.Seq2[task, error] {
+	return func(yield func(task, error) bool) {
 		p.cleanHistory()
 		stream := p.streams[scope.stream]
 		stream.decoder.AddKeyValue(key, value)
@@ -179,7 +179,7 @@ func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, v
 	}
 }
 
-// Cache access and reclamation stay on the parser goroutine. Assembly publishes
+// Cache access and reclamation stay on the parser goroutine. The conductor publishes
 // only the durable watermark; captured conversions keep their metadata alive.
 func (p *inputParser) cleanHistory() {
 	if p.codecConfig.Protocol != config.ProtocolSimple || p.completedWatermark == nil {

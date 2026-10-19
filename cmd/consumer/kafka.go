@@ -74,7 +74,7 @@ type kafkaReader struct {
 	pausedPartitions int
 	boundary         *readBoundary
 	control          *readBoundary
-	progressMu       sync.Mutex // Protects event progress and scheduling shared with assembly.
+	progressMu       sync.Mutex // Protects event progress and scheduling shared with the conductor.
 }
 
 func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
@@ -178,13 +178,13 @@ type kafkaInput struct {
 	record  *ack
 }
 
-func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input kafkaInput) iter.Seq2[assemblyInput, error] {
+func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input kafkaInput) iter.Seq2[task, error] {
 		return c.parse(ctx, parser, input)
-	}, output)
+	}, tasks)
 }
 
-func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafkaInput) iter.Seq2[assemblyInput, error] {
+func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafkaInput) iter.Seq2[task, error] {
 	id := input.message.Partition
 	scope := inputScope{stream: id, record: input.record, ddlCopy: id != 0, dmlBoundary: c.control}
 	if id == 0 {
@@ -193,8 +193,8 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 	if len(c.partitions) == 1 {
 		scope.ddlBoundary = &readBoundary{reached: true}
 	}
-	return func(yield func(assemblyInput, error) bool) {
-		pending := make([]assemblyInput, 0, 1)
+	return func(yield func(task, error) bool) {
+		pending := make([]task, 0, 1)
 		rows := 0
 		for result, err := range parser.parseMessage(ctx, scope, input.message.Key, input.message.Value) {
 			if err != nil {
@@ -223,7 +223,7 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 				}
 				continue
 			}
-			// Validate the whole DML message before any of its rows reach assembly.
+			// Validate the whole DML message before any of its rows reach the conductor.
 			pending = append(pending, result)
 		}
 		for _, result := range pending {
@@ -356,7 +356,7 @@ func (c *kafkaReader) ContinueReading(enabled bool) {
 	c.limitReads()
 }
 
-// A nil selection covers every partition. The assembler supplies logical table
+// A nil selection covers every partition. The conductor supplies logical table
 // names; the reader translates them using its transport's routing rules.
 func (c *kafkaReader) tablePartitions(names []event.SchemaTableName) []int32 {
 	if c.router == nil || len(names) == 0 {
@@ -411,7 +411,7 @@ func (c *kafkaReader) Boundary(tables []event.SchemaTableName, commitTs uint64) 
 	return c.boundary
 }
 
-// Called by assembly while holding progressMu. Only assembly mutates reached.
+// Called by the conductor while holding progressMu. Only the conductor mutates reached.
 func (c *kafkaReader) advanceBoundary() {
 	if c.boundary == nil || c.boundary.reached {
 		return

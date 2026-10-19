@@ -297,17 +297,17 @@ func (*storageFile) storageRead()      {}
 func (*storageDDL) storageRead()       {}
 func (storageCheckpoint) storageRead() {}
 
-func (c *storageReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input storageRead) iter.Seq2[assemblyInput, error] {
+func (c *storageReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input storageRead) iter.Seq2[task, error] {
 		return c.parse(ctx, parser, input)
-	}, output)
+	}, tasks)
 }
 
-func (c *storageReader) parse(ctx context.Context, parser *inputParser, input storageRead) iter.Seq2[assemblyInput, error] {
+func (c *storageReader) parse(ctx context.Context, parser *inputParser, input storageRead) iter.Seq2[task, error] {
 	if file, ok := input.(*storageFile); ok {
 		return c.parseFile(ctx, parser, file)
 	}
-	return func(yield func(assemblyInput, error) bool) {
+	return func(yield func(task, error) bool) {
 		switch input := input.(type) {
 		case *storageDDL:
 			input.ddl.TableInfo = input.schema.tableInfo()
@@ -501,7 +501,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 
 func (c *storageReader) Advance(_ []readUpdate) {}
 
-// The source can read the next schema only after assembly registers this DDL.
+// The source can read the next schema only after the conductor registers this DDL.
 func (c *storageReader) registerDDL(input *storageDDL) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -555,8 +555,8 @@ func (s *readSchema) tableInfo() *common.TableInfo {
 	return s.table
 }
 
-func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *storageFile) iter.Seq2[assemblyInput, error] {
-	return func(yield func(assemblyInput, error) bool) {
+func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *storageFile) iter.Seq2[task, error] {
+	return func(yield func(task, error) bool) {
 		table := file.schema.tableInfo()
 		var decoder codecCommon.Decoder
 		switch p.codecConfig.Protocol {

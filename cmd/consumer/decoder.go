@@ -63,7 +63,7 @@ func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup
 
 func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	task.record.retain()
-	// Conversion can finish out of order. The assembler joins results in table
+	// Conversion can finish out of order. The conductor joins results in table
 	// order before allowing controls or writes to pass them.
 	select {
 	case d.input <- task:
