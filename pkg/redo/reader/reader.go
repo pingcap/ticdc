@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -410,8 +411,10 @@ func (h *logHeap) Pop() interface{} {
 }
 
 func getChangefeedFromMetaPath(path string) commonType.ChangeFeedID {
-	parts := strings.Split(path, "_")
-	keyspace := parts[1]
-	name := parts[2]
+	parts := strings.Split(filepath.Base(path), "_")
+	// Changefeed names cannot contain underscores, but keyspaces can.
+	nameIdx := len(parts) - 3
+	keyspace := strings.Join(parts[1:nameIdx], "_")
+	name := parts[nameIdx]
 	return commonType.NewChangeFeedIDWithName(name, keyspace)
 }

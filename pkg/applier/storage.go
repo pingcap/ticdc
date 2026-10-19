@@ -22,6 +22,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -63,12 +64,14 @@ func newTempTxnInsertEventStorage(flushThreshold int, dir string) *tempTxnInsert
 	}
 }
 
-func (t *tempTxnInsertEventStorage) initializeAddEvent(ts common.Ts) {
+func (t *tempTxnInsertEventStorage) initializeAddEvent(ts common.Ts) error {
+	if err := t.close(); err != nil {
+		return err
+	}
 	t.reading = false
 	t.useFileStorage = false
 	t.txnCommitTs = ts
-	t.writingFile = nil
-	t.readingFile = nil
+	return nil
 }
 
 func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.RedoDMLEvent) error {
@@ -80,7 +83,9 @@ func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.RedoDMLEvent) er
 		log.Panic("should read all events before write new event")
 	}
 	if !t.hasEvent() {
-		t.initializeAddEvent(event.Row.CommitTs)
+		if err := t.initializeAddEvent(event.Row.CommitTs); err != nil {
+			return err
+		}
 	} else {
 		if t.txnCommitTs != event.Row.CommitTs {
 			log.Panic("commit ts of events should be the same",
@@ -153,6 +158,9 @@ func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.RedoDMLEvent, e
 		return nil, nil
 	}
 	if t.readingFile == nil {
+		if err := t.close(); err != nil {
+			return nil, err
+		}
 		var err error
 		t.readingFile, err = os.Open(fmt.Sprintf("%s/%s", t.dir, tempStorageFileName))
 		if err != nil {
@@ -173,7 +181,25 @@ func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.RedoDMLEvent, e
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
+	if len(t.eventSizes) == 0 {
+		if err := t.close(); err != nil {
+			return nil, err
+		}
+	}
 	return redoLog.RedoRow, nil
+}
+
+func (t *tempTxnInsertEventStorage) close() error {
+	var err error
+	if t.writingFile != nil {
+		err = errors.WrapError(errors.ErrRedoFileOp, t.writingFile.Close())
+		t.writingFile = nil
+	}
+	if t.readingFile != nil {
+		err = multierr.Append(err, errors.WrapError(errors.ErrRedoFileOp, t.readingFile.Close()))
+		t.readingFile = nil
+	}
+	return err
 }
 
 func (t *tempTxnInsertEventStorage) readNextEvent() (*commonEvent.RedoDMLEvent, error) {
