@@ -148,6 +148,40 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	require.False(t, span.priorityPolicy.everCaughtUp.Load())
 }
 
+func TestSubscriptionBaseScanPriorityIsNeverDowngraded(t *testing.T) {
+	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
+	client := &subscriptionClient{
+		upstream: &upstreamHandle{pdClock: pdClock},
+		regionScheduler: &regionRequestScheduler{
+			taskQueue: priorityqueue.New[*regionPriorityTask](),
+		},
+	}
+
+	startTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:            SubscriptionID(1),
+		span:             rawSpan,
+		startTs:          startTs,
+		rangeLock:        regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, startTs),
+		baseScanPriority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		priorityPolicy:   newScanPriorityPolicy(pdClock, 30*time.Minute),
+	}
+	// newRegionInfo starts at low priority to simulate a retry path that does
+	// not inherit the priority from the previous Region.
+	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+
+	client.scheduleRegionRequest(context.Background(), region)
+	task := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, task.priority())
+}
+
 func popRegionPriorityTask(
 	t *testing.T,
 	queue *priorityqueue.PriorityQueue[*regionPriorityTask],

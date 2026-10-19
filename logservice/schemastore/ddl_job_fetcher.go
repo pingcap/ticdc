@@ -18,6 +18,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -104,6 +105,7 @@ func (p *ddlJobFetcher) run(startTs uint64) error {
 			advanceSubSpanResolvedTs,
 			0,
 			ddlPullerFilterLoop,
+			cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		)
 	}
 	return nil

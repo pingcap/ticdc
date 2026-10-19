@@ -27,11 +27,65 @@ import (
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server/mock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
+
+func TestHasRunningImport(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ttls     []int64
+		getErr   error
+		leaseErr error
+		wantCode string
+	}{
+		{name: "no tasks"},
+		{name: "running task", ttls: []int64{180}, wantCode: "CDC:ErrUpstreamHasRunningImport"},
+		{name: "expired lease", ttls: []int64{-1}},
+		{name: "zero ttl", ttls: []int64{0}},
+		{name: "expired then running", ttls: []int64{-1, 180}, wantCode: "CDC:ErrUpstreamHasRunningImport"},
+		{name: "list failure", getErr: context.Canceled, wantCode: "CDC:ErrPDEtcdAPIError"},
+		{name: "lease failure", ttls: []int64{180}, leaseErr: context.Canceled, wantCode: "CDC:ErrPDEtcdAPIError"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cli := etcd.NewMockClient(gomock.NewController(t))
+			resp := &clientv3.GetResponse{}
+			for i, ttl := range tc.ttls {
+				leaseID := int64(i + 1)
+				resp.Kvs = append(resp.Kvs, &mvccpb.KeyValue{Lease: leaseID})
+				cli.EXPECT().TimeToLive(ctx, clientv3.LeaseID(leaseID)).Return(
+					&clientv3.LeaseTimeToLiveResponse{TTL: ttl}, tc.leaseErr)
+			}
+			cli.EXPECT().Get(ctx, registerImportTaskPrefix, gomock.Any()).DoAndReturn(
+				func(_ context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+					op := clientv3.OpGet(key, opts...)
+					require.Equal(t, []byte(clientv3.GetPrefixRangeEnd(registerImportTaskPrefix)), op.RangeBytes())
+					return resp, tc.getErr
+				})
+
+			err := hasRunningImport(ctx, cli, 123)
+			if tc.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			code, ok := errors.RFCCode(err)
+			require.True(t, ok)
+			require.Equal(t, tc.wantCode, string(code))
+			if tc.wantCode == "CDC:ErrUpstreamHasRunningImport" {
+				require.Contains(t, err.Error(), "upstream-id: 123")
+			} else {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		})
+	}
+}
 
 func TestGetChangeFeedCoordinatorError(t *testing.T) {
 	ctrl := gomock.NewController(t)

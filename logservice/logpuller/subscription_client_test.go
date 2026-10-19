@@ -570,7 +570,16 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(
+		subID,
+		span,
+		1,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -660,6 +669,7 @@ func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 		func(ts uint64) { resolvedTsCh <- ts },
 		0,
 		true,
+		cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 	)
 
 	var subscribeRequest *cdcpb.ChangeDataRequest
@@ -674,7 +684,7 @@ func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 	require.Equal(t, span.StartKey, subscribeRequest.StartKey)
 	require.Equal(t, span.EndKey, subscribeRequest.EndKey)
 	require.Equal(t, kvrpcpb.ExtraOp_ReadOldValue, subscribeRequest.ExtraOp)
-	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_LOW, subscribeRequest.ScanPriority)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, subscribeRequest.ScanPriority)
 	require.True(t, subscribeRequest.FilterLoop)
 	require.NotNil(t, subscribeRequest.Header)
 	require.Equal(t, pdClient.GetClusterID(ctx), subscribeRequest.Header.ClusterId)

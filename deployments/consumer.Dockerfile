@@ -1,5 +1,6 @@
-FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache make bash git
+FROM golang:1.26.9-alpine AS builder
+# binutils-gold provides ld.gold for the arm64 CGO link step.
+RUN apk add --no-cache make bash git build-base binutils-gold
 WORKDIR /go/src/github.com/pingcap/ticdc
 COPY . .
 

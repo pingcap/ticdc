@@ -49,7 +49,7 @@ function run() {
 	run_sql "INSERT INTO owner_resign.t1 (id, val) values (1, 1);"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/owner/ChangefeedOwnerDontUpdateCheckpoint=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/changefeed/CoordinatorDontUpdateChangefeedCheckpoint=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302" --pd "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 	ensure 10 "cdc cli capture list --server http://127.0.0.1:8302 |jq '.|length'|grep -E '^2$'"
 

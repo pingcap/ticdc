@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,6 +28,27 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
+	subClient := newTrackingSubscriptionClient()
+	fetcher := newDDLJobFetcher(
+		context.Background(),
+		subClient,
+		nil,
+		keyspaceID,
+		func(DDLJobWithCommitTs) {},
+		func(uint64) {},
+	)
+
+	require.NoError(t, fetcher.run(1))
+	require.Equal(t,
+		[]cdcpb.ScanPriority{cdcpb.ScanPriority_SCAN_PRIORITY_HIGH},
+		subClient.subscriptionPriorities())
+}
 
 func TestAdvanceSchemaStoreResolvedTs(t *testing.T) {
 	tsCh := make(chan uint64, 100)

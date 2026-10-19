@@ -199,6 +199,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
+	if err = hasRunningImport(ctx, h.server.GetEtcdClient().GetEtcdClient(), pdClient.GetClusterID(ctx)); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	tmpInfo := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
 		SinkURI:      cfg.SinkURI,
