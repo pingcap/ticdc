@@ -31,6 +31,10 @@ import (
 )
 
 const (
+	// MaskedSensitiveValue is the placeholder used when exposing sensitive
+	// configuration values.
+	MaskedSensitiveValue = "******"
+
 	// DefaultMaxMessageBytes sets the default value for max-message-bytes.
 	DefaultMaxMessageBytes = 10 * 1024 * 1024 // 10M
 	// DefaultAdvanceTimeoutInSec sets the default value for advance-timeout-in-sec.
@@ -144,14 +148,15 @@ type SinkConfig struct {
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
-	// SchemaRegistry is only available when the downstream is MQ using avro protocol.
+	// SchemaRegistry is only available when the downstream is MQ using avro protocol
+	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
 	// EncoderConcurrency is only available when the downstream is MQ.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
 	// Terminator is NOT available when the downstream is DB.
 	Terminator *string `toml:"terminator" json:"terminator,omitempty"`
 	// DateSeparator is only available when the downstream is Storage.
-	DateSeparator *string `toml:"date-separator" json:"date-separator,omitempty"`
+	DateSeparator *DateSeparator `toml:"date-separator" json:"date-separator,omitempty"`
 	// EnablePartitionSeparator is only available when the downstream is Storage.
 	EnablePartitionSeparator *bool `toml:"enable-partition-separator" json:"enable-partition-separator,omitempty"`
 	// FileIndexWidth is only available when the downstream is Storage
@@ -207,7 +212,6 @@ type SinkConfig struct {
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
 
-	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
 	ForceReplicate *bool            `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -371,6 +375,20 @@ func (d *DateSeparator) FromString(separator string) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler.
+func (d DateSeparator) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (d *DateSeparator) UnmarshalText(text []byte) error {
+	if err := d.FromString(string(text)); err != nil {
+		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid date separator %q", text)
+	}
+	return nil
+}
+
 // GetPattern returns the pattern of the date separator.
 func (d DateSeparator) GetPattern() string {
 	switch d {
@@ -407,6 +425,8 @@ func (d DateSeparator) String() string {
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	// Rules are evaluated in order, and the first matching rule wins.
+	// MQ dispatching skips rules that only configure target schema or table names.
+	// A matcher-only rule selects the default MQ topic and partition strategy.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`
@@ -509,17 +529,23 @@ func (k *KafkaConfig) GetOutputRawChangeEvent() bool {
 
 // MaskSensitiveData masks sensitive data in KafkaConfig
 func (k *KafkaConfig) MaskSensitiveData() {
-	k.SASLPassword = aws.String("******")
-	k.SASLGssAPIPassword = aws.String("******")
-	k.SASLOAuthClientSecret = aws.String("******")
-	k.Key = aws.String("******")
+	sensitiveFields := []*string{k.SASLPassword, k.SASLGssAPIPassword, k.SASLOAuthClientSecret, k.Key}
 	if k.GlueSchemaRegistryConfig != nil {
-		k.GlueSchemaRegistryConfig.AccessKey = "******"
-		k.GlueSchemaRegistryConfig.Token = "******"
-		k.GlueSchemaRegistryConfig.SecretAccessKey = "******"
+		sensitiveFields = append(sensitiveFields,
+			&k.GlueSchemaRegistryConfig.AccessKey,
+			&k.GlueSchemaRegistryConfig.Token,
+			&k.GlueSchemaRegistryConfig.SecretAccessKey)
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = MaskedSensitiveValue
+		}
 	}
 	if k.SASLOAuthTokenURL != nil {
 		k.SASLOAuthTokenURL = aws.String(util.MaskSensitiveDataInURI(*k.SASLOAuthTokenURL))
+	}
+	if k.LargeMessageHandle != nil {
+		k.LargeMessageHandle.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(k.LargeMessageHandle.ClaimCheckStorageURI)
 	}
 }
 
@@ -680,13 +706,14 @@ func (c *PulsarConfig) GetOutputRawChangeEvent() bool {
 // MaskSensitiveData masks sensitive data in PulsarConfig
 func (c *PulsarConfig) MaskSensitiveData() {
 	if c.AuthenticationToken != nil {
-		c.AuthenticationToken = aws.String("******")
+		c.AuthenticationToken = aws.String(MaskedSensitiveValue)
 	}
 	if c.BasicPassword != nil {
-		c.BasicPassword = aws.String("******")
+		c.BasicPassword = aws.String(MaskedSensitiveValue)
 	}
 	if c.OAuth2 != nil {
-		c.OAuth2.OAuth2PrivateKey = "******"
+		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
+		c.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(c.OAuth2.OAuth2IssuerURL)
 	}
 }
 
@@ -720,6 +747,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `toml:"write-timeout" json:"write-timeout,omitempty"`
 	ReadTimeout                  *string `toml:"read-timeout" json:"read-timeout,omitempty"`
 	Timeout                      *string `toml:"timeout" json:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `toml:"async-ddl-timeout" json:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `toml:"enable-batch-dml" json:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `toml:"enable-multi-statement" json:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `toml:"enable-cache-prepared-statement" json:"enable-cache-prepared-statement,omitempty"`
@@ -870,14 +898,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	// validate storage sink related config
 	if sinkURI != nil && IsStorageScheme(sinkURI.Scheme) {
-		// validate date separator
-		if len(util.GetOrZero(s.DateSeparator)) > 0 {
-			var separator DateSeparator
-			if err := separator.FromString(util.GetOrZero(s.DateSeparator)); err != nil {
-				return cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
-			}
-		}
-
 		// File index width should be in [minFileIndexWidth, maxFileIndexWidth].
 		// In most scenarios, the user does not need to change this configuration,
 		// so the default value of this parameter is not set and just make silent
@@ -965,7 +985,7 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		if s.OpenProtocol != nil {
 			outputOldValue = s.OpenProtocol.OutputOldValue
 		}
-	case ProtocolDebezium:
+	case ProtocolDebezium, ProtocolDebeziumAvro:
 		if s.Debezium != nil {
 			outputOldValue = s.Debezium.OutputOldValue
 		}
@@ -1166,6 +1186,12 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// DecimalHandlingMode selects double (default) or string for Debezium JSON decimals.
+	DecimalHandlingMode *string `toml:"decimal-handling-mode" json:"decimal-handling-mode,omitempty"`
+	// BigintUnsignedHandlingMode selects long (default) or string for Debezium JSON unsigned bigints.
+	BigintUnsignedHandlingMode *string `toml:"bigint-unsigned-handling-mode" json:"bigint-unsigned-handling-mode,omitempty"`
+	// BinaryHandlingMode selects bytes, base64 (default), base64-url-safe, or hex for Debezium JSON binary columns.
+	BinaryHandlingMode *string `toml:"binary-handling-mode" json:"binary-handling-mode,omitempty"`
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text

@@ -18,14 +18,17 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -213,14 +216,18 @@ func (d *decoder) assembleDMLEventFromPayload(
 		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
+	binaryHandlingMode := d.config.DebeziumBinaryHandlingMode
+	if d.config.Protocol == config.ProtocolDebeziumAvro {
+		binaryHandlingMode = common.BinaryHandlingModeBase64
+	}
 	before, ok1 := valuePayload["before"].(map[string]any)
 	if ok1 {
-		data := assembleColumnData(before, columns, d.config.TimeZone)
+		data := assembleColumnData(before, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	after, ok2 := valuePayload["after"].(map[string]any)
 	if ok2 {
-		data := assembleColumnData(after, columns, d.config.TimeZone)
+		data := assembleColumnData(after, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
@@ -332,19 +339,19 @@ func queryTableInfoFromPayload(
 	return result
 }
 
-func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]any {
+func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) map[string]any {
 	result := make(map[string]any, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = decodeColumn(val, col, timeZone)
+		result[col.Name.O] = decodeColumn(val, col, timeZone, binaryHandlingMode)
 	}
 	return result
 }
 
-func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location) any {
+func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) any {
 	if value == nil {
 		return value
 	}
@@ -354,8 +361,16 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			value, err = base64.StdEncoding.DecodeString(value.(string))
+			switch binaryHandlingMode {
+			case common.BinaryHandlingModeBase64URLSafe:
+				value, err = base64.URLEncoding.DecodeString(value.(string))
+			case common.BinaryHandlingModeHex:
+				value, err = hex.DecodeString(value.(string))
+			default:
+				value, err = base64.StdEncoding.DecodeString(value.(string))
+			}
 			if err != nil {
+				err = errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
 				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
 			}
 			return value
@@ -397,6 +412,13 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 		}
 		value = types.NewDuration(0, 0, 0, int(val), types.MaxFsp)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
+		if strVal, ok := value.(string); ok && mysql.HasUnsignedFlag(colInfo.GetFlag()) {
+			uintVal, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return uintVal
+		}
 		var intVal int64
 		intVal, err = value.(json.Number).Int64()
 		if err != nil {
@@ -422,6 +444,14 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 			return types.NewBinaryLiteralFromUint(uint64(0), -1)
 		}
 	case mysql.TypeNewDecimal:
+		if strVal, ok := value.(string); ok {
+			dec := new(types.MyDecimal)
+			err = dec.FromString([]byte(strVal))
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return dec
+		}
 		var f64 float64
 		f64, err = value.(json.Number).Float64()
 		if err != nil {

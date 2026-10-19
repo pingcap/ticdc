@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -34,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -53,13 +53,13 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -128,7 +128,7 @@ func TestWriterRun(t *testing.T) {
 			TableInfo:       tableInfo,
 			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
 		}
-		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask := newDMLTask(tableName, dmlEvent, nil)
 		tableTask.encodedMsgs = []*common.Message{
 			{
 				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
@@ -201,6 +201,7 @@ func TestWriterFlushMarker(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
@@ -264,6 +265,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msgA := common.NewMsg(nil, []byte(`{"id":"a"}`))
 	msgA.SetRowsCount(1)
@@ -292,6 +294,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 				},
 			}),
 		},
+		nil,
 	)
 	msgB := common.NewMsg(nil, []byte(`{"id":"b"}`))
 	msgB.SetRowsCount(1)
@@ -361,6 +364,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 			DispatcherID:     dispatcherID,
 		},
 		dmlEvent,
+		nil,
 	)
 	tableTask.encodedMsgs = []*common.Message{
 		{
@@ -384,7 +388,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+func TestWriterPostFlushDoesNotRunPausedPostEnqueue(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
@@ -411,21 +415,13 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 
 	var secondFlushed atomic.Int64
 	var secondEnqueued atomic.Int64
-	secondCallbacks := &txnCallbacks{
-		flushed: []func(){
-			func() {
-				secondFlushed.Add(1)
-			},
-		},
-		enqueued: []func(){
-			func() {
-				secondEnqueued.Add(1)
-			},
-		},
-	}
 	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
-	secondMsg.Callback = secondCallbacks.postFlush
-	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	secondMsg.Callback = func() {
+		secondFlushed.Add(1)
+	}
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, func() {
+		secondEnqueued.Add(1)
+	})
 	require.NoError(t, err)
 	defer spoolBuffer.Release(secondEntry)
 	require.Equal(t, int64(0), secondEnqueued.Load())
@@ -442,7 +438,7 @@ func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
 	}
 
 	require.Equal(t, int64(1), secondFlushed.Load())
-	require.Equal(t, int64(1), secondEnqueued.Load())
+	require.Equal(t, int64(0), secondEnqueued.Load())
 
 	spoolBuffer.Release(firstEntry)
 	require.Equal(t, int64(1), secondEnqueued.Load())
@@ -471,7 +467,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		// Keep the quota larger than this encoded batch so the controller still
 		// spills it to local spool files instead of taking the oversized in-memory fast path.
@@ -483,7 +479,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -513,6 +509,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -697,14 +694,14 @@ func TestWriterIndexWriteError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -731,6 +728,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
@@ -761,7 +759,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	cfg.FileIndexWidth = 6
@@ -769,7 +767,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -796,6 +794,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
+		nil,
 	)
 
 	var callbackCount atomic.Int64

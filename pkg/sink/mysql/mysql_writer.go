@@ -42,13 +42,18 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+	// defaultDDLPollInterval is how often a running downstream DDL is re-checked.
+	defaultDDLPollInterval = 5 * time.Second
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
-	id           int
-	ctx          context.Context
-	db           *sql.DB
+	id  int
+	ctx context.Context
+	db  *sql.DB
+	// asyncDB is used only by the TiDB ADD INDEX execution path, whose
+	// read timeout is intentionally independent from the regular DB.
+	asyncDB      *sql.DB
 	cfg          *Config
 	ChangefeedID common.ChangeFeedID
 
@@ -74,7 +79,10 @@ type Writer struct {
 	// for dry-run mode
 	blockerTicker *time.Ticker
 
-	writeGate *writelease.Gate
+	// ddlPollInterval is how often a running downstream DDL is re-checked.
+	// Tests lower it to avoid paying the production poll interval.
+	ddlPollInterval time.Duration
+	writeGate       *writelease.Gate
 }
 
 func NewWriter(
@@ -99,6 +107,7 @@ func NewWriter(
 
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
+		ddlPollInterval:             defaultDDLPollInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
@@ -110,6 +119,11 @@ func NewWriter(
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
+}
+
+// SetControlAsyncDB sets the DB pool used to execute TiDB ADD INDEX DDLs.
+func (w *Writer) SetControlAsyncDB(db *sql.DB) {
+	w.asyncDB = db
 }
 
 // SetWriteGate configures capture-wide DML write admission for this transport

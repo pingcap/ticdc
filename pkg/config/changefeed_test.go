@@ -14,6 +14,7 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -66,6 +67,74 @@ func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
 
+func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		protocol     Protocol
+		keepRegistry bool
+	}{
+		{protocol: ProtocolAvro, keepRegistry: true},
+		{protocol: ProtocolDebeziumAvro, keepRegistry: true},
+		{protocol: ProtocolDebezium, keepRegistry: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.Protocol = util.AddressOf(tt.protocol.String())
+			cfg.Sink.SchemaRegistry = util.AddressOf("http://127.0.0.1:8088")
+			info := &ChangeFeedInfo{
+				SinkURI: "kafka://127.0.0.1:9092/topic",
+				Config:  cfg,
+			}
+
+			info.RmUnusedFields()
+			if tt.keepRegistry {
+				require.NotNil(t, info.Config.Sink.SchemaRegistry)
+				require.Equal(t, "http://127.0.0.1:8088", *info.Config.Sink.SchemaRegistry)
+			} else {
+				require.Nil(t, info.Config.Sink.SchemaRegistry)
+			}
+		})
+	}
+}
+
+func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"}}
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword:          util.AddressOf("plain-password-sentinel"),
+		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+		SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+		SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+		Key:                   util.AddressOf("private-key-sentinel"),
+		LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: "s3://bucket/prefix?access-key=claim-check-secret-sentinel"},
+		GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+			AccessKey:       "glue-access-sentinel",
+			SecretAccessKey: "glue-secret-sentinel",
+			Token:           "glue-token-sentinel",
+		},
+	}
+	info := &ChangeFeedInfo{
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config:  cfg,
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	output := info.String()
+	require.NotContains(t, output, "sentinel")
+	require.Contains(t, output, "xxxxx")
+	require.Contains(t, output, "******")
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	replicaConfig := GetDefaultReplicaConfig()
 	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
@@ -77,4 +146,64 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	changefeedConfig := info.ToChangefeedConfig()
 	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
 	require.True(t, changefeedConfig.IsLowLatencyMode())
+}
+
+func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
+	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
+		t.Run(sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.DispatchRules = []*DispatchRule{
+				nil,
+				{
+					Matcher:        []string{"sales.*", "!sales.tmp"},
+					TargetSchema:   "archive",
+					TargetTable:    "{schema}_{table}",
+					DispatcherRule: "ts",
+					PartitionRule:  "index-value",
+					IndexName:      "primary",
+					Columns:        []string{"id"},
+					TopicRule:      "sales-events",
+				},
+			}
+			info := &ChangeFeedInfo{SinkURI: sinkURI, Config: cfg}
+
+			info.RmUnusedFields()
+
+			require.Equal(t, []*DispatchRule{
+				nil,
+				{
+					Matcher:      []string{"sales.*", "!sales.tmp"},
+					TargetSchema: "archive",
+					TargetTable:  "{schema}_{table}",
+				},
+			}, info.Config.Sink.DispatchRules)
+		})
+	}
+}
+
+func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	info := &ChangeFeedInfo{Config: replicaConfig}
+	for _, level := range []string{CheckLevelCorrectness, CheckLevelNone} {
+		replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(level)
+		replicaConfig.Integrity.CorruptionHandleLevel = util.AddressOf(CorruptionHandleLevelError)
+		converted := info.ToChangefeedConfig()
+		require.Equal(t, level, converted.SinkConfig.Integrity.IntegrityCheckLevel)
+		require.Equal(t, CorruptionHandleLevelError, converted.SinkConfig.Integrity.CorruptionHandleLevel)
+		require.NotSame(t, replicaConfig.Sink, converted.SinkConfig)
+		require.Nil(t, replicaConfig.Sink.Integrity)
+		data, err := json.Marshal(converted)
+		require.NoError(t, err)
+		var wireConfig map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &wireConfig))
+		require.NotContains(t, wireConfig, "integrity")
+		var decodedSink SinkConfig
+		require.NoError(t, json.Unmarshal(wireConfig["sink_config"], &decodedSink))
+		require.Equal(t, converted.SinkConfig.Integrity, decodedSink.Integrity)
+	}
+	replicaConfig.Integrity = nil
+	require.Same(t, replicaConfig.Sink, info.ToChangefeedConfig().SinkConfig)
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig.Integrity)
+	replicaConfig.Sink = nil
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
 }

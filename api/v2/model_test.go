@@ -13,12 +13,73 @@
 package v2
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSinkConfigDateSeparator(t *testing.T) {
+	t.Parallel()
+
+	var sinkConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date_separator":"DAY"}`), &sinkConfig))
+	require.Equal(t, config.DateSeparatorDay, util.GetOrZero(sinkConfig.DateSeparator))
+
+	err := json.Unmarshal([]byte(`{"date_separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
+
+func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
+	info := &ChangeFeedInfo{
+		ID:      "test",
+		SinkURI: "kafka://user:sink-password-sentinel@127.0.0.1:9092/topic?secret=uri-secret-sentinel",
+		Config: &ReplicaConfig{
+			Sink: &SinkConfig{
+				SchemaRegistry: util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel"),
+				KafkaConfig: &KafkaConfig{
+					KafkaClientID:         util.AddressOf("visible-client-id"),
+					SASLPassword:          util.AddressOf("plain-password-sentinel"),
+					SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
+					SASLOAuthClientSecret: util.AddressOf("oauth-secret-sentinel"),
+					SASLOAuthTokenURL:     util.AddressOf("https://oauth.example.com/token?client_secret=token-url-secret-sentinel"),
+					LargeMessageHandle:    &LargeMessageHandleConfig{ClaimCheckStorageURI: util.AddressOf("s3://bucket/prefix?access-key=claim-check-secret-sentinel")},
+					GlueSchemaRegistryConfig: &GlueSchemaRegistryConfig{
+						AccessKey:       util.AddressOf("glue-access-sentinel"),
+						SecretAccessKey: util.AddressOf("glue-secret-sentinel"),
+						Token:           util.AddressOf("glue-token-sentinel"),
+					},
+				},
+				PulsarConfig: &PulsarConfig{
+					AuthenticationToken: util.AddressOf("pulsar-token-sentinel"),
+					BasicPassword:       util.AddressOf("pulsar-password-sentinel"),
+					OAuth2: &PulsarOAuth2{
+						OAuth2PrivateKey: util.AddressOf("pulsar-private-key-sentinel"),
+						OAuth2IssuerURL:  util.AddressOf("https://user:pulsar-issuer-secret-sentinel@oauth.example.com"),
+					},
+				},
+			},
+			Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?access-key=consistent-secret-sentinel")},
+		},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	masked, err := info.CloneWithMaskedSensitiveData()
+	require.NoError(t, err)
+	output, err := masked.Marshal()
+	require.NoError(t, err)
+	require.NotContains(t, output, "sentinel")
+	require.NotContains(t, output, "memory_quota")
+	require.Contains(t, output, "visible-client-id")
+	require.Nil(t, masked.Config.Sink.KafkaConfig.Key)
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
 
 // TestReplicaConfigConversion verifies API/internal replica config conversion,
 // including round-tripping the optional event collector batch overrides.
@@ -42,6 +103,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+			DebeziumConfig: &DebeziumConfig{
+				DecimalHandlingMode:        util.AddressOf("string"),
+				BigintUnsignedHandlingMode: util.AddressOf("string"),
+				BinaryHandlingMode:         util.AddressOf("hex"),
+			},
 		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
@@ -59,6 +125,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 			MaxLogSize:        util.AddressOf(int64(128)),
 			FlushIntervalInMs: util.AddressOf(int64(2000)),
 			Storage:           util.AddressOf("s3://test"),
+			SpoolDiskQuota:    util.AddressOf(int64(2048)),
+			SpoolBaseDir:      util.AddressOf("/tmp/redo-spool"),
 		},
 	}
 
@@ -75,6 +143,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -84,6 +155,23 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, int64(128), util.GetOrZero(internalCfg.Consistent.MaxLogSize))
 	require.Equal(t, int64(2000), util.GetOrZero(internalCfg.Consistent.FlushIntervalInMs))
 	require.Equal(t, "s3://test", util.GetOrZero(internalCfg.Consistent.Storage))
+	require.Equal(t, int64(2048), util.GetOrZero(internalCfg.Consistent.SpoolDiskQuota))
+	// The release API uses a bool, so an omitted output_old_value remains false.
+	require.False(t, internalCfg.Sink.Debezium.OutputOldValue)
+
+	// An explicit output_old_value must be honored.
+	apiCfgDebezium := &ReplicaConfig{
+		Sink: &SinkConfig{
+			DebeziumConfig: &DebeziumConfig{
+				OutputOldValue: false,
+			},
+		},
+	}
+	internalDebezium := apiCfgDebezium.ToInternalReplicaConfig()
+	require.False(t, internalDebezium.Sink.Debezium.OutputOldValue)
+	require.Nil(t, internalDebezium.Sink.Debezium.DecimalHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
+	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
 
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
@@ -103,10 +191,15 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
+	require.False(t, apiCfgBack.Sink.DebeziumConfig.OutputOldValue)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
+	require.Equal(t, int64(2048), *apiCfgBack.Consistent.SpoolDiskQuota)
 
 	// Test case 4: batch fields round trip and nil preservation
 	apiBatchCfg := &ReplicaConfig{
@@ -209,4 +302,24 @@ func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
 	require.NotNil(t, apiCfgBack.Consistent)
 	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
 	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
+}
+
+func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			MySQLConfig: &MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("45m"),
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
+	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
 }

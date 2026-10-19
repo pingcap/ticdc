@@ -28,6 +28,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type stopChangefeedKind int
+
+const (
+	stopChangefeedKindCurrentPlacement stopChangefeedKind = iota
+	stopChangefeedKindStaleOwner
+)
+
 // StopChangefeedOperator is an operator to remove a maintainer from a node
 type StopChangefeedOperator struct {
 	keyspaceID        uint32
@@ -38,6 +45,7 @@ type StopChangefeedOperator struct {
 	coordinatorNodeID node.ID
 	backend           changefeed.Backend
 	maintainerEpoch   uint64
+	kind              stopChangefeedKind
 }
 
 func NewStopChangefeedOperator(
@@ -48,6 +56,7 @@ func NewStopChangefeedOperator(
 	backend changefeed.Backend,
 	removed bool,
 	maintainerEpoch uint64,
+	kind stopChangefeedKind,
 ) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
 		keyspaceID:        keyspaceID,
@@ -57,6 +66,7 @@ func NewStopChangefeedOperator(
 		coordinatorNodeID: coordinatorNode,
 		backend:           backend,
 		maintainerEpoch:   maintainerEpoch,
+		kind:              kind,
 	}
 }
 

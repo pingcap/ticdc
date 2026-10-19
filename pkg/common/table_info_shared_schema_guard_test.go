@@ -63,12 +63,8 @@ type goSourceFile struct {
 }
 
 // TestLatestTiDBTableInfoSharedSchemaGuard verifies the upstream struct fields
-<<<<<<< HEAD
 // whose shared-schema compatibility has been reviewed and recorded here.
 // New upstream fields should be reviewed and then added here intentionally.
-=======
-// that TiCDC shared-schema logic depends on.
->>>>>>> a6c01a5dd (test: Add a prerequisite assumption verification test for correctness of sharedSchema (#4252))
 func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	// This guard intentionally checks the latest TiDB master to detect
 	// upstream struct-field changes before TiCDC upgrades its pinned TiDB version.
@@ -83,23 +79,13 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"PKIsHandle", "IsCommonHandle", "CommonHandleVersion",
 				"Comment", "AutoIncID", "AutoIncIDExtra", "AutoIDCache", "AutoRandID",
 				"MaxColumnID", "MaxIndexID", "MaxForeignKeyID", "MaxConstraintID", "UpdateTS", "AutoIDSchemaID",
-<<<<<<< HEAD
-				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions", "TableSplitPolicy",
-				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
-				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
-				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
-				"Revision", "DBID",
-				// Materialized-view metadata is table-level and does not affect the shared column schema.
-				"MaterializedViewBase", "MaterializedView", "MaterializedViewShadow", "MaterializedViewLog",
-				// These table-level storage settings do not affect the shared column schema.
-				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
-=======
 				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions",
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
-				"Revision", "DBID", "Mode",
->>>>>>> a6c01a5dd (test: Add a prerequisite assumption verification test for correctness of sharedSchema (#4252))
+				"Revision", "DBID",
+				// These table-level storage settings do not affect the shared column schema.
+				"Mode",
 			},
 		},
 		{
@@ -120,12 +106,8 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 			typeName:        "IndexInfo",
 			expectedFields: []string{
 				"ID", "Name", "Table", "Columns", "State", "BackfillState", "Comment", "Tp", "Unique", "Primary",
-				"Invisible", "Global", "MVIndex", "VectorInfo", "InvertedInfo", "FullTextInfo",
-<<<<<<< HEAD
-				"ConditionExprString", "AffectColumn", "RegionSplitPolicy", "GlobalIndexVersion",
-=======
+				"Invisible", "Global", "MVIndex", "VectorInfo",
 				"ConditionExprString", "AffectColumn", "GlobalIndexVersion",
->>>>>>> a6c01a5dd (test: Add a prerequisite assumption verification test for correctness of sharedSchema (#4252))
 			},
 		},
 		{
@@ -228,7 +210,7 @@ func buildRequiredTypesByPackage(cases []structGuardCase) map[packageKey][]strin
 func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 	t.Helper()
 
-	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@master")
+	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@release-8.5")
 	output, cmdErr := cmd.CombinedOutput()
 	mod, decodeErr := decodeModuleInfo(output)
 	require.NoError(t, decodeErr, "unmarshal module metadata for %s failed", modulePath)

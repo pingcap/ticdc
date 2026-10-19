@@ -16,11 +16,16 @@ package util
 import (
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
@@ -182,6 +187,54 @@ func TestEventsGroupGetAllMessagesSortsOutOfOrderMessages(t *testing.T) {
 	require.Empty(t, group.messages)
 }
 
+func BenchmarkEventsGroupResolveInto(b *testing.B) {
+	const messageCount = 16 * 1024
+
+	messages := make([]*codeccommon.DMLMessage, messageCount)
+	for i := range messages {
+		messages[i] = newTestDMLMessage(uint64(i + 1))
+	}
+
+	benchmarks := []struct {
+		name       string
+		resolveTs  uint64
+		outOfOrder bool
+	}{
+		{name: "ordered/noop", resolveTs: 0},
+		{name: "ordered/half", resolveTs: messageCount / 2},
+		{name: "ordered/all", resolveTs: messageCount},
+		{name: "out-of-order/all", resolveTs: messageCount, outOfOrder: true},
+	}
+
+	oldLogLevel := log.GetLevel()
+	log.SetLevel(zapcore.FatalLevel)
+	b.Cleanup(func() { log.SetLevel(oldLogLevel) })
+
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			source := messages
+			if benchmark.outOfOrder {
+				source = append([]*codeccommon.DMLMessage(nil), messages...)
+				lastIndex := len(source) - 1
+				source[lastIndex-1], source[lastIndex] = source[lastIndex], source[lastIndex-1]
+			}
+			group := NewEventsGroup(0, 1)
+			group.messages = make([]*codeccommon.DMLMessage, 0, messageCount)
+			dst := make([]*codeccommon.DMLMessage, 0, messageCount)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if len(group.messages) != messageCount {
+					group.messages = append(group.messages[:0], source...)
+					group.outOfOrder = benchmark.outOfOrder
+				}
+				dst = group.ResolveInto(benchmark.resolveTs, dst[:0])
+			}
+		})
+	}
+}
+
 func TestAppendOrMergeDMLEventMergesSameCommitTs(t *testing.T) {
 	var flushed []int
 	e1 := newTestDMLEvent(10, common.RowTypeInsert)
@@ -211,4 +264,42 @@ func TestAppendOrMergeDMLEventAppendsDifferentCommitTs(t *testing.T) {
 	require.Len(t, events, 2)
 	require.Same(t, e1, events[0])
 	require.Same(t, e2, events[1])
+}
+
+func TestAppendOrMergeDMLEventSparseChecksums(t *testing.T) {
+	for _, checksums := range [][]*integrity.Checksum{
+		{{Current: 1}, nil, {Current: 3}},
+		{nil, nil, {Current: 3}},
+		{{Current: 1}, nil, nil},
+	} {
+		var events []*commonEvent.DMLEvent
+		for i, rowType := range []common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeInsert} {
+			e := newTestDMLEvent(100, rowType)
+			e.Rows = chunk.NewChunkWithCapacity([]*types.FieldType{types.NewFieldType(mysql.TypeLonglong)}, 2)
+			e.Rows.AppendInt64(0, int64(i+1))
+			if rowType == common.RowTypeUpdate {
+				e.RowTypes = append(e.RowTypes, rowType)
+				e.Rows.AppendInt64(0, 20)
+			} else {
+				e.RowKeys = [][]byte{{byte(i + 1)}}
+			}
+			if checksums[i] != nil {
+				e.Checksum = []*integrity.Checksum{checksums[i]}
+			}
+			events = AppendOrMergeDMLEvent(events, e)
+		}
+		require.Len(t, events, 1)
+		merged := events[0]
+		require.Equal(t, int32(3), merged.Length)
+		require.Len(t, merged.RowTypes, 4)
+		require.Equal(t, [][]byte{{1}, nil, nil, {3}}, merged.RowKeys)
+		require.Equal(t, checksums, merged.Checksum)
+		for i := range checksums {
+			row, ok := merged.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, checksums[i], row.Checksum)
+		}
+		_, ok := merged.GetNextRow()
+		require.False(t, ok)
+	}
 }
