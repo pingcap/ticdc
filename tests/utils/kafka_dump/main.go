@@ -185,7 +185,7 @@ func tableOf(raw []byte) string {
 		Payload struct {
 			Op     string `json:"op"`
 			Source struct {
-				Table any `json:"table"`
+				Table string `json:"table"`
 			} `json:"source"`
 		} `json:"payload"`
 	}
@@ -198,17 +198,8 @@ func tableOf(raw []byte) string {
 	// Debezium also includes source.table in DDL messages. Only count row events.
 	switch msg.Payload.Op {
 	case "c", "u", "d", "r":
+		return msg.Payload.Source.Table
 	default:
 		return ""
 	}
-	switch table := msg.Payload.Source.Table.(type) {
-	case string:
-		return table
-	case map[string]any:
-		if len(table) == 1 {
-			value, _ := table["string"].(string)
-			return value
-		}
-	}
-	return ""
 }
