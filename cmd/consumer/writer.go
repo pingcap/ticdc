@@ -58,12 +58,12 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		memory:     memory,
 		completed:  make(chan struct{}, 1),
 		mutations:  make(map[mutationKey]*writeBatch),
-		ddlJobs:    make(chan *writeEvent, 1),
+		ddlJobs:    make(chan *ddlWrite, 1),
 		ddlDone:    make(chan struct{}, 1),
 	}
 }
 
-func (w *writer) start(ctx context.Context, input <-chan []*writeEvent) error {
+func (w *writer) start(ctx context.Context) error {
 	w.g, ctx = errgroup.WithContext(ctx)
 	w.g.Go(func() error {
 		return w.executeDDL(ctx)
@@ -80,31 +80,8 @@ func (w *writer) start(ctx context.Context, input <-chan []*writeEvent) error {
 		log.Panic("consumer downstream sink stopped unexpectedly")
 		return nil
 	})
-	// Dispatch returns before close joins tasks blocked on sink queues.
-	return w.dispatch(ctx, input)
-}
-
-func (w *writer) dispatch(ctx context.Context, input <-chan []*writeEvent) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case items, ok := <-input:
-			if !ok {
-				return context.Cause(ctx)
-			}
-			for _, item := range items {
-				w.consume(item)
-			}
-		case <-w.completed:
-		}
-		if err := w.flushDML(ctx); err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer DML submission failed", zap.Error(err))
-			}
-			return err
-		}
-	}
+	<-ctx.Done()
+	return context.Cause(ctx)
 }
 
 func (w *writer) close() {
@@ -145,10 +122,10 @@ type writer struct {
 	downstream        sink.Sink
 	memory            *memoryUsage
 	completed         chan struct{}
-	pendingDML        []*writeEvent
-	pendingDDL        []*writeEvent
-	ddlInFlight       *writeEvent
-	ddlJobs           chan *writeEvent
+	pendingDML        []*dmlWrite
+	pendingDDL        []*ddlWrite
+	ddlInFlight       *ddlWrite
+	ddlJobs           chan *ddlWrite
 	ddlDone           chan struct{}
 	inFlight          []*writeBatch
 	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
@@ -156,12 +133,12 @@ type writer struct {
 	writtenBefore     uint64
 	inFlightBytes     int64
 	inFlightEvents    int
-	pendingWatermarks []*writeEvent
+	pendingWatermarks []*checkpoint
 	watermark         uint64
 	progressChanged   bool
 }
 type writeBatch struct {
-	items   []*writeEvent
+	items   []*dmlWrite
 	events  []*event.DMLEvent
 	dropped []*event.DMLEvent
 	keys    []mutationKey
@@ -184,28 +161,39 @@ type ddlKey struct {
 	query    string
 }
 
-func (w *writer) consume(result *writeEvent) {
-	if result.dml != nil {
-		w.pendingDML = append(w.pendingDML, result)
+type dmlWrite struct {
+	dml        *event.DMLEvent
+	bytes      int64
+	sequential bool
+}
+
+type ddlWrite struct {
+	ddl     *event.DDLEvent
+	onFlush func()
+}
+
+func (w *writer) enqueueDML(row *dmlWrite) {
+	w.pendingDML = append(w.pendingDML, row)
+	w.progressChanged = true
+}
+
+func (w *writer) enqueueDDL(ddl *ddlWrite) {
+	w.pendingDDL = append(w.pendingDDL, ddl)
+	w.progressChanged = true
+}
+
+func (w *writer) enqueueWatermark(progress *checkpoint) {
+	if progress.watermark > w.watermark {
+		w.watermark = progress.watermark
 		w.progressChanged = true
 	}
-	if result.ddl != nil {
-		w.pendingDDL = append(w.pendingDDL, result)
+	if progress.onFlush != nil {
+		w.pendingWatermarks = append(w.pendingWatermarks, progress)
 		w.progressChanged = true
-	}
-	if result.hasWatermark {
-		if result.watermark > w.watermark {
-			w.watermark = result.watermark
-			w.progressChanged = true
-		}
-		if result.onFlush != nil {
-			w.pendingWatermarks = append(w.pendingWatermarks, result)
-			w.progressChanged = true
-		}
 	}
 }
 
-func (w *writer) writeDDL(ctx context.Context, result *writeEvent) error {
+func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -252,13 +240,13 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			continue
 		}
 		for _, item := range w.pendingDML {
-			if item.dml.CommitTs <= ddl.GetCommitTs() && ddlBlocksTable(ddl, item) {
+			if item.dml.CommitTs <= ddl.GetCommitTs() && ddlBlocksTable(ddl, item.dml) {
 				return nil
 			}
 		}
 		for _, batch := range w.inFlight {
-			if slices.ContainsFunc(batch.items, func(item *writeEvent) bool {
-				return ddlBlocksTable(ddl, item)
+			if slices.ContainsFunc(batch.items, func(item *dmlWrite) bool {
+				return ddlBlocksTable(ddl, item.dml)
 			}) {
 				return nil
 			}
@@ -287,9 +275,9 @@ func (w *writer) flushDML(ctx context.Context) error {
 	if err := w.flushDDL(ctx); err != nil {
 		return err
 	}
-	active := make(map[int64]*writeEvent)
+	active := make(map[int64]*dmlWrite)
 	blocked := make(map[int64]bool)
-	tables := make(map[int64]*writeEvent)
+	tables := make(map[int64]*dmlWrite)
 	pending := w.pendingDML
 	for len(w.pendingDML) != 0 {
 		if err := context.Cause(ctx); err != nil {
@@ -313,7 +301,7 @@ func (w *writer) flushDML(ctx context.Context) error {
 	return w.flushDDL(ctx)
 }
 
-func (w *writer) selectBatch(active map[int64]*writeEvent, blocked map[int64]bool, tables map[int64]*writeEvent) (*writeBatch, int) {
+func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool, tables map[int64]*dmlWrite) (*writeBatch, int) {
 	clear(active)
 	clear(blocked)
 	clear(tables)
@@ -327,15 +315,15 @@ func (w *writer) selectBatch(active map[int64]*writeEvent, blocked map[int64]boo
 		bytes int64
 		end   int
 	)
-	items := make([]*writeEvent, 0, min(batchRows, len(w.pendingDML)))
+	items := make([]*dmlWrite, 0, min(batchRows, len(w.pendingDML)))
 	for index, item := range w.pendingDML {
 		id := item.dml.PhysicalTableID
 		if blocked[id] {
 			continue
 		}
-		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item)
-		if fenced || slices.ContainsFunc(w.pendingDDL, func(control *writeEvent) bool {
-			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item)
+		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
+		if fenced || slices.ContainsFunc(w.pendingDDL, func(control *ddlWrite) bool {
+			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
 		}) {
 			blocked[id] = true
 			continue
@@ -428,7 +416,7 @@ func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 	return nil
 }
 
-func (w *writer) removeDML(items []*writeEvent, end int) {
+func (w *writer) removeDML(items []*dmlWrite, end int) {
 	if end == len(items) {
 		// The common case consumes a prefix without moving the backlog.
 		clear(w.pendingDML[:end])
@@ -436,7 +424,7 @@ func (w *writer) removeDML(items []*writeEvent, end int) {
 		return
 	}
 	var selected int
-	w.pendingDML = slices.DeleteFunc(w.pendingDML, func(item *writeEvent) bool {
+	w.pendingDML = slices.DeleteFunc(w.pendingDML, func(item *dmlWrite) bool {
 		if selected == len(items) || item != items[selected] {
 			return false
 		}

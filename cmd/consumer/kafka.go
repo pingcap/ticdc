@@ -18,8 +18,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"iter"
 	"math"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -104,8 +108,29 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		kgo.FetchMaxWait(100 * time.Millisecond),
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
-	if upstreamURI.Scheme == config.KafkaSSLScheme {
-		kafkaOptions = append(kafkaOptions, kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
+	query := upstreamURI.Query()
+	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
+	if upstreamURI.Scheme == config.KafkaSSLScheme || ca != "" || cert != "" || key != "" {
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		if ca != "" {
+			pem, err := os.ReadFile(ca)
+			if err != nil {
+				log.Panic("Kafka CA certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				log.Panic("Kafka CA certificate is invalid", zap.Error(errors.ErrKafkaInvalidConfig.GenWithStack("no certificate found in %s", ca)))
+			}
+			tlsConfig.RootCAs = pool
+		}
+		if cert != "" || key != "" {
+			certificate, err := tls.LoadX509KeyPair(cert, key)
+			if err != nil {
+				log.Panic("Kafka client certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
+			}
+			tlsConfig.Certificates = []tls.Certificate{certificate}
+		}
+		kafkaOptions = append(kafkaOptions, kgo.DialTLSConfig(tlsConfig))
 	}
 	client, err := kgo.NewClient(kafkaOptions...)
 	if err != nil {
@@ -148,7 +173,89 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	}
 }
 
-func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
+type kafkaInput struct {
+	message *kgo.Record
+	record  *ack
+}
+
+func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input kafkaInput) iter.Seq2[assemblyInput, error] {
+		return c.parse(ctx, parser, input)
+	}, output)
+}
+
+func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafkaInput) iter.Seq2[assemblyInput, error] {
+	id := input.message.Partition
+	scope := inputScope{stream: id, record: input.record, ddlCopy: id != 0, dmlBoundary: c.control}
+	if id == 0 {
+		scope.dmlBoundary = &readBoundary{reached: true, watermark: c.control.watermark}
+	}
+	if len(c.partitions) == 1 {
+		scope.ddlBoundary = &readBoundary{reached: true}
+	}
+	return func(yield func(assemblyInput, error) bool) {
+		pending := make([]assemblyInput, 0, 1)
+		rows := 0
+		for result, err := range parser.parseMessage(ctx, scope, input.message.Key, input.message.Value) {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if task, ok := result.(*decodeTask); ok {
+				rows++
+				if rows > parser.codecConfig.MaxBatchSize {
+					log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxBatchSize", parser.codecConfig.MaxBatchSize), zap.Int("actualBatchSize", rows))
+				}
+				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > parser.codecConfig.MaxMessageBytes {
+					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", parser.codecConfig.MaxMessageBytes), zap.Int("receivedBytes", size))
+				}
+				message := task.message
+				skipKeyOnlyDelete := parser.codecConfig.Protocol == config.ProtocolAvro && message.RowType == common.RowTypeUpdate
+				task.message = codecCommon.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
+					dml := message.ToDMLEvent()
+					c.checkPartition(dml, id, input.message.Offset, skipKeyOnlyDelete)
+					return dml
+				})
+			}
+			if rows == 0 {
+				if !yield(result, nil) {
+					return
+				}
+				continue
+			}
+			// Validate the whole DML message before any of its rows reach assembly.
+			pending = append(pending, result)
+		}
+		for _, result := range pending {
+			if !yield(result, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (c *kafkaReader) checkPartition(dml *event.DMLEvent, partition int32, offset int64, skipKeyOnlyDelete bool) {
+	generator := c.router.GetPartitionGenerator(dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName())
+	partitionCount := int32(len(c.partitions))
+	dml.Rewind()
+	defer dml.Rewind()
+	for row, ok := dml.GetNextRow(); ok; row, ok = dml.GetNextRow() {
+		// Avro UPDATE without a before image produces a keyed delete and a
+		// complete insert. Only the insert can reproduce routing by nonkey columns.
+		if skipKeyOnlyDelete && row.RowType == common.RowTypeDelete {
+			continue
+		}
+		expected, _, err := generator.GeneratePartitionIndexAndKey(&row, partitionCount, dml.TableInfo, dml.CommitTs)
+		if err != nil {
+			log.Panic("Kafka DML partition calculation failed", zap.String("topic", c.topic), zap.Int32("partition", partition), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Error(err))
+		}
+		if expected != partition {
+			log.Panic("Kafka DML was dispatched to the wrong partition", zap.String("topic", c.topic), zap.Int32("partition", partition), zap.Int32("expectedPartition", expected), zap.Int32("partitionCount", partitionCount), zap.Int64("offset", offset), zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()), zap.Uint64("commitTs", dml.CommitTs))
+		}
+	}
+}
+
+func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -163,7 +270,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 		c.prefetchedBytes = prefetched
 		c.limitReads()
 		var (
-			batch []*readData
+			batch []kafkaInput
 			size  int64
 		)
 		for len(batch) < batchRows && size < batchBytes {
@@ -190,24 +297,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 				offset: record.Offset,
 			})
 			partition.mu.Unlock()
-			data := &readData{
-				key:         record.Key,
-				value:       record.Value,
-				stream:      partitionID,
-				ddlCopy:     partitionID != 0,
-				record:      state,
-				dmlBoundary: c.control,
-			}
-			if partitionID == 0 {
-				data.dmlBoundary = &readBoundary{
-					reached:   true,
-					watermark: c.control.watermark,
-				}
-			}
-			if len(c.partitions) == 1 {
-				data.ddlBoundary = &readBoundary{reached: true}
-			}
-			batch = append(batch, data)
+			batch = append(batch, kafkaInput{message: record, record: state})
 			size += bytes
 		}
 		if len(batch) != 0 {
@@ -245,8 +335,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*readData, error) {
 func (c *kafkaReader) Advance(updates []readUpdate) {
 	c.progressMu.Lock()
 	for _, update := range updates {
-		data := update.data
-		partition := c.partitions[data.stream]
+		partition := c.partitions[update.stream]
 		if update.progress != 0 {
 			partition.watermark = max(partition.watermark, update.progress)
 			partition.hasWatermark = true

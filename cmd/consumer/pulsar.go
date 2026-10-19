@@ -17,6 +17,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"iter"
 	"net/url"
 	"strings"
 	"sync"
@@ -185,7 +186,19 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	return c
 }
 
-func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
+type pulsarInput struct {
+	message pulsar.ConsumerMessage
+	record  *ack
+}
+
+func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[assemblyInput, error] {
+		scope := inputScope{record: input.record, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
+		return parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload())
+	}, output)
+}
+
+func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 	if err := c.wait(ctx); err != nil {
 		return nil, err
 	}
@@ -196,7 +209,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
 	case message = <-c.consumer.Chan():
 	}
 	var (
-		batch []*readData
+		batch []pulsarInput
 		bytes int64
 	)
 	for {
@@ -210,13 +223,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*readData, error) {
 			messageID: messageID,
 		})
 		partition.mu.Unlock()
-		batch = append(batch, &readData{
-			key:         []byte(message.Key()),
-			value:       message.Payload(),
-			record:      record,
-			dmlBoundary: &readBoundary{reached: true},
-			ddlOrder:    commitOrder,
-		})
+		batch = append(batch, pulsarInput{message: message, record: record})
 		bytes += size
 		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
 			return batch, nil

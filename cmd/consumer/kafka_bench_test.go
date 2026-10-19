@@ -37,15 +37,15 @@ func BenchmarkKafkaReadScheduling(b *testing.B) {
 					polled:       []*kgo.Record{{Partition: int32(id)}},
 				}
 			}
-			data := &readData{}
+			update := readUpdate{}
 			b.ReportAllocs()
 			for b.Loop() {
 				c.limitReads()
 				id := c.nextPartition()
 				c.readSequence++
 				c.partitions[id].sequence = c.readSequence
-				data.stream = id
-				c.Advance([]readUpdate{{data: data, decoded: true}})
+				update.stream = id
+				c.Advance([]readUpdate{update})
 			}
 		})
 	}

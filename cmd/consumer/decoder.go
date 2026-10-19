@@ -16,68 +16,17 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"runtime"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-type decodeStream struct {
-	decoder       codecCommon.Decoder
-	cachedRecords map[*codecCommon.DMLMessage]*cachedInput
-	watermark     uint64
-	hasWatermark  bool
-}
-
-type cachedInput struct {
-	data *readData
-	task *decodeTask
-}
-
-func newDecodeStream(ctx context.Context, id int, decoding *decodeConfig, upstreamDB *sql.DB, tables simple.TableInfoProvider) *decodeStream {
-	var (
-		decoder codecCommon.Decoder
-		err     error
-	)
-	if decoding.codec.Protocol == config.ProtocolSimple {
-		decoder, err = simple.NewDecoder(ctx, decoding.codec, upstreamDB, tables)
-	}
-	if decoding.codec.Protocol != config.ProtocolSimple {
-		decoder, err = codec.NewEventDecoder(ctx, id, decoding.codec, decoding.topic, upstreamDB)
-	}
-	if err != nil {
-		log.Panic("consumer event decoder initialization failed", zap.String("protocol", decoding.codec.Protocol.String()), zap.Error(err))
-	}
-	return &decodeStream{
-		decoder: decoder,
-	}
-}
-
-// The reader supplies immutable schema contents. Only assembly materializes
-// and caches TableInfo; conversion workers receive that captured metadata.
-type readSchema struct {
-	file  *cloudstorage.SchemaFile
-	table *common.TableInfo
-}
-
-func (s *readSchema) tableInfo() *common.TableInfo {
-	if s.table == nil {
-		s.table = s.file.TableInfo()
-		s.table.UpdateTS = s.file.TableVersion
-	}
-	return s.table
-}
-
-// Protocol cursors and schema updates remain with the assembler. Workers only
+// Protocol cursors and schema updates remain with the source parser. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
 	g         *errgroup.Group
@@ -88,14 +37,18 @@ type decoderGroup struct {
 }
 
 type decodeTask struct {
-	message *codecCommon.DMLMessage
-	name    event.SchemaTableName
-	record  *ack
-	dml     *event.DMLEvent
-	bytes   int64
-	done    chan struct{}
-	table   *common.TableInfo
-	tableID int64
+	commitTs uint64
+	stream   int32
+	boundary *readBoundary
+	waiting  bool
+	message  *codecCommon.DMLMessage
+	name     event.SchemaTableName
+	record   *ack
+	dml      *event.DMLEvent
+	bytes    int64
+	done     chan struct{}
+	table    *common.TableInfo
+	tableID  int64
 }
 
 func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup {
@@ -178,7 +131,7 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 		d.memory.reserve(bytes)
 		task.dml, task.bytes = dml, bytes
 		task.record.release()
-		task.message, task.record, task.table = nil, nil, nil
+		task.message, task.table = nil, nil
 		close(task.done)
 		select {
 		case d.completed <- struct{}{}:

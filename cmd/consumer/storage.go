@@ -15,10 +15,10 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"io"
+	"iter"
 	"maps"
 	"net/url"
 	"slices"
@@ -34,6 +34,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -59,11 +62,9 @@ type storageIndex struct {
 }
 
 type storageInput struct {
-	key      cloudstorage.DMLPathKey
-	index    cloudstorage.FileIndex
-	end      uint64 // The pending range is expanded one file at a time.
-	groupEnd bool
-	sort     bool
+	key   cloudstorage.DMLPathKey
+	index cloudstorage.FileIndex
+	end   uint64 // The pending range is expanded one file at a time.
 }
 type storageTableKey struct {
 	schema    string
@@ -75,15 +76,13 @@ type storageReader struct {
 	*readLimit
 	tableIDs       map[storageTableKey]int64
 	nextTableID    int64
-	group          *readGroup
-	groupKey       cloudstorage.DMLPathKey
 	storage        storeapi.Storage
 	memory         *memoryUsage
 	confirmable    chan<- struct{}
 	dateSeparator  config.DateSeparator
 	fileExtension  string
 	fileIndexWidth int
-	sortCSVRows    bool
+	scanInterval   time.Duration
 	checkpoint     uint64
 	readCheckpoint uint64
 	schemas        map[cloudstorage.SchemaPathKey]*readSchema
@@ -126,7 +125,7 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
-		sortCSVRows:    protocol == config.ProtocolCsv && replicaConfig.Sink.CSVConfig.OutputOldValue && replicaConfig.Sink.CSVConfig.IncludeCommitTs,
+		scanInterval:   storageScanInterval,
 		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
@@ -276,7 +275,54 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
-func (c *storageReader) Read(ctx context.Context) ([]*readData, error) {
+type (
+	storageRead interface{ storageRead() }
+	storageFile struct {
+		contents []byte
+		schema   *readSchema
+		tableID  int64
+		record   *ack
+	}
+)
+
+type storageDDL struct {
+	schema     *readSchema
+	ddl        *event.DDLEvent
+	record     *ack
+	registered chan struct{}
+}
+type storageCheckpoint uint64
+
+func (*storageFile) storageRead()      {}
+func (*storageDDL) storageRead()       {}
+func (storageCheckpoint) storageRead() {}
+
+func (c *storageReader) Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error {
+	return readAndParse(ctx, c.Read, func(ctx context.Context, input storageRead) iter.Seq2[assemblyInput, error] {
+		return c.parse(ctx, parser, input)
+	}, output)
+}
+
+func (c *storageReader) parse(ctx context.Context, parser *inputParser, input storageRead) iter.Seq2[assemblyInput, error] {
+	if file, ok := input.(*storageFile); ok {
+		return c.parseFile(ctx, parser, file)
+	}
+	return func(yield func(assemblyInput, error) bool) {
+		switch input := input.(type) {
+		case *storageDDL:
+			input.ddl.TableInfo = input.schema.tableInfo()
+			input.record.retain()
+			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{record: input.record, ddlBoundary: &readBoundary{reached: true}}, registered: func() { c.registerDDL(input) }}, nil) {
+				return
+			}
+			input.record.release()
+		case storageCheckpoint:
+			yield(&checkpoint{watermark: uint64(input)}, nil)
+		}
+	}
+}
+
+func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -293,11 +339,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*readData, error) {
 			if c.scanned && c.checkpoint > c.readCheckpoint {
 				c.readCheckpoint = c.checkpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				return []*readData{{
-					control: &readControl{
-						watermark: c.checkpoint,
-					},
-				}}, nil
+				return []storageRead{storageCheckpoint(c.checkpoint)}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -325,16 +367,14 @@ func (c *storageReader) Read(ctx context.Context) ([]*readData, error) {
 			continue
 		}
 		if key.TableVersion < ddlWatermark {
-			if !input.groupEnd {
-				c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
-			}
+			c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
 			continue
 		}
 		if key.IsSchemaFileDMLPathKey() {
 			if err := c.wait(ctx); err != nil {
 				return nil, err
 			}
-			return []*readData{c.readDDL(key, schema)}, nil
+			return []storageRead{c.readDDL(key, schema)}, nil
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -347,47 +387,15 @@ func (c *storageReader) Read(ctx context.Context) ([]*readData, error) {
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
 		}
-		if c.group == nil || c.groupKey != key {
-			var compare func(first, second *event.DMLEvent) int
-			if input.sort {
-				compare = c.compareRows
-			}
-			c.group = &readGroup{
-				tableID:  tableID,
-				compare:  compare,
-				boundary: &readBoundary{reached: !input.sort},
-			}
-			c.groupKey = key
-		}
-		if input.groupEnd {
-			data := &readData{
-				format:   rowFormat,
-				schema:   schema,
-				group:    c.group,
-				groupEnd: true,
-			}
-			c.group = nil
-			return []*readData{data}, nil
-		}
 		if err := c.wait(ctx); err != nil {
 			return nil, err
 		}
-		data, err := c.readDMLFile(ctx, input, schema)
+		data, err := c.readDMLFile(ctx, input, schema, tableID)
 		if err != nil {
 			return nil, err
 		}
-		return []*readData{data}, nil
+		return []storageRead{data}, nil
 	}
-}
-
-// File sequences from different dispatchers overlap in commitTs. Storage owns
-// their merge order; CSV old-value rows additionally delete before inserting.
-func (c *storageReader) compareRows(first, second *event.DMLEvent) int {
-	order := cmp.Compare(first.CommitTs, second.CommitTs)
-	if order != 0 || !c.sortCSVRows {
-		return order
-	}
-	return cmp.Compare(first.RowTypes[0], second.RowTypes[0])
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {
@@ -395,7 +403,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-time.After(storageScanInterval):
+		case <-time.After(c.scanInterval):
 		}
 	}
 	c.scanned = true
@@ -424,10 +432,6 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 			c.inputs = append(c.inputs, storageInput{key: key})
 			continue
 		}
-		var sortBeforeWrite bool
-		for indexKey := range files[key] {
-			sortBeforeWrite = sortBeforeWrite || indexKey.EnableTableAcrossNodes
-		}
 		for indexKey, span := range files[key] {
 			c.inputs = append(c.inputs, storageInput{
 				key: key,
@@ -435,19 +439,14 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 					FileIndexKey: indexKey,
 					Idx:          span.start,
 				},
-				end:  span.end,
-				sort: sortBeforeWrite,
+				end: span.end,
 			})
 		}
-		c.inputs = append(c.inputs, storageInput{
-			key:      key,
-			groupEnd: true,
-		})
 	}
 	return nil
 }
 
-func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *readData {
+func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *storageDDL {
 	c.pendingSchema = make(chan struct{})
 	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table))
 	record := newAck(c.memory, size, c.confirmable)
@@ -469,16 +468,10 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema)
 		TableName:     schema.file.Table,
 		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 	}
-	return &readData{
-		format:      rowFormat,
-		schema:      schema,
-		ddl:         ddl,
-		record:      record,
-		ddlBoundary: &readBoundary{reached: true},
-	}
+	return &storageDDL{schema: schema, ddl: ddl, record: record, registered: c.pendingSchema}
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema) (*readData, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema, tableID int64) (*storageFile, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 	file, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
@@ -503,39 +496,28 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	c.records = append(c.records, record)
 	c.mu.Unlock()
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &readData{
-		format:      rowFormat,
-		value:       data,
-		schema:      schema,
-		group:       c.group,
-		record:      record,
-		dmlBoundary: c.group.boundary,
-	}, nil
+	return &storageFile{contents: data, schema: schema, tableID: tableID, record: record}, nil
 }
 
-func (c *storageReader) Advance(updates []readUpdate) {
+func (c *storageReader) Advance(_ []readUpdate) {}
+
+// The source can read the next schema only after assembly registers this DDL.
+func (c *storageReader) registerDDL(input *storageDDL) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, update := range updates {
-		data := update.data
-		if !update.decoded || data.ddl == nil {
-			continue
-		}
-		ddl := data.ddl
-		file := data.schema.file
-		key := common.QuoteSchema(file.Schema, file.Table)
-		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], file.TableVersion)
-		if ddl.Type == byte(timodel.ActionRenameTable) {
-			old := ddl.BlockedTableNames[0]
-			oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
-			c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], file.TableVersion)
-		}
-		close(c.pendingSchema)
+	ddl, file := input.ddl, input.schema.file
+	key := common.QuoteSchema(file.Schema, file.Table)
+	c.ddlWatermarks[key] = max(c.ddlWatermarks[key], file.TableVersion)
+	if ddl.Type == byte(timodel.ActionRenameTable) {
+		old := ddl.BlockedTableNames[0]
+		oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
+		c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], file.TableVersion)
 	}
+	close(input.registered)
 }
 
 func (c *storageReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
-	// File group completion is published in the ordered input itself.
+	// File rows are ready for writing without waiting for other files.
 	return nil
 }
 
@@ -556,4 +538,58 @@ func (c *storageReader) Confirm(_ context.Context) error {
 
 func (c *storageReader) Close() {
 	c.storage.Close()
+}
+
+// The reader supplies schema contents. Its parser materializes TableInfo;
+// conversion workers receive that captured immutable metadata.
+type readSchema struct {
+	file  *cloudstorage.SchemaFile
+	table *common.TableInfo
+}
+
+func (s *readSchema) tableInfo() *common.TableInfo {
+	if s.table == nil {
+		s.table = s.file.TableInfo()
+		s.table.UpdateTS = s.file.TableVersion
+	}
+	return s.table
+}
+
+func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *storageFile) iter.Seq2[assemblyInput, error] {
+	return func(yield func(assemblyInput, error) bool) {
+		table := file.schema.tableInfo()
+		var decoder codecCommon.Decoder
+		switch p.codecConfig.Protocol {
+		case config.ProtocolCsv:
+			var err error
+			decoder, err = csv.NewDecoderWithColumnSelector(ctx, p.codecConfig, table, file.contents, p.selectors.GetForTableInfo(table))
+			if err != nil {
+				yield(nil, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
+				return
+			}
+		case config.ProtocolCanalJSON:
+			decoder = canal.NewTxnDecoder(p.codecConfig)
+			decoder.AddKeyValue(nil, file.contents)
+		}
+		scope := inputScope{record: file.record, dmlBoundary: &readBoundary{reached: true}}
+		for {
+			if err := context.Cause(ctx); err != nil {
+				yield(nil, err)
+				return
+			}
+			kind, more := decoder.HasNext()
+			if !more {
+				break
+			}
+			if kind != codecCommon.MessageTypeRow {
+				continue
+			}
+			task := p.messageTask(scope, decoder.NextDMLMessage())
+			task.table, task.tableID = table, file.tableID
+			if !yield(task, nil) {
+				return
+			}
+		}
+		file.record.release()
+	}
 }

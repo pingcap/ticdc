@@ -19,8 +19,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -36,7 +38,16 @@ type options struct {
 	timezone        string
 	logFile         string
 	logLevel        string
+	ca, cert, key   string
 	enableProfiling bool
+
+	schemaRegistryURI      string
+	upstreamTiDBDSN        string
+	oauth2                 config.OAuth2
+	authTLSCertificatePath string
+	authTLSPrivateKeyPath  string
+	fileIndexWidth         int
+	flushInterval          time.Duration
 }
 
 func main() {
@@ -66,10 +77,26 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.upstreamURI, "upstream-uri", "", "Kafka, Pulsar, or Storage source URI")
 	flags.StringVar(&options.downstreamURI, "downstream-uri", "", "downstream sink URI")
 	flags.StringVar(&options.configFile, "config", "", "consumer configuration file")
-	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID or Pulsar subscription name (randomly generated if omitted)")
+	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID (random if omitted) or Pulsar subscription name (default pulsar-test-subscription)")
+	flags.StringVar(&options.consumerID, "consumer-group-id", "", "Kafka consumer group ID")
+	flags.StringVar(&options.consumerID, "subscription-name", "", "Pulsar subscription name (default pulsar-test-subscription)")
+	flags.StringVar(&options.schemaRegistryURI, "schema-registry-uri", "", "Avro schema registry URI")
+	flags.StringVar(&options.upstreamTiDBDSN, "upstream-tidb-dsn", "", "upstream TiDB DSN")
 	flags.StringVar(&options.timezone, "tz", "System", "consumer time zone")
 	flags.StringVar(&options.logFile, "log-file", "cdc_consumer.log", "log file path")
 	flags.StringVar(&options.logLevel, "log-level", "info", "log level")
+	flags.StringVar(&options.ca, "ca", "", "CA certificate path for Kafka or Pulsar TLS connection")
+	flags.StringVar(&options.cert, "cert", "", "Client certificate path for Kafka or Pulsar TLS connection")
+	flags.StringVar(&options.key, "key", "", "Client private key path for Kafka or Pulsar TLS connection")
+	flags.StringVar(&options.oauth2.OAuth2PrivateKey, "oauth2-private-key", "", "Pulsar OAuth2 private key path")
+	flags.StringVar(&options.oauth2.OAuth2IssuerURL, "oauth2-issuer-url", "", "Pulsar OAuth2 issuer URL")
+	flags.StringVar(&options.oauth2.OAuth2ClientID, "oauth2-client-id", "", "Pulsar OAuth2 client ID")
+	flags.StringVar(&options.oauth2.OAuth2Scope, "oauth2-scope", "", "Pulsar OAuth2 scope")
+	flags.StringVar(&options.oauth2.OAuth2Audience, "oauth2-audience", "", "Pulsar OAuth2 audience")
+	flags.StringVar(&options.authTLSCertificatePath, "auth-tls-certificate-path", "", "Pulsar authentication certificate path")
+	flags.StringVar(&options.authTLSPrivateKeyPath, "auth-tls-private-key-path", "", "Pulsar authentication private key path")
+	flags.IntVar(&options.fileIndexWidth, "file-index-width", config.DefaultFileIndexWidth, "Storage file index width")
+	flags.DurationVar(&options.flushInterval, "flush-interval", storageScanInterval, "Storage scan interval")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
 	return command
 }

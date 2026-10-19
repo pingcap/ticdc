@@ -51,6 +51,7 @@ type consumer struct {
 	g             *errgroup.Group
 	reader        *reader
 	assembler     *assembler
+	parser        *inputParser
 	writer        *writer
 	upstreamDB    *sql.DB
 	profileServer *http.Server
@@ -67,16 +68,53 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
 	sourceType := sourceTypeFromURI(upstreamURI)
+	if sourceType == sourceKafka || sourceType == sourcePulsar {
+		query := upstreamURI.Query()
+		changed := false
+		for name, value := range map[string]string{
+			"ca": options.ca, "cert": options.cert, "key": options.key,
+			"schema-registry": options.schemaRegistryURI, "upstream-tidb-dsn": options.upstreamTiDBDSN,
+			"oauth2-private-key": options.oauth2.OAuth2PrivateKey, "oauth2-issuer-url": options.oauth2.OAuth2IssuerURL,
+			"oauth2-client-id": options.oauth2.OAuth2ClientID, "oauth2-scope": options.oauth2.OAuth2Scope,
+			"oauth2-audience":           options.oauth2.OAuth2Audience,
+			"auth-tls-certificate-path": options.authTLSCertificatePath, "auth-tls-private-key-path": options.authTLSPrivateKeyPath,
+		} {
+			if value != "" {
+				query.Set(name, value)
+				changed = true
+			}
+		}
+		if changed {
+			upstreamURI.RawQuery = query.Encode()
+		}
+		if sourceType == sourcePulsar && options.ca != "" && upstreamURI.Scheme == config.PulsarScheme {
+			upstreamURI.Scheme = config.PulsarSSLScheme
+		}
+	}
 	consumerID := options.consumerID
-	if sourceType != sourceStorage && strings.TrimSpace(consumerID) == "" {
-		consumerID = "ticdc_consumer_" + uuid.NewString()
+	if strings.TrimSpace(consumerID) == "" {
+		switch sourceType {
+		case sourceKafka:
+			consumerID = "ticdc_kafka_consumer_" + uuid.NewString()
+		case sourcePulsar:
+			consumerID = "pulsar-test-subscription"
+		}
 	}
 	replicaConfig := loadReplicaConfig(options.configFile)
+	if sourceType == sourceStorage {
+		if options.flushInterval <= 0 {
+			log.Panic("Storage scan interval must be positive", zap.Duration("flushInterval", options.flushInterval))
+		}
+		replicaConfig.Sink.FileIndexWidth = new(options.fileIndexWidth)
+	}
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
 	memory := newMemoryUsage()
 	confirmable := make(chan struct{}, 1)
 	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
+	if sourceType == sourceStorage {
+		reader.client.(*storageReader).scanInterval = options.flushInterval
+	}
 	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
 	upstreamDB := newUpstreamDB(ctx, upstreamURI)
 	defer func() {
@@ -101,10 +139,12 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			streams[id] = newDecodeStream(ctx, int(id), decoding, upstreamDB, tables)
 		}
 	}
-	assembler := newAssembler(ctx, decoding, upstreamDB, replicaConfig, memory, streams, reader.client, tables)
+	parsing := newInputParser(ctx, decoding, upstreamDB, replicaConfig, streams, tables)
+	assembler := newAssembler(memory, reader.client, parsing)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
+		parser:        parsing,
 		assembler:     assembler,
 		writer:        writer,
 		upstreamDB:    upstreamDB,
@@ -172,6 +212,9 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
+	}
+	if source == sourceKafka && protocol == config.ProtocolAvro {
+		codecConfig.AvroEnableWatermark = true
 	}
 	if replicaConfig.Integrity != nil {
 		codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
@@ -273,18 +316,17 @@ func (c *consumer) consume(ctx context.Context) error {
 			return nil
 		})
 	}
-	inputs := make(chan []*readData, 1)
-	results := make(chan []*writeEvent, 1)
+	inputs := make(chan []assemblyInput, 1)
 	writeDone := make(chan struct{})
 	c.g.Go(func() error {
-		return c.reader.start(ctx, inputs)
-	})
-	c.g.Go(func() error {
-		return c.assembler.start(ctx, inputs, results)
+		return c.reader.start(ctx, c.parser, inputs)
 	})
 	c.g.Go(func() error {
 		defer close(writeDone)
-		return c.writer.start(ctx, results)
+		return c.assembler.start(ctx, inputs, c.writer)
+	})
+	c.g.Go(func() error {
+		return c.writer.start(ctx)
 	})
 	<-ctx.Done()
 	// Stop dispatching before the caller closes the sink.

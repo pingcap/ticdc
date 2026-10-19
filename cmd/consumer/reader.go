@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"iter"
 	"net/url"
 
 	"github.com/pingcap/log"
@@ -26,12 +27,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Read, Advance and Confirm may run concurrently. Boundary is assembler-owned.
-// Close runs after all callers have stopped.
-// Read returns a nonempty batch without waiting to fill it.
+// Run owns source reading and parsing. Advance and Confirm may run concurrently.
+// Boundary is assembler-owned. Close runs after all callers have stopped.
 // ContinueReading lets an unfinished dependency advance past the soft budget.
 type Reader interface {
-	Read(ctx context.Context) ([]*readData, error)
+	Run(ctx context.Context, parser *inputParser, output chan<- []assemblyInput) error
 	Advance(updates []readUpdate)
 	// Boundary requests event progress through commitTs. Nil covers every input;
 	// an empty, nonnil selection covers the control stream. Zero clears the request.
@@ -112,27 +112,82 @@ func newReader(
 	}
 }
 
-func (r *reader) start(ctx context.Context, results chan<- []*readData) error {
+func (r *reader) start(ctx context.Context, parser *inputParser, results chan<- []assemblyInput) error {
 	r.g, ctx = errgroup.WithContext(ctx)
-	r.g.Go(func() error {
-		return r.confirm(ctx)
-	})
+	r.g.Go(func() error { return r.confirm(ctx) })
 	defer close(results)
-	for {
-		data, err := r.client.Read(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
+	err := r.client.Run(ctx, parser, results)
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
+	if err != nil {
+		log.Error("consumer read failed", zap.Error(err))
+	}
+	return err
+}
+
+// Each source keeps its native input type through reading and parsing. The
+// bounded queue lets I/O run while the source parser publishes logical work.
+func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, error), parse func(context.Context, T) iter.Seq2[assemblyInput, error], output chan<- []assemblyInput) error {
+	g, ctx := errgroup.WithContext(ctx)
+	inputs := make(chan []T, 1)
+	g.Go(func() error {
+		defer close(inputs)
+		for {
+			batch, err := read(ctx)
+			if err != nil {
+				return err
+			}
+			select {
+			case inputs <- batch:
+			case <-ctx.Done():
 				return context.Cause(ctx)
 			}
-			log.Error("consumer read failed", zap.Error(err))
-			return err
 		}
-		select {
-		case results <- data:
-		case <-ctx.Done():
-			return context.Cause(ctx)
+	})
+	g.Go(func() error {
+		pending := make([]assemblyInput, 0, batchRows)
+		flush := func() error {
+			if len(pending) == 0 {
+				return nil
+			}
+			select {
+			case output <- pending:
+				pending = make([]assemblyInput, 0, batchRows)
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
 		}
-	}
+		for {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case batch, ok := <-inputs:
+				if !ok {
+					return flush()
+				}
+				for _, data := range batch {
+					for input, err := range parse(ctx, data) {
+						if err != nil {
+							return err
+						}
+						pending = append(pending, input)
+						_, row := input.(*decodeTask)
+						if len(pending) == batchRows || !row {
+							if err := flush(); err != nil {
+								return err
+							}
+						}
+					}
+				}
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		}
+	})
+	return g.Wait()
 }
 
 func (r *reader) confirm(ctx context.Context) error {
@@ -165,46 +220,9 @@ const (
 	commitOrder
 )
 
-type readFormat uint8
-
-const (
-	messageFormat readFormat = iota
-	rowFormat                // Rows decoded with externally supplied table metadata.
-)
-
-// readData carries encoded contents, logical decoding context and input proofs.
-// Physical offsets, message IDs and file paths remain private to each reader.
-type readData struct {
-	format  readFormat
-	key     []byte
-	value   []byte
-	stream  int32
-	ddlCopy bool // A replica awaits its canonical DDL before downstream execution.
-	record  *ack
-
-	schema      *readSchema
-	ddl         *event.DDLEvent
-	control     *readControl
-	group       *readGroup
-	groupEnd    bool
-	dmlBoundary *readBoundary
-	ddlBoundary *readBoundary
-	ddlOrder    readOrder
-}
-
-// Group inputs are contiguous. An unordered group must be completely decoded
-// before its rows are sorted.
-type readGroup struct {
-	tableID  int64
-	compare  func(first, second *event.DMLEvent) int
-	boundary *readBoundary
-}
-
-// Assembly returns decoded progress and matching scoped boundary crossings.
-// These facts never confirm downstream writes or expose protocol state to readers.
+// Source progress contains no input payload or decoder state.
 type readUpdate struct {
-	data     *readData
-	decoded  bool
+	stream   int32
 	progress uint64
 	boundary *readBoundary
 }
@@ -216,7 +234,7 @@ type readControl struct {
 }
 
 // A boundary either completes a finite input scope or exposes a shared control
-// watermark. Only assembly advances these facts; groups retain their own boundary.
+// watermark. Only assembly advances these facts.
 type readBoundary struct {
 	reached   bool
 	watermark *uint64
