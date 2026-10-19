@@ -189,6 +189,36 @@ func TestListChangefeedsRequiresAuthentication(t *testing.T) {
 	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
 }
 
+func TestListChangefeedsAllowsEmptyResultWithoutAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	coordinator := &resumeNormalCoordinator{}
+	srv := &resumeNormalServer{coordinator: coordinator}
+	handler := &OpenAPIV2{server: srv}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds?keyspace=deleted-keyspace",
+		nil,
+	)
+
+	handler.ListChangeFeeds(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.JSONEq(t, `{"total":0,"items":[]}`, w.Body.String())
+	require.False(t, srv.etcdClientRequested)
+}
+
 func TestLoadKeyspaceInContext(t *testing.T) {
 	if !kerneltype.IsNextGen() {
 		t.Skip("keyspace authentication context is only needed in next-gen")
