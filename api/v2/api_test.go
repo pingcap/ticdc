@@ -81,3 +81,29 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 		})
 	}
 }
+
+func TestDebugInfoRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() { config.StoreGlobalServerConfig(originalConfig) })
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	apiServer := mock.NewMockServer(ctrl)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	apiServer.EXPECT().GetEtcdClient().Return(etcdClient)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	router := gin.New()
+	RegisterOpenAPIV2Routes(router, NewOpenAPIV2(apiServer))
+
+	request := httptest.NewRequest(http.MethodGet, "/debug/info", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusUnauthorized, response.Code, response.Body.String())
+}

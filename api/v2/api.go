@@ -45,7 +45,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
 	// Integration test relies on this API to determine whether the TiCDC node is healthy.
-	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
+	router.GET("/debug/info", middleware.AuthenticateMiddleware(api.server), gin.WrapF(api.handleDebugInfo))
 
 	debugGroup := router.Group("/debug")
 	debugGroup.Use(middleware.LogMiddleware())
