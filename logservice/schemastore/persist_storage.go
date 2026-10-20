@@ -784,17 +784,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-<<<<<<< HEAD
 	writePersistedDDLEvent(p.db, &ddlEvent)
-=======
-	err := writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
-	if err != nil {
-		return errors.Trace(err)
-	}
 	failpoint.Inject("afterPersistingDDL", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
 	})
->>>>>>> 190987aad (schemastore: fix RegisterTable snapshot consistency race (#5957))
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

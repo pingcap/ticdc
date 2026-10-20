@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -79,7 +80,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
 	region := newRegionInfo(
 		tikv.NewRegionVerID(1, 1, 1),
@@ -92,8 +93,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		context.Background(), span.StartKey, span.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
 	region.lockedRangeState = lockResult.LockedRangeState
-	state := newRegionFeedState(region, 1, worker)
-	state.start()
+	state := newRegionFeedState(region, 1, worker, nil)
 
 	// Receive prewrite2 with empty value.
 	{
@@ -210,6 +210,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(10)
 	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
 	ds.Start()
 
@@ -221,27 +223,28 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	subID1 := SubscriptionID(1)
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
-	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
-	state1.start()
+	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
+	var subSpan1 *subscribedSpan
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
 			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
 			EndKey:   common.ToComparableKey(common.UpperBoundKey),
 		}
-		subSpan := &subscribedSpan{
+		subSpan1 = &subscribedSpan{
 			subID:             subID1,
 			span:              heartbeatpb.TableSpan{},
 			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1),
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
-		state1.region.subscribedSpan = subSpan
-		lockResult := subSpan.rangeLock.LockRange(
+		ds.AddPath(subID1, subSpan1, dynstream.AreaSettings{})
+		state1.region.subscribedSpan = subSpan1
+		lockResult := subSpan1.rangeLock.LockRange(
 			context.Background(), span.StartKey, span.EndKey, 1, 1)
 		require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
 		state1.region.lockedRangeState = lockResult.LockedRangeState
@@ -250,8 +253,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID2 := SubscriptionID(2)
-	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker)
-	state2.start()
+	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -265,6 +267,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
 		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
 		state2.region.subscribedSpan = subSpan
@@ -277,8 +280,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID3 := SubscriptionID(3)
-	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker)
-	state3.start()
+	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -292,6 +294,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
+			priorityPolicy:    newScanPriorityPolicy(pdClock, 30*time.Minute),
 		}
 		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
 		state3.region.subscribedSpan = subSpan
@@ -343,6 +346,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(10), state1.getLastResolvedTs())
 	require.Equal(t, uint64(11), state2.getLastResolvedTs())
 	require.Equal(t, uint64(8), state3.getLastResolvedTs())
+	require.True(t, subSpan1.priorityPolicy.everCaughtUp.Load())
 }
 
 func TestHandleResolvedTsThrottled(t *testing.T) {
@@ -372,8 +376,10 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		subID:           SubscriptionID(1),
 		rangeLock:       l,
 		advanceInterval: 100,
+		priorityPolicy:  newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.lastAdvanceTime.Store(0)
+	worker := &regionRequestWorker{tracker: newRegionTracker()}
 	state := newRegionFeedState(
 		regionInfo{
 			verID:            tikv.NewRegionVerID(1, 1, 1),
@@ -381,9 +387,9 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 			lockedRangeState: res1.LockedRangeState,
 		},
 		1,
+		worker,
 		nil,
 	)
-	state.start()
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }
@@ -397,13 +403,14 @@ func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, secondLock.Status)
 
 	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		startTs:   100,
-		span:      heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
-		rangeLock: rangeLock,
+		subID:          SubscriptionID(1),
+		startTs:        100,
+		span:           heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
+		rangeLock:      rangeLock,
+		priorityPolicy: newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.resolvedTs.Store(span.startTs)
-	worker := &regionRequestWorker{requestCache: newRequestCache(2)}
+	worker := &regionRequestWorker{tracker: newRegionTracker()}
 	newState := func(
 		regionID uint64, regionSpan heartbeatpb.TableSpan,
 		lockedRangeState *regionlock.LockedRangeState,
@@ -418,8 +425,8 @@ func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
 			},
 			uint64(span.subID),
 			worker,
+			nil,
 		)
-		state.start()
 		return state
 	}
 	firstState := newState(1,

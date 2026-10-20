@@ -2910,12 +2910,12 @@ func TestRegisterTableBuildsConsistentVersionStoreSnapshot(t *testing.T) {
 		{
 			dbInfo: &model.DBInfo{
 				ID:   schemaID,
-				Name: ast.NewCIStr("test"),
+				Name: parser_model.NewCIStr("test"),
 			},
 			tables: []*model.TableInfo{
 				{
 					ID:   tableID,
-					Name: ast.NewCIStr("t1"),
+					Name: parser_model.NewCIStr("t1"),
 				},
 			},
 		},
