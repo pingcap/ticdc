@@ -54,7 +54,9 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 			sink:                        mockSink,
 			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
 		}
-		dispatcherManager.state.Store(uint32(dispatcherManagerRunning))
+		dispatcherManager.lifecycleMu.Lock()
+		dispatcherManager.state = dispatcherManagerRunning
+		dispatcherManager.lifecycleMu.Unlock()
 
 		done := make(chan bool, 1)
 		go func() {
@@ -86,7 +88,9 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 			sink:                        deadlockMockSink,
 			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
 		}
-		deadlockDispatcherManager.state.Store(uint32(dispatcherManagerRunning))
+		deadlockDispatcherManager.lifecycleMu.Lock()
+		deadlockDispatcherManager.state = dispatcherManagerRunning
+		deadlockDispatcherManager.lifecycleMu.Unlock()
 
 		done := make(chan bool, 1)
 		go func() {
@@ -132,7 +136,9 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 			sink:                        deadlockMockSink,
 			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
 		}
-		deadlockDispatcherManager.state.Store(uint32(dispatcherManagerRunning))
+		deadlockDispatcherManager.lifecycleMu.Lock()
+		deadlockDispatcherManager.state = dispatcherManagerRunning
+		deadlockDispatcherManager.lifecycleMu.Unlock()
 
 		done := make(chan bool, 1)
 		go func() {
@@ -345,7 +351,9 @@ func TestHeartBeatResponseHandlerDropsStaleMaintainerEpoch(t *testing.T) {
 	dispatcherManager := &DispatcherManager{
 		changefeedID: changefeedID,
 	}
-	dispatcherManager.state.Store(uint32(dispatcherManagerRunning))
+	dispatcherManager.lifecycleMu.Lock()
+	dispatcherManager.state = dispatcherManagerRunning
+	dispatcherManager.lifecycleMu.Unlock()
 	dispatcherManager.meta.maintainerID = "current-maintainer"
 	dispatcherManager.meta.maintainerEpoch = 2
 
@@ -417,7 +425,9 @@ func TestRedoResolvedTsForwardMessageHandlerDropsStaleMaintainerEpoch(t *testing
 		changefeedID:  changefeedID,
 		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
 	}
-	dispatcherManager.state.Store(uint32(dispatcherManagerRunning))
+	dispatcherManager.lifecycleMu.Lock()
+	dispatcherManager.state = dispatcherManagerRunning
+	dispatcherManager.lifecycleMu.Unlock()
 	dispatcherManager.meta.maintainerID = "current-maintainer"
 	dispatcherManager.meta.maintainerEpoch = 2
 	dispatcherManager.redoGlobalTs.Store(50)

@@ -56,7 +56,7 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 // not started. Bootstrap callers must hold MaintainerFenceMu to serialize this
 // check with maintainer close requests.
 func (e *DispatcherManager) IsReusable() bool {
-	return e.getState() == dispatcherManagerRunning
+	return e.isRunning()
 }
 
 // TryUpdateMaintainer records the active maintainer owner and epoch.

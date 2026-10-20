@@ -49,18 +49,18 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	collector := &HeartBeatCollector{}
 	collector.isClosed.Store(true)
 	appcontext.SetService(appcontext.HeartbeatCollector, collector)
-	var initialState dispatcherManagerState
+	var wasInitializing bool
 	manager, err := NewDispatcherManager(
 		0, common.NewChangeFeedIDWithName("lifecycle", common.DefaultKeyspaceName),
 		newStateTestConfig(), nil, nil, 1, node.ID("maintainer"), 1, false,
 		func(manager *DispatcherManager) bool {
-			initialState = manager.getState()
+			wasInitializing = manager.isInitializing()
 			return true
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, dispatcherManagerInitializing, initialState)
-	require.Equal(t, dispatcherManagerRunning, manager.getState())
+	require.True(t, wasInitializing)
+	require.True(t, manager.isRunning())
 	require.True(t, manager.IsReusable())
 	t.Cleanup(manager.LocalFence)
 
@@ -69,7 +69,8 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	release := sync.OnceFunc(manager.wg.Done)
 	t.Cleanup(release)
 	require.False(t, manager.TryClose(false))
-	require.Equal(t, dispatcherManagerClosing, manager.getState())
+	require.True(t, manager.isClosingOrClosed())
+	require.False(t, manager.isClosed())
 	require.False(t, manager.IsReusable())
 	require.False(t, manager.TryClose(false))
 	select {
@@ -79,7 +80,7 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	}
 	release()
 	require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
-	require.Equal(t, dispatcherManagerClosed, manager.getState())
+	require.True(t, manager.isClosed())
 	require.False(t, manager.IsReusable())
 }
 
@@ -118,7 +119,7 @@ func TestDispatcherManagerCloseDuringInitialization(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("initializing manager was not registered")
 			}
-			require.Equal(t, dispatcherManagerInitializing, manager.getState())
+			require.True(t, manager.isInitializing())
 			require.False(t, manager.IsReusable())
 			// Runtime requests must not access the constructor's partial resources.
 			handler := &SchedulerDispatcherRequestHandler{}
@@ -142,7 +143,8 @@ func TestDispatcherManagerCloseDuringInitialization(t *testing.T) {
 				t.Fatal("shutdown did not cancel initialization")
 			}
 			require.ErrorIs(t, manager.ctx.Err(), context.Canceled)
-			require.Equal(t, dispatcherManagerClosing, manager.getState())
+			require.True(t, manager.isClosingOrClosed())
+			require.False(t, manager.isClosed())
 			require.False(t, manager.TryClose(false))
 			manager.LocalFence()
 			unblock()
@@ -151,12 +153,12 @@ func TestDispatcherManagerCloseDuringInitialization(t *testing.T) {
 				require.Nil(t, result.manager)
 				require.True(t, IsWritePathClosedError(result.err))
 				// Failed construction returns only after its own cleanup completes.
-				require.Equal(t, dispatcherManagerClosed, manager.getState())
+				require.True(t, manager.isClosed())
 			case <-time.After(time.Second):
 				t.Fatal("initialization did not return after shutdown")
 			}
 			require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
-			require.Equal(t, dispatcherManagerClosed, manager.getState())
+			require.True(t, manager.isClosed())
 		})
 	}
 }
@@ -192,7 +194,7 @@ func TestDispatcherManagerInitializationFailure(t *testing.T) {
 			require.Error(t, err)
 			require.Nil(t, manager)
 			require.Equal(t, withSink, initializing.sink != nil)
-			require.Equal(t, dispatcherManagerClosed, initializing.getState())
+			require.True(t, initializing.isClosed())
 			require.ErrorIs(t, initializing.ctx.Err(), context.Canceled)
 			require.True(t, initializing.TryClose(false))
 		})
@@ -249,7 +251,9 @@ func TestDispatcherManagerCloseRacesWithInitialization(t *testing.T) {
 func TestDispatcherManagerTasksStopDuringClosing(t *testing.T) {
 	for _, state := range []dispatcherManagerState{dispatcherManagerClosing, dispatcherManagerClosed} {
 		manager := &DispatcherManager{}
-		manager.state.Store(uint32(state))
+		manager.lifecycleMu.Lock()
+		manager.state = state
+		manager.lifecycleMu.Unlock()
 		require.Zero(t, (&HeartBeatTask{manager: manager}).Execute())
 		require.Zero(t, (&MergeCheckTask{manager: manager}).Execute())
 		require.Zero(t, (&RemoveDispatcherTask{manager: manager}).Execute())
@@ -314,7 +318,8 @@ func TestDispatcherManagerCloseWaitsForAdmittedWork(t *testing.T) {
 		})
 	}
 	closers.Wait()
-	require.Equal(t, dispatcherManagerClosing, manager.getState())
+	require.True(t, manager.isClosingOrClosed())
+	require.False(t, manager.isClosed())
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.False(t, handler.Handle(manager, message))
 	unblock()
@@ -354,7 +359,8 @@ func TestDispatcherManagerLocalFenceStopsInitializedWritePath(t *testing.T) {
 		t.Fatal("local fence did not stop the sink")
 	}
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	require.Equal(t, dispatcherManagerClosing, manager.getState())
+	require.True(t, manager.isClosingOrClosed())
+	require.False(t, manager.isClosed())
 	select {
 	case <-fenced:
 		t.Fatal("local fence returned before its write path stopped")

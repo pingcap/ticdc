@@ -13,36 +13,58 @@
 
 package dispatchermanager
 
+// dispatcherManagerState transitions:
+//
+//	Initializing -> Running -> Closing -> Closed
+//	      |                       ^
+//	      +-----------------------+
 type dispatcherManagerState uint32
 
 const (
-	// The zero value covers construction before the manager is published.
+	// Initialization is in progress; the constructor owns cleanup.
 	dispatcherManagerInitializing dispatcherManagerState = iota
-	// All local components and initial background work have been registered.
+	// Initialization is complete; the manager accepts new work.
 	dispatcherManagerRunning
-	// New work and resource publication are fenced while cleanup completes.
+	// Shutdown has started; new work and resource registration are rejected.
 	dispatcherManagerClosing
-	// Base cleanup has returned. Remove-only cleanup may still be running.
+	// Shutdown is complete; TryClose returns true.
+	// Changefeed deletion cleanup may still run asynchronously.
 	dispatcherManagerClosed
 )
 
-func (e *DispatcherManager) getState() dispatcherManagerState {
-	return dispatcherManagerState(e.state.Load())
+func (e *DispatcherManager) isInitializing() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.state == dispatcherManagerInitializing
 }
 
-func (e *DispatcherManager) isWritePathClosed() bool {
-	return e.getState() >= dispatcherManagerClosing
+func (e *DispatcherManager) isRunning() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.state == dispatcherManagerRunning
+}
+
+func (e *DispatcherManager) isClosed() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.state == dispatcherManagerClosed
+}
+
+func (e *DispatcherManager) isClosingOrClosed() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.state >= dispatcherManagerClosing
 }
 
 // startClosing returns the previous state and serializes shutdown with resource
 // publication. Initializing leaves cleanup with the constructor; Running
 // transfers it to the caller. Later callers must not start another cleanup.
 func (e *DispatcherManager) startClosing() dispatcherManagerState {
-	e.writePathMu.Lock()
-	defer e.writePathMu.Unlock()
-	state := e.getState()
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	state := e.state
 	if state < dispatcherManagerClosing {
-		e.state.Store(uint32(dispatcherManagerClosing))
+		e.state = dispatcherManagerClosing
 	}
 	return state
 }
@@ -50,9 +72,9 @@ func (e *DispatcherManager) startClosing() dispatcherManagerState {
 // beginWork admits runtime work before shutdown can start waiting for it.
 // Every successful call must be paired with wg.Done after the work returns.
 func (e *DispatcherManager) beginWork() bool {
-	e.writePathMu.Lock()
-	defer e.writePathMu.Unlock()
-	if e.getState() != dispatcherManagerRunning {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.state != dispatcherManagerRunning {
 		return false
 	}
 	e.wg.Add(1)

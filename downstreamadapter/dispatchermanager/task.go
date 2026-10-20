@@ -55,7 +55,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 func (t *HeartBeatTask) Execute() time.Time {
 	if !t.manager.beginWork() {
 		// Initial dispatchers can schedule this task before construction returns.
-		if t.manager.getState() == dispatcherManagerInitializing {
+		if t.manager.isInitializing() {
 			return time.Now().Add(heartbeatInterval(t.manager))
 		}
 		return time.Time{}
@@ -208,9 +208,9 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 	// Stop retrying and cleanup best-effort.
 	t.Cancel()
 
-	t.manager.writePathMu.Lock()
-	defer t.manager.writePathMu.Unlock()
-	if t.manager.isWritePathClosed() {
+	t.manager.lifecycleMu.Lock()
+	defer t.manager.lifecycleMu.Unlock()
+	if t.manager.state >= dispatcherManagerClosing {
 		return
 	}
 
@@ -258,7 +258,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	closedCount := 0
 	count := 0
 	for closedCount < len(t.dispatcherIDs) {
-		if t.manager.isWritePathClosed() {
+		if t.manager.isClosingOrClosed() {
 			t.Cancel()
 			return
 		}
@@ -310,9 +310,9 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
 	startTs, skipSyncpointAtStartTs, skipDMLAsStartTs := resolveMergedDispatcherStartTs(t, minCheckpointTs, pendingStates)
-	t.manager.writePathMu.Lock()
-	if t.manager.isWritePathClosed() {
-		t.manager.writePathMu.Unlock()
+	t.manager.lifecycleMu.Lock()
+	if t.manager.state >= dispatcherManagerClosing {
+		t.manager.lifecycleMu.Unlock()
 		t.Cancel()
 		return
 	}
@@ -323,7 +323,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, startTs)
-	t.manager.writePathMu.Unlock()
+	t.manager.lifecycleMu.Unlock()
 	log.Info("merge dispatcher commit",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
