@@ -28,6 +28,11 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -447,4 +452,74 @@ func schemaFieldsByName(t *testing.T, schema map[string]any, name string) map[st
 		}
 	}
 	return nil
+}
+
+// TestDecodedTableInfoLocatesRowByPrimaryKey checks the table info this decoder
+// builds from a payload: a composite primary key must stay the handle key, with
+// the real column offsets, because that is what the MySQL sink locates rows by.
+func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
+	cfg := common.NewConfig(config.ProtocolDebezium)
+	cfg.EnableTiDBExtension = true
+	cfg.TimeZone = time.UTC
+
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", compositeKeyRowEvent(t)))
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder := NewDecoder(cfg, 0, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := decoder.NextDMLMessage().ToDMLEvent()
+	common.RequireRowLocatorByPrimaryKey(t, event.TableInfo, "a", "b")
+}
+
+// compositeKeyRowEvent builds an insert into test.t(a, b, c) with primary key
+// (a, b), the shape a composite key arrives in from an upstream table.
+func compositeKeyRowEvent(t *testing.T) *commonEvent.RowEvent {
+	t.Helper()
+
+	newColumn := func(id int64, offset int, name string, tp byte) *model.ColumnInfo {
+		return &model.ColumnInfo{
+			ID:        id,
+			Name:      ast.NewCIStr(name),
+			FieldType: *types.NewFieldType(tp),
+			State:     model.StatePublic,
+			Offset:    offset,
+		}
+	}
+	tidbTableInfo := &model.TableInfo{
+		Name: ast.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{
+			newColumn(1, 0, "a", mysql.TypeLong),
+			newColumn(2, 1, "b", mysql.TypeLong),
+			newColumn(3, 2, "c", mysql.TypeVarchar),
+		},
+		Indices: []*model.IndexInfo{{
+			Name:    ast.NewCIStr("primary"),
+			Primary: true,
+			Unique:  true,
+			State:   model.StatePublic,
+			Columns: []*model.IndexColumn{
+				{Name: ast.NewCIStr("a"), Offset: 0},
+				{Name: ast.NewCIStr("b"), Offset: 1},
+			},
+		}},
+	}
+	tableInfo := commonType.NewTableInfo4Decoder("test", tidbTableInfo)
+
+	row := commonEvent.RowChange{
+		RowType: commonType.RowTypeInsert,
+		Row:     chunk.MutRowFromValues(int64(1), int64(2), "x").ToRow(),
+	}
+	return &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       2,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
 }

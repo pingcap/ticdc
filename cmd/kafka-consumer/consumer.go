@@ -202,7 +202,7 @@ func (c *consumer) Run(ctx context.Context) (err error) {
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return c.writer.run(ctx)
+		return c.writer.mysqlSink.Run(ctx)
 	})
 	g.Go(func() error {
 		return c.readMessage(ctx)

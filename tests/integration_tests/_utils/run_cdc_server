@@ -9,6 +9,7 @@
 # --pd: pd address
 # --restart: restart CDC server after an unexpected exit
 # --max-restarts: maximum number of unexpected exits to restart (-1 for unlimited)
+# --skip-ready-check: skip the changefeed API readiness check when the coordinator is intentionally blocked
 # --redact-info-log: log redaction mode (false|true|marker)
 #                    Generates a config file with [security] redact-info-log setting
 #                    Values: false (OFF, no redaction), true (ON, full redaction),
@@ -40,6 +41,7 @@ config_path=
 data_dir=
 curl_status_cmd=
 supposed_to_fail="no"
+skip_ready_check="no"
 cluster_id="default"
 newarch=
 
@@ -103,6 +105,9 @@ while [[ ${1} ]]; do
 	--supposed-to-fail)
 		supposed_to_fail="${2}"
 		shift
+		;;
+	--skip-ready-check)
+		skip_ready_check="yes"
 		;;
 	--data-dir)
 		data_dir=${2}
@@ -294,7 +299,7 @@ set +e
 # fi
 
 # If the command is supposed to fail (in check usage tips test), just exit without retry
-if [[ "$supposed_to_fail" != "no" ]]; then
+if [[ "$supposed_to_fail" != "no" || "$skip_ready_check" == "yes" ]]; then
 	set +x
 	exit 0
 fi

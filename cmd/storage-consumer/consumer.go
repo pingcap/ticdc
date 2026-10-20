@@ -14,10 +14,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -451,6 +453,14 @@ func messageWithPhysicalTableID(message *common.DMLMessage, tableID int64) *comm
 	})
 }
 
+func sortDMLMessages(messages []*common.DMLMessage) {
+	// Key exchanges require deletes before inserts within each transaction.
+	// Keep transactions ordered and preserve order within each row type.
+	slices.SortStableFunc(messages, func(a, b *common.DMLMessage) int {
+		return cmp.Or(cmp.Compare(a.GetCommitTs(), b.GetCommitTs()), cmp.Compare(a.RowType, b.RowType))
+	})
+}
+
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	group := c.eventsGroup[tableID]
 	if group == nil {
@@ -467,18 +477,27 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		if batch == nil {
 			break
 		}
+		if c.codecCfg.Protocol == config.ProtocolCsv && c.codecCfg.OutputOldValue && c.codecCfg.IncludeCommitTs {
+			sortDMLMessages(batch.Messages)
+		}
 		events := util.DMLMessagesToEvents(batch.Messages)
-		if len(events) != 0 {
+		// The storage consumer resolves messages by the file order without a watermark, so
+		// replays are only deduplicated inside one batch.
+		retained, duplicates := util.NewReplayFilter().FilterBatch(events)
+		if len(retained) != 0 {
 			fields := []zap.Field{zap.Int64("tableID", tableID)}
-			if events[0].TableInfo != nil {
+			if retained[0].TableInfo != nil {
 				fields = append(fields,
-					zap.String("schema", events[0].TableInfo.GetSchemaName()),
-					zap.String("table", events[0].TableInfo.GetTableName()))
+					zap.String("schema", retained[0].TableInfo.GetSchemaName()),
+					zap.String("table", retained[0].TableInfo.GetTableName()))
 			}
-			if err := c.flushDMLBatch(ctx, events, fields...); err != nil {
+			if err := c.flushDMLBatch(ctx, retained, fields...); err != nil {
 				return err
 			}
-			total += len(events)
+			total += len(retained)
+		}
+		for _, e := range duplicates {
+			e.PostFlush()
 		}
 		if err := batch.Ack(); err != nil {
 			return err

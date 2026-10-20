@@ -251,6 +251,9 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
+	// Serialize info writes with API operations and the bootstrap acknowledgement.
+	c.controller.apiLock.Lock()
+	defer c.controller.apiLock.Unlock()
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))

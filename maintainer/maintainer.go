@@ -152,6 +152,7 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
+	ctx    context.Context
 	cancel context.CancelFunc
 
 	checkpointTsGauge    prometheus.Gauge
@@ -261,6 +262,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
 	m.cancel = cancel
 
 	go m.runHandleEvents(ctx)
@@ -1136,7 +1138,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
-	postBootstrapRequest, err := m.controller.FinishBootstrap(responses, isMySQLSinkCompatible)
+	postBootstrapRequest, err := m.controller.FinishBootstrap(m.ctx, responses, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

@@ -14,14 +14,14 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api/v2/mock"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,14 +33,20 @@ func TestChangefeedRemoveCli(t *testing.T) {
 
 	cmd := newCmdRemoveChangefeed(f)
 
-	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{}, nil)
+	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(&v2.ChangeFeedInfo{
+		SinkURI: "kafka://user:uri-secret-sentinel@host/topic?sasl-password=password-sentinel&secret-access-key=key-sentinel",
+	}, nil)
 	cf.EXPECT().Delete(gomock.Any(), "test", "abc").Return(nil)
 	cf.EXPECT().Get(gomock.Any(), "test", "abc").Return(nil,
-		cerror.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
+		errors.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
 	os.Args = []string{"remove", "--changefeed-id=abc", "--keyspace=test"}
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
 	require.Nil(t, cmd.Execute())
+	require.NotContains(t, output.String(), "sentinel")
+	require.Contains(t, output.String(), "xxxxx")
 	cf.EXPECT().Get(gomock.Any(), "default", "abc").Return(nil,
-		cerror.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
+		errors.ErrChangeFeedNotExists.GenWithStackByArgs("abc"))
 	os.Args = []string{"remove", "--changefeed-id=abc", "--keyspace=default"}
 	require.Nil(t, cmd.Execute())
 

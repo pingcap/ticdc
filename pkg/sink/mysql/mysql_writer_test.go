@@ -620,29 +620,62 @@ func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
-	writer, db, mock := newTestMysqlWriterForTiDB(t)
-	defer db.Close()
-
-	event := &commonEvent.DDLEvent{
-		Type: byte(timodel.ActionCreateTable),
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		BlockedTableNames: []commonEvent.SchemaTableName{
-			{
-				SchemaName: "test",
-				TableName:  "a",
-			},
-		},
+func TestWaitAsyncDDLDoneUsesParameters(t *testing.T) {
+	schemaName := `test"; DROP DATABASE protected; -- `
+	tableName := `a"; CREATE TABLE protected.pwn(i INT); -- `
+	tests := []struct {
+		name          string
+		serverVersion string
+		query         string
+	}{
+		{name: "new DDL jobs table", serverVersion: defaultRunningAddIndexNewSQLVersion, query: checkRunningAddIndexSQL},
+		{name: "legacy admin statement", serverVersion: "8.4.0", query: checkRunningAddIndexSQLForOldVersion},
 	}
 
-	expected := fmt.Sprintf(checkRunningAddIndexSQL, "test", "a")
-	mock.ExpectQuery(expected).
-		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY"}))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			writer, db, mock := newTestMysqlWriterForTiDB(t)
+			defer db.Close()
+			writer.cfg.ServerInfo = version.ParseServerInfo(tc.serverVersion)
 
-	writer.waitAsyncDDLDone(event)
+			event := &commonEvent.DDLEvent{
+				Type: byte(timodel.ActionCreateTable),
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{0},
+				},
+				BlockedTableNames: []commonEvent.SchemaTableName{
+					{
+						SchemaName: schemaName,
+						TableName:  tableName,
+					},
+				},
+			}
+
+			mock.ExpectQuery(tc.query).
+				WithArgs(schemaName, tableName).
+				WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY"}))
+
+			writer.waitAsyncDDLDone(event)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestGetDDLStateFromTiDBUsesParameters(t *testing.T) {
+	db, mock := newTestMockDB(t)
+	defer db.Close()
+
+	createTime := "2021-05-26 11:33:37.776000"
+	ddl := `ALTER TABLE t COMMENT = '"; CREATE TABLE protected.pwn(i INT); -- '`
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs(createTime, ddl).
+		WillReturnRows(sqlmock.NewRows([]string{"QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE"}).
+			AddRow(ddl, "done", "1", "alter table", "public"))
+
+	state, err := getDDLStateFromTiDB(context.Background(), db, ddl, createTime)
+	require.NoError(t, err)
+	require.Equal(t, timodel.JobStateDone, state)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -785,7 +818,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(checkRunningAddIndexSQL).WithArgs("test", "t").WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -796,7 +829,8 @@ func TestWriterAsyncDDL(t *testing.T) {
 	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(200 * time.Millisecond).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
-	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
+	mock.ExpectQuery(checkRunningSQL).
+		WithArgs("2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);").
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).
 			AddRow("", "", "", "", "", "running", "alter table t add index nameIndex(name);"))
 	mock.ExpectBegin()
@@ -823,7 +857,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	mock.ExpectCommit()
 
 	// for add column ddl for table t
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(checkRunningAddIndexSQL).WithArgs("test", "t").WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()

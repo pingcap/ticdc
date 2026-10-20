@@ -78,6 +78,7 @@ type writer struct {
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
 	spillStore             *util.SpillStore
+	replayFilter           *util.ReplayFilter
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -89,6 +90,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: putil.GetOrZero(o.replicaConfig.Scheduler.EnableTableAcrossNodes),
 		spillStore:             util.NewSpillStore(),
+		replayFilter:           util.NewReplayFilter(),
 	}
 	var (
 		db  *sql.DB
@@ -252,7 +254,36 @@ func (w *writer) flushEventsFromGroups(
 	return total, nil
 }
 
+// getReplayFilter returns the replay filter, creating it lazily so writers built
+// without newWriter, such as in tests, still deduplicate.
+func (w *writer) getReplayFilter() *util.ReplayFilter {
+	if w.replayFilter == nil {
+		w.replayFilter = util.NewReplayFilter()
+	}
+	return w.replayFilter
+}
+
 func (w *writer) flushDMLBatch(
+	ctx context.Context, events []*commonEvent.DMLEvent, fields ...zap.Field,
+) error {
+	// Replays use the same partition, and PrepareResolve keeps each table's
+	// equal commit-ts together. Deduplicate the restored batch before the sink
+	// merges row changes. Equality with the watermark remains open to replay.
+	filter := w.getReplayFilter()
+	retained, duplicates := filter.FilterBatch(events)
+	if err := w.flushFilteredDMLBatch(ctx, retained, fields...); err != nil {
+		return err
+	}
+	// Advance deduplication state and release duplicate chunks only after the
+	// retained rows are durable. The caller then acknowledges the spill batch.
+	filter.Commit(w.globalWatermark())
+	for _, e := range duplicates {
+		e.PostFlush()
+	}
+	return nil
+}
+
+func (w *writer) flushFilteredDMLBatch(
 	ctx context.Context, events []*commonEvent.DMLEvent, fields ...zap.Field,
 ) error {
 	if len(events) == 0 {
@@ -354,6 +385,9 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A replay may have been buffered before the watermark advanced. Keep the
+	// previous boundary until ALL groups have drained, not just one batch.
+	w.getReplayFilter().Advance(watermark)
 	if total != 0 {
 		stats := w.getSpillStore().Stats()
 		log.Info("flush DML events done", zap.Uint64("watermark", watermark),

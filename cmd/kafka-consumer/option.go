@@ -77,9 +77,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`")
 	}
 
-	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
-		return r == '/'
-	})
+	o.topic = strings.Trim(upstreamURI.Path, "/")
 	if len(o.topic) == 0 {
 		log.Panic("no topic provided for the consumer")
 	}
@@ -149,6 +147,9 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("codec config apply failed", zap.Error(err))
+	}
+	if replicaConfig.Integrity != nil {
+		o.codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
 	}
 	o.codecConfig.AvroConfluentSchemaRegistry = o.schemaRegistryURI
 

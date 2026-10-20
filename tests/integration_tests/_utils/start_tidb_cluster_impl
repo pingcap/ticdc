@@ -292,7 +292,8 @@ run_sql "CREATE user 'normal'@'%' identified by '123456';" ${DOWN_TIDB_HOST} ${D
 run_sql "GRANT select,insert,update,delete,index,create,drop,alter,create view,references ON *.* TO 'normal'@'%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 run_sql "FLUSH privileges" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-if [[ "${SKIP_TIFLASH:-0}" == "1" ]]; then
+# Most integration tests do not use TiFlash, so start it only when explicitly requested.
+if [[ "${SKIP_TIFLASH:-1}" == "1" ]]; then
 	echo "Skipping TiFlash startup"
 	exit 0
 fi
