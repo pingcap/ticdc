@@ -1185,7 +1185,7 @@ func TestHandleBootstrapRequestRebuildsClosedManager(t *testing.T) {
 				staleClose := requireMessage(t, mc.GetMessageChannel(), "stale close response missing")
 				require.True(t, staleClose.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
 				require.Same(t, active, orchestrator.dispatcherManagers[cfID])
-				require.True(t, active.IsReusable())
+				require.True(t, active.IsRunning())
 				require.Equal(t, float64(1), testutil.ToFloat64(gauge))
 			}
 

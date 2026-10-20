@@ -164,8 +164,8 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-	// lifecycleMu protects state and serializes work admission and resource registration
-	// with shutdown. Every state access must hold lifecycleMu.
+	// lifecycleMu protects state and prevents new tasks or resource registrations
+	// once shutdown starts. Every state access must hold lifecycleMu.
 	lifecycleMu sync.Mutex
 	state       dispatcherManagerState
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
@@ -236,6 +236,7 @@ func NewDispatcherManager(
 	}
 
 	manager = &DispatcherManager{
+		state:                 dispatcherManagerInitializing,
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
@@ -512,7 +513,7 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if !e.beginWork() {
+	if !e.tryAddRunningTask() {
 		return newWritePathClosedError()
 	}
 	defer e.wg.Done()
@@ -1108,8 +1109,8 @@ func (e *DispatcherManager) close() {
 }
 
 func (e *DispatcherManager) stopWritePath() {
-	// Closing prevents new publication. Wait for registrations admitted before
-	// the transition, then snapshot the heartbeat task under its publication lock.
+	// Closing prevents new registrations. Snapshot the heartbeat task while
+	// holding the same lock used to register it.
 	e.lifecycleMu.Lock()
 	heartBeatTask := e.heartBeatTask
 	e.lifecycleMu.Unlock()

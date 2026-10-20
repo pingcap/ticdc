@@ -60,8 +60,7 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, wasInitializing)
-	require.True(t, manager.isRunning())
-	require.True(t, manager.IsReusable())
+	require.True(t, manager.IsRunning())
 	t.Cleanup(manager.LocalFence)
 
 	// Hold background completion so repeated close requests observe Closing.
@@ -71,7 +70,7 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	require.False(t, manager.TryClose(false))
 	require.True(t, manager.isClosingOrClosed())
 	require.False(t, manager.isClosed())
-	require.False(t, manager.IsReusable())
+	require.False(t, manager.IsRunning())
 	require.False(t, manager.TryClose(false))
 	select {
 	case <-manager.ctx.Done():
@@ -81,7 +80,7 @@ func TestDispatcherManagerLifecycle(t *testing.T) {
 	release()
 	require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
 	require.True(t, manager.isClosed())
-	require.False(t, manager.IsReusable())
+	require.False(t, manager.IsRunning())
 }
 
 func TestDispatcherManagerCloseDuringInitialization(t *testing.T) {
@@ -120,7 +119,7 @@ func TestDispatcherManagerCloseDuringInitialization(t *testing.T) {
 				t.Fatal("initializing manager was not registered")
 			}
 			require.True(t, manager.isInitializing())
-			require.False(t, manager.IsReusable())
+			require.False(t, manager.IsRunning())
 			// Runtime requests must not access the constructor's partial resources.
 			handler := &SchedulerDispatcherRequestHandler{}
 			require.False(t, handler.Handle(manager, NewSchedulerDispatcherRequest("maintainer", &heartbeatpb.ScheduleDispatcherRequest{
@@ -244,7 +243,7 @@ func TestDispatcherManagerCloseRacesWithInitialization(t *testing.T) {
 			require.Same(t, manager, constructed)
 		}
 		require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
-		require.False(t, manager.IsReusable())
+		require.False(t, manager.IsRunning())
 	}
 }
 
@@ -266,7 +265,7 @@ func TestDispatcherManagerHeartbeatWaitsForRunning(t *testing.T) {
 	require.False(t, (&HeartBeatTask{manager: manager}).Execute().IsZero())
 }
 
-func TestDispatcherManagerCloseWaitsForAdmittedWork(t *testing.T) {
+func TestDispatcherManagerCloseWaitsForRunningTask(t *testing.T) {
 	manager := createTestManager(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	manager.ctx, manager.cancel = ctx, cancel
@@ -298,7 +297,7 @@ func TestDispatcherManagerCloseWaitsForAdmittedWork(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(time.Second):
-		t.Fatal("checkpoint work was not admitted")
+		t.Fatal("checkpoint handler did not start")
 	}
 	require.False(t, manager.TryClose(false))
 	select {
@@ -312,7 +311,7 @@ func TestDispatcherManagerCloseWaitsForAdmittedWork(t *testing.T) {
 	for i := range 8 {
 		closers.Go(func() {
 			if manager.TryClose(i == 0) {
-				t.Error("close succeeded before admitted work returned")
+				t.Error("close succeeded before the running handler returned")
 			}
 			manager.LocalFence()
 		})

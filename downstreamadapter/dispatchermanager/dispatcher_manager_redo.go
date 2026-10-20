@@ -337,7 +337,7 @@ func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if !e.beginWork() {
+	if !e.tryAddRunningTask() {
 		return newWritePathClosedError()
 	}
 	defer e.wg.Done()

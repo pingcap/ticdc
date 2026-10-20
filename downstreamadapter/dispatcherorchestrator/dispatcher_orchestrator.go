@@ -207,7 +207,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 	if exists {
 		manager.MaintainerFenceMu.Lock()
-		if !manager.IsReusable() {
+		if !manager.IsRunning() {
 			// A closing manager cannot be revived by changing its maintainer.
 			// Let the new maintainer's bootstrap retries wait for complete cleanup.
 			if !manager.CanUpdateMaintainer(from, maintainerEpoch) || !manager.TryClose(false) {
@@ -298,7 +298,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 
 	manager.MaintainerFenceMu.Lock()
-	if !manager.IsReusable() {
+	if !manager.IsRunning() {
 		manager.MaintainerFenceMu.Unlock()
 		return nil
 	}
@@ -336,7 +336,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return nil
 	}
 	if exists {
-		// A higher-epoch maintainer may reuse an existing DispatcherManager with
+		// A higher-epoch maintainer may take over an existing DispatcherManager with
 		// the same table trigger ID. A fresh trigger ID is allowed only after the
 		// old maintainer handover leaves no old trigger on this node. If a
 		// different trigger ID is still present, the scheduler has violated the
@@ -457,7 +457,7 @@ func (t bootstrapTableTrigger) validate(cfID common.ChangeFeedID) error {
 	)
 }
 
-// ensure verifies that a reused manager has the bootstrap owner's table
+// ensure verifies that the manager has the bootstrap owner's table
 // trigger, or creates it when no trigger exists yet.
 func (t bootstrapTableTrigger) ensure(cfID common.ChangeFeedID) error {
 	if t.id == nil {

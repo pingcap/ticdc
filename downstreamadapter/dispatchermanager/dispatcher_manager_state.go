@@ -38,7 +38,8 @@ func (e *DispatcherManager) isInitializing() bool {
 	return e.state == dispatcherManagerInitializing
 }
 
-func (e *DispatcherManager) isRunning() bool {
+// IsRunning reports whether the manager is in the Running state.
+func (e *DispatcherManager) IsRunning() bool {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
 	return e.state == dispatcherManagerRunning
@@ -69,9 +70,10 @@ func (e *DispatcherManager) startClosing() dispatcherManagerState {
 	return state
 }
 
-// beginWork admits runtime work before shutdown can start waiting for it.
-// Every successful call must be paired with wg.Done after the work returns.
-func (e *DispatcherManager) beginWork() bool {
+// tryAddRunningTask adds the current handler or periodic task to wg while Running.
+// The caller must defer wg.Done(). Shutdown waits for these calls to return
+// before setting Closed.
+func (e *DispatcherManager) tryAddRunningTask() bool {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
 	if e.state != dispatcherManagerRunning {

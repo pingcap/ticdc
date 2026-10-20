@@ -211,7 +211,7 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		return false
 	}
 	defer dispatcherManager.wg.Done()
@@ -555,7 +555,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	heartbeatResponse := resps[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		return false
 	}
 	defer dispatcherManager.wg.Done()
@@ -661,7 +661,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		return false
 	}
 	defer dispatcherManager.wg.Done()
@@ -730,7 +730,7 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	}
 	msg := messages[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		dispatcherManager.MaintainerFenceMu.Unlock()
 		return false
 	}
@@ -829,7 +829,7 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 	msg := messages[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		return false
 	}
 	defer dispatcherManager.wg.Done()
@@ -947,7 +947,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	mergeDispatcherRequest := reqs[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
-	if !dispatcherManager.beginWork() {
+	if !dispatcherManager.tryAddRunningTask() {
 		return false
 	}
 	defer dispatcherManager.wg.Done()

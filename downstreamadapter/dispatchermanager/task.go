@@ -53,7 +53,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 }
 
 func (t *HeartBeatTask) Execute() time.Time {
-	if !t.manager.beginWork() {
+	if !t.manager.tryAddRunningTask() {
 		// Initial dispatchers can schedule this task before construction returns.
 		if t.manager.isInitializing() {
 			return time.Now().Add(heartbeatInterval(t.manager))
@@ -140,7 +140,7 @@ func newMergeCheckTask(manager *DispatcherManager, mergedDispatcher dispatcher.D
 }
 
 func (t *MergeCheckTask) Execute() time.Time {
-	if !t.manager.beginWork() {
+	if !t.manager.tryAddRunningTask() {
 		return time.Time{}
 	}
 	defer t.manager.wg.Done()
@@ -526,7 +526,7 @@ type RemoveDispatcherTask struct {
 }
 
 func (t *RemoveDispatcherTask) Execute() time.Time {
-	if !t.manager.beginWork() {
+	if !t.manager.tryAddRunningTask() {
 		return time.Time{}
 	}
 	defer t.manager.wg.Done()
