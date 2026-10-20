@@ -70,6 +70,308 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	})
 }
 
+<<<<<<< HEAD
+=======
+func TestManagerIgnoresInvalidMessages(t *testing.T) {
+	manager := &Manager{}
+	tests := []struct {
+		name    string
+		handler messaging.MessageHandler
+		msgType messaging.IOType
+		message []messaging.IOTypeT
+	}{
+		{
+			name:    "missing maintainer manager payload",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCoordinatorBootstrapRequest,
+		},
+		{
+			name:    "missing maintainer payload",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+		},
+		{
+			name:    "add maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeAddMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.AddMaintainerRequest{}},
+		},
+		{
+			name:    "remove maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRemoveMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.RemoveMaintainerRequest{}},
+		},
+		{
+			name:    "bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerBootstrapResponse{}},
+		},
+		{
+			name:    "post bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerPostBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerPostBootstrapResponse{}},
+		},
+		{
+			name:    "heartbeat request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeHeartBeatRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.HeartBeatRequest{}},
+		},
+		{
+			name:    "nil block status request",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{(*heartbeatpb.BlockStatusRequest)(nil)},
+		},
+		{
+			name:    "block status request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{}},
+		},
+		{
+			name:    "checkpoint message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCheckpointTsMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.CheckpointTsMessage{}},
+		},
+		{
+			name:    "redo progress message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRedoResolvedTsProgressMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.RedoResolvedTsProgressMessage{}},
+		},
+		{
+			name:    "close response without changefeed ID",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerCloseResponse{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &messaging.TargetMessage{
+				From:    "node1",
+				Type:    tt.msgType,
+				Message: tt.message,
+			}
+			require.NotPanics(t, func() {
+				require.NoError(t, tt.handler(context.Background(), msg))
+			})
+		})
+	}
+}
+
+func newAddMaintainerRequestForEpoch(
+	t *testing.T,
+	cfID common.ChangeFeedID,
+	configEpoch uint64,
+	requestEpoch uint64,
+) *heartbeatpb.AddMaintainerRequest {
+	t.Helper()
+
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        configEpoch,
+	}
+	data, err := json.Marshal(info)
+	require.NoError(t, err)
+	return &heartbeatpb.AddMaintainerRequest{
+		Id:              cfID.ToPB(),
+		Config:          data,
+		CheckpointTs:    10,
+		KeyspaceId:      common.DefaultKeyspaceID,
+		MaintainerEpoch: requestEpoch,
+	}
+}
+
+func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
+	t.Helper()
+
+	testutil.SetUpTestServices(t)
+	selfNode := node.NewInfo("", "")
+	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode, nil)
+	t.Cleanup(maintainers.closeAll)
+	return maintainers
+}
+
+func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
+	t.Helper()
+
+	cleanup := func() {
+		keyspace := cfID.Keyspace()
+		name := cfID.Name()
+		metrics.MaintainerGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+
+		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+}
+
+func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("reject-live-newer-epoch", common.DefaultKeyspaceName)
+	cleanupMaintainerMetricsForTest(t, cfID)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
+	oldMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, oldMaintainer == currentMaintainer)
+	require.Equal(t, uint64(1), currentMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+
+	currentMaintainer.checkpointTsGauge.Set(123)
+	require.Equal(t, float64(123), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
+}
+
+func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("stopped-maintainer-replacement", common.DefaultKeyspaceName)
+	cleanupMaintainerMetricsForTest(t, cfID)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
+	oldMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+
+	oldMaintainer.markRemoved()
+	oldMaintainer.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.False(t, oldMaintainer == currentMaintainer)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+
+	currentMaintainer.checkpointTsGauge.Set(456)
+	maintainers.cleanupRemovedMaintainer(cfID, oldMaintainer)
+	maintainerAfterStaleCleanup, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, currentMaintainer == maintainerAfterStaleCleanup)
+	require.Equal(t, float64(456), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
+
+	currentMaintainer.markRemoved()
+	currentMaintainer.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
+	maintainers.cleanupRemovedMaintainer(cfID, currentMaintainer)
+	_, ok = maintainers.getMaintainer(cfID)
+	require.False(t, ok)
+}
+
+func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
+	compatMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Zero(t, compatMaintainer.currentMaintainerEpoch())
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 4, 0), noDrainTarget)
+	compatMaintainerAfterRetry, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, compatMaintainer == compatMaintainerAfterRetry)
+}
+
+func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
+	maintainerAfterOldAdd, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, currentMaintainer == maintainerAfterOldAdd)
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
+	maintainerAfterCompatAdd, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, currentMaintainer == maintainerAfterCompatAdd)
+}
+
+func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+
+	rejectedEpochs := []uint64{3, 2, 1, 0}
+	for _, requestEpoch := range rejectedEpochs {
+		t.Run("requestEpoch"+strconv.FormatUint(requestEpoch, 10), func(t *testing.T) {
+			require.False(t, maintainers.mayRegisterMaintainerForAdd(cfID, requestEpoch))
+			registeredMaintainer := maintainers.registerMaintainerForAdd(cfID, requestEpoch, func() *Maintainer {
+				t.Fatalf("registerMaintainerForAdd created maintainer for rejected request epoch %d", requestEpoch)
+				return nil
+			})
+			require.Nil(t, registeredMaintainer)
+			maintainerAfterRejectedAdd, ok := maintainers.getMaintainer(cfID)
+			require.True(t, ok)
+			require.True(t, currentMaintainer == maintainerAfterRejectedAdd)
+		})
+	}
+}
+
+func TestManagerMaintainerSet_RemoveMissingMaintainerReportsRequestEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("remove-missing", common.DefaultKeyspaceName)
+	req := &heartbeatpb.RemoveMaintainerRequest{
+		Id:              cfID.ToPB(),
+		MaintainerEpoch: 7,
+	}
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("self"),
+		messaging.MaintainerManagerTopic,
+		req,
+	)
+
+	status := maintainers.handleRemoveMaintainer(msg)
+	require.NotNil(t, status)
+	require.Equal(t, heartbeatpb.ComponentState_Stopped, status.State)
+	require.Equal(t, uint64(7), status.MaintainerEpoch)
+}
+
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 // This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {

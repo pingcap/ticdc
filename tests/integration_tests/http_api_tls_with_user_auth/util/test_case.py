@@ -1,4 +1,6 @@
 import sys
+import os
+import subprocess
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -125,6 +127,9 @@ def create_changefeed(sink_uri):
 def list_changefeed():
     # test state: all
     url = BASE_URL0 + "/changefeeds?state=all&keyspace=keyspace1"
+    resp = rq.get(url, cert=CERT, verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.unauthorized, url)
+
     # Add retry logic to wait for changefeeds
     # We need to retry because the coordinator need some time to sync the changefeed infos from etcd
     for _ in range(RETRY_TIME):
@@ -157,6 +162,97 @@ def list_changefeed():
         assert cf["state"] == "stopped"
 
     print("pass test: list changefeed")
+
+
+def remove_keyspace_metadata_from_etcd(pd_cluster_id, keyspace_id, keyspace):
+    keys = (
+        f"/pd/{pd_cluster_id}/keyspaces/meta/{keyspace_id:08d}",
+        f"/pd/{pd_cluster_id}/keyspaces/id/{keyspace}",
+    )
+    env = os.environ.copy()
+    env["ETCDCTL_API"] = "3"
+    for key in keys:
+        result = subprocess.run(
+            [
+                "etcdctl",
+                f"--endpoints={TLS_PD_ADDR}",
+                f"--cacert={CA_PEM_PATH}",
+                f"--cert={CLIENT_PEM_PATH}",
+                f"--key={CLIENT_KEY_PEM_PATH}",
+                "del",
+                key,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+            check=False,
+        )
+        assert result.returncode == 0, \
+            f"failed to delete PD keyspace metadata {key}: {result.stderr}"
+        assert result.stdout.strip() == "1", \
+            f"PD keyspace metadata {key} does not exist"
+
+
+def list_changefeeds_after_keyspace_deleted():
+    keyspace = "keyspace1"
+    changefeed_id = "changefeed-test1"
+    changefeed_url = BASE_URL0 + \
+        "/changefeeds/" + changefeed_id + "?keyspace=" + keyspace
+
+    resp = rq.get(changefeed_url, auth=Auth, cert=CERT,
+                  verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.ok, changefeed_url)
+    pd_cluster_id = resp.json()["upstream_id"]
+
+    keyspace_url = TLS_PD_ADDR + "/pd/api/v2/keyspaces/" + keyspace
+    resp = rq.get(keyspace_url, cert=CERT, verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.ok, keyspace_url)
+    keyspace_id = resp.json()["id"]
+
+    resp = rq.get(keyspace_url + "?force_refresh_group_id=true",
+                  cert=CERT, verify=VERIFY, timeout=5)
+    if resp.status_code == rq.codes.ok:
+        keyspace_group_id = resp.json()["config"]["tso_keyspace_group_id"]
+    else:
+        assert resp.status_code == rq.codes.internal_server_error and \
+            "keyspace group manager is not initialized" in resp.text, \
+            f"unexpected failure while resolving keyspace group: {resp.text}"
+        keyspace_group_id = None
+
+    state_url = keyspace_url + "/state"
+    for state in ("disabled", "archived"):
+        resp = rq.put(state_url, json={"state": state}, cert=CERT,
+                      verify=VERIFY, timeout=5)
+        assert_status_code(resp, rq.codes.ok, state_url)
+
+    if keyspace_group_id is not None:
+        remove_keyspace_url = TLS_PD_ADDR + \
+            "/pd/api/v2/tso/keyspace-groups/" + \
+            str(keyspace_group_id) + "/keyspaces"
+        resp = rq.delete(remove_keyspace_url,
+                         json={"keyspaces": [keyspace_id]},
+                         cert=CERT, verify=VERIFY, timeout=5)
+        assert_status_code(resp, rq.codes.ok, remove_keyspace_url)
+    else:
+        remove_keyspace_metadata_from_etcd(
+            pd_cluster_id, keyspace_id, keyspace)
+
+    resp = rq.get(keyspace_url, cert=CERT, verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.internal_server_error, keyspace_url)
+    assert "PD:keyspace:ErrKeyspaceNotFound" in resp.text, \
+        f"unexpected PD error after removing keyspace: {resp.text}"
+
+    list_url = BASE_URL0 + "/changefeeds?state=all&keyspace=" + keyspace
+    resp = rq.get(list_url, cert=CERT, verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.unauthorized, list_url)
+
+    resp = rq.get(list_url, auth=Auth, cert=CERT,
+                  verify=VERIFY, timeout=5)
+    assert_status_code(resp, rq.codes.ok, list_url)
+    assert any(item["id"] == changefeed_id for item in resp.json()["items"])
+
+    print("pass test: list changefeeds after keyspace deleted")
 
 
 def get_changefeed():
@@ -408,9 +504,13 @@ def verify_table():
         }
     })
     headers = {"Content-Type": "application/json"}
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY, timeout=5)
+    assert resp.status_code == rq.codes.unauthorized
+
     for i in range(RETRY_TIME):
-        resp = rq.post(url, data=data, headers=headers,
-                       cert=CERT, verify=VERIFY)
+        resp = rq.post(url, data=data, auth=Auth, headers=headers,
+                       cert=CERT, verify=VERIFY, timeout=5)
         if resp.status_code == rq.codes.ok:
             break
         time.sleep(1)
@@ -502,6 +602,8 @@ if __name__ == "__main__":
         "get_status": get_status,
         "create_changefeed": create_changefeed,
         "list_changefeed": list_changefeed,
+        "list_changefeeds_after_keyspace_deleted":
+            list_changefeeds_after_keyspace_deleted,
         "get_changefeed": get_changefeed,
         "pause_changefeed": pause_changefeed,
         "update_changefeed": update_changefeed,
