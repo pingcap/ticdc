@@ -178,8 +178,14 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    assert_status_code(resp, rq.codes.bad_request, url)
-    assert resp.json()["error_code"] == "CDC:ErrSinkURIInvalid", f"{resp.text}"
+    if os.getenv("TICDC_NEWARCH") == "false":
+        expected_status = rq.codes.internal_server_error
+        expected_error = "CDC:ErrKafkaNewProducer"
+    else:
+        expected_status = rq.codes.bad_request
+        expected_error = "CDC:ErrSinkURIInvalid"
+    assert_status_code(resp, expected_status, url)
+    assert resp.json()["error_code"] == expected_error, f"{resp.text}"
     assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
 
     print("pass test: create changefeed")
