@@ -64,7 +64,7 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 // generateNormalSQL converts a single DMLEvent into SQL statements, respecting safe mode.
-func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
+func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
 	log.Debug("inSafeMode",
@@ -139,6 +139,27 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 		rowLists = append(rowLists, &row)
 	}
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
+}
+
+// generateSafeBatchSQLForSingleEvent rewrites updates as delete/replace pairs
+// so safe mode can recover rows missing downstream without merging events.
+func (w *Writer) generateSafeBatchSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
+	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		if row.RowType == common.RowTypeUpdate {
+			rows = append(rows,
+				&commonEvent.RowChange{RowType: common.RowTypeDelete, PreRow: row.PreRow},
+				&commonEvent.RowChange{RowType: common.RowTypeInsert, Row: row.Row})
+		} else {
+			rows = append(rows, &row)
+		}
+	}
+	return w.batchSingleTxnDmls(rows, event.TableInfo, true)
 }
 
 // generateBatchSQLsPerEvent falls back to per-event batching when cross-event merging is not possible.
@@ -240,6 +261,14 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 		}
 	}
 
+	// Validate all updates before merging so a filtered duplicate cannot hide
+	// an unexpected, unsplit primary-key change later in the batch.
+	for _, row := range rowLists {
+		if row.rowChange.RowType == common.RowTypeUpdate && !compareKeys(row.preRowKeys, row.rowKeys) {
+			return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+		}
+	}
+
 	// Step 2 combine the rows until there is no change
 	// Consider we will split the event if PK is changed, so the Update will not change the PK
 	// for the rows comparation, there are six situations:
@@ -282,9 +311,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-						}
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
 							preRowChange := rowLists[j].rowChange
@@ -303,9 +329,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					}
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].rowKeys
-					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
-						return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
 							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
@@ -328,9 +351,6 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
-							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-								return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
-							}
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].rowChange.PreRow,
 								Row:     rowLists[j].rowChange.Row,
