@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -81,7 +82,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
 	region := newRegionInfo(
 		tikv.RegionVerID{},
@@ -90,17 +91,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		subSpan,
 		false,
 	)
-<<<<<<< HEAD
-	lockResult := subSpan.rangeLock.LockRange(
-		context.Background(), span.StartKey, span.EndKey, 1, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
-	region.lockedRangeState = lockResult.LockedRangeState
-	state := newRegionFeedState(region, 1, worker)
-	state.start()
-=======
 	region.lockedRangeState = &regionlock.LockedRangeState{}
 	state := newRegionFeedState(region, 1, worker, nil)
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 
 	// Receive prewrite2 with empty value.
 	{
@@ -217,14 +209,10 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-<<<<<<< HEAD
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
-=======
 	handler := &regionEventHandler{eventSink: &regionEventSink{
 		memoryQuota: newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
 	}}
 	ds := dynstream.NewParallelDynamicStream("test", handler, option)
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
@@ -235,14 +223,9 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	subID1 := SubscriptionID(1)
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
-<<<<<<< HEAD
-	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
-	state1.start()
-=======
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker, nil)
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -256,28 +239,17 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
-<<<<<<< HEAD
-		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
-		state1.region.subscribedSpan = subSpan
-		lockResult := subSpan.rangeLock.LockRange(
-			context.Background(), span.StartKey, span.EndKey, 1, 1)
-		require.Equal(t, regionlock.LockRangeStatusSuccess, lockResult.Status)
-		state1.region.lockedRangeState = lockResult.LockedRangeState
-=======
 			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 		}
 		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
 		state1.region.subscribedSpan = subSpan
 		state1.region.lockedRangeState = &regionlock.LockedRangeState{}
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 		state1.setInitialized()
 		state1.updateResolvedTs(9)
 	}
 
 	subID2 := SubscriptionID(2)
-	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker)
-	state2.start()
+	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -291,10 +263,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
-<<<<<<< HEAD
-=======
 			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 		}
 		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
 		state2.region.subscribedSpan = subSpan
@@ -304,8 +273,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 
 	subID3 := SubscriptionID(3)
-	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker)
-	state3.start()
+	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker, nil)
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
@@ -319,10 +287,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
-<<<<<<< HEAD
-=======
 			priorityPolicy:    newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 		}
 		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
 		state3.region.subscribedSpan = subSpan
@@ -400,8 +365,10 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 		subID:           SubscriptionID(1),
 		rangeLock:       l,
 		advanceInterval: 100,
+		priorityPolicy:  newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute),
 	}
 	span.lastAdvanceTime.Store(0)
+	worker := &regionRequestWorker{tracker: newRegionTracker()}
 	state := newRegionFeedState(
 		regionInfo{
 			verID:            tikv.NewRegionVerID(1, 1, 1),
@@ -409,55 +376,13 @@ func TestHandleResolvedTsThrottled(t *testing.T) {
 			lockedRangeState: res1.LockedRangeState,
 		},
 		1,
+		worker,
 		nil,
 	)
-	state.start()
 
 	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }
 
-<<<<<<< HEAD
-func TestSpanInitializedAfterAllRangesInitialized(t *testing.T) {
-	ctx := context.Background()
-	rangeLock := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), 100)
-	firstLock := rangeLock.LockRange(ctx, []byte("a"), []byte("m"), 1, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, firstLock.Status)
-	secondLock := rangeLock.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, secondLock.Status)
-
-	span := &subscribedSpan{
-		subID:     SubscriptionID(1),
-		startTs:   100,
-		span:      heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("z")},
-		rangeLock: rangeLock,
-	}
-	span.resolvedTs.Store(span.startTs)
-	worker := &regionRequestWorker{requestCache: newRequestCache(2)}
-	newState := func(
-		regionID uint64, regionSpan heartbeatpb.TableSpan,
-		lockedRangeState *regionlock.LockedRangeState,
-	) *regionFeedState {
-		state := newRegionFeedState(
-			regionInfo{
-				verID:            tikv.NewRegionVerID(regionID, 1, 1),
-				span:             regionSpan,
-				rpcCtx:           &tikv.RPCContext{},
-				subscribedSpan:   span,
-				lockedRangeState: lockedRangeState,
-			},
-			uint64(span.subID),
-			worker,
-		)
-		state.start()
-		return state
-	}
-	firstState := newState(1,
-		heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("m")},
-		firstLock.LockedRangeState)
-	secondState := newState(2,
-		heartbeatpb.TableSpan{StartKey: []byte("m"), EndKey: []byte("z")},
-		secondLock.LockedRangeState)
-=======
 func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 	quota := newMemoryQuotaController(1024, 8)
 	span := newTestQuotaSpan(1)
@@ -467,7 +392,6 @@ func TestHandleEntriesReleasesMemoryAfterDownstreamCallback(t *testing.T) {
 		return true
 	}
 	span.advanceResolvedTs = func(uint64) {}
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 
 	lockedState := &regionlock.LockedRangeState{}
 	lockedState.ResolvedTs.Store(100)

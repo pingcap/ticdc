@@ -29,8 +29,7 @@ import (
 )
 
 var (
-	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
 
 	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
 	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
@@ -280,7 +279,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
+		worker.tracker.RemoveIf(SubscriptionID(state.requestID), state.getRegionID(), state)
 		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
@@ -447,8 +446,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}

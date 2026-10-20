@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -113,9 +112,8 @@ func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
 	submitRegionForAdmission(t, controller,
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
-	highPriorityRegion := prepareRegionForAdmission(
-		createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
+	highPriorityRegion.scanPriority = scanPriorityHigh
 	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
@@ -151,9 +149,8 @@ func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
 	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
-	submitRegionForAdmission(t, controller,
-		highPriorityRegion, currentTs)
+	highPriorityRegion.scanPriority = scanPriorityHigh
+	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
 	require.NoError(t, err)

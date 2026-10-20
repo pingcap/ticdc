@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -62,7 +61,7 @@ func newTestQuotaRegion(span *subscribedSpan) regionInfo {
 
 func newTestQuotaRegionWithPriority(
 	span *subscribedSpan,
-	priority cdcpb.ScanPriority,
+	priority scanPriorityLevel,
 ) regionInfo {
 	region := newTestQuotaRegion(span)
 	region.scanPriority = priority
@@ -113,13 +112,13 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 5))
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 10))
 	_, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(lowPrioritySpan, cdcpb.ScanPriority_SCAN_PRIORITY_LOW),
+		newTestQuotaRegionWithPriority(lowPrioritySpan, scanPriorityLow),
 		lowPriorityTs,
 	)
 	require.False(t, admitted)
 
 	scanBytes, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(highPrioritySpan, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(highPrioritySpan, scanPriorityHigh),
 		highPriorityTs,
 	)
 	require.True(t, admitted)
@@ -128,7 +127,7 @@ func TestMemoryQuotaAdmissionLevels(t *testing.T) {
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 45))
 	require.True(t, quota.AcquireEvent(context.Background(), highPrioritySpan, 20))
 	scanBytes, _, admitted = quota.AcquireScan(
-		newTestQuotaRegionWithPriority(highPrioritySpan, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(highPrioritySpan, scanPriorityHigh),
 		highPriorityTs,
 	)
 	require.True(t, admitted)
@@ -153,7 +152,7 @@ func TestMemoryQuotaReleaseEventClampsToZero(t *testing.T) {
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	_, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW),
+		newTestQuotaRegionWithPriority(span, scanPriorityLow),
 		currentTs,
 	)
 	require.False(t, admitted)
@@ -174,7 +173,7 @@ func TestMemoryQuotaDerivedLimitsSaturate(t *testing.T) {
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, 24*time.Hour)
 	scanBytes, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(span, scanPriorityHigh),
 		currentTs,
 	)
 	require.True(t, admitted)
@@ -190,7 +189,7 @@ func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {
 	require.True(t, quota.AcquireEvent(context.Background(), span1, 30))
 	require.True(t, quota.AcquireEvent(context.Background(), span2, 40))
 	scanBytes, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(span1, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(span1, scanPriorityHigh),
 		span1.resolvedTs.Load(),
 	)
 	require.True(t, admitted)
@@ -210,7 +209,7 @@ func TestMemoryQuotaSpanStopKeepsOwnedMemoryUntilRelease(t *testing.T) {
 	// Late tasks reach the stopped-subscription cleanup path without consuming
 	// scan quota.
 	scanBytes, _, admitted = quota.AcquireScan(
-		newTestQuotaRegionWithPriority(span1, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(span1, scanPriorityHigh),
 		span1.resolvedTs.Load(),
 	)
 	require.True(t, admitted)
@@ -344,7 +343,7 @@ func TestMemoryQuotaLowPriorityScanUsesCurrentPressure(t *testing.T) {
 	quota := newMemoryQuotaController(100, 20)
 	span := newTestQuotaSpan(1)
 	currentTs := setTestQuotaSpanLag(span, time.Hour)
-	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
+	region := newTestQuotaRegionWithPriority(span, scanPriorityLow)
 
 	bytes1, _, admitted := quota.AcquireScan(region, currentTs)
 	require.True(t, admitted)
@@ -368,7 +367,7 @@ func TestMemoryQuotaLowLagScanBypassesWarmingGate(t *testing.T) {
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	scanBytes, _, admitted := quota.AcquireScan(
-		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH),
+		newTestQuotaRegionWithPriority(span, scanPriorityHigh),
 		currentTs,
 	)
 	require.True(t, admitted)
@@ -389,7 +388,7 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	controller := newRegionAdmissionController(1, 1, quota, clock)
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
-	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
+	region := newTestQuotaRegionWithPriority(span, scanPriorityLow)
 	require.True(t, controller.submit(newRegionPriorityTask(region, 1)))
 
 	type popResult struct {
@@ -433,7 +432,7 @@ func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
 
 	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
 	require.True(t, controller.submit(newRegionPriorityTask(
-		newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW), 1)))
+		newTestQuotaRegionWithPriority(span, scanPriorityLow), 1)))
 
 	type popResult struct {
 		req *regionReq

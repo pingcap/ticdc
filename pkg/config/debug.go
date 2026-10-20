@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-<<<<<<< HEAD
-=======
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -34,7 +32,6 @@ const (
 	// DefaultLogPullerScanBaseSize is the default base memory estimate for one
 	// initial scan.
 	DefaultLogPullerScanBaseSize uint64 = 8 * 1024 * 1024
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -67,6 +64,7 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	c.Puller.ValidateAndAdjust()
 
 	return nil
 }
@@ -80,13 +78,9 @@ type PullerConfig struct {
 	// LogRegionDetails determines whether logs Region details or not in puller and kv-client.
 	LogRegionDetails bool `toml:"log-region-details" json:"log_region_details"`
 
-	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
-	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
-	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
-	// each worker's queue size will be 32 / 8 = 4.
+	// PendingRegionRequestQueueSize is the approximate normal initial-scan window
+	// for one TiKV store. It is divided among the store's puller workers.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
-<<<<<<< HEAD
-=======
 	// RegionRequestMaxWindowMultiplier controls the maximum window available to
 	// previously initialized regions and regions whose scan lag is below the
 	// configured low-priority threshold.
@@ -105,18 +99,11 @@ type PullerConfig struct {
 	// pressure and throttles new low-priority scans; it is not an actual memory
 	// allocation or a per-scan hard limit.
 	ScanBaseSize uint64 `toml:"scan-base-size" json:"scan_base_size"`
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 }
 
 // NewDefaultPullerConfig return the default puller configuration
 func NewDefaultPullerConfig() *PullerConfig {
 	return &PullerConfig{
-<<<<<<< HEAD
-		EnableResolvedTsStuckDetection: false,
-		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
-		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
-=======
 		EnableResolvedTsStuckDetection:   false,
 		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
 		LogRegionDetails:                 false,
@@ -146,7 +133,6 @@ func (c *PullerConfig) ValidateAndAdjust() {
 	}
 	if c.OldStartTsScanLowPriorityThreshold <= 0 {
 		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
->>>>>>> ec9ca995c (logpuller: control region scan admission with memory quota (#5669))
 	}
 	if c.MemoryQuota == 0 {
 		log.Warn("log puller memory quota must be positive, use default value",
