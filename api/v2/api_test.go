@@ -59,8 +59,13 @@ func TestTableInspectionRoutesRequireAuthentication(t *testing.T) {
 		keyspaceManager := keyspace.NewMockManager(ctrl)
 		keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), common.DefaultKeyspaceName).Return(
 			&keyspacepb.KeyspaceMeta{
+<<<<<<< HEAD
 				Id:   common.DefaultKeyspaceID,
 				Name: common.DefaultKeyspaceName,
+=======
+				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: common.DefaultKeyspaceID},
+				Name:     common.DefaultKeyspaceName,
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 			}, nil,
 		).Times(len(paths))
 		appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, keyspaceManager)

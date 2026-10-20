@@ -19,7 +19,11 @@ import (
 	"testing"
 	"time"
 
+<<<<<<< HEAD
 	"github.com/pingcap/errors"
+=======
+	"github.com/pingcap/ticdc/pkg/errors"
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,13 +101,24 @@ func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
 				WillReturnError(errors.New("exec failed"))
 			mock.ExpectExec("ROLLBACK").WillReturnResult(nil)
 
+<<<<<<< HEAD
 			writer := &Writer{ctx: context.Background(), db: db}
+=======
+			conn, err := db.Conn(context.Background())
+			require.NoError(t, err)
+			defer conn.Close()
+			writer := &Writer{ctx: context.Background()}
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 			dmls := &preparedDMLs{
 				sqls:   []string{"INSERT INTO t VALUES (?)"},
 				values: [][]any{{rowValue}},
 			}
 
+<<<<<<< HEAD
 			_, err := writer.multiStmtExecute(dmls, time.Second)
+=======
+			err = writer.multiStmtExecute(conn, dmls, time.Second)
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 			require.Error(t, err)
 			if tt.containsRow {
 				require.Contains(t, err.Error(), rowValue)

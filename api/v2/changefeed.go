@@ -377,8 +377,13 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 	}
 	info := changefeeds[0]
 	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+<<<<<<< HEAD
 		Id:   info.KeyspaceID,
 		Name: info.ChangefeedID.Keyspace(),
+=======
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 	})
 	if !middleware.AuthenticateRequest(c, h.server) {
 		return
@@ -546,8 +551,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		return
 	}
 	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+<<<<<<< HEAD
 		Id:   cfInfo.KeyspaceID,
 		Name: cfInfo.ChangefeedID.Keyspace(),
+=======
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 	})
 	if !middleware.AuthenticateRequest(c, h.server) {
 		return

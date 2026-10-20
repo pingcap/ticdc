@@ -60,7 +60,11 @@ WHERE DB_NAME = ?
     AND (STATE = "running" OR STATE = "queueing");
 `
 
+<<<<<<< HEAD
 const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
+=======
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
+>>>>>>> 1c011427d (*: harden API access and downstream query handling (#6581))
 	WHERE CREATE_TIME >= ? AND QUERY = ?;`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
