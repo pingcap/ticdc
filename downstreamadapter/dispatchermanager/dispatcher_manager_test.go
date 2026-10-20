@@ -503,8 +503,8 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 
 func TestTryCloseWaitsForFinalCleanup(t *testing.T) {
 	manager := &DispatcherManager{}
-	// Finalizing stops background tasks before metrics cleanup finishes.
-	manager.state.Store(uint32(dispatcherManagerFinalizing))
+	// Closing includes the final task and metrics cleanup.
+	manager.state.Store(uint32(dispatcherManagerClosing))
 	require.False(t, manager.TryClose(false))
 
 	manager.state.Store(uint32(dispatcherManagerClosed))
@@ -1371,4 +1371,12 @@ func TestAbortMergeRestoresSourceDispatchersRegistration(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2.GetComponentStatus())
 	require.True(t, ec.HasDispatcher(dispatcher1.GetId()))
 	require.True(t, ec.HasDispatcher(dispatcher2.GetId()))
+
+	// An already running merge must not restore registrations after shutdown starts.
+	ec.RemoveDispatcher(dispatcher1)
+	ec.RemoveDispatcher(dispatcher2)
+	require.Equal(t, dispatcherManagerRunning, manager.startClosing())
+	abortMerge(task, manager.dispatcherMap, manager.sink.SinkType(), "manager_closing")
+	require.False(t, ec.HasDispatcher(dispatcher1.GetId()))
+	require.False(t, ec.HasDispatcher(dispatcher2.GetId()))
 }

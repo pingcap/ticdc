@@ -165,12 +165,10 @@ type DispatcherManager struct {
 	latestRedoWatermark Watermark
 
 	// state advances from Initializing to Running, or directly to Closing on failure,
-	// then through Finalizing to Closed. Closing fences new resource publication.
-	state       atomic.Uint32
+	// then to Closed after base cleanup. Closing fences new resource publication.
+	state atomic.Uint32
+	// Serializes state transitions, runtime admission, and resource publication.
 	writePathMu sync.Mutex
-	// initDone is closed on every constructor return, before cleanup may inspect
-	// partially initialized resources or wait for background work.
-	initDone chan struct{}
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
 	// A later removed=false request must not downgrade the final cleanup semantics.
 	removeChangefeedRequested atomic.Bool
@@ -240,7 +238,6 @@ func NewDispatcherManager(
 
 	manager = &DispatcherManager{
 		ctx:                   ctx,
-		initDone:              make(chan struct{}),
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
 		mergeOperatorMap:      sync.Map{},
@@ -275,14 +272,20 @@ func NewDispatcherManager(
 	manager.meta.maintainerID = maintainerID
 	cleanupManager := manager
 	defer func() {
-		close(cleanupManager.initDone)
-		if err != nil && cleanupManager != nil {
-			cleanupManager.LocalFence()
+		if err != nil {
+			// The constructor owns partial resources until it publishes Running.
+			// A close during initialization only fences and cancels construction.
+			cleanupManager.startClosing()
+			cleanupManager.cancel()
+			cleanupManager.close()
 			manager = nil
 		}
 	}()
 	// The manager must be fenceable before any write-capable resource is initialized.
 	if registerInitializing != nil && !registerInitializing(manager) {
+		return nil, newWritePathClosedError()
+	}
+	if manager.isWritePathClosed() {
 		return nil, newWritePathClosedError()
 	}
 
@@ -418,9 +421,6 @@ func NewDispatcherManager(
 	manager.wg.Go(func() {
 		manager.collectBlockStatusRequest(ctx)
 	})
-	manager.state.Store(uint32(dispatcherManagerRunning))
-	manager.writePathMu.Unlock()
-
 	log.Info("dispatcher manager initialized",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
@@ -431,6 +431,10 @@ func NewDispatcherManager(
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
 		zap.String("filterConfig", filterCfg.String()),
 	)
+	// Publish Running only after the constructor's final resource access. From
+	// this point a close request owns cleanup and may run before we return.
+	manager.state.Store(uint32(dispatcherManagerRunning))
+	manager.writePathMu.Unlock()
 	return manager, nil
 }
 
@@ -509,6 +513,11 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+	if !e.beginWork() {
+		return newWritePathClosedError()
+	}
+	defer e.wg.Done()
+
 	e.writePathMu.Lock()
 	if e.isWritePathClosed() {
 		e.writePathMu.Unlock()
@@ -1062,38 +1071,30 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {
 		e.removeChangefeedRequested.Store(true)
 	}
-	if e.getState() == dispatcherManagerClosed {
+	switch e.startClosing() {
+	case dispatcherManagerInitializing:
+		// The constructor will stop and clean up its own partial resources.
+		e.cancel()
+	case dispatcherManagerRunning:
+		go e.close()
+	case dispatcherManagerClosed:
 		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
-	if !e.startClosing() {
-		return e.getState() == dispatcherManagerClosed
-	}
-
-	go e.close()
 	return false
 }
 
 // LocalFence stops the local write path immediately without waiting for
 // dispatcher progress to drain. The remaining cleanup continues asynchronously.
 func (e *DispatcherManager) LocalFence() {
-	if e.getState() >= dispatcherManagerFinalizing {
+	if e.getState() == dispatcherManagerClosed {
 		return
 	}
-	startClose := e.startClosing()
+	previousState := e.startClosing()
 	if e.cancel != nil {
 		e.cancel()
 	}
-	if startClose {
-		if e.initDone != nil {
-			select {
-			case <-e.initDone:
-			default:
-				// Initialization owns its partial resources until it returns.
-				go e.close()
-				return
-			}
-		}
+	if previousState == dispatcherManagerRunning {
 		e.stopWritePath()
 		go e.finishClose()
 	}
@@ -1103,18 +1104,6 @@ func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.initDone != nil {
-		select {
-		case <-e.initDone:
-		default:
-			// Cancel initialization before waiting, so blocked resource creation
-			// can return and hand its partial resources over to cleanup.
-			if e.cancel != nil {
-				e.cancel()
-			}
-			<-e.initDone
-		}
-	}
 	e.stopWritePath()
 	e.finishClose()
 }
@@ -1206,9 +1195,6 @@ func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
 
 func (e *DispatcherManager) finishClose() {
 	e.wg.Wait()
-	if !e.state.CompareAndSwap(uint32(dispatcherManagerClosing), uint32(dispatcherManagerFinalizing)) {
-		return
-	}
 	defer e.state.Store(uint32(dispatcherManagerClosed))
 
 	e.removeTaskHandles.Range(func(key, value any) bool {

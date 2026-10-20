@@ -20,10 +20,8 @@ const (
 	dispatcherManagerInitializing dispatcherManagerState = iota
 	// All local components and initial background work have been registered.
 	dispatcherManagerRunning
-	// New resources are fenced while existing work and resources are stopped.
+	// New work and resource publication are fenced while cleanup completes.
 	dispatcherManagerClosing
-	// Scheduled tasks skip subsequent executions during final metrics cleanup.
-	dispatcherManagerFinalizing
 	// Base cleanup has returned. Remove-only cleanup may still be running.
 	dispatcherManagerClosed
 )
@@ -36,14 +34,27 @@ func (e *DispatcherManager) isWritePathClosed() bool {
 	return e.getState() >= dispatcherManagerClosing
 }
 
-// startClosing serializes the shutdown decision with resource publication and
-// the Initializing -> Running transition. Only its successful caller starts cleanup.
-func (e *DispatcherManager) startClosing() bool {
+// startClosing returns the previous state and serializes shutdown with resource
+// publication. Initializing leaves cleanup with the constructor; Running
+// transfers it to the caller. Later callers must not start another cleanup.
+func (e *DispatcherManager) startClosing() dispatcherManagerState {
 	e.writePathMu.Lock()
 	defer e.writePathMu.Unlock()
-	if e.isWritePathClosed() {
+	state := e.getState()
+	if state < dispatcherManagerClosing {
+		e.state.Store(uint32(dispatcherManagerClosing))
+	}
+	return state
+}
+
+// beginWork admits runtime work before shutdown can start waiting for it.
+// Every successful call must be paired with wg.Done after the work returns.
+func (e *DispatcherManager) beginWork() bool {
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.getState() != dispatcherManagerRunning {
 		return false
 	}
-	e.state.Store(uint32(dispatcherManagerClosing))
+	e.wg.Add(1)
 	return true
 }

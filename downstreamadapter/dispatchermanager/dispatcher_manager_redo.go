@@ -337,6 +337,11 @@ func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+	if !e.beginWork() {
+		return newWritePathClosedError()
+	}
+	defer e.wg.Done()
+
 	e.writePathMu.Lock()
 	defer e.writePathMu.Unlock()
 	if e.isWritePathClosed() {
