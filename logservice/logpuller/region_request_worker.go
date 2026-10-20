@@ -514,5 +514,6 @@ func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataR
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
+		ScanPriority: normalizeScanPriority(region.scanPriority),
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/tikv/client-go/v2/tikv"
@@ -47,6 +48,9 @@ type regionInfo struct {
 	// Whether to filter out the value write by cdc itself.
 	// It should be `true` in BDR mode
 	filterLoop bool
+	// scanPriority is sent to TiKV/CSE so remote incremental scan admission can
+	// preserve TiCDC's business priority across retries.
+	scanPriority cdcpb.ScanPriority
 }
 
 func newRegionInfo(
@@ -62,10 +66,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
-<<<<<<< HEAD
-=======
 		scanPriority:   cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 	}
 }
 

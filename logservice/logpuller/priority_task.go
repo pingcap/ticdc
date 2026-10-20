@@ -13,35 +13,6 @@
 
 package logpuller
 
-<<<<<<< HEAD
-import (
-	"fmt"
-	"time"
-
-	"github.com/tikv/client-go/v2/oracle"
-)
-
-// TaskType represents the type of region task
-type TaskType int
-
-const (
-	// TaskHighPrior represents region error or region change
-	// This type has the highest priority
-	TaskHighPrior TaskType = iota
-	// TaskLowPrior represents new subscription
-	// This type has the lowest priority
-	TaskLowPrior
-)
-
-const (
-	highPriorityBase   = 0
-	lowPriorityBase    = 60 * 60 * 24 // 1 day
-	forcedPriorityBase = 60 * 60      // 60 minutes
-)
-
-func (t TaskType) String() string {
-	return fmt.Sprintf("%d", t)
-=======
 import "github.com/pingcap/kvproto/pkg/cdcpb"
 
 func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
@@ -49,7 +20,6 @@ func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
 		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
 	}
 	return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 }
 
 func isHighScanPriority(priority cdcpb.ScanPriority) bool {

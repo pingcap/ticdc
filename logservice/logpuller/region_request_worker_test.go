@@ -83,29 +83,6 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 	return region
 }
 
-<<<<<<< HEAD
-func TestRegionStatesOperation(t *testing.T) {
-	worker := &regionRequestWorker{}
-	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
-
-	require.Nil(t, worker.getRegionState(1, 2))
-	require.Nil(t, worker.takeRegionState(1, 2))
-
-	worker.addRegionState(1, 2, &regionFeedState{})
-	require.NotNil(t, worker.getRegionState(1, 2))
-	require.NotNil(t, worker.takeRegionState(1, 2))
-	require.Nil(t, worker.getRegionState(1, 2))
-	require.Equal(t, 0, len(worker.requestedRegions.subscriptions))
-
-	worker.addRegionState(1, 2, &regionFeedState{})
-	require.NotNil(t, worker.getRegionState(1, 2))
-	require.NotNil(t, worker.takeRegionState(1, 2))
-	require.Nil(t, worker.getRegionState(1, 2))
-	require.Equal(t, 0, len(worker.requestedRegions.subscriptions))
-}
-
-func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
-=======
 func admitRegionRequest(
 	t *testing.T,
 	controller *regionAdmissionController,
@@ -207,7 +184,6 @@ func TestCreateRegionRequestScanPriority(t *testing.T) {
 
 func TestRegionRequestWorkerIgnoresDuplicateActiveRegion(t *testing.T) {
 	admission := newRegionAdmissionController(10, 1)
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 	worker := &regionRequestWorker{
 		admission: admission,
 		store:     &requestedStore{storeAddr: "store-1"},

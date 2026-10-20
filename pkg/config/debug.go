@@ -21,15 +21,12 @@ import (
 	"go.uber.org/zap"
 )
 
-<<<<<<< HEAD
-=======
 const (
 	// DefaultOldStartTsScanLowPriorityThreshold is the default lag threshold for
 	// classifying scan tasks as low priority.
 	DefaultOldStartTsScanLowPriorityThreshold = 10 * time.Minute
 )
 
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 // DebugConfig represents config for ticdc unexposed feature configurations
 type DebugConfig struct {
 	DB *DBConfig `toml:"db" json:"db"`
@@ -60,6 +57,7 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	c.Puller.ValidateAndAdjust()
 
 	return nil
 }
@@ -76,8 +74,6 @@ type PullerConfig struct {
 	// PendingRegionRequestQueueSize is the approximate normal initial-scan window
 	// for one TiKV store. It is divided among the store's puller workers.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
-<<<<<<< HEAD
-=======
 	// RegionRequestMaxWindowMultiplier controls the maximum window available to
 	// previously initialized regions and regions whose scan lag is below the
 	// configured low-priority threshold.
@@ -88,18 +84,11 @@ type PullerConfig struct {
 	// Scans within this threshold are scheduled as high priority. Older scans
 	// remain low priority until their span catches up once.
 	OldStartTsScanLowPriorityThreshold TomlDuration `toml:"old-start-ts-scan-low-priority-threshold" json:"old_start_ts_scan_low_priority_threshold"`
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 }
 
 // NewDefaultPullerConfig return the default puller configuration
 func NewDefaultPullerConfig() *PullerConfig {
 	return &PullerConfig{
-<<<<<<< HEAD
-		EnableResolvedTsStuckDetection: false,
-		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
-		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
-=======
 		EnableResolvedTsStuckDetection:   false,
 		ResolvedTsStuckInterval:          TomlDuration(5 * time.Minute),
 		LogRegionDetails:                 false,
@@ -127,7 +116,6 @@ func (c *PullerConfig) ValidateAndAdjust() {
 	}
 	if c.OldStartTsScanLowPriorityThreshold <= 0 {
 		c.OldStartTsScanLowPriorityThreshold = TomlDuration(DefaultOldStartTsScanLowPriorityThreshold)
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 	}
 }
 

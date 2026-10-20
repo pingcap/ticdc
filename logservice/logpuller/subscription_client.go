@@ -36,9 +36,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -245,6 +247,8 @@ func (s *subscriptionClient) Subscribe(
 		advanceResolvedTs,
 		advanceInterval,
 		bdrMode,
+		s.pdClock,
+		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
@@ -252,10 +256,6 @@ func (s *subscriptionClient) Subscribe(
 	select {
 	case <-s.ctx.Done():
 		log.Warn("subscribes span failed, the subscription client has closed")
-<<<<<<< HEAD
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: rt.filterLoop, priority: TaskLowPrior}:
-		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-=======
 	case s.rangeTaskCh <- rangeTask{
 		span:           span,
 		subscribedSpan: rt,
@@ -264,7 +264,6 @@ func (s *subscriptionClient) Subscribe(
 	}:
 		log.Info("subscribes span done",
 			zap.Uint64("subscriptionID", uint64(subID)),
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
 			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
 	}
@@ -616,15 +615,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
-<<<<<<< HEAD
-func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
-=======
 func (s *subscriptionClient) scheduleRegionRequest(
 	ctx context.Context,
 	region regionInfo,
 	inheritedPriority cdcpb.ScanPriority,
 ) {
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -635,12 +630,6 @@ func (s *subscriptionClient) scheduleRegionRequest(
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-<<<<<<< HEAD
-		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
-	case regionlock.LockRangeStatusStale:
-		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
-=======
 		currentTs := s.pdClock.CurrentTS()
 		priority := region.subscribedSpan.priorityPolicy.resolve(
 			inheritedPriority,
@@ -665,7 +654,6 @@ func (s *subscriptionClient) scheduleRegionRequest(
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(
 				ctx, r, region.subscribedSpan, region.filterLoop, inheritedPriority)
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 		}
 	default:
 		return
@@ -676,15 +664,11 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
-<<<<<<< HEAD
-	priority TaskType,
-=======
 	inheritedPriority cdcpb.ScanPriority,
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
 ) {
 	select {
 	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: inheritedPriority}:
 	}
 }
 

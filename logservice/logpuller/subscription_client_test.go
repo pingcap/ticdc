@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -80,6 +81,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 	client.spanRegistry.Add(span)
 
@@ -152,12 +155,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -270,6 +273,8 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -327,6 +332,8 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		true,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
@@ -389,8 +396,6 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Nil(t, client.spanRegistry.Get(span.subID))
 }
 
-<<<<<<< HEAD
-=======
 func TestHandleRegionsSkipsStoppedSubscriptionBeforeCreatingStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -698,7 +703,29 @@ func TestRangeRetryPreservesScanPriority(t *testing.T) {
 	}
 }
 
->>>>>>> d4b9c2259 (logpuller: refactor region request worker lifecycle (#5619))
+func newScanPriorityTestSpan() (heartbeatpb.TableSpan, *subscribedSpan) {
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:          SubscriptionID(1),
+		span:           rawSpan,
+		rangeLock:      regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+		priorityPolicy: newTestScanPriorityPolicy(),
+	}
+	return rawSpan, span
+}
+
+func newScanPriorityTestRegion(span *subscribedSpan) regionInfo {
+	return newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span.span, nil, span, false)
+}
+
+func newTestScanPriorityPolicy() scanPriorityPolicy {
+	return newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
+}
+
 type mockDynamicStream struct{}
 
 func (s *mockDynamicStream) Start() {}
@@ -954,7 +981,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span.initialized.Store(true)
 
 	// Replicate the getResolvedTargetTs closure from runResolveLockChecker
