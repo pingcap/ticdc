@@ -119,9 +119,12 @@ next pressure check retries; cancellation does not wait for reclamation queue
 space. Once a path has been visited, skip it until a new droppable data event
 arrives, so retained controls alone do not cause repeated ineffective requests.
 
-Claim reclaimed bytes with a compare-and-swap on path pending memory before
-subtracting from the area. Concurrent removal transfers the remaining bytes
-only once. The existing admission-time payload-to-DropEvent replacement also
+The owning stream reconciles both reclamation and removal accounting.
+RemovePath only unregisters the path; it leaves pending bytes accounted until
+the owner clears the queue. If removal precedes or occurs during reclamation,
+clear the removed path completely and deduct its pending bytes once. Otherwise,
+subtract the reclaimed payload bytes from both the path and area. The existing
+admission-time payload-to-DropEvent replacement also
 charges the actual retained marker size, preserving wrapper overhead.
 
 The EventCollector memory-release path retains recovery/control events:

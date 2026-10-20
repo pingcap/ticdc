@@ -86,7 +86,7 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 	path *pathInfo[A, P, T, D, H],
 	notifyDrop bool,
 ) {
-	if !notifyDrop && path.areaMemStat != nil &&
+	if !notifyDrop && !path.removed.Load() && path.areaMemStat != nil &&
 		path.areaMemStat.settings.Load().algorithm == MemoryControlForEventCollector {
 		q.reclaimBlockedPath(path)
 		return
@@ -112,7 +112,11 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 // reclaimBlockedPath runs only on the queue owner. Keep recovery notifications
 // and watermarks so a later Wake can recover even without new upstream events.
 func (q *eventQueue[A, P, T, D, H]) reclaimBlockedPath(path *pathInfo[A, P, T, D, H]) {
-	if path.removed.Load() || !path.blocking.Load() {
+	if path.removed.Load() {
+		q.releasePath(path, false)
+		return
+	}
+	if !path.blocking.Load() {
 		return
 	}
 	releasedBytes := int64(0)
@@ -134,20 +138,17 @@ func (q *eventQueue[A, P, T, D, H]) reclaimBlockedPath(path *pathInfo[A, P, T, D
 		}
 		path.pendingQueue.PushBack(e)
 	}
+	if path.removed.Load() {
+		q.releasePath(path, false)
+		return
+	}
 	path.reclaimed.Store(true)
-	for releasedBytes > 0 {
-		pending := path.pendingSize.Load()
-		// RemovePath concurrently transfers the remaining accounting out of
-		// this path. Claim only bytes still owned here, avoiding a double
-		// decrement against other paths in the same area.
-		if path.removed.Load() || pending < releasedBytes {
-			return
-		}
-		if path.pendingSize.CompareAndSwap(pending, pending-releasedBytes) {
-			path.areaMemStat.decPendingSize(path, releasedBytes)
-			path.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
-			return
-		}
+	// The queue owner also reconciles removal, so no other goroutine changes
+	// this path's pending memory while reclamation updates its accounting.
+	if releasedBytes > 0 {
+		path.pendingSize.Add(-releasedBytes)
+		path.areaMemStat.decPendingSize(path, releasedBytes)
+		path.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
 	}
 }
 

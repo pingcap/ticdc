@@ -214,6 +214,7 @@ func TestRemoveDuringReclamationPreservesOtherPathAccounting(t *testing.T) {
 	}
 	q.releasePath(a, false)
 	require.Zero(t, a.pendingSize.Load())
+	require.Zero(t, a.pendingQueue.Length())
 	require.Equal(t, int64(900), b.pendingSize.Load())
 	require.Equal(t, int64(900), b.areaMemStat.totalPendingSize.Load())
 }
