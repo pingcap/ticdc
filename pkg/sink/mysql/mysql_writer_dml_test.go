@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1107,4 +1109,68 @@ func TestPrepareDMLsWithExpressionIndex(t *testing.T) {
 	}
 	require.True(t, reflect.DeepEqual(expected, dmls.values[0]),
 		"unexpected REPLACE args: %v %v", dmls.values[0], expected)
+}
+
+func TestPrepareDMLsCompositeKeyNUL(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("CREATE TABLE t (a VARBINARY(32) NOT NULL, b VARBINARY(32) NOT NULL, PRIMARY KEY (a, b))")
+	tableInfo := helper.GetTableInfo(job)
+
+	testCases := []struct {
+		name      string
+		insertKey [2]string
+		deleteKey [2]string
+	}{
+		{name: "embedded NUL", insertKey: [2]string{"a\x00b", "c"}, deleteKey: [2]string{"a", "b\x00c"}},
+		{name: "empty column", insertKey: [2]string{"", "\x00"}, deleteKey: [2]string{"\x00", ""}},
+	}
+	for _, safeMode := range []bool{false, true} {
+		for _, batchDML := range []bool{true, false} {
+			for _, tc := range testCases {
+				t.Run(fmt.Sprintf("safeMode=%t/batchDML=%t/%s", safeMode, batchDML, tc.name), func(t *testing.T) {
+					writer, db, _ := newTestMysqlWriter(t)
+					defer db.Close()
+					writer.cfg.SafeMode = safeMode
+					writer.cfg.BatchDMLEnable = batchDML
+					dispatcherID := common.NewDispatcherID()
+					makeEvent := func(rowType common.RowType, commitTs uint64, key [2]string) *commonEvent.DMLEvent {
+						event := commonEvent.NewDMLEvent(dispatcherID, tableInfo.TableName.TableID, commitTs-1, commitTs, tableInfo)
+						event.ReplicatingTs = 1
+						event.Length = 1
+						event.RowTypes = []common.RowType{rowType}
+						event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+						event.Rows.AppendBytes(0, []byte(key[0]))
+						event.Rows.AppendBytes(1, []byte(key[1]))
+						return event
+					}
+					events := []*commonEvent.DMLEvent{
+						makeEvent(common.RowTypeInsert, 100, tc.insertKey),
+						makeEvent(common.RowTypeDelete, 101, tc.deleteKey),
+					}
+					require.Equal(t, batchDML, writer.shouldGenBatchSQL(tableInfo, events))
+					dmls, err := writer.prepareDMLs(events)
+					require.NoError(t, err)
+					defer dmlsPool.Put(dmls)
+					require.ElementsMatch(t, []common.RowType{common.RowTypeInsert, common.RowTypeDelete}, dmls.rowTypes,
+						"INSERT and DELETE of distinct composite keys must both survive")
+					require.Len(t, dmls.sqls, 2)
+					require.Len(t, dmls.values, 2)
+					for i, rowType := range dmls.rowTypes {
+						if rowType == common.RowTypeInsert {
+							verb := "INSERT"
+							if safeMode {
+								verb = "REPLACE"
+							}
+							require.Equal(t, verb+" INTO `test`.`t` (`a`,`b`) VALUES (?,?)", dmls.sqls[i])
+							require.Equal(t, []interface{}{[]byte(tc.insertKey[0]), []byte(tc.insertKey[1])}, dmls.values[i])
+						} else {
+							require.Equal(t, []interface{}{[]byte(tc.deleteKey[0]), []byte(tc.deleteKey[1])}, dmls.values[i])
+						}
+					}
+				})
+			}
+		}
+	}
 }
