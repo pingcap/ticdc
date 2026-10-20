@@ -15,10 +15,12 @@ package eventservice
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -490,10 +492,77 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 	return result.needScan, result.request
 }
 
+// Experiment-only state: count distinct cursor positions, never change them.
+var testCursorPauseStates sync.Map
+
+type testCursorPauseState struct {
+	sync.Mutex
+	position string
+	count    int
+}
+
+func testShouldDelayCursorRound(task scanTask, specification string) bool {
+	parts := strings.SplitN(specification, ":", 4)
+	if len(parts) != 4 || task.changefeedStat.changefeedID.Name() != parts[0] {
+		return false
+	}
+	slowTableID, e0 := strconv.ParseInt(parts[1], 10, 64)
+	firstUntil, e1 := strconv.ParseInt(parts[2], 10, 64)
+	secondUntil, e2 := strconv.ParseInt(parts[3], 10, 64)
+	if e0 != nil || e1 != nil || e2 != nil || task.info.GetTableSpan().TableID == slowTableID {
+		return false
+	}
+	if time.Now().UnixMilli() >= secondUntil {
+		testCursorPauseStates.Delete(task)
+		return false
+	}
+	progress := task.loadScanProgress()
+	if progress.txnStartTs == 0 {
+		testCursorPauseStates.Delete(task)
+		return false
+	}
+	valueState, _ := testCursorPauseStates.LoadOrStore(task, &testCursorPauseState{})
+	state := valueState.(*testCursorPauseState)
+	state.Lock()
+	position := string(progress.rowLevelScanPosition)
+	changed := state.count == 0 || position != state.position
+	if changed {
+		state.count++
+		state.position = position
+	}
+	count := state.count
+	state.Unlock()
+	until := secondUntil
+	if count == 1 {
+		until = firstUntil
+	}
+	if changed {
+		log.Info("test cursor scheduling delay", zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Int("cursorRound", count), zap.Int64("untilMillis", until))
+	}
+	return time.Now().UnixMilli() < until
+}
+
 // getScanTaskRequestResult determines the valid range and resume cursor for a scan task.
 // It also reports when the applied SchemaStore frontier is the effective range
 // cap, so low-latency mode can retry the dispatcher after that frontier advances.
 func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestResult {
+	failpoint.Inject("DelayCursorRoundsUntil", func(value failpoint.Value) {
+		if testShouldDelayCursorRound(task, value.(string)) {
+			failpoint.Return(scanTaskRequestResult{})
+		}
+	})
+	// Test-only bounded scheduling delay for fast tables, including their idle
+	// scan preparation. It neither changes timestamps nor barrier decisions.
+	failpoint.Inject("DelayChangefeedScanUntil", func(value failpoint.Value) {
+		parts := strings.SplitN(value.(string), ":", 3)
+		if len(parts) == 3 && task.changefeedStat.changefeedID.Name() == parts[0] {
+			slowTableID, tableErr := strconv.ParseInt(parts[1], 10, 64)
+			until, timeErr := strconv.ParseInt(parts[2], 10, 64)
+			if tableErr == nil && timeErr == nil && task.info.GetTableSpan().TableID != slowTableID && time.Now().UnixMilli() < until {
+				failpoint.Return(scanTaskRequestResult{})
+			}
+		}
+	})
 	// 1. Get the range and resume cursor of the dispatcher.
 	request, needScan := task.getScanRequest()
 	if !needScan {
@@ -753,6 +822,21 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.String("remote", remoteID.String()))
 		return
 	}
+
+	// Test-only scheduling delay, bounded by an absolute deadline. Apply the
+	// identical hook to master and fixed; quota and barrier logic stay intact.
+	failpoint.Inject("DelayTableScanUntil", func(value failpoint.Value) {
+		parts := strings.SplitN(value.(string), ":", 2)
+		if len(parts) == 2 {
+			tableID, tableErr := strconv.ParseInt(parts[0], 10, 64)
+			until, timeErr := strconv.ParseInt(parts[1], 10, 64)
+			if tableErr == nil && timeErr == nil && task.info.GetTableSpan().TableID == tableID &&
+				task.loadScanProgress().txnStartTs != 0 && time.Now().UnixMilli() < until {
+				time.Sleep(10 * time.Millisecond)
+				failpoint.Return()
+			}
+		}
+	})
 
 	requestResult := c.getScanTaskRequestResult(task)
 	if !requestResult.needScan {
