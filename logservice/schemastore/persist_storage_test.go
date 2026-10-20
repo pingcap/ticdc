@@ -29,11 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-<<<<<<< HEAD
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-=======
 	"github.com/pingcap/tidb/pkg/parser/mysql"
->>>>>>> 514625622 (schemastore: fix old table metadata for rename table (#5943))
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -3242,7 +3239,7 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		job.Version = model.JobVersion1
 		job.FillArgs(&model.RenameTableArgs{
 			OldSchemaID:  200,
-			NewTableName: ast.NewCIStr("t1"),
+			NewTableName: parser_model.NewCIStr("t1"),
 		})
 		_, err := job.Encode(true)
 		require.NoError(t, err)
@@ -3299,8 +3296,8 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		job.SQLMode = mysql.ModeANSIQuotes
 		job.FillArgs(&model.RenameTableArgs{
 			OldSchemaID:   200,
-			OldSchemaName: ast.NewCIStr("SourceDB"),
-			NewTableName:  ast.NewCIStr("NewTable"),
+			OldSchemaName: parser_model.NewCIStr("SourceDB"),
+			NewTableName:  parser_model.NewCIStr("NewTable"),
 		})
 		job.Query = `RENAME TABLE "SourceDB"."OldTable" TO "TargetDB"."NewTable"`
 
@@ -3326,8 +3323,8 @@ func TestRenameTableRepairsOldTableMetadata(t *testing.T) {
 		job.Version = model.JobVersion2
 		job.FillArgs(&model.RenameTableArgs{
 			OldSchemaID:   200,
-			OldSchemaName: ast.NewCIStr("source_db"),
-			NewTableName:  ast.NewCIStr("target_t"),
+			OldSchemaName: parser_model.NewCIStr("source_db"),
+			NewTableName:  parser_model.NewCIStr("target_t"),
 		})
 		job.Query = "RENAME TABLE wrong_db.source_t TO target_db.target_t"
 
