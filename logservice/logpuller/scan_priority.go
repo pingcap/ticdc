@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -49,14 +48,14 @@ func (p *scanPriorityPolicy) observeSpanResolved(resolvedTs uint64) bool {
 // resolve returns the effective priority after combining inherited, span, and
 // region progress. A high priority decision is never downgraded.
 func (p *scanPriorityPolicy) resolve(
-	inherited cdcpb.ScanPriority,
+	inherited scanPriorityLevel,
 	regionResolvedTs uint64,
 	currentTime time.Time,
-) cdcpb.ScanPriority {
+) scanPriorityLevel {
 	if isHighScanPriority(inherited) || p.everCaughtUp.Load() || p.isTsClose(regionResolvedTs, currentTime) {
-		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+		return scanPriorityHigh
 	}
-	return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	return scanPriorityLow
 }
 
 func (p *scanPriorityPolicy) isTsClose(ts uint64, currentTime time.Time) bool {

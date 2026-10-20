@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -89,7 +88,7 @@ type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
-	priority       cdcpb.ScanPriority
+	priority       scanPriorityLevel
 }
 
 type SubscriptionClientConfig struct {
@@ -260,7 +259,7 @@ func (s *subscriptionClient) Subscribe(
 		span:           span,
 		subscribedSpan: rt,
 		filterLoop:     rt.filterLoop,
-		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		priority:       scanPriorityLow,
 	}:
 		log.Info("subscribes span done",
 			zap.Uint64("subscriptionID", uint64(subID)),
@@ -537,7 +536,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
-	inheritedPriority cdcpb.ScanPriority,
+	inheritedPriority scanPriorityLevel,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
@@ -618,7 +617,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 func (s *subscriptionClient) scheduleRegionRequest(
 	ctx context.Context,
 	region regionInfo,
-	inheritedPriority cdcpb.ScanPriority,
+	inheritedPriority scanPriorityLevel,
 ) {
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
@@ -664,7 +663,7 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
-	inheritedPriority cdcpb.ScanPriority,
+	inheritedPriority scanPriorityLevel,
 ) {
 	select {
 	case <-ctx.Done():

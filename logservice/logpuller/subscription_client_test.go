@@ -562,53 +562,53 @@ func TestHandleRegionsReschedulesRegionWhenStoreSubmitFails(t *testing.T) {
 func TestRegionRetryScanPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		priority     cdcpb.ScanPriority
+		priority     scanPriorityLevel
 		cdcErr       *cdcpb.Error
 		everCaughtUp bool
-		expected     cdcpb.ScanPriority
+		expected     scanPriorityLevel
 	}{
 		{
 			name:     "server is busy high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "server is busy low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			cdcErr:   &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 		{
 			name:         "server is busy low after catch up",
-			priority:     cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority:     scanPriorityLow,
 			cdcErr:       &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
 			everCaughtUp: true,
-			expected:     cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected:     scanPriorityHigh,
 		},
 		{
 			name:     "congested high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "congested low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			cdcErr:   &cdcpb.Error{Congested: &cdcpb.Congested{}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 		{
 			name:     "unknown retry high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			cdcErr:   &cdcpb.Error{},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "unknown retry low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			cdcErr:   &cdcpb.Error{},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -639,45 +639,45 @@ func TestRegionRetryScanPriority(t *testing.T) {
 func TestRangeRetryPreservesScanPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		priority cdcpb.ScanPriority
+		priority scanPriorityLevel
 		err      error
-		expected cdcpb.ScanPriority
+		expected scanPriorityLevel
 	}{
 		{
 			name:     "epoch not match high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "epoch not match low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			err:      &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 		{
 			name:     "region not found high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "region not found low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			err:      &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 		{
 			name:     "rpc context unavailable high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: scanPriorityHigh,
 			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			expected: scanPriorityHigh,
 		},
 		{
 			name:     "rpc context unavailable low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: scanPriorityLow,
 			err:      &rpcCtxUnavailableErr{verID: tikv.NewRegionVerID(1, 1, 1)},
-			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			expected: scanPriorityLow,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
