@@ -79,11 +79,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
-<<<<<<< HEAD
-=======
 		client.upstream.pdClock,
 		30*time.Minute,
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 	)
 	client.spanRegistry.Add(span)
 
@@ -109,16 +106,12 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{
-		verID:            tikv.NewRegionVerID(2, 1, 1),
-		lockedRangeState: res.LockedRangeState,
-		subscribedSpan:   span,
-	}, 1, worker)
+	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
@@ -161,20 +154,12 @@ func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-<<<<<<< HEAD
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-=======
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
 		TableID:  2,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-<<<<<<< HEAD
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-=======
 	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 
 	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -284,6 +269,8 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -319,11 +306,9 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   priorityqueue.New[PriorityTask](),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
-	client.pdClock = pdutil.NewClock4Test()
 
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
@@ -343,28 +328,24 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		true,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
 	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-<<<<<<< HEAD
-=======
 	const storeAddr = "store-1"
 	worker := &regionRequestWorker{storeAddr: storeAddr, controlQueue: newControlQueue()}
 	store := &regionRequestStore{workers: []*regionRequestWorker{worker}}
 	client.regionScheduler = &regionRequestScheduler{}
 	client.regionScheduler.stores.Store(storeAddr, store)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 
 	client.setTableStopped(span)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	task, err := client.regionTaskQueue.Pop(ctx)
-	require.NoError(t, err)
-	region := task.GetRegionInfo()
-	require.True(t, region.isStopped())
-	require.True(t, region.filterLoop)
+	req, ok := worker.controlQueue.tryPop()
+	require.True(t, ok)
+	require.Equal(t, SubscriptionID(1), req.subID)
+	require.True(t, req.filterLoop)
 }
 
 func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
@@ -442,13 +423,6 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-<<<<<<< HEAD
-func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	sink := newTestRegionEventSink(&mockDynamicStream{})
-	client := &subscriptionClient{
-		eventSink:       sink,
-		regionTaskQueue: priorityqueue.New[PriorityTask](),
-=======
 func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	sink := &regionEventSink{
 		ds: &mockDynamicStream{},
@@ -457,7 +431,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	client := &subscriptionClient{eventSink: sink}
 	client.regionScheduler = &regionRequestScheduler{
 		taskQueue: priorityqueue.New[*regionPriorityTask](),
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 
@@ -484,44 +457,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
-func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
-	ctx := context.Background()
-	client := &subscriptionClient{}
-
-	worker := &regionRequestWorker{
-		requestCache: newRequestCache(1),
-	}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
-
-	dummyRegion := regionInfo{
-		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-	ok, err := worker.add(ctx, dummyRegion, true)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	stopRegion := regionInfo{
-		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
-	}
-	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
-	require.False(t, enqueued)
-
-	<-worker.requestCache.pendingQueue
-	worker.requestCache.markDone()
-
-	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
-	require.True(t, enqueued)
-	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
-}
-
-=======
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mockPDClock := pdutil.NewClock4Test()
@@ -634,7 +569,7 @@ func TestGetResolvedTargetTs(t *testing.T) {
 		TableID:  1,
 		StartKey: []byte{'a'},
 		EndKey:   []byte{'z'},
-	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
 	span.initialized.Store(true)
 
 	// Replicate the getResolvedTargetTs closure from runResolveLockChecker

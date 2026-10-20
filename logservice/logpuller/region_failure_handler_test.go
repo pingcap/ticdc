@@ -19,8 +19,14 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -140,5 +146,85 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 		require.Equal(t, context.Canceled, errors.Cause(err))
 	case <-time.After(time.Second):
 		t.Fatal("failure handler did not exit after context cancellation")
+	}
+}
+
+func TestRegionFailureHandlerPreservesRegionRetryPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		priority     scanPriorityLevel
+		everCaughtUp bool
+		expected     scanPriorityLevel
+	}{
+		{"busy high", scanPriorityHigh, false, scanPriorityHigh},
+		{"busy low", scanPriorityLow, false, scanPriorityLow},
+		{"busy after catch up", scanPriorityLow, true, scanPriorityHigh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pdClock := pdutil.NewClock4Test()
+			pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(time.Now()))
+			span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+			subscribed := &subscribedSpan{
+				subID:          1,
+				span:           span,
+				rangeLock:      regionlock.NewRangeLock(1, span.StartKey, span.EndKey, 100),
+				priorityPolicy: newScanPriorityPolicy(pdClock, 30*time.Minute),
+			}
+			subscribed.priorityPolicy.everCaughtUp.Store(tc.everCaughtUp)
+			client := &subscriptionClient{
+				upstream: &upstreamHandle{pdClock: pdClock},
+				regionScheduler: &regionRequestScheduler{
+					taskQueue: priorityqueue.New[*regionPriorityTask](),
+				},
+			}
+			handler := newRegionFailureHandler(nil, nil, client.scheduleRegionRequest, nil)
+			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span, nil, subscribed, false)
+			region.scanPriority = tc.priority
+
+			err := handler.handleError(context.Background(), newRegionErrorInfo(region,
+				&eventError{err: &cdcpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}}))
+			require.NoError(t, err)
+			task := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
+			require.Equal(t, tc.expected, task.priority())
+		})
+	}
+}
+
+func TestRegionFailureHandlerPreservesRangeRetryPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		priority     scanPriorityLevel
+		everCaughtUp bool
+		err          error
+		expected     scanPriorityLevel
+	}{
+		{"epoch high", scanPriorityHigh, false, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}, scanPriorityHigh},
+		{"region not found low", scanPriorityLow, false, &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}}, scanPriorityLow},
+		{"RPC context unavailable high", scanPriorityHigh, false, &rpcCtxUnavailableErr{}, scanPriorityHigh},
+		{"RPC context unavailable after catch up", scanPriorityLow, true, &rpcCtxUnavailableErr{}, scanPriorityHigh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pdClock := pdutil.NewClock4Test()
+			pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(time.Now()))
+			span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+			subscribed := &subscribedSpan{
+				subID:          1,
+				span:           span,
+				priorityPolicy: newScanPriorityPolicy(pdClock, 30*time.Minute),
+			}
+			subscribed.priorityPolicy.everCaughtUp.Store(tc.everCaughtUp)
+			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span, nil, subscribed, false)
+			region.lockedRangeState = &regionlock.LockedRangeState{}
+			region.scanPriority = tc.priority
+			var retryTask rangeTask
+			handler := newRegionFailureHandler(nil, nil, nil, func(_ context.Context, task rangeTask) {
+				retryTask = task
+			})
+
+			err := handler.handleError(context.Background(), newRegionErrorInfo(region, tc.err))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, retryTask.priority)
+			require.Equal(t, span, retryTask.span)
+		})
 	}
 }

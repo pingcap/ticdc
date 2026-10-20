@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -122,11 +121,9 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-<<<<<<< HEAD
-=======
 	rescheduleRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
-		if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
+		if priority == scanPriorityLow {
 			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
 				priority,
 				errInfo.resolvedTs(),
@@ -141,7 +138,6 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		})
 	}
 
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
 		log.Debug("cdc region error",
@@ -156,49 +152,28 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 		innerErr := eerr.err
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
-<<<<<<< HEAD
-			r.client.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-=======
 			r.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
 			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-<<<<<<< HEAD
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-=======
 			rescheduleRange()
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-<<<<<<< HEAD
-			r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-=======
 			rescheduleRange()
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-<<<<<<< HEAD
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-=======
 			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
-<<<<<<< HEAD
-			r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
-=======
 			r.scheduleRegionRequest(ctx, errInfo.regionInfo)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
@@ -217,42 +192,24 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
-<<<<<<< HEAD
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *rpcCtxUnavailableErr:
-		metricFeedRPCCtxUnavailable.Inc()
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-=======
 		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
 		rescheduleRange()
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
-<<<<<<< HEAD
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		r.client.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
-=======
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
 		rescheduleRange()
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 		return nil
 	case *storeStreamErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
-<<<<<<< HEAD
-		r.client.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		r.client.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-=======
 		r.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		r.scheduleRegionRequest(ctx, errInfo.regionInfo)
->>>>>>> 8bd1d7e23 (logpuller: extract region request scheduler from subscription client (#5665))
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.
