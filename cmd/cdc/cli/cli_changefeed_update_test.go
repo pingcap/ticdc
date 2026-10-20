@@ -24,8 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
-	cmdUtil "github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -194,30 +192,72 @@ func TestChangefeedUpdateCli(t *testing.T) {
 }
 
 func TestSameClusterUpdateConfigs(t *testing.T) {
-	confDir := "../../../tests/integration_tests/same_upstream_downstream/conf"
-	for _, tc := range []struct{ name, want string }{
-		{"same_schema", "requires database isolation"},
-		{"case_sensitive", "requires database isolation"},
-		{"source_schema_chain", "requires database isolation"},
-		{"all_schemas", "requires database isolation"},
-		{"schema_ambiguity", "different target-schema expressions"},
-		{"no_route", "requires table routing to be enabled"},
-		{"narrow_route", "is not covered by any dispatch rule matcher"},
-		{"unsupported", "does not support the filter rule"},
+	replica := config.GetDefaultReplicaConfig()
+	replica.AllowSameCluster = new(true)
+	replica.Filter.Rules = []string{"src.*"}
+	replica.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_copy"},
+	}
+	original := v2.ToAPIReplicaConfig(replica)
+
+	for _, tc := range []struct {
+		name                 string
+		config               string
+		wantAllowSameCluster bool
+		wantFilterRules      []string
+		wantDispatchRules    []*v2.DispatchRule
+	}{
+		{
+			name: "replace filter and routing",
+			config: `allow-same-cluster = true
+[filter]
+rules = ['new_src.*']
+[[sink.dispatchers]]
+matcher = ['new_src.*']
+target-schema = 'new_dst'
+target-table = '{table}_routed'
+`,
+			wantAllowSameCluster: true,
+			wantFilterRules:      []string{"new_src.*"},
+			wantDispatchRules: []*v2.DispatchRule{
+				{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst", TargetTable: "{table}_routed"},
+			},
+		},
+		{
+			name:                 "preserve omitted same-cluster configuration",
+			config:               "memory-quota = 2097152\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "disable same-cluster replication",
+			config:               "allow-same-cluster = false\n",
+			wantAllowSameCluster: false,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "clear routing",
+			config:               "[sink]\ndispatchers = []\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			replica := config.GetDefaultReplicaConfig()
-			require.NoError(t, cmdUtil.StrictDecodeFile(filepath.Join(confDir, "allow_same_cluster.toml"), "test", replica))
 			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			configPath := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tc.config), 0o644))
 			cmd := NewCmdCli()
 			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
 			o.addFlags(cmd)
-			require.NoError(t, cmd.ParseFlags([]string{"--config=" + filepath.Join(confDir, "allow_same_cluster_"+tc.name+".toml")}))
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + configPath}))
 			updated, err := o.applyChanges(oldInfo, cmd)
 			require.NoError(t, err)
-			info := &config.ChangeFeedInfo{Config: updated.Config.ToInternalReplicaConfig()}
-			require.ErrorContains(t, check.ValidateSameClusterRouting(info.ToChangefeedConfig()), tc.want)
-			require.Equal(t, v2.ToAPIReplicaConfig(replica), oldInfo.Config)
+			require.Equal(t, new(tc.wantAllowSameCluster), updated.Config.AllowSameCluster)
+			require.Equal(t, tc.wantFilterRules, updated.Config.Filter.Rules)
+			require.Equal(t, tc.wantDispatchRules, updated.Config.Sink.DispatchRules)
+			require.Equal(t, original, oldInfo.Config)
 		})
 	}
 }
