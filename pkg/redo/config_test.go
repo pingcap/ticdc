@@ -201,7 +201,7 @@ func TestInitExternalStorage(t *testing.T) {
 func TestValidateStorageWithOptionsSkipIOCheck(t *testing.T) {
 	t.Parallel()
 
-	uri, err := objstore.ParseRawURL("s3:///redo-test-no-bucket")
+	uri, err := objstore.ParseRawURL("s3:///redo-test-no-bucket?secret-access-key=redo-secret-sentinel")
 	require.NoError(t, err)
 
 	err = ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: false})
@@ -209,4 +209,5 @@ func TestValidateStorageWithOptionsSkipIOCheck(t *testing.T) {
 
 	err = ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: true})
 	require.Error(t, err)
+	require.NotContains(t, err.Error(), "redo-secret-sentinel")
 }

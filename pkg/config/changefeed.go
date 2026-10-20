@@ -20,10 +20,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/tikv/client-go/v2/oracle"
@@ -250,6 +249,10 @@ func (cfg *ChangefeedConfig) String() string {
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
+	// BootstrapPending preserves fresh-start semantics until the first maintainer
+	// bootstrap succeeds. Nil means an existing changefeed with no pending bootstrap.
+	BootstrapPending *bool `json:"bootstrap-pending,omitempty"`
+
 	ChangefeedID common.ChangeFeedID `json:"id"`
 	UpstreamID   uint64              `json:"upstream-id"`
 	SinkURI      string              `json:"sink-uri"`
@@ -281,6 +284,16 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
 		ChangefeedID:                  info.ChangefeedID,
 		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
@@ -289,7 +302,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SinkURI:                       info.SinkURI,
 		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:                    info.Config.Sink,
+		SinkConfig:                    sinkConfig,
 		Filter:                        info.Config.Filter,
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
@@ -329,7 +342,7 @@ func (info *ChangeFeedInfo) isFailedByGC() bool {
 		log.Panic("changefeed info is not consistent",
 			zap.Any("state", info.State), zap.Any("error", info.Error))
 	}
-	return cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
+	return errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -357,6 +370,19 @@ func (info *ChangeFeedInfo) String() (str string) {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
 	return str
+}
+
+// MaskChangefeedInfo returns masked metadata for display without modifying data.
+func MaskChangefeedInfo(data []byte) (string, error) {
+	info := new(ChangeFeedInfo)
+	if err := info.Unmarshal(data); err != nil {
+		return "", err
+	}
+	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
+	if info.Config != nil {
+		info.Config.MaskSensitiveData()
+	}
+	return info.Marshal()
 }
 
 // GetStartTs returns StartTs if it's specified or using the
@@ -404,14 +430,14 @@ func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, e
 	}
 
 	data, err := json.Marshal(dataToMarshal)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrUnmarshalFailed, err)
+		return errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
 	return nil
 }
@@ -483,7 +509,7 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 	if err != nil {
 		log.Warn(
 			"failed to parse the sink uri",
-			zap.Error(err),
+			zap.Error(util.MaskSensitiveDataInURLError(err)),
 			zap.String("sinkURI", util.MaskSensitiveDataInURIForError(info.SinkURI)),
 		)
 		return
@@ -607,7 +633,7 @@ func (info *ChangeFeedInfo) fixState() {
 		// This corresponds to the case of failure or error.
 		case AdminNone, AdminResume:
 			if info.Error != nil {
-				if cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
+				if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
 					state = StateFailed
 				} else {
 					state = StateWarning
@@ -752,14 +778,14 @@ type ChangeFeedStatus struct {
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
 func (status *ChangeFeedStatus) Marshal() (string, error) {
 	data, err := json.Marshal(status)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal into *ChangeFeedStatus from json marshal byte slice
 func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
-		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 }
 
 // GetMaintainerAddr returns the address of the changefeed's maintainer

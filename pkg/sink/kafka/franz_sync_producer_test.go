@@ -87,6 +87,7 @@ func TestSyncProducerPartialFailure(t *testing.T) {
 	defer cluster.Close()
 
 	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
 		return produceResponseWithError(req, 1, kerr.InvalidTopicException.Code)
 	})
 	o := testOptions(cluster.ListenAddrs())

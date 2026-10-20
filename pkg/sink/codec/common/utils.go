@@ -15,6 +15,7 @@ package common
 
 import (
 	"database/sql/driver"
+	"slices"
 	"sync"
 	"testing"
 
@@ -39,6 +40,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	// Return copies, so that a test assigning to the events cannot affect the
 	// other tests of the package.
 	ddlEvent := *largeEvent.ddlEvent
+	ddlEvent.NeedAddedTables = slices.Clone(largeEvent.ddlEvent.NeedAddedTables)
 	insertEvent := *largeEvent.insertEvent
 	updateEvent := *largeEvent.updateEvent
 	deleteEvent := *largeEvent.deleteEvent

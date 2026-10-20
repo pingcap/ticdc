@@ -14,6 +14,7 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -79,9 +80,39 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
+func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
+	replicaConfig := GetDefaultReplicaConfig()
+	info := &ChangeFeedInfo{Config: replicaConfig}
+	for _, level := range []string{CheckLevelCorrectness, CheckLevelNone} {
+		replicaConfig.Integrity.IntegrityCheckLevel = new(level)
+		replicaConfig.Integrity.CorruptionHandleLevel = new(CorruptionHandleLevelError)
+		converted := info.ToChangefeedConfig()
+		require.Equal(t, level, converted.SinkConfig.Integrity.IntegrityCheckLevel)
+		require.Equal(t, CorruptionHandleLevelError, converted.SinkConfig.Integrity.CorruptionHandleLevel)
+		require.NotSame(t, replicaConfig.Sink, converted.SinkConfig)
+		require.Nil(t, replicaConfig.Sink.Integrity)
+		data, err := json.Marshal(converted)
+		require.NoError(t, err)
+		var wireConfig map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &wireConfig))
+		require.NotContains(t, wireConfig, "integrity")
+		var decodedSink SinkConfig
+		require.NoError(t, json.Unmarshal(wireConfig["sink_config"], &decodedSink))
+		require.Equal(t, converted.SinkConfig.Integrity, decodedSink.Integrity)
+	}
+	replicaConfig.Integrity = nil
+	require.Same(t, replicaConfig.Sink, info.ToChangefeedConfig().SinkConfig)
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig.Integrity)
+	replicaConfig.Sink = nil
+	require.Nil(t, info.ToChangefeedConfig().SinkConfig)
+}
+
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
+	cfg.Sink.PulsarConfig = &PulsarConfig{
+		OAuth2: &OAuth2{OAuth2IssuerURL: "https://user:pulsar-issuer-secret-sentinel@oauth.example.com"},
+	}
 	cfg.Sink.KafkaConfig = &KafkaConfig{
 		SASLPassword:          util.AddressOf("plain-password-sentinel"),
 		SASLGssAPIPassword:    util.AddressOf("gssapi-password-sentinel"),
@@ -116,6 +147,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 		"glue-access-sentinel",
 		"glue-secret-sentinel",
 		"glue-token-sentinel",
+		"pulsar-issuer-secret-sentinel",
 	} {
 		require.NotContains(t, output, secret)
 	}

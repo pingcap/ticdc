@@ -14,7 +14,9 @@
 package event
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"hash/crc32"
 	"testing"
 	"time"
 
@@ -27,6 +29,29 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCalculateColumnChecksumColumnIDOrder(t *testing.T) {
+	columns := []*timodel.ColumnInfo{
+		{ID: 1, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+		{ID: 3, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+		{ID: 2, FieldType: *types.NewFieldType(mysql.TypeLonglong)},
+	}
+	fields := []*types.FieldType{&columns[0].FieldType, &columns[1].FieldType, &columns[2].FieldType}
+	row := chunk.NewChunkWithCapacity(fields, 1)
+	row.AppendInt64(0, 10)
+	row.AppendInt64(1, 30)
+	row.AppendInt64(2, 20)
+	var data []byte
+	for _, value := range []uint64{10, 20, 30} {
+		data = binary.LittleEndian.AppendUint64(data, value)
+	}
+	checksum, err := calculateColumnChecksum(columns, row.GetRow(0), time.UTC)
+	require.NoError(t, err)
+	require.Equal(t, crc32.ChecksumIEEE(data), checksum)
+	// The table schema and chunk must retain their original column order.
+	require.Equal(t, []int64{1, 3, 2}, []int64{columns[0].ID, columns[1].ID, columns[2].ID})
+	require.Equal(t, int64(30), row.GetRow(0).GetInt64(1))
+}
 
 func TestParseJobFromDDLJob(t *testing.T) {
 	t.Run("accepts done create table jobs from tidb_ddl_job", func(t *testing.T) {

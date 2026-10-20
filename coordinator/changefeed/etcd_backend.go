@@ -207,6 +207,46 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 	return nil
 }
 
+// FinishInit acknowledges initialization without overwriting status
+// or metadata concurrently changed by pause, resume, removal, or another owner.
+func (b *EtcdBackend) FinishInit(
+	ctx context.Context, id common.ChangeFeedID, epoch uint64,
+) (*config.ChangeFeedInfo, error) {
+	key := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
+	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, key)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	info := &config.ChangeFeedInfo{}
+	if err := info.Unmarshal(resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	if info.ChangefeedID != id || info.Epoch != epoch {
+		return nil, nil
+	}
+	if info.BootstrapPending == nil || !*info.BootstrapPending {
+		return info, nil
+	}
+	info.BootstrapPending = nil
+	value, err := info.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	txn, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+		[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", resp.Kvs[0].ModRevision)},
+		[]clientv3.Op{clientv3.OpPut(key, value)}, nil)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if !txn.Succeeded {
+		return nil, cerror.ErrMetaOpFailed.GenWithStackByArgs("acknowledge changefeed bootstrap")
+	}
+	return info, nil
+}
+
 // BumpChangefeedEpoch atomically persists a strictly newer ownership epoch.
 // It can optionally update status in the same transaction so state changes and
 // the new owner fence are observed together after coordinator failover.

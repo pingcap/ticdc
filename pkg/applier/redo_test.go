@@ -24,6 +24,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
+	"github.com/pingcap/ticdc/cmd/util"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -111,6 +112,127 @@ func newFlag(flag uint) uint64 {
 		result.SetIsPrimaryKey()
 	}
 	return uint64(result)
+}
+
+func TestApplyRowSpill(t *testing.T) {
+	ap := NewRedoApplier(&RedoApplierConfig{})
+	ap.needRecoveryInfo = false
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	newRow := func(startTs, commitTs uint64, value int64) *commonEvent.RedoDMLEvent {
+		return &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs: startTs, CommitTs: commitTs,
+				Table:        &common.TableName{Schema: "test", Table: "t", TableID: 42},
+				Columns:      []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeLonglong}},
+				IndexColumns: [][]int{{0}},
+			},
+			Columns: []commonEvent.RedoColumnValue{{Value: value, Flag: newFlag(pmysql.PriKeyFlag)}},
+		}
+	}
+	rows := []*commonEvent.RedoDMLEvent{
+		newRow(105, 110, 1),
+		newRow(115, 120, 2),
+		newRow(115, 120, 3),
+		newRow(125, 130, 4),
+	}
+	// Keep delete and update ordering within the second transaction.
+	rows[1].Row.PreColumns, rows[1].Row.Columns = rows[1].Row.Columns, nil
+	rows[1].PreColumns, rows[1].Columns = rows[1].Columns, nil
+	rows[2].Row.PreColumns = rows[2].Row.Columns
+	rows[2].PreColumns = []commonEvent.RedoColumnValue{{Value: int64(2), Flag: newFlag(pmysql.PriKeyFlag)}}
+	for _, row := range rows {
+		require.NoError(t, ap.applyRow(row, 100))
+	}
+	require.Equal(t, int64(len(rows)), ap.spillStore.Stats().PayloadWriteCount)
+	require.Zero(t, ap.spillStore.Stats().PayloadDecodeCount, "enqueue must keep DML materialization lazy")
+	// Mutating the input after enqueue must not affect disk-backed replay.
+	rows[0].Columns[0].Value = int64(99)
+
+	group := ap.eventsGroup[42]
+	limit := util.ResolveLimit{MaxMessages: 1, MaxBytes: 1}
+	batch, hasMore, err := group.PrepareResolve(120, limit)
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Len(t, batch.Messages, 1)
+	events := util.DMLMessagesToEvents(batch.Messages)
+	require.Len(t, events, 1)
+	row, ok := events[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(1), row.Row.GetInt64(0))
+	events[0].PostFlush()
+	require.Zero(t, ap.spillStore.Stats().AppliedEventCount, "spill data must survive until acknowledgement")
+	require.NoError(t, batch.Ack())
+
+	batch, hasMore, err = group.PrepareResolve(120, limit)
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, batch.Messages, 2, "one transaction must remain intact despite batch limits")
+	events = util.DMLMessagesToEvents(batch.Messages)
+	require.Len(t, events, 1)
+	require.Equal(t, uint64(120), events[0].CommitTs)
+	require.Equal(t, uint64(115), events[0].StartTs)
+	require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeUpdate, common.RowTypeUpdate}, events[0].RowTypes)
+	require.Equal(t, int32(2), events[0].Length)
+	events[0].PostFlush()
+	require.NoError(t, batch.Ack())
+
+	batch, _, err = group.PrepareResolve(130, limit)
+	require.NoError(t, err)
+	require.Len(t, batch.Messages, 1, "rows after the DDL barrier must remain pending")
+	require.NoError(t, batch.Ack())
+	require.Equal(t, int64(len(rows)), ap.spillStore.Stats().AppliedEventCount)
+	require.Zero(t, ap.spillStore.PendingBytes())
+}
+
+func TestApplySkippedDropCleansSpill(t *testing.T) {
+	ap := NewRedoApplier(&RedoApplierConfig{})
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	ap.tableDDLTs[42] = ddlTs{ts: 100}
+	ap.tableDDLTs[common.DDLSpanTableID] = ddlTs{ts: 120}
+	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs: 105, CommitTs: 110,
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
+		},
+	}, 100))
+	require.Positive(t, ap.spillStore.PendingBytes())
+	require.NoError(t, ap.applyDDL(t.Context(), &commonEvent.RedoDDLEvent{
+		Type: byte(timodel.ActionDropTable),
+		DDL: &commonEvent.DDLEventInRedoLog{
+			CommitTs: 120, Query: "DROP TABLE test.t",
+			NeedDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
+			},
+		},
+	}, 100))
+	require.Empty(t, ap.eventsGroup)
+	require.Zero(t, ap.spillStore.PendingBytes())
+	require.Zero(t, ap.spillStore.Stats().PayloadDecodeCount, "discarded rows must not be materialized")
+}
+
+func TestConsumeLogsCleansSpillOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	ap := NewRedoApplier(&RedoApplierConfig{Dir: dir})
+	ap.needRecoveryInfo = false
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs: 105, CommitTs: 110,
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
+		},
+	}, 100))
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	ap.rd = NewMockReader(100, 130, nil, nil)
+	ap.updateSplitter = newUpdateEventSplitter(ap.rd, dir)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, ap.consumeLogs(ctx), context.Canceled)
+	files, err = os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, files, "cancelled replay must remove spill payloads and the index")
 }
 
 func TestApplyReplicationKeyLossRecovery(t *testing.T) {

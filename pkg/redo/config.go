@@ -15,7 +15,6 @@ package redo
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -194,8 +193,7 @@ func IsBlackholeStorage(scheme string) bool {
 var InitExternalStorage = func(ctx context.Context, uri url.URL) (storeapi.Storage, error) {
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrStorageInitialize, err,
-			fmt.Sprintf("can't init external storage for %s", uri.String()))
+		return nil, errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 	return s, nil
 }
@@ -204,8 +202,8 @@ func initExternalStorageForTest(ctx context.Context, uri url.URL) (storeapi.Stor
 	if ConsistentStorage(uri.Scheme) == consistentStorageS3 && len(uri.Host) == 0 {
 		// TODO: this branch is compatible with previous s3 logic and will be removed
 		// in the future.
-		return nil, errors.WrapError(errors.ErrStorageInitialize,
-			errors.Errorf("please specify the bucket for %+v", uri))
+		return nil, errors.ErrStorageInitialize.GenWithStack(
+			"please specify the bucket for %s", util.MaskSensitiveDataInURIForError(uri.String()))
 	}
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
@@ -249,19 +247,16 @@ func ValidateStorageWithOptions(uri *url.URL, opts StorageValidationOptions) err
 
 	err := os.MkdirAll(uri.Path, DefaultDirMode)
 	if err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't make dir for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 
 	file := filepath.Join(uri.Path, "file.test")
 	if err := os.WriteFile(file, []byte(""), DefaultFileMode); err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't write file for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 
 	if _, err := os.ReadFile(file); err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't read file for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 	_ = os.Remove(file)
 	return nil
