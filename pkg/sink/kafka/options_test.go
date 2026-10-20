@@ -38,6 +38,118 @@ const (
 	mockTopicMessageMaxBytes  = "1048588"
 )
 
+<<<<<<< HEAD
+=======
+func TestKafkaClientSelection(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+
+	for _, test := range []struct {
+		name          string
+		enableFranzGo bool
+		uri           string
+		expected      string
+		wantErr       bool
+	}{
+		{
+			name:     "default selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:          "server enables franz",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic",
+			expected:      KafkaClientFranz,
+		},
+		{
+			name:     "URI selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:     "URI value is case insensitive",
+			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=FRANZ",
+			expected: KafkaClientFranz,
+		},
+		{
+			name:          "URI selects sarama over server default",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected:      KafkaClientSarama,
+		},
+		{
+			name:          "URI selects franz with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=franz",
+			expected:      KafkaClientFranz,
+		},
+		{
+			name:    "invalid client",
+			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr: true,
+		},
+		{
+			name:          "invalid client with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr:       true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serverConfig := originalConfig.Clone()
+			serverConfig.Debug.EnableKafkaFranzGo = test.enableFranzGo
+			config.StoreGlobalServerConfig(serverConfig)
+
+			sinkURI, err := url.Parse(test.uri)
+			require.NoError(t, err)
+
+			options := NewOptions()
+			err = options.Apply(changefeedID, sinkURI, &config.SinkConfig{})
+			if test.wantErr {
+				require.ErrorIs(t, err, errors.ErrKafkaInvalidConfig)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, test.expected, options.Client)
+		})
+	}
+}
+
+func TestFactorySelection(t *testing.T) {
+	const topic = "factory-selection"
+	cluster := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, topic))
+	defer cluster.Close()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "factory-selection")
+	for _, test := range []struct {
+		client   string
+		expected Factory
+	}{
+		{client: KafkaClientFranz, expected: &franzFactory{}},
+		{client: KafkaClientSarama, expected: &saramaFactory{}},
+	} {
+		t.Run(test.client, func(t *testing.T) {
+			o := NewOptions()
+			o.Client = test.client
+			o.ClientID = "ticdc-test"
+			o.BrokerEndpoints = cluster.ListenAddrs()
+			o.Topic = topic
+
+			factory, err := NewFactory(context.Background(), o, changefeedID)
+			require.NoError(t, err)
+			require.IsType(t, test.expected, factory)
+
+			factory.Close()
+		})
+	}
+}
+
+>>>>>>> bb6bcae9f (kafka: add server debug switch for franz-go and enable it in CI (#6567))
 func TestCompleteOptions(t *testing.T) {
 	options := NewOptions()
 

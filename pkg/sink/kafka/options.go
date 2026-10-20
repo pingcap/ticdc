@@ -175,7 +175,15 @@ type options struct {
 
 // NewOptions returns a default Kafka configuration
 func NewOptions() *options {
+	client := KafkaClientSarama
+	if debug := config.GetGlobalServerConfig().Debug; debug != nil && debug.EnableKafkaFranzGo {
+		client = KafkaClientFranz
+	}
 	return &options{
+<<<<<<< HEAD
+=======
+		Client:             client,
+>>>>>>> bb6bcae9f (kafka: add server debug switch for franz-go and enable it in CI (#6567))
 		Version:            "2.4.0",
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
 		MaxBatchedBytes:    config.DefaultMaxMessageBytes,

@@ -25,7 +25,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
 func TestServerConfigLargeTxnThresholdDefault(t *testing.T) {
+=======
+func TestServerConfigMarshal(t *testing.T) {
+	t.Parallel()
+	conf := GetDefaultServerConfig()
+	conf.Addr = "192.155.22.33:8887"
+	b, err := conf.Marshal()
+	require.NoError(t, err)
+	conf2 := new(ServerConfig)
+	err = conf2.Unmarshal([]byte(b))
+	require.NoError(t, err)
+	require.Equal(t, conf, conf2)
+}
+
+func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	configContent := strings.TrimSpace(`
+enable-legacy-safepoint = true
+`)
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+	cfg := GetDefaultServerConfig()
+	require.False(t, cfg.EnableLegacySafePoint)
+
+	metaData, err := toml.DecodeFile(configPath, cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.True(t, cfg.EnableLegacySafePoint)
+}
+
+func TestServerConfigDecodeEnableKafkaFranzGo(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		content string
+		enabled bool
+	}{
+		{name: "default"},
+		{name: "disabled", content: "[debug]\nenable-kafka-franz-go = false\n"},
+		{name: "enabled", content: "[debug]\nenable-kafka-franz-go = true\n", enabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := GetDefaultServerConfig()
+			metaData, err := toml.Decode(test.content, cfg)
+			require.NoError(t, err)
+			require.Empty(t, metaData.Undecoded())
+			require.Equal(t, test.enabled, cfg.Debug.EnableKafkaFranzGo)
+			require.Equal(t, test.enabled, cfg.Clone().Debug.EnableKafkaFranzGo)
+		})
+	}
+}
+
+func TestServerConfigClone(t *testing.T) {
+>>>>>>> bb6bcae9f (kafka: add server debug switch for franz-go and enable it in CI (#6567))
 	t.Parallel()
 	conf := GetDefaultServerConfig()
 	require.Equal(t, int64(1024*1024), conf.Debug.EventService.LargeTxnThresholdInBytes)

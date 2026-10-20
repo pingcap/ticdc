@@ -44,6 +44,10 @@ type DebugConfig struct {
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
+
+	// EnableKafkaFranzGo is a temporary migration switch that makes franz-go the
+	// default Kafka sink client. The kafka-client URI parameter takes precedence.
+	EnableKafkaFranzGo bool `toml:"enable-kafka-franz-go" json:"enable_kafka_franz_go"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
