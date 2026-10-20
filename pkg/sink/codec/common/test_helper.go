@@ -31,11 +31,12 @@ import (
 func AppendRow2Chunk(data map[string]any, columns []*model.ColumnInfo, chk *chunk.Chunk) {
 	for idx, col := range columns {
 		value := data[col.Name.O]
-		appendCol2Chunk(idx, value, col.FieldType, chk)
+		AppendColumn2Chunk(idx, value, col.FieldType, chk)
 	}
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
+// AppendColumn2Chunk appends a value already converted to the column type.
+func AppendColumn2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	if raw == nil {
 		chk.AppendNull(idx)
 		return

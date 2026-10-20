@@ -16,13 +16,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -31,6 +32,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
@@ -140,26 +142,39 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
+					encoder, err := canal.NewJSONRowEventEncoder(cfg, nil)
+					if err != nil {
+						b.Fatal(err)
+					}
 					values := make([][]byte, 100)
 					for id := range values {
-						data := make(map[string]string, 32)
-						mysqlTypes := make(map[string]string, 32)
-						for column := range 32 {
-							name := "c" + strconv.Itoa(column)
-							data[name], mysqlTypes[name] = "12345", "bigint"
+						columns := make([]*timodel.ColumnInfo, 32)
+						for column := range columns {
+							columns[column] = &timodel.ColumnInfo{
+								ID:        int64(column + 1),
+								Name:      ast.NewCIStr("c" + strconv.Itoa(column)),
+								Offset:    column,
+								State:     timodel.StatePublic,
+								FieldType: *types.NewFieldType(mysql.TypeLonglong),
+							}
 						}
-						values[id], err = json.Marshal(map[string]any{
-							"database":  "test",
-							"table":     "t" + strconv.Itoa(id),
-							"type":      "INSERT",
-							"isDdl":     false,
-							"mysqlType": mysqlTypes,
-							"data":      []map[string]string{data},
-							"_tidb":     map[string]uint64{"commitTs": 10},
+						table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+							Name:    ast.NewCIStr("t" + strconv.Itoa(id)),
+							Columns: columns,
 						})
-						if err != nil {
+						rows := chunk.NewChunkWithCapacity(table.GetFieldSlice(), 1)
+						for column := range columns {
+							rows.AppendInt64(column, 12345)
+						}
+						if err := encoder.AppendRowChangedEvent(ctx, "", &event.RowEvent{
+							TableInfo:      table,
+							CommitTs:       10,
+							Event:          event.RowChange{Row: rows.GetRow(0), RowType: common.RowTypeInsert},
+							ColumnSelector: columnselector.NewDefaultColumnSelector(),
+						}); err != nil {
 							b.Fatal(err)
 						}
+						values[id] = encoder.Build()[0].Value
 					}
 					// Populate schemas before timing steady-state conversion.
 					for _, value := range values {
