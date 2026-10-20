@@ -42,7 +42,7 @@ type rowChangeWithKeys struct {
 
 // ===== Normal SQL (one row -> one statement) =====
 
-// generateNormalSQLs produces SQLs without batching for tables without delete filtering.
+// generateNormalSQLs simply iterates each event and produces SQLs without batching.
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	var (
 		queries  []string
@@ -55,7 +55,7 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 			continue
 		}
 
-		queryList, argsList, rowTypesList := w.generateNormalSQL(event, false)
+		queryList, argsList, rowTypesList := w.generateNormalSQL(event)
 		queries = append(queries, queryList...)
 		args = append(args, argsList...)
 		rowTypes = append(rowTypes, rowTypesList...)
@@ -64,8 +64,7 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 // generateNormalSQL converts a single DMLEvent into SQL statements, respecting safe mode.
-// keepUpdate preserves UPDATE statements for tables with delete filtering.
-func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent, keepUpdate bool) ([]string, [][]any, []common.RowType) {
+func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
 	log.Debug("inSafeMode",
@@ -95,9 +94,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent, keepUpdate bool)
 		)
 		switch row.RowType {
 		case common.RowTypeUpdate:
-			// The legacy sink keeps UPDATE statements even in safe mode. Preserve
-			// that behavior with delete filtering, regardless of the batch size.
-			if inSafeMode && !keepUpdate {
+			if inSafeMode {
 				query, args = buildDelete(event.TableInfo, row)
 				if query != "" {
 					queries = append(queries, query)
@@ -142,6 +139,27 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 		rowLists = append(rowLists, &row)
 	}
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
+}
+
+// generateSafeBatchSQLForSingleEvent rewrites updates as delete/replace pairs
+// so safe mode can recover rows missing downstream without merging events.
+func (w *Writer) generateSafeBatchSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
+	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		if row.RowType == common.RowTypeUpdate {
+			rows = append(rows,
+				&commonEvent.RowChange{RowType: common.RowTypeDelete, PreRow: row.PreRow},
+				&commonEvent.RowChange{RowType: common.RowTypeInsert, Row: row.Row})
+		} else {
+			rows = append(rows, &row)
+		}
+	}
+	return w.batchSingleTxnDmls(rows, event.TableInfo, true)
 }
 
 // generateBatchSQLsPerEvent falls back to per-event batching when cross-event merging is not possible.

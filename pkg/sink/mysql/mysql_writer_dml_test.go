@@ -371,24 +371,30 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 		safeSQLs        []string
 		args            [][]any
 		rowTypes        []common.RowType
+		safeArgs        [][]any
+		safeRowTypes    []common.RowType
 		disableBatch    bool
 		invalidSequence bool
 	}{
 		{
-			name:       "single update keeps legacy semantics",
-			events:     []*commonEvent.DMLEvent{updateEvent},
-			unsafeSQLs: []string{updateSQL},
-			safeSQLs:   []string{updateSQL},
-			args:       [][]any{{int64(1), "updated", int64(1)}},
-			rowTypes:   []common.RowType{common.RowTypeUpdate},
-		},
-		{
-			name:         "single update without batching keeps legacy semantics",
+			name:         "single update",
 			events:       []*commonEvent.DMLEvent{updateEvent},
 			unsafeSQLs:   []string{updateSQL},
-			safeSQLs:     []string{updateSQL},
+			safeSQLs:     []string{deleteSQL, replaceSQL},
 			args:         [][]any{{int64(1), "updated", int64(1)}},
 			rowTypes:     []common.RowType{common.RowTypeUpdate},
+			safeArgs:     [][]any{{int64(1)}, {int64(1), "updated"}},
+			safeRowTypes: []common.RowType{common.RowTypeDelete, common.RowTypeInsert},
+		},
+		{
+			name:         "single update without batching",
+			events:       []*commonEvent.DMLEvent{updateEvent},
+			unsafeSQLs:   []string{updateSQL},
+			safeSQLs:     []string{deleteSQL, replaceSQL},
+			args:         [][]any{{int64(1), "updated", int64(1)}},
+			rowTypes:     []common.RowType{common.RowTypeUpdate},
+			safeArgs:     [][]any{{int64(1)}, {int64(1), "updated"}},
+			safeRowTypes: []common.RowType{common.RowTypeDelete, common.RowTypeInsert},
 			disableBatch: true,
 		},
 		{
@@ -403,9 +409,11 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 			name:            "update then insert",
 			events:          []*commonEvent.DMLEvent{updateEvent, insertEvent2},
 			unsafeSQLs:      []string{updateSQL, insertsSQL},
-			safeSQLs:        []string{updateSQL, replacesSQL},
+			safeSQLs:        []string{deleteSQL, replaceSQL, replacesSQL},
 			args:            [][]any{{int64(1), "updated", int64(1)}, {int64(1), "last", int64(2), "other"}},
 			rowTypes:        []common.RowType{common.RowTypeUpdate, common.RowTypeInsert},
+			safeArgs:        [][]any{{int64(1)}, {int64(1), "updated"}, {int64(1), "last", int64(2), "other"}},
+			safeRowTypes:    []common.RowType{common.RowTypeDelete, common.RowTypeInsert, common.RowTypeInsert},
 			invalidSequence: true,
 		},
 		{
@@ -453,8 +461,13 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 							} else {
 								require.Equal(t, tt.safeSQLs, dmls.sqls)
 							}
-							require.Equal(t, tt.args, dmls.values)
-							require.Equal(t, tt.rowTypes, dmls.rowTypes)
+							if mode != "unsafe" && tt.safeArgs != nil {
+								require.Equal(t, tt.safeArgs, dmls.values)
+								require.Equal(t, tt.safeRowTypes, dmls.rowTypes)
+							} else {
+								require.Equal(t, tt.args, dmls.values)
+								require.Equal(t, tt.rowTypes, dmls.rowTypes)
+							}
 						})
 					}
 				})
@@ -552,6 +565,9 @@ func TestDeleteFilterSelectsTableDMLMode(t *testing.T) {
 				"UPDATE `test`.`filtered` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1": {{int64(3), "after", int64(3)}},
 			}
 			if safeMode {
+				delete(expected, "UPDATE `test`.`filtered` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1")
+				expected["DELETE FROM `test`.`filtered` WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3)}}
+				expected["REPLACE INTO `test`.`filtered` (`id`,`name`) VALUES (?,?)"] = [][]any{{int64(3), "after"}}
 				expected["DELETE FROM `test`.`regular` WHERE `id` = ? LIMIT 1"] = [][]any{{int64(3)}}
 				expected["REPLACE INTO `test`.`regular` (`id`,`name`) VALUES (?,?)"] = [][]any{{int64(3), "after"}}
 			} else {
