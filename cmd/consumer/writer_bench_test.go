@@ -65,7 +65,7 @@ func BenchmarkWriterBacklog(b *testing.B) {
 				copy(pending, events)
 				w.pendingDML = pending
 				if name == "32768/watermark" {
-					w.watermark, w.writtenBefore, w.progressChanged = 20, 0, true
+					w.watermark, w.checkpoint, w.progressChanged = 20, 0, true
 				}
 				if err := w.flushDML(ctx); err != nil {
 					b.Fatal(err)

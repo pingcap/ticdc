@@ -128,23 +128,28 @@ type writer struct {
 	ddlJobs           chan *ddlWrite
 	ddlDone           chan struct{}
 	inFlight          []*writeBatch
-	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations retained at the watermark boundary.
+	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations awaiting checkpoint advancement.
 	ddlWrites         map[ddlKey]bool
-	writtenBefore     uint64
+	checkpoint        uint64
+	tableCheckpoints  map[int64]uint64 // Inclusive DML checkpoints ahead of the global checkpoint.
+	unsubmitted       uint64
+	hasUnsubmitted    bool
+	unsubmittedTables map[int64]uint64
 	inFlightBytes     int64
 	inFlightEvents    int
-	pendingWatermarks []*checkpoint
+	pendingWatermarks []*watermark
 	watermark         uint64
 	progressChanged   bool
 }
 type writeBatch struct {
-	items   []*dmlWrite
-	events  []*event.DMLEvent
-	dropped []*event.DMLEvent
-	keys    []mutationKey
-	bytes   int64
-	done    chan struct{}
-	flushed atomic.Int64
+	items    []*dmlWrite
+	events   []*event.DMLEvent
+	dropped  []*event.DMLEvent
+	keys     []mutationKey
+	bytes    int64
+	done     chan struct{}
+	flushed  atomic.Int64
+	finished []atomic.Bool
 }
 
 type mutationKey struct {
@@ -172,17 +177,17 @@ type ddlWrite struct {
 	onFlush func()
 }
 
-func (w *writer) enqueueDML(row *dmlWrite) {
+func (w *writer) addDML(row *dmlWrite) {
 	w.pendingDML = append(w.pendingDML, row)
 	w.progressChanged = true
 }
 
-func (w *writer) enqueueDDL(ddl *ddlWrite) {
+func (w *writer) addDDL(ddl *ddlWrite) {
 	w.pendingDDL = append(w.pendingDDL, ddl)
 	w.progressChanged = true
 }
 
-func (w *writer) enqueueWatermark(progress *checkpoint) {
+func (w *writer) addWatermark(progress *watermark) {
 	if progress.watermark > w.watermark {
 		w.watermark = progress.watermark
 		w.progressChanged = true
@@ -229,7 +234,7 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			table:    ddl.TableName,
 			query:    ddl.Query,
 		}
-		if w.ddlWrites[key] || key.commitTs < w.writtenBefore {
+		if w.ddlWrites[key] || (key.commitTs > 0 && key.commitTs <= w.checkpoint) {
 			// No DDL is in flight, so the original write has succeeded.
 			if result.onFlush != nil {
 				result.onFlush()
@@ -265,7 +270,7 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			return nil
 		}
 	}
-	w.advanceWatermarks()
+	w.advanceCheckpoint()
 	return nil
 }
 
@@ -389,6 +394,7 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 }
 
 func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) error {
+	batch.finished = make([]atomic.Bool, len(batch.events))
 	w.inFlight = append(w.inFlight, batch)
 	w.inFlightBytes += batch.bytes
 	w.inFlightEvents += len(batch.items)
@@ -396,15 +402,16 @@ func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 	if len(batch.events) == 0 {
 		close(batch.done)
 	}
-	for _, dml := range batch.events {
+	for index, dml := range batch.events {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		var flushed atomic.Bool
 		dml.AddPostFlushFunc(func() {
-			if flushed.CAS(false, true) && batch.flushed.Add(1) == int64(len(batch.events)) {
-				w.memory.release(batch.bytes)
-				close(batch.done)
+			if batch.finished[index].CAS(false, true) {
+				if batch.flushed.Add(1) == int64(len(batch.events)) {
+					w.memory.release(batch.bytes)
+					close(batch.done)
+				}
 				select {
 				case w.completed <- struct{}{}:
 				default:
@@ -462,7 +469,9 @@ func (w *writer) finishBatches() {
 			dml.PostFlush()
 		}
 		for _, key := range batch.keys {
-			w.mutations[key] = nil
+			if w.mutations[key] == batch {
+				w.mutations[key] = nil
+			}
 		}
 		// Nonempty batches release memory in their final flush callback.
 		if len(batch.events) == 0 {
@@ -474,10 +483,10 @@ func (w *writer) finishBatches() {
 	}
 	clear(w.inFlight[len(remaining):])
 	w.inFlight = remaining
-	w.advanceWatermarks()
+	w.advanceCheckpoint()
 }
 
-func (w *writer) advanceWatermarks() {
+func (w *writer) advanceCheckpoint() {
 	if !w.progressChanged {
 		return
 	}
@@ -485,12 +494,30 @@ func (w *writer) advanceWatermarks() {
 	if w.watermark == 0 && len(w.pendingWatermarks) == 0 {
 		return
 	}
-	// Readers publish global watermarks. Every unfinished write limits their
-	// downstream completion, regardless of its table.
+	// A watermark covers every input through its timestamp. Checkpoints also
+	// account for tasks still waiting for metadata or conversion in the conductor.
 	var (
 		unfinished uint64 = math.MaxUint64
 		pending    bool
 	)
+	if w.hasUnsubmitted {
+		unfinished, pending = w.unsubmitted, true
+	}
+	var unfinishedTables map[int64]uint64
+	if len(w.mutations) != 0 {
+		unfinishedTables = make(map[int64]uint64)
+		for id, ts := range w.unsubmittedTables {
+			unfinishedTables[id] = ts
+		}
+	}
+	trackTable := func(dml *event.DMLEvent) {
+		if unfinishedTables != nil {
+			id := dml.PhysicalTableID
+			if before, exists := unfinishedTables[id]; !exists || dml.CommitTs < before {
+				unfinishedTables[id] = dml.CommitTs
+			}
+		}
+	}
 	for _, control := range w.pendingDDL {
 		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
 	}
@@ -499,15 +526,27 @@ func (w *writer) advanceWatermarks() {
 	}
 	for _, item := range w.pendingDML {
 		unfinished, pending = min(unfinished, item.dml.CommitTs), true
+		trackTable(item.dml)
 	}
 	for _, batch := range w.inFlight {
-		for _, item := range batch.items {
-			unfinished, pending = min(unfinished, item.dml.CommitTs), true
+		for index, dml := range batch.events {
+			if !batch.finished[index].Load() {
+				unfinished, pending = min(unfinished, dml.CommitTs), true
+				trackTable(dml)
+			}
 		}
 	}
+	through := w.watermark
+	if pending {
+		through = 0
+		if unfinished > 0 {
+			through = min(w.watermark, unfinished-1)
+		}
+	}
+	w.checkpoint = max(w.checkpoint, through)
 	remaining := w.pendingWatermarks[:0]
 	for _, control := range w.pendingWatermarks {
-		if pending && unfinished <= control.watermark {
+		if control.watermark > w.checkpoint {
 			remaining = append(remaining, control)
 			continue
 		}
@@ -515,26 +554,41 @@ func (w *writer) advanceWatermarks() {
 	}
 	clear(w.pendingWatermarks[len(remaining):])
 	w.pendingWatermarks = remaining
-	before := min(w.watermark, unfinished)
-	if before <= w.writtenBefore {
-		return
-	}
-	w.writtenBefore = max(w.writtenBefore, before)
-	// Retire identities only after input progress and all earlier writes pass.
+	// Reclaim each table after input progress and its own earlier DML pass.
+	// Keep a table boundary to reject replays while unrelated writes still
+	// hold back the global checkpoint and DDL history.
 	for key := range w.mutations {
-		if key.commitTs < w.writtenBefore {
+		through := w.watermark
+		if unfinished, exists := unfinishedTables[key.tableID]; exists {
+			through = 0
+			if unfinished > 0 {
+				through = min(w.watermark, unfinished-1)
+			}
+		}
+		if key.commitTs > 0 && key.commitTs <= through {
 			delete(w.mutations, key)
+			if through > w.checkpoint {
+				if w.tableCheckpoints == nil {
+					w.tableCheckpoints = make(map[int64]uint64)
+				}
+				w.tableCheckpoints[key.tableID] = max(w.tableCheckpoints[key.tableID], through)
+			}
+		}
+	}
+	for id, checkpoint := range w.tableCheckpoints {
+		if checkpoint <= w.checkpoint {
+			delete(w.tableCheckpoints, id)
 		}
 	}
 	for key := range w.ddlWrites {
-		if key.commitTs < w.writtenBefore {
+		if key.commitTs > 0 && key.commitTs <= w.checkpoint {
 			delete(w.ddlWrites, key)
 		}
 	}
 }
 
 func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
-	if dml.CommitTs < w.writtenBefore {
+	if dml.CommitTs > 0 && dml.CommitTs <= max(w.checkpoint, w.tableCheckpoints[dml.PhysicalTableID]) {
 		return nil, nil
 	}
 	if dml.CommitTs == 0 || len(dml.TableInfo.GetOrderedHandleKeyColumnIDs()) == 0 {

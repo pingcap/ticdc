@@ -41,7 +41,7 @@ type pendingTask interface{ pendingTask() }
 
 func (*decodeTask) pendingTask() {}
 func (*ddlTask) pendingTask()    {}
-func (*checkpoint) pendingTask() {}
+func (*watermark) pendingTask()  {}
 
 type ddlTask struct {
 	ddl         *event.DDLEvent
@@ -50,7 +50,9 @@ type ddlTask struct {
 	awaitingDDL bool
 }
 
-type checkpoint struct {
+type watermark struct {
+	// All input through watermark has been read and registered. onFlush runs
+	// only after the downstream checkpoint covers the same inclusive range.
 	watermark uint64
 	onFlush   func()
 }
@@ -80,18 +82,19 @@ func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) e
 			c.collectWatermarks()
 		case <-c.decoder.completed:
 		case <-w.completed:
-		case <-c.historyChanged:
 		}
 		for task := c.next(); task != nil; task = c.next() {
 			c.decoding = append(c.decoding, task)
 		}
 		c.deliver(c.collectDecoded(), w)
+		c.updateWatermark(w)
 		if err := w.flushDML(ctx); err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer DML submission failed", zap.Error(err))
 			}
 			return err
 		}
+		c.checkpoint.Store(w.checkpoint)
 		c.cleanHistory()
 		c.advanceReading()
 	}
@@ -126,8 +129,8 @@ func (c *conductor) collectDecoded() []pendingTask {
 			switch prior := prior.(type) {
 			case *ddlTask:
 				ready = ready && isRow && !ddlBlocksTask(prior.ddl, row)
-			case *checkpoint:
-				if _, progress := item.(*checkpoint); progress {
+			case *watermark:
+				if _, progress := item.(*watermark); progress {
 					ready = false
 				}
 			}
@@ -140,7 +143,7 @@ func (c *conductor) collectDecoded() []pendingTask {
 					break
 				}
 			}
-		case *checkpoint:
+		case *watermark:
 			for _, prior := range blockedRows {
 				if prior.commitTs <= item.watermark {
 					ready = false
@@ -170,7 +173,7 @@ func (c *conductor) deliver(items []pendingTask, w *writer) {
 	var bytes int64
 	flush := func() {
 		for _, row := range c.prepare(rows) {
-			w.enqueueDML(row)
+			w.addDML(row)
 		}
 		rows = rows[:0]
 		bytes = 0
@@ -186,10 +189,10 @@ func (c *conductor) deliver(items []pendingTask, w *writer) {
 			}
 		case *ddlTask:
 			flush()
-			w.enqueueDDL(&ddlWrite{ddl: item.ddl, onFlush: item.onFlush})
-		case *checkpoint:
+			w.addDDL(&ddlWrite{ddl: item.ddl, onFlush: item.onFlush})
+		case *watermark:
 			flush()
-			w.enqueueWatermark(item)
+			w.addWatermark(item)
 		}
 	}
 	flush()
@@ -285,41 +288,40 @@ func (c *conductor) prepare(items []*dmlWrite) []*dmlWrite {
 
 // conductor coordinates row conversion, write ordering and completion progress.
 type conductor struct {
-	reader             Reader
-	controls           []*readControl
-	ddlCopies          map[uint64][]*ack
-	ddlInputs          map[ddlKey]*ddlInput
-	boundary           *readBoundary
-	boundaryTs         uint64
-	boundaryDDL        *ddlTask
-	completedWatermark atomic.Uint64
-	cleanedWatermark   uint64
-	historyChanged     chan struct{}
-	g                  *errgroup.Group
-	memory             *memoryUsage
-	streams            map[int32]*streamProgress
-	waitingMetadata    int
-	decoder            *decoderGroup
-	pendingWatermarks  []*checkpoint
-	watermark          uint64
-	mergeRows          bool
-	sortCSVRows        bool
-	decoding           []pendingTask
-	pendingDML         []*decodeTask
-	pendingDDL         []*ddlTask
-	controlTs          uint64
-	scanIndex          int
-	priorityIndex      int
-	scanWatermark      uint64
-	scanDDL            *ddlTask
-	scanDDLReady       bool
-	scanInvalid        bool
-	scanBlocked        map[int64]uint64
-	scanBoundaries     map[*readBoundary]uint64
-	holes              int
-	waitingWatermark   uint64
-	waitingCount       int
-	waitingKnown       bool
+	reader            Reader
+	controls          []*readControl
+	ddlCopies         map[uint64][]*ack
+	ddlInputs         map[ddlKey]*ddlInput
+	boundary          *readBoundary
+	boundaryTs        uint64
+	boundaryDDL       *ddlTask
+	checkpoint        atomic.Uint64
+	cleanedCheckpoint uint64
+	g                 *errgroup.Group
+	memory            *memoryUsage
+	streams           map[int32]*streamWatermark
+	waitingMetadata   int
+	decoder           *decoderGroup
+	pendingWatermarks []*watermark
+	watermark         uint64
+	mergeRows         bool
+	sortCSVRows       bool
+	decoding          []pendingTask
+	pendingDML        []*decodeTask
+	pendingDDL        []*ddlTask
+	controlTs         uint64
+	scanIndex         int
+	priorityIndex     int
+	scanWatermark     uint64
+	scanDDL           *ddlTask
+	scanDDLReady      bool
+	scanInvalid       bool
+	scanBlocked       map[int64]uint64
+	scanBoundaries    map[*readBoundary]uint64
+	holes             int
+	waitingWatermark  uint64
+	waitingCount      int
+	waitingKnown      bool
 }
 
 type ddlInput struct {
@@ -675,18 +677,18 @@ func ddlBlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string)
 }
 
 func newConductor(memory *memoryUsage, reader Reader, parsing *inputParser) *conductor {
-	streams := make(map[int32]*streamProgress, len(parsing.streams))
+	streams := make(map[int32]*streamWatermark, len(parsing.streams))
 	for id := range parsing.streams {
-		streams[id] = &streamProgress{}
+		streams[id] = &streamWatermark{}
 	}
 	c := &conductor{
-		reader: reader, historyChanged: make(chan struct{}, 1),
+		reader: reader,
 		memory: memory, streams: streams,
 		decoder:     newDecoderGroup(memory, make(chan struct{}, 1)),
 		mergeRows:   parsing.codecConfig.Protocol == config.ProtocolCsv,
 		sortCSVRows: parsing.codecConfig.Protocol == config.ProtocolCsv && parsing.codecConfig.OutputOldValue && parsing.codecConfig.IncludeCommitTs,
 	}
-	parsing.completedWatermark = &c.completedWatermark
+	parsing.checkpoint = &c.checkpoint
 	return c
 }
 
@@ -836,8 +838,8 @@ func (c *conductor) needsMoreInput() bool {
 	return false
 }
 
-// The input contract groups control progress by decoding stream. Kafka provides
-// one stream per partition; topic-wide controls use a single merged stream.
+// Kafka and Pulsar provide one read watermark per physical partition. A global
+// watermark needs every partition; missing progress holds the previous boundary.
 func (c *conductor) collectWatermarks() {
 	watermark := uint64(math.MaxUint64)
 	for _, stream := range c.streams {
@@ -866,45 +868,72 @@ func (c *conductor) collectWatermarks() {
 	if len(records) == 0 {
 		return
 	}
-	c.queueWatermark(c.watermark, records)
+	c.addWatermark(c.watermark, records)
 }
 
-func (c *conductor) queueWatermark(watermark uint64, records []*ack) {
-	c.pendingWatermarks = append(c.pendingWatermarks, &checkpoint{
-		watermark: watermark,
+func (c *conductor) addWatermark(through uint64, records []*ack) {
+	c.pendingWatermarks = append(c.pendingWatermarks, &watermark{
+		watermark: through,
 		onFlush: func() {
 			for _, record := range records {
 				record.release()
-			}
-			for completed := c.completedWatermark.Load(); completed < watermark; completed = c.completedWatermark.Load() {
-				if c.completedWatermark.CAS(completed, watermark) {
-					break
-				}
-			}
-			select {
-			case c.historyChanged <- struct{}{}:
-			default:
 			}
 		},
 	})
 }
 
-// Input watermarks establish history boundaries. Downstream completion delays
-// reclamation until earlier effects finish; current schemas remain available.
+// Input progress can pass conversions still in flight. Register their earliest
+// timestamps before letting the writer advance global or table checkpoints.
+func (c *conductor) updateWatermark(w *writer) {
+	w.watermark = max(w.watermark, c.watermark)
+	w.unsubmitted, w.hasUnsubmitted = math.MaxUint64, false
+	clear(w.unsubmittedTables)
+	track := func(ts uint64) {
+		w.unsubmitted, w.hasUnsubmitted = min(w.unsubmitted, ts), true
+	}
+	trackDML := func(row *decodeTask) {
+		track(row.commitTs)
+		if w.unsubmittedTables == nil {
+			w.unsubmittedTables = make(map[int64]uint64)
+		}
+		if ts, ok := w.unsubmittedTables[row.tableID]; !ok || row.commitTs < ts {
+			w.unsubmittedTables[row.tableID] = row.commitTs
+		}
+	}
+	for _, row := range c.pendingDML {
+		if row != nil {
+			trackDML(row)
+		}
+	}
+	for _, ddl := range c.pendingDDL {
+		track(ddl.ddl.GetCommitTs())
+	}
+	for _, work := range c.decoding {
+		switch work := work.(type) {
+		case *decodeTask:
+			trackDML(work)
+		case *ddlTask:
+			track(work.ddl.GetCommitTs())
+		}
+	}
+	w.progressChanged = true
+}
+
+// Reclaim history only through the inclusive downstream checkpoint.
 func (c *conductor) cleanHistory() {
-	watermark := c.completedWatermark.Load()
-	if watermark <= c.cleanedWatermark {
+	checkpoint := c.checkpoint.Load()
+	if checkpoint <= c.cleanedCheckpoint {
 		return
 	}
-	c.cleanedWatermark = watermark
+	c.cleanedCheckpoint = checkpoint
 	for key := range c.ddlInputs {
-		if key.commitTs < watermark {
+		if key.commitTs <= checkpoint {
 			delete(c.ddlInputs, key)
 		}
 	}
 }
 
-type streamProgress struct {
+type streamWatermark struct {
 	watermark    uint64
 	hasWatermark bool
 }
@@ -912,7 +941,7 @@ type streamProgress struct {
 func (c *conductor) accept(ctx context.Context, work task) error {
 	switch result := work.(type) {
 	case *decodeTask:
-		if result.table != nil && result.commitTs < c.watermark {
+		if result.table != nil && result.commitTs > 0 && result.commitTs <= c.checkpoint.Load() {
 			result.record.release()
 			return nil
 		}
@@ -929,17 +958,17 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 			return err
 		}
 		result.task.record.release()
-	case *checkpoint:
+	case *watermark:
 		c.watermark = max(c.watermark, result.watermark)
-		c.queueWatermark(result.watermark, nil)
-	case *inputProgress:
+		c.addWatermark(result.watermark, nil)
+	case *inputWatermark:
 		defer result.record.release()
 		stream := c.streams[result.stream]
 		stream.watermark = max(stream.watermark, result.watermark)
 		stream.hasWatermark = true
 		result.record.retain()
 		c.controls = append(c.controls, &readControl{watermark: result.watermark, records: []*ack{result.record}})
-		c.reader.Advance([]readUpdate{{stream: result.stream, progress: result.watermark}})
+		c.reader.Advance([]readUpdate{{stream: result.stream, watermark: result.watermark}})
 	case *inputDDL:
 		defer result.scope.record.release()
 		if err := setDDLTableNames(result.ddl); err != nil {

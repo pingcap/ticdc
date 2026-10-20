@@ -74,25 +74,25 @@ type storageTableKey struct {
 
 type storageReader struct {
 	*readLimit
-	tableIDs       map[storageTableKey]int64
-	nextTableID    int64
-	storage        storeapi.Storage
-	memory         *memoryUsage
-	confirmable    chan<- struct{}
-	dateSeparator  config.DateSeparator
-	fileExtension  string
-	fileIndexWidth int
-	scanInterval   time.Duration
-	checkpoint     uint64
-	readCheckpoint uint64
-	schemas        map[cloudstorage.SchemaPathKey]*readSchema
-	fileIndices    map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
-	ddlWatermarks  map[string]uint64
-	pendingSchema  chan struct{} // Header decoding determines the next file groups.
-	mu             sync.Mutex
-	records        []*ack
-	inputs         []storageInput
-	scanned        bool
+	tableIDs         map[storageTableKey]int64
+	nextTableID      int64
+	storage          storeapi.Storage
+	memory           *memoryUsage
+	confirmable      chan<- struct{}
+	dateSeparator    config.DateSeparator
+	fileExtension    string
+	fileIndexWidth   int
+	scanInterval     time.Duration
+	sourceCheckpoint uint64
+	watermark        uint64
+	schemas          map[cloudstorage.SchemaPathKey]*readSchema
+	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
+	ddlWatermarks    map[string]uint64
+	pendingSchema    chan struct{} // Header decoding determines the next file groups.
+	mu               sync.Mutex
+	records          []*ack
+	inputs           []storageInput
+	scanned          bool
 }
 
 func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) *storageReader {
@@ -186,7 +186,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
 			continue // Ignore unsupported index paths in a shared Storage directory.
 		}
-		if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+		if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 			continue
 		}
 		paths = append(paths, &storageIndex{
@@ -247,7 +247,7 @@ func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) 
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
 	var key cloudstorage.SchemaPathKey
 	key.Parse(path)
-	if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
 		return key, false, nil
 	}
 	data, err := c.readFile(ctx, path)
@@ -288,11 +288,11 @@ type storageDDL struct {
 	record     *ack
 	registered chan struct{}
 }
-type storageCheckpoint uint64
+type storageWatermark uint64
 
-func (*storageFile) storageRead()      {}
-func (*storageDDL) storageRead()       {}
-func (storageCheckpoint) storageRead() {}
+func (*storageFile) storageRead()     {}
+func (*storageDDL) storageRead()      {}
+func (storageWatermark) storageRead() {}
 
 func (c *storageReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
 	return readAndParse(ctx, c.Read, func(ctx context.Context, input storageRead) iter.Seq2[task, error] {
@@ -313,8 +313,8 @@ func (c *storageReader) parse(ctx context.Context, parser *inputParser, input st
 				return
 			}
 			input.record.release()
-		case storageCheckpoint:
-			yield(&checkpoint{watermark: uint64(input)}, nil)
+		case storageWatermark:
+			yield(&watermark{watermark: uint64(input)}, nil)
 		}
 	}
 }
@@ -333,10 +333,10 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			}
 		}
 		if len(c.inputs) == 0 {
-			if c.scanned && c.checkpoint > c.readCheckpoint {
-				c.readCheckpoint = c.checkpoint
+			if c.scanned && c.sourceCheckpoint > c.watermark {
+				c.watermark = c.sourceCheckpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				return []storageRead{storageCheckpoint(c.checkpoint)}, nil
+				return []storageRead{storageWatermark(c.sourceCheckpoint)}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -417,7 +417,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 		if err := json.Unmarshal(data, &metadata); err != nil {
 			return errors.WrapError(errors.ErrCodecDecode, err, "decode Storage metadata")
 		}
-		c.checkpoint = max(c.checkpoint, metadata.CheckpointTs)
+		c.sourceCheckpoint = max(c.sourceCheckpoint, metadata.CheckpointTs)
 	}
 	files, err := c.scanFiles(ctx)
 	if err != nil {

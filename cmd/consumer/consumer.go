@@ -139,6 +139,13 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			streams[id] = newDecodeStream(ctx, int(id), decoding, upstreamDB, tables)
 		}
 	}
+	if sourceType == sourcePulsar {
+		partitions := reader.client.(*pulsarReader).partitions
+		streams = make(map[int32]*decodeStream, len(partitions))
+		for _, partition := range partitions {
+			streams[partition.stream] = newDecodeStream(ctx, int(partition.stream), decoding, upstreamDB, tables)
+		}
+	}
 	parsing := newInputParser(ctx, decoding, upstreamDB, replicaConfig, streams, tables)
 	conductor := newConductor(memory, reader.client, parsing)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)

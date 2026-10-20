@@ -70,6 +70,8 @@ type kafkaReader struct {
 	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
 	confirmable      chan<- struct{}
 	partitions       map[int32]*kafkaPartition
+	readWatermarks   map[int32]uint64 // Parser-owned partition coverage, before conductor publication.
+	watermark        uint64
 	readSequence     uint64
 	pausedPartitions int
 	boundary         *readBoundary
@@ -201,6 +203,13 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 				yield(nil, err)
 				return
 			}
+			if progress, ok := result.(*inputWatermark); ok {
+				if err := c.checkWatermark(ctx, id, progress.watermark); err != nil {
+					progress.record.release()
+					yield(nil, err)
+					return
+				}
+			}
 			if task, ok := result.(*decodeTask); ok {
 				rows++
 				if rows > parser.codecConfig.MaxBatchSize {
@@ -232,6 +241,42 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 			}
 		}
 	}
+}
+
+// Validate the complete topic scope before a new global read watermark becomes
+// visible. Partition growth requires rebuilding routing and decoder state.
+func (c *kafkaReader) checkWatermark(ctx context.Context, partition int32, through uint64) error {
+	if c.readWatermarks == nil {
+		c.readWatermarks = make(map[int32]uint64, len(c.partitions))
+	}
+	c.readWatermarks[partition] = max(c.readWatermarks[partition], through)
+	for id := range c.partitions {
+		through = min(through, c.readWatermarks[id])
+	}
+	if through <= c.watermark {
+		return nil
+	}
+	metadata, err := kadm.NewClient(c.client).Metadata(ctx, c.topic)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, err, "refresh Kafka partitions")
+	}
+	topic, ok := metadata.Topics[c.topic]
+	if !ok {
+		return errors.ErrKafkaInvalidConfig.GenWithStackByArgs("Kafka topic metadata is unavailable")
+	}
+	if topic.Err != nil {
+		return errors.WrapError(errors.ErrKafkaInvalidConfig, topic.Err, "refresh Kafka topic metadata")
+	}
+	if len(topic.Partitions) != len(c.partitions) {
+		return errors.ErrKafkaInvalidConfig.GenWithStackByArgs("Kafka partitions changed; restart the consumer")
+	}
+	for id := range topic.Partitions {
+		if c.partitions[id] == nil {
+			return errors.ErrKafkaInvalidConfig.GenWithStackByArgs("Kafka partitions changed; restart the consumer")
+		}
+	}
+	c.watermark = through
+	return nil
 }
 
 func (c *kafkaReader) checkPartition(dml *event.DMLEvent, partition int32, offset int64, skipKeyOnlyDelete bool) {
@@ -325,6 +370,9 @@ func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 		for iterator := fetches.RecordIter(); !iterator.Done(); {
 			record := iterator.Next()
 			partition := c.partitions[record.Partition]
+			if partition == nil {
+				return nil, errors.ErrKafkaInvalidConfig.GenWithStackByArgs("Kafka partitions changed; restart the consumer")
+			}
 			partition.polled = append(partition.polled, record)
 			bytes += int64(len(record.Key) + len(record.Value))
 		}
@@ -336,8 +384,8 @@ func (c *kafkaReader) Advance(updates []readUpdate) {
 	c.progressMu.Lock()
 	for _, update := range updates {
 		partition := c.partitions[update.stream]
-		if update.progress != 0 {
-			partition.watermark = max(partition.watermark, update.progress)
+		if update.watermark != 0 {
+			partition.watermark = max(partition.watermark, update.watermark)
 			partition.hasWatermark = true
 		}
 		if update.boundary != nil && update.boundary == c.boundary {

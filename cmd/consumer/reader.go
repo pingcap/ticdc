@@ -222,12 +222,12 @@ const (
 
 // Source progress contains no input payload or decoder state.
 type readUpdate struct {
-	stream   int32
-	progress uint64
-	boundary *readBoundary
+	stream    int32
+	watermark uint64
+	boundary  *readBoundary
 }
 
-// Controls retain their input references until the downstream watermark passes.
+// Controls retain their input references until the downstream checkpoint covers them.
 type readControl struct {
 	watermark uint64
 	records   []*ack

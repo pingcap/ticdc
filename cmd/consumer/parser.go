@@ -57,11 +57,11 @@ type inputScope struct {
 
 type task interface{ isTask() }
 
-func (*decodeTask) isTask()    {}
-func (*inputDDL) isTask()      {}
-func (*inputProgress) isTask() {}
-func (*checkpoint) isTask()    {}
-func (*resumeTask) isTask()    {}
+func (*decodeTask) isTask()     {}
+func (*inputDDL) isTask()       {}
+func (*inputWatermark) isTask() {}
+func (*watermark) isTask()      {}
+func (*resumeTask) isTask()     {}
 
 type inputDDL struct {
 	ddl        *event.DDLEvent
@@ -69,7 +69,7 @@ type inputDDL struct {
 	registered func()
 }
 
-type inputProgress struct {
+type inputWatermark struct {
 	watermark uint64
 	stream    int32
 	record    *ack
@@ -80,12 +80,12 @@ type resumeTask struct{ task *decodeTask }
 // A source owns its codec cursors and schema-dependent row cache. Parallel
 // conversion workers receive captured messages, never these cursors.
 type inputParser struct {
-	codecConfig        *codecCommon.Config
-	selectors          *columnselector.ColumnSelectors
-	streams            map[int32]*decodeStream
-	schemas            *simple.TableInfoCache
-	completedWatermark *atomic.Uint64
-	cleanedWatermark   uint64
+	codecConfig       *codecCommon.Config
+	selectors         *columnselector.ColumnSelectors
+	streams           map[int32]*decodeStream
+	schemas           *simple.TableInfoCache
+	checkpoint        *atomic.Uint64
+	cleanedCheckpoint uint64
 }
 
 func newInputParser(ctx context.Context, decoding *decodeConfig, upstreamDB *sql.DB, replicaConfig *config.ReplicaConfig, streams map[int32]*decodeStream, schemas *simple.TableInfoCache) *inputParser {
@@ -170,7 +170,7 @@ func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, v
 				}
 			case codecCommon.MessageTypeResolved:
 				scope.record.retain()
-				if !yield(&inputProgress{watermark: stream.decoder.NextResolvedEvent(), stream: scope.stream, record: scope.record}, nil) {
+				if !yield(&inputWatermark{watermark: stream.decoder.NextResolvedEvent(), stream: scope.stream, record: scope.record}, nil) {
 					return
 				}
 			}
@@ -180,15 +180,15 @@ func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, v
 }
 
 // Cache access and reclamation stay on the parser goroutine. The conductor publishes
-// only the durable watermark; captured conversions keep their metadata alive.
+// only the downstream checkpoint; captured conversions keep their metadata alive.
 func (p *inputParser) cleanHistory() {
-	if p.codecConfig.Protocol != config.ProtocolSimple || p.completedWatermark == nil {
+	if p.codecConfig.Protocol != config.ProtocolSimple || p.checkpoint == nil {
 		return
 	}
-	watermark := p.completedWatermark.Load()
-	if watermark > p.cleanedWatermark {
-		p.schemas.ReleaseBefore(watermark)
-		p.cleanedWatermark = watermark
+	checkpoint := p.checkpoint.Load()
+	if checkpoint > p.cleanedCheckpoint {
+		p.schemas.ReleaseBefore(checkpoint)
+		p.cleanedCheckpoint = checkpoint
 	}
 }
 

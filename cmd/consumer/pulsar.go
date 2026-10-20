@@ -40,14 +40,18 @@ type pulsarRecord struct {
 }
 
 type pulsarPartition struct {
-	records []pulsarRecord
-	mu      sync.Mutex // Protects records, shared by Read and Confirm.
+	stream    int32
+	watermark uint64 // Parser-owned inclusive read boundary for this partition.
+	records   []pulsarRecord
+	mu        sync.Mutex // Protects records, shared by Read and Confirm.
 }
 
 type pulsarReader struct {
 	*readLimit
 	client      pulsar.Client
 	consumer    pulsar.Consumer
+	topic       string
+	watermark   uint64 // Parser-owned global boundary with verified partition membership.
 	memory      *memoryUsage
 	partitions  map[string]*pulsarPartition
 	confirmable chan<- struct{}
@@ -171,13 +175,14 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 		log.Panic("Pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
 	partitions := make(map[string]*pulsarPartition, len(topics))
-	for _, partitionTopic := range topics {
-		partitions[partitionTopic] = &pulsarPartition{}
+	for id, partitionTopic := range topics {
+		partitions[partitionTopic] = &pulsarPartition{stream: int32(id)}
 	}
 	c := &pulsarReader{
 		readLimit:   newReadLimit(memory),
 		client:      client,
 		consumer:    consumer,
+		topic:       topic,
 		memory:      memory,
 		partitions:  partitions,
 		confirmable: confirmable,
@@ -193,9 +198,52 @@ type pulsarInput struct {
 
 func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
 	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[task, error] {
-		scope := inputScope{record: input.record, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
-		return parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload())
+		partition := c.partitions[input.message.Topic()]
+		scope := inputScope{stream: partition.stream, record: input.record, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
+		return func(yield func(task, error) bool) {
+			for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
+				if progress, ok := work.(*inputWatermark); ok && err == nil {
+					if err = c.checkWatermark(ctx, partition, progress.watermark); err != nil {
+						progress.record.release()
+						yield(nil, err)
+						return
+					}
+				}
+				if !yield(work, err) {
+					return
+				}
+			}
+		}
 	}, tasks)
+}
+
+// Each physical partition must cover the candidate watermark. Refresh membership
+// before publishing a new global boundary so a new partition cannot be omitted.
+func (c *pulsarReader) checkWatermark(ctx context.Context, partition *pulsarPartition, through uint64) error {
+	partition.watermark = max(partition.watermark, through)
+	for _, input := range c.partitions {
+		through = min(through, input.watermark)
+	}
+	if through <= c.watermark {
+		return nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	topics, err := c.client.TopicPartitions(c.topic)
+	if err != nil {
+		return errors.WrapError(errors.ErrPulsarInvalidConfig, err, "refresh Pulsar partitions")
+	}
+	if len(topics) != len(c.partitions) {
+		return errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
+	}
+	for _, topic := range topics {
+		if c.partitions[topic] == nil {
+			return errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
+		}
+	}
+	c.watermark = through
+	return nil
 }
 
 func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
@@ -214,6 +262,9 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 	)
 	for {
 		partition := c.partitions[message.Topic()]
+		if partition == nil {
+			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
+		}
 		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()))
 		record := newAck(c.memory, size, c.confirmable)
@@ -242,7 +293,7 @@ func (c *pulsarReader) Advance(_ []readUpdate) {
 }
 
 func (c *pulsarReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
-	// Topic-wide checkpoints provide this transport's completion boundaries.
+	// The minimum checkpoint marker across physical partitions covers the input.
 	return nil
 }
 
