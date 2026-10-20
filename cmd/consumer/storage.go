@@ -167,35 +167,32 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 	}
 	files := make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange)
 	var paths []*storageIndex
-	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(path string, _ int64) error {
+	metadata, err := c.metadataPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range metadata {
 		if cloudstorage.IsSchemaFile(path) {
 			key, added, err := c.readSchema(ctx, path)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if added {
 				files[cloudstorage.NewSchemaFileDMLPathKey(key)] = nil
 			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".index") {
-			return nil
+			continue
 		}
 		var key cloudstorage.DMLPathKey
 		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
-			return nil //nolint:nilerr // Ignore unsupported index paths in a shared Storage directory.
+			continue // Ignore unsupported index paths in a shared Storage directory.
 		}
 		if (c.checkpoint > 0 && key.TableVersion > c.checkpoint) || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
-			return nil
+			continue
 		}
 		paths = append(paths, &storageIndex{
 			path: path,
 			key:  key,
 		})
-		return nil
-	})
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan Storage files")
 	}
 	if err := c.readIndices(ctx, paths); err != nil {
 		return nil, err
