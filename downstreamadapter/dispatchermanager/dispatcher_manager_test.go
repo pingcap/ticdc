@@ -123,7 +123,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		false,
-		"system",
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
 		false, // outputRawChangeEvent
