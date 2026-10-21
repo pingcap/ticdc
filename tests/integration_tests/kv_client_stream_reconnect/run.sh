@@ -29,6 +29,35 @@ function check_failpoint_log_value() {
 	return 1
 }
 
+function check_stream_reconnected() {
+	local log_file="$WORK_DIR/cdc.log"
+	local initial_count
+
+	for ((i = 0; i < 60; i++)); do
+		if [ -f "$log_file" ] && grep -q "inject force reconnect" "$log_file"; then
+			initial_count=$(grep -c "region request worker going to create grpc stream" "$log_file")
+			break
+		fi
+		sleep 1
+	done
+
+	if [ -z "${initial_count:-}" ]; then
+		echo "inject force reconnect log not found"
+		return 1
+	fi
+
+	for ((i = 0; i < 30; i++)); do
+		if [ "$(grep -c "region request worker going to create grpc stream" "$log_file")" -gt "$initial_count" ]; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "region request worker did not reconnect after force reconnect"
+	tail -n 200 "$log_file"
+	return 1
+}
+
 # This test mainly verifies kv client force reconnect can work
 # Trigger force reconnect by failpoint injection
 function run() {
@@ -47,7 +76,7 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
 
-	# this will be triggered every 5s in logpuller
+	# This will be triggered every 10s in logpuller.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/logpuller/InjectForceReconnect=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	enable_failpoint --name "$FAILPOINT_API_TEST_NAME" --expr "return(\"$FAILPOINT_API_TEST_VALUE\")"
@@ -81,6 +110,7 @@ EOF
 		sleep 1
 	done
 
+	check_stream_reconnected
 	check_failpoint_log_value "$FAILPOINT_API_TEST_VALUE"
 	disable_failpoint --name "$FAILPOINT_API_TEST_NAME"
 	ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""

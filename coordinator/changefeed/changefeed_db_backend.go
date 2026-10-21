@@ -54,6 +54,7 @@ type Backend interface {
 	// DeleteChangefeed removes all related info of a changefeed from db
 	DeleteChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// SetChangefeedProgress persists the operation progress status to db for a changefeed
+	// Clearing progress must not overwrite ProgressRemoving.
 	SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error
 	// UpdateChangefeedCheckpointTs persists the checkpointTs for changefeeds
 	UpdateChangefeedCheckpointTs(ctx context.Context, checkpointTs map[common.ChangeFeedID]uint64) error
