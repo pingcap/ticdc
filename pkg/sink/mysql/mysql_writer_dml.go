@@ -808,14 +808,15 @@ func (w *Writer) multiStmtExecute(
 
 	conn, err := w.db.Conn(w.ctx)
 	if err != nil {
-		return false, cerror.WrapError(cerror.ErrMySQLConnectionError, err)
+		return false, errors.Trace(err)
 	}
 	defer conn.Close()
 	if w.writeGate != nil && !w.writeGate.IsWritable() {
 		return false, nil
 	}
 
-	// Raw exposes the MySQL driver's per-statement affected row counts.
+	// We use conn.Raw to record the all affected rows.
+	// See https://github.com/go-sql-driver/mysql/pull/1309
 	err = conn.Raw(func(raw any) error {
 		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
 		checker := raw.(driver.NamedValueChecker)
@@ -825,42 +826,36 @@ func (w *Writer) multiStmtExecute(
 			}
 		}
 		execer := raw.(driver.ExecerContext)
+		// we use ExecContext to reduce the overhead of network latency.
+		// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+		// When an error happens before COMMIT, the server session can be left with an open transaction.
+		// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
 		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
 		if err != nil {
-			// Use the driver directly because Raw holds the connection's lock.
+			// An error before COMMIT can leave an open transaction. Use the driver
+			// directly because Raw already holds the underlying connection's lock.
 			rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
 			_, rbErr := execer.ExecContext(rbCtx, "ROLLBACK", nil)
 			rbCancel()
 			if rbErr != nil {
 				log.Info("failed to rollback after multi statement exec error",
-					zap.Int("writerID", w.id), zap.Error(rbErr))
+					zap.Int("writerID", w.id),
+					zap.Error(rbErr))
 			}
-			// Let Raw discard bad connections before wrapping the execution error.
-			return err
+			args := make([]any, len(multiStmtArgs))
+			for i, arg := range multiStmtArgs {
+				args[i] = arg.Value
+			}
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
 		}
 		var rowsAffected int64
-		if mysqlResult, ok := res.(dmysql.Result); ok {
-			for _, affected := range mysqlResult.AllRowsAffected() {
-				rowsAffected += affected
-			}
-		} else {
-			rowsAffected, err = res.RowsAffected()
-			if err != nil {
-				log.Warn("get rows affected failed", zap.Error(err))
-				return nil
-			}
+		for _, affected := range res.(dmysql.Result).AllRowsAffected() {
+			rowsAffected += affected
 		}
 		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
 		return nil
 	})
-	if err != nil {
-		args := make([]any, len(multiStmtArgs))
-		for i, arg := range multiStmtArgs {
-			args[i] = arg.Value
-		}
-		return true, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
-	}
-	return true, nil
+	return true, err
 }
 
 func (w *Writer) logDMLTxnErr(
