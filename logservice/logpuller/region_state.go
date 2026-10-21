@@ -88,6 +88,9 @@ type regionFeedState struct {
 	region    regionInfo
 	requestID uint64 // It is also the subscription ID
 	matcher   *matcher
+	// onInitialized runs once when the region finishes its first successful
+	// initialization for this request lifecycle.
+	onInitialized func(*regionFeedState)
 
 	// Transform: normal -> stopped -> removed.
 	// normal: the region is in replicating.
@@ -111,12 +114,14 @@ func newRegionFeedState(
 	requestID uint64,
 	worker *regionRequestWorker,
 	request *regionReq,
+	onInitialized func(*regionFeedState),
 ) *regionFeedState {
 	state := &regionFeedState{
-		region:    region,
-		requestID: requestID,
-		matcher:   newMatcher(),
-		worker:    worker,
+		region:        region,
+		requestID:     requestID,
+		matcher:       newMatcher(),
+		onInitialized: onInitialized,
+		worker:        worker,
 	}
 	state.regionReq.Store(request)
 	return state
@@ -165,8 +170,13 @@ func (s *regionFeedState) isInitialized() bool {
 }
 
 func (s *regionFeedState) setInitialized() {
-	s.region.lockedRangeState.Initialized.Store(true)
+	if !s.region.lockedRangeState.Initialized.CompareAndSwap(false, true) {
+		return
+	}
 	s.finishScan()
+	if s.onInitialized != nil {
+		s.onInitialized(s)
+	}
 }
 
 func (s *regionFeedState) finishScan() {
