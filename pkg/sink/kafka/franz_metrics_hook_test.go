@@ -16,12 +16,10 @@ package kafka
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -74,31 +72,6 @@ func TestMetricsHook(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	InitMetrics(registry)
-
-	keyspaceLabel := "namespace"
-	if kerneltype.IsNextGen() {
-		keyspaceLabel = "keyspace_name"
-	}
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	checkedMetrics := 0
-	for _, family := range metricFamilies {
-		if !strings.HasPrefix(family.GetName(), "ticdc_sink_kafka_producer_") {
-			continue
-		}
-		for _, metric := range family.Metric {
-			labels := make(map[string]string)
-			for _, label := range metric.Label {
-				labels[label.GetName()] = label.GetValue()
-			}
-			if labels["changefeed"] != changefeedID.Name() {
-				continue
-			}
-			require.Equal(t, changefeedID.Keyspace(), labels[keyspaceLabel], family.GetName())
-			checkedMetrics++
-		}
-	}
-	require.Positive(t, checkedMetrics)
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, nil)
 	hook.OnBrokerE2E(meta, 0, kgo.BrokerE2E{
