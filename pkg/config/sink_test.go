@@ -129,12 +129,22 @@ func TestValidateTxnAtomicity(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		cfg := SinkConfig{}
+		cfg := SinkConfig{
+			DispatchRules: []*DispatchRule{
+				nil,
+				{Matcher: []string{"src.orders"}, DispatcherRule: "table"},
+				nil,
+				{Matcher: []string{"src.customers"}, DispatcherRule: "table"},
+			},
+		}
 		parsedSinkURI, err := url.Parse(tc.sinkURI)
 		require.Nil(t, err)
 		if tc.expectedErr == "" {
 			require.Nil(t, cfg.validateAndAdjust(parsedSinkURI))
 			require.Equal(t, tc.shouldSplitTxn, util.GetOrZero(cfg.TxnAtomicity).ShouldSplitTxn())
+			require.Len(t, cfg.DispatchRules, 2)
+			require.Equal(t, []string{"src.orders"}, cfg.DispatchRules[0].Matcher)
+			require.Equal(t, []string{"src.customers"}, cfg.DispatchRules[1].Matcher)
 		} else {
 			require.Regexp(t, tc.expectedErr, cfg.validateAndAdjust(parsedSinkURI))
 		}
@@ -570,9 +580,16 @@ func TestValidateAndAdjustStorageConfig(t *testing.T) {
 	sinkURI, err := url.Parse("s3://bucket?protocol=csv")
 	require.NoError(t, err)
 	s := GetDefaultReplicaConfig()
+	s.Sink.DispatchRules = []*DispatchRule{
+		nil,
+		{Matcher: []string{"src.*"}, DispatcherRule: "table"},
+		nil,
+	}
 	err = s.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	require.Equal(t, DefaultFileIndexWidth, util.GetOrZero(s.Sink.FileIndexWidth))
+	require.Len(t, s.Sink.DispatchRules, 1)
+	require.Equal(t, "table", s.Sink.DispatchRules[0].PartitionRule)
 
 	err = s.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
