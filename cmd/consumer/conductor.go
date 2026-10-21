@@ -838,13 +838,15 @@ func (c *conductor) needsMoreInput() bool {
 	return false
 }
 
-// Kafka and Pulsar provide one read watermark per physical partition. A global
-// watermark needs every partition; missing progress holds the previous boundary.
+// Partition markers establish a global watermark when every stream is covered.
+// Sources can also publish a global boundary after proving complete input;
+// release covered controls even when some streams have no individual marker.
 func (c *conductor) collectWatermarks() {
 	watermark := uint64(math.MaxUint64)
 	for _, stream := range c.streams {
 		if !stream.hasWatermark {
-			return
+			watermark = 0
+			break
 		}
 		watermark = min(watermark, stream.watermark)
 	}
@@ -963,12 +965,16 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 		c.addWatermark(result.watermark, nil)
 	case *inputWatermark:
 		defer result.record.release()
-		stream := c.streams[result.stream]
-		stream.watermark = max(stream.watermark, result.watermark)
-		stream.hasWatermark = true
+		if !result.sourceCheckpoint {
+			stream := c.streams[result.stream]
+			stream.watermark = max(stream.watermark, result.watermark)
+			stream.hasWatermark = true
+		}
 		result.record.retain()
 		c.controls = append(c.controls, &readControl{watermark: result.watermark, records: []*ack{result.record}})
-		c.reader.Advance([]readUpdate{{stream: result.stream, watermark: result.watermark}})
+		if !result.sourceCheckpoint {
+			c.reader.Advance([]readUpdate{{stream: result.stream, watermark: result.watermark}})
+		}
 	case *inputDDL:
 		defer result.scope.record.release()
 		if err := setDDLTableNames(result.ddl); err != nil {

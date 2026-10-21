@@ -41,9 +41,15 @@ type pulsarRecord struct {
 
 type pulsarPartition struct {
 	stream    int32
-	watermark uint64 // Parser-owned inclusive read boundary for this partition.
+	watermark uint64           // Parser-owned inclusive read boundary for this partition.
+	parsed    pulsar.MessageID // End of the partition prefix parsed in this run.
 	records   []pulsarRecord
 	mu        sync.Mutex // Protects records, shared by Read and Confirm.
+}
+
+type pulsarReadBoundary struct {
+	watermark uint64
+	positions map[string]pulsar.MessageID // Fixed broker tails still awaiting parsing.
 }
 
 type pulsarReader struct {
@@ -52,6 +58,8 @@ type pulsarReader struct {
 	consumer    pulsar.Consumer
 	topic       string
 	watermark   uint64 // Parser-owned global boundary with verified partition membership.
+	candidate   uint64
+	boundary    *pulsarReadBoundary
 	memory      *memoryUsage
 	partitions  map[string]*pulsarPartition
 	confirmable chan<- struct{}
@@ -203,30 +211,117 @@ func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<
 		return func(yield func(task, error) bool) {
 			for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
 				if progress, ok := work.(*inputWatermark); ok && err == nil {
-					if err = c.checkWatermark(ctx, partition, progress.watermark); err != nil {
-						progress.record.release()
-						yield(nil, err)
-						return
-					}
+					partition.watermark = max(partition.watermark, progress.watermark)
+					c.candidate = max(c.candidate, progress.watermark)
+					progress.sourceCheckpoint = true
 				}
 				if !yield(work, err) {
 					return
 				}
+				if err != nil {
+					return
+				}
+			}
+			if partition.parsed == nil || pulsarPositionReached(input.message.ID(), partition.parsed) {
+				partition.parsed = input.message.ID()
+			}
+			through, err := c.advanceWatermark(ctx, input.message.Topic())
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if through != 0 {
+				yield(&watermark{watermark: through}, nil)
 			}
 		}
 	}, tasks)
 }
 
-// Each physical partition must cover the candidate watermark. Refresh membership
-// before publishing a new global boundary so a new partition cannot be omitted.
-func (c *pulsarReader) checkWatermark(ctx context.Context, partition *pulsarPartition, through uint64) error {
-	partition.watermark = max(partition.watermark, through)
-	for _, input := range c.partitions {
-		through = min(through, input.watermark)
+// A checkpoint covers production across the topic. Broker tails sampled after
+// observing it bound the remaining input, including partitions without markers.
+// Keep the active targets fixed while coalescing later checkpoints in candidate.
+func (c *pulsarReader) advanceWatermark(ctx context.Context, topic string) (uint64, error) {
+	previous := c.watermark
+	for c.candidate > c.watermark {
+		if c.boundary == nil {
+			positions := make(map[string]pulsar.MessageID)
+			for topic, partition := range c.partitions {
+				if partition.watermark < c.candidate {
+					positions[topic] = nil
+				}
+			}
+			if len(positions) != 0 {
+				if err := context.Cause(ctx); err != nil {
+					return 0, err
+				}
+				tails, err := c.consumer.GetLastMessageIDs()
+				if err != nil {
+					return 0, errors.WrapError(errors.ErrPulsarInvalidConfig, err, "read Pulsar partition tails")
+				}
+				seen := make(map[string]bool, len(tails))
+				for _, tail := range tails {
+					partition := c.partitions[tail.Topic()]
+					if partition == nil || seen[tail.Topic()] {
+						return 0, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
+					}
+					seen[tail.Topic()] = true
+					if partition.watermark < c.candidate && !pulsarPositionReached(partition.parsed, tail) {
+						positions[tail.Topic()] = tail
+					} else {
+						delete(positions, tail.Topic())
+					}
+				}
+				if len(seen) != len(c.partitions) {
+					return 0, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partition tails are incomplete; restart the consumer")
+				}
+			}
+			c.boundary = &pulsarReadBoundary{watermark: c.candidate, positions: positions}
+		} else if target, ok := c.boundary.positions[topic]; ok {
+			partition := c.partitions[topic]
+			if partition.watermark >= c.boundary.watermark || pulsarPositionReached(partition.parsed, target) {
+				delete(c.boundary.positions, topic)
+			}
+		}
+		if len(c.boundary.positions) != 0 {
+			break
+		}
+		if err := c.checkPartitions(ctx); err != nil {
+			return 0, err
+		}
+		c.watermark = c.boundary.watermark
+		c.boundary = nil
 	}
-	if through <= c.watermark {
-		return nil
+	if c.watermark > previous {
+		return c.watermark, nil
 	}
+	return 0, nil
+}
+
+// An entry-level tail covers every message in a batch. Never treat the first
+// decoded message in that entry as completion of the whole entry.
+func pulsarPositionReached(parsed, target pulsar.MessageID) bool {
+	if target.EntryID() < 0 {
+		return true // The broker reports an empty partition.
+	}
+	if parsed == nil {
+		return false
+	}
+	order := cmp.Or(
+		cmp.Compare(parsed.LedgerID(), target.LedgerID()),
+		cmp.Compare(parsed.EntryID(), target.EntryID()),
+	)
+	if order != 0 {
+		return order > 0
+	}
+	if target.BatchIdx() >= 0 {
+		return parsed.BatchIdx() >= target.BatchIdx()
+	}
+	return parsed.BatchIdx() < 0 || (parsed.BatchSize() > 0 && parsed.BatchIdx() == parsed.BatchSize()-1)
+}
+
+// Refresh membership before publishing a global boundary so a new partition
+// cannot be omitted, even when subscription auto-discovery has not caught up.
+func (c *pulsarReader) checkPartitions(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -242,7 +337,6 @@ func (c *pulsarReader) checkWatermark(ctx context.Context, partition *pulsarPart
 			return errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 		}
 	}
-	c.watermark = through
 	return nil
 }
 
@@ -293,7 +387,7 @@ func (c *pulsarReader) Advance(_ []readUpdate) {
 }
 
 func (c *pulsarReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
-	// The minimum checkpoint marker across physical partitions covers the input.
+	// Checkpoint markers and fixed partition tails establish global coverage.
 	return nil
 }
 

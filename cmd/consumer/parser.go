@@ -70,9 +70,10 @@ type inputDDL struct {
 }
 
 type inputWatermark struct {
-	watermark uint64
-	stream    int32
-	record    *ack
+	watermark        uint64
+	stream           int32
+	record           *ack
+	sourceCheckpoint bool // Production progress whose read coverage is published separately.
 }
 
 type resumeTask struct{ task *decodeTask }
