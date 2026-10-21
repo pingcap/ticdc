@@ -161,7 +161,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.KafkaConfig = &KafkaConfig{
-		SASLPassword: util.AddressOf("plain-password-sentinel"),
+		SASLPassword: new("plain-password-sentinel"),
 	}
 	changefeedConfig := &ChangefeedConfig{
 		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
