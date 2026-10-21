@@ -453,72 +453,87 @@ func TestIsSchemaFile(t *testing.T) {
 func TestCheckOrWriteSchema(t *testing.T) {
 	t.Parallel()
 
-	ctx := t.Context()
-	dir := t.TempDir()
-	f := testFilePathGenerator(ctx, t, dir)
+	for _, enableTableAcrossNodes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tableAcrossNodes=%t", enableTableAcrossNodes), func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			f := testFilePathGenerator(ctx, t, dir)
+			f.config.EnableTableAcrossNodes = enableTableAcrossNodes
 
-	var columns []*timodel.ColumnInfo
-	ft := types.NewFieldType(mysql.TypeLong)
-	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	col := &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("Id"),
-		FieldType:    *ft,
-		DefaultValue: 10,
+			var columns []*timodel.ColumnInfo
+			ft := types.NewFieldType(mysql.TypeLong)
+			ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+			col := &timodel.ColumnInfo{
+				Name:         ast.NewCIStr("Id"),
+				FieldType:    *ft,
+				DefaultValue: 10,
+			}
+			columns = append(columns, col)
+			tidbInfo := &timodel.TableInfo{
+				ID:      20,
+				Name:    ast.NewCIStr("table1"),
+				Columns: columns,
+				Version: 100,
+			}
+			tableInfo := commonType.WrapTableInfo("test", tidbInfo)
+
+			table := VersionedTableName{
+				TableNameWithPhysicTableID: tableInfo.TableName,
+				TableInfoVersion:           100,
+			}
+
+			effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.False(t, hasNewerSchemaVersion)
+			require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+			// With split spans, a higher schema version can come from another
+			// dispatcher startTs and does not establish that this DML is stale.
+			table.TableInfoVersion = 99
+			effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, !enableTableAcrossNodes, hasNewerSchemaVersion)
+			if enableTableAcrossNodes {
+				require.Equal(t, uint64(100), effectiveTableVersion)
+				// The effective version must also be preserved by the cache.
+				effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+				require.NoError(t, err)
+				require.False(t, hasNewerSchemaVersion)
+				require.Equal(t, uint64(100), effectiveTableVersion)
+			} else {
+				require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+			}
+
+			// test only table version changed, schema file should be reused
+			table.TableInfoVersion = 101
+			effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.False(t, hasNewerSchemaVersion)
+			require.Equal(t, uint64(tidbInfo.Version), effectiveTableVersion)
+
+			dir = filepath.Join(dir, "test/table1/meta")
+			files, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(files))
+
+			// test schema file is invalid
+			err = os.WriteFile(filepath.Join(dir,
+				fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
+				[]byte("invalid"), 0o644)
+			require.NoError(t, err)
+			err = os.Remove(filepath.Join(dir, files[0].Name()))
+			require.NoError(t, err)
+			delete(f.versionMap, table)
+			effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.False(t, hasNewerSchemaVersion)
+			require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+			files, err = os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Equal(t, 2, len(files))
+		})
 	}
-	columns = append(columns, col)
-	tidbInfo := &timodel.TableInfo{
-		ID:      20,
-		Name:    ast.NewCIStr("table1"),
-		Columns: columns,
-		Version: 100,
-	}
-	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
-
-	table := VersionedTableName{
-		TableNameWithPhysicTableID: tableInfo.TableName,
-		TableInfoVersion:           100,
-	}
-
-	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
-	require.NoError(t, err)
-	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
-
-	// test old dml file can be ignored
-	table.TableInfoVersion = 99
-	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-	require.NoError(t, err)
-	require.True(t, hasNewerSchemaVersion)
-	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
-
-	// test only table version changed, schema file should be reused
-	table.TableInfoVersion = 101
-	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-	require.NoError(t, err)
-	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, uint64(tidbInfo.Version), effectiveTableVersion)
-
-	dir = filepath.Join(dir, "test/table1/meta")
-	files, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(files))
-
-	// test schema file is invalid
-	err = os.WriteFile(filepath.Join(dir,
-		fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
-		[]byte("invalid"), 0o644)
-	require.NoError(t, err)
-	err = os.Remove(filepath.Join(dir, files[0].Name()))
-	require.NoError(t, err)
-	delete(f.versionMap, table)
-	effectiveTableVersion, hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-	require.NoError(t, err)
-	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
-
-	files, err = os.ReadDir(dir)
-	require.NoError(t, err)
-	require.Equal(t, 2, len(files))
 }
 
 func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {

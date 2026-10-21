@@ -219,9 +219,9 @@ func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
 // The first return value is the schema version that must be used in later
 // data/index paths. The second return value is true when storage already has a
-// newer schema with the same checksum, so the caller should discard the old DML
-// batch. Storage errors are returned from checking, walking, or writing schema
-// files.
+// newer schema with the same checksum and table-across-nodes is disabled, so the
+// caller should discard the old DML batch. Storage errors are returned from
+// checking, walking, or writing schema files.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
@@ -284,7 +284,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if err != nil {
 		return 0, false, err
 	}
-	if hasNewerSchemaVersion {
+	// Split spans can have different startTs without a schema change, so a
+	// higher schema file version does not establish that their DML is stale.
+	if hasNewerSchemaVersion && !f.config.EnableTableAcrossNodes {
 		return table.TableInfoVersion, true, nil
 	}
 
