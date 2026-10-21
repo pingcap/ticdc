@@ -230,8 +230,8 @@ func TestFlushAllWaitsForOutOfOrderUploads(t *testing.T) {
 	require.Same(t, third, <-worker.flushCh)
 	require.Empty(t, worker.flushCh)
 	require.Len(t, worker.files, 2)
-	require.Equal(t, "nextlog!", string(third.writer.buf.Bytes()))
-	require.Equal(t, "last", string(worker.files[1].writer.buf.Bytes()))
+	require.Equal(t, "nextlog!", third.writer.buf.String())
+	require.Equal(t, "last", worker.files[1].writer.buf.String())
 	require.Equal(t, []int{1, 2}, callbackOrder)
 
 	for _, file := range []struct {

@@ -46,13 +46,13 @@ func TestTxnInsertStorageClosesFilesAfterDrain(t *testing.T) {
 		}
 	})
 	for txn := uint64(1); txn <= 3; txn++ {
-		for i := int64(0); i < 3; i++ {
+		for i := range int64(3) {
 			require.NoError(t, storage.addEvent(newStorageTestInsertEvent(txn, i)))
 		}
 		writingFile := storage.writingFile
 		require.NotNil(t, writingFile)
 		var readingFile *os.File
-		for i := int64(0); i < 3; i++ {
+		for i := range int64(3) {
 			event, err := storage.readNextEvent()
 			require.NoError(t, err)
 			require.EqualValues(t, i, event.Columns[0].Value)
@@ -84,7 +84,7 @@ func TestConsumeLogsClosesTxnStorageOnCancel(t *testing.T) {
 			ap.updateSplitter = newUpdateEventSplitter(ap.rd, dir)
 			storage := ap.updateSplitter.tempStorage
 			storage.flushThreshold = 2
-			for i := int64(0); i < 3; i++ {
+			for i := range int64(3) {
 				require.NoError(t, storage.addEvent(newStorageTestInsertEvent(120, i)))
 			}
 			file := storage.writingFile
