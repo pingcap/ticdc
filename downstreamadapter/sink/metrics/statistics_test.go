@@ -24,8 +24,8 @@ import (
 )
 
 func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
-	ExecBatchHistogram.Reset()
-	t.Cleanup(ExecBatchHistogram.Reset)
+	execBatchHistogram.Reset()
+	t.Cleanup(execBatchHistogram.Reset)
 
 	statistics := NewStatistics(
 		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
@@ -36,11 +36,11 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 		return 2, 10, nil
 	}))
 
-	require.Equal(t, 1, testutil.CollectAndCount(ExecBatchHistogram))
+	require.Equal(t, 1, testutil.CollectAndCount(execBatchHistogram))
 	metric := &dto.Metric{}
 	require.NoError(t, statistics.metricExecBatchHis.(prometheus.Metric).Write(metric))
 	require.Contains(t, metric.GetLabel(), &dto.LabelPair{Name: new("keyspace_id"), Value: new("123")})
 
 	statistics.Close()
-	require.Equal(t, 0, testutil.CollectAndCount(ExecBatchHistogram))
+	require.Equal(t, 0, testutil.CollectAndCount(execBatchHistogram))
 }

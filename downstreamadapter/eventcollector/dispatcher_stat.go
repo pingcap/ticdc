@@ -578,7 +578,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
 	d.session.resetCurrentEventService()
-	EventCollectorDroppedEventCount.Inc()
+	eventCollectorDroppedEventCount.Inc()
 }
 
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {

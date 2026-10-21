@@ -19,21 +19,21 @@ import (
 )
 
 var (
-	DispatcherReceivedEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	dispatcherReceivedEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "dispatcher",
 		Name:      "received_event_count",
 		Help:      "The number of events received by the dispatcher",
 	}, []string{"type", "event_type"})
 
-	EventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
+	eventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "dispatcher",
 		Name:      "event_collector_registered_dispatcher_count",
 		Help:      "The number of registered dispatchers in the event collector",
 	})
 
-	EventCollectorReceivedEventLagDuration = prometheus.NewHistogramVec(
+	eventCollectorReceivedEventLagDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
@@ -42,7 +42,7 @@ var (
 			Buckets:   metrics.LagBucket(),
 		}, []string{"type"})
 
-	EventCollectorHandleEventDuration = prometheus.NewHistogram(
+	eventCollectorHandleEventDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_collector",
@@ -50,19 +50,27 @@ var (
 			Help:      "The duration of handling events",
 		})
 
-	EventCollectorDroppedEventCount = prometheus.NewCounter(prometheus.CounterOpts{
+	eventCollectorDroppedEventCount = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_collector",
 		Name:      "dropped_event_count",
 		Help:      "The number of events dropped by the event collector",
 	})
+
+	dynamicStreamMemoryUsage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dynamic_stream",
+			Name:      "memory_usage",
+		}, []string{"module", "type", metrics.GetKeyspaceLabel(), "area"})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DispatcherReceivedEventCount)
-	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
-	registry.MustRegister(EventCollectorReceivedEventLagDuration)
-	registry.MustRegister(EventCollectorHandleEventDuration)
-	registry.MustRegister(EventCollectorDroppedEventCount)
+	registry.MustRegister(dynamicStreamMemoryUsage)
+	registry.MustRegister(dispatcherReceivedEventCount)
+	registry.MustRegister(eventCollectorRegisteredDispatcherCount)
+	registry.MustRegister(eventCollectorReceivedEventLagDuration)
+	registry.MustRegister(eventCollectorHandleEventDuration)
+	registry.MustRegister(eventCollectorDroppedEventCount)
 }

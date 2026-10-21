@@ -133,9 +133,9 @@ func newFileWorkerGroup(
 		},
 		flushCh:    make(chan *fileCache, 32),
 		completeCh: make(chan *fileCache, workerNum),
-		metricWriteBytes: redocommon.RedoWriteBytesGauge.
+		metricWriteBytes: redoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
-		metricFlushAllDuration: redocommon.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: redoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 		metricBusyRatio: redocommon.RedoWorkerBusyRatio.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
@@ -170,9 +170,9 @@ func (f *fileWorkerGroup) Run(
 }
 
 func (f *fileWorkerGroup) close() {
-	redocommon.RedoFlushAllDurationHistogram.
+	redoFlushAllDurationHistogram.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
-	redocommon.RedoWriteBytesGauge.
+	redoWriteBytesGauge.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 	redocommon.RedoWorkerBusyRatio.
 		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)

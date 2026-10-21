@@ -28,16 +28,16 @@ import (
 )
 
 var (
-	metricsEventCount = PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = pullerEventCounter.WithLabelValues("event")
 
-	metricRegionEventHandleDurationEntries  = SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
-	metricRegionEventHandleDurationResolved = SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
-	metricRegionEventHandleDurationMixed    = SubscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
-	metricRegionEventHandleDurationError    = SubscriptionClientRegionEventHandleDuration.WithLabelValues("error")
+	metricRegionEventHandleDurationEntries  = subscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
+	metricRegionEventHandleDurationResolved = subscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
+	metricRegionEventHandleDurationMixed    = subscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
+	metricRegionEventHandleDurationError    = subscriptionClientRegionEventHandleDuration.WithLabelValues("error")
 
-	metricConsumeKVEventsCallbackDurationClearCache        = SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
-	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
-	metricConsumeKVEventsCallbackDurationWakeSubscription  = SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
+	metricConsumeKVEventsCallbackDurationClearCache        = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
+	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
+	metricConsumeKVEventsCallbackDurationWakeSubscription  = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
 )
 
 const (

@@ -97,8 +97,8 @@ func newWriter(
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricFlushBytes:    cloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration: cloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 	}
 	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
@@ -122,10 +122,10 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 	overseerTicker := time.NewTicker(d.config.FlushInterval * 2)
 	writerLabel := strconv.Itoa(d.shardID)
-	metricBusyRatio := metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
+	metricBusyRatio := cloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
 	defer func() {
 		overseerTicker.Stop()
-		metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
+		cloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
 	}()
 
 	for {

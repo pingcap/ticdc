@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	MaintainerCheckpointTsGauge = prometheus.NewGaugeVec(
+	maintainerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -27,7 +27,7 @@ var (
 			Help:      "checkpoint ts of maintainer",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
+	maintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -35,7 +35,7 @@ var (
 			Help:      "checkpoint ts lag of maintainer in seconds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
+	maintainerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -43,7 +43,7 @@ var (
 			Help:      "resolved ts of maintainer",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
+	maintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -51,7 +51,7 @@ var (
 			Help:      "resolved ts lag of maintainer in seconds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	MaintainerGauge = prometheus.NewGaugeVec(
+	maintainerGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "changefeed",
@@ -59,8 +59,8 @@ var (
 			Help:      "The counter of changefeed maintainer",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	// ExecDDLBlockingGauge records the count of blocking DDL.
-	ExecDDLBlockingGauge = prometheus.NewGaugeVec(
+	// execDDLBlockingGauge records the count of blocking DDL.
+	execDDLBlockingGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "ddl",
@@ -68,7 +68,7 @@ var (
 			Help:      "Total count of blocking ddl.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
-	MaintainerHandleEventDuration = prometheus.NewHistogramVec(
+	maintainerHandleEventDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -77,7 +77,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	MaintainerEventChLenGauge = prometheus.NewGaugeVec(
+	maintainerEventChLenGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -85,7 +85,7 @@ var (
 			Help:      "length of maintainer event channel",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	ScheduleTaskGauge = prometheus.NewGaugeVec(
+	scheduleTaskGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -93,7 +93,7 @@ var (
 			Help:      "The total number of scheduler tasks",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
-	SpanCountGauge = prometheus.NewGaugeVec(
+	spanCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -101,7 +101,7 @@ var (
 			Help:      "The total number of spans",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
-	TableCountGauge = prometheus.NewGaugeVec(
+	tableCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -109,7 +109,7 @@ var (
 			Help:      "The total number of tables",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
-	TableStateGauge = prometheus.NewGaugeVec(
+	tableStateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -117,7 +117,7 @@ var (
 			Help:      "The total number of tables in different replication states",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "state", "mode"})
 
-	SlowestTableIDGauge = prometheus.NewGaugeVec(
+	slowestTableIDGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -125,7 +125,7 @@ var (
 			Help:      "The table ID of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	SlowestTableCheckpointTsGauge = prometheus.NewGaugeVec(
+	slowestTableCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -133,7 +133,7 @@ var (
 			Help:      "The checkpoint ts of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	SlowestTableResolvedTsGauge = prometheus.NewGaugeVec(
+	slowestTableResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -141,7 +141,7 @@ var (
 			Help:      "The resolved ts of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	SlowestTableStageCheckpointTsGaugeVec = prometheus.NewGaugeVec(
+	slowestTableStageCheckpointTsGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -149,7 +149,7 @@ var (
 			Help:      "Checkpoint ts of each stage of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableStageResolvedTsGaugeVec = prometheus.NewGaugeVec(
+	slowestTableStageResolvedTsGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -157,7 +157,7 @@ var (
 			Help:      "Resolved ts of each stage of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableStageCheckpointTsLagGaugeVec = prometheus.NewGaugeVec(
+	slowestTableStageCheckpointTsLagGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -165,7 +165,7 @@ var (
 			Help:      "Checkpoint ts lag of each stage of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableStageResolvedTsLagGaugeVec = prometheus.NewGaugeVec(
+	slowestTableStageResolvedTsLagGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -173,7 +173,7 @@ var (
 			Help:      "Resolved ts lag of each stage of the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableStageCheckpointTsLagHistogramVec = prometheus.NewHistogramVec(
+	slowestTableStageCheckpointTsLagHistogramVec = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -182,7 +182,7 @@ var (
 			Buckets:   prometheus.LinearBuckets(0.5, 0.5, 36),
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableStageResolvedTsLagHistogramVec = prometheus.NewHistogramVec(
+	slowestTableStageResolvedTsLagHistogramVec = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -191,7 +191,7 @@ var (
 			Buckets:   prometheus.LinearBuckets(0.5, 0.5, 36),
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "stage"})
 
-	SlowestTableRegionGaugeVec = prometheus.NewGaugeVec(
+	slowestTableRegionGaugeVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -199,7 +199,7 @@ var (
 			Help:      "The number of regions captured by the slowest table",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	SlowestTablePullerResolvedTs = prometheus.NewGaugeVec(
+	slowestTablePullerResolvedTs = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -207,39 +207,57 @@ var (
 			Help:      "Puller Slowest ResolvedTs",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	SlowestTablePullerResolvedTsLag = prometheus.NewGaugeVec(
+	slowestTablePullerResolvedTsLag = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
 			Name:      "slow_table_puller_resolved_ts_lag",
 			Help:      "Puller Slowest ResolvedTs lag",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	captureLeaseResponseCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_lease_response_total",
+			Help:      "Number of capture write lease responses by handling result.",
+		}, []string{"result"})
+
+	captureLeaseResponseRejectedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_lease_response_rejected_total",
+			Help:      "Number of rejected P2P write lease responses.",
+		}, []string{"reason"})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(MaintainerCheckpointTsGauge)
-	registry.MustRegister(MaintainerCheckpointTsLagGauge)
-	registry.MustRegister(MaintainerResolvedTsGauge)
-	registry.MustRegister(MaintainerResolvedTsLagGauge)
-	registry.MustRegister(MaintainerGauge)
-	registry.MustRegister(ExecDDLBlockingGauge)
-	registry.MustRegister(MaintainerHandleEventDuration)
-	registry.MustRegister(MaintainerEventChLenGauge)
-	registry.MustRegister(ScheduleTaskGauge)
-	registry.MustRegister(SpanCountGauge)
-	registry.MustRegister(TableCountGauge)
-	registry.MustRegister(TableStateGauge)
-	registry.MustRegister(SlowestTableIDGauge)
-	registry.MustRegister(SlowestTableCheckpointTsGauge)
-	registry.MustRegister(SlowestTableResolvedTsGauge)
-	registry.MustRegister(SlowestTableStageCheckpointTsGaugeVec)
-	registry.MustRegister(SlowestTableStageResolvedTsGaugeVec)
-	registry.MustRegister(SlowestTableStageCheckpointTsLagGaugeVec)
-	registry.MustRegister(SlowestTableStageResolvedTsLagGaugeVec)
-	registry.MustRegister(SlowestTableStageCheckpointTsLagHistogramVec)
-	registry.MustRegister(SlowestTableStageResolvedTsLagHistogramVec)
-	registry.MustRegister(SlowestTableRegionGaugeVec)
-	registry.MustRegister(SlowestTablePullerResolvedTs)
-	registry.MustRegister(SlowestTablePullerResolvedTsLag)
+	registry.MustRegister(captureLeaseResponseCounter)
+	registry.MustRegister(captureLeaseResponseRejectedCounter)
+	registry.MustRegister(maintainerCheckpointTsGauge)
+	registry.MustRegister(maintainerCheckpointTsLagGauge)
+	registry.MustRegister(maintainerResolvedTsGauge)
+	registry.MustRegister(maintainerResolvedTsLagGauge)
+	registry.MustRegister(maintainerGauge)
+	registry.MustRegister(execDDLBlockingGauge)
+	registry.MustRegister(maintainerHandleEventDuration)
+	registry.MustRegister(maintainerEventChLenGauge)
+	registry.MustRegister(scheduleTaskGauge)
+	registry.MustRegister(spanCountGauge)
+	registry.MustRegister(tableCountGauge)
+	registry.MustRegister(tableStateGauge)
+	registry.MustRegister(slowestTableIDGauge)
+	registry.MustRegister(slowestTableCheckpointTsGauge)
+	registry.MustRegister(slowestTableResolvedTsGauge)
+	registry.MustRegister(slowestTableStageCheckpointTsGaugeVec)
+	registry.MustRegister(slowestTableStageResolvedTsGaugeVec)
+	registry.MustRegister(slowestTableStageCheckpointTsLagGaugeVec)
+	registry.MustRegister(slowestTableStageResolvedTsLagGaugeVec)
+	registry.MustRegister(slowestTableStageCheckpointTsLagHistogramVec)
+	registry.MustRegister(slowestTableStageResolvedTsLagHistogramVec)
+	registry.MustRegister(slowestTableRegionGaugeVec)
+	registry.MustRegister(slowestTablePullerResolvedTs)
+	registry.MustRegister(slowestTablePullerResolvedTsLag)
 }

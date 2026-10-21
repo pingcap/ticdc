@@ -50,19 +50,19 @@ import (
 )
 
 var (
-	kvEventCount        = EventStoreReceivedEventCount.WithLabelValues("kv")
-	resolvedEventCount  = EventStoreReceivedEventCount.WithLabelValues("resolved")
-	insertKVEntryCount  = EventStoreKVEntryCount.WithLabelValues("insert")
-	updateKVEntryCount  = EventStoreKVEntryCount.WithLabelValues("update")
-	deleteKVEntryCount  = EventStoreKVEntryCount.WithLabelValues("delete")
-	scannedBytesMetrics = EventStoreScanBytes.WithLabelValues("scanned")
-	skippedBytesMetrics = EventStoreScanBytes.WithLabelValues("skipped")
+	kvEventCount        = eventStoreReceivedEventCount.WithLabelValues("kv")
+	resolvedEventCount  = eventStoreReceivedEventCount.WithLabelValues("resolved")
+	insertKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("insert")
+	updateKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("update")
+	deleteKVEntryCount  = eventStoreKVEntryCount.WithLabelValues("delete")
+	scannedBytesMetrics = eventStoreScanBytes.WithLabelValues("scanned")
+	skippedBytesMetrics = eventStoreScanBytes.WithLabelValues("skipped")
 )
 
 var (
-	metricEventStoreFirstReadDurationHistogram = EventStoreReadDurationHistogram.WithLabelValues("first")
-	metricEventStoreNextReadDurationHistogram  = EventStoreReadDurationHistogram.WithLabelValues("next")
-	metricEventStoreCloseReadDurationHistogram = EventStoreReadDurationHistogram.WithLabelValues("close")
+	metricEventStoreFirstReadDurationHistogram = eventStoreReadDurationHistogram.WithLabelValues("first")
+	metricEventStoreNextReadDurationHistogram  = eventStoreReadDurationHistogram.WithLabelValues("next")
+	metricEventStoreCloseReadDurationHistogram = eventStoreReadDurationHistogram.WithLabelValues("close")
 )
 
 const subscriptionIdleTTL = time.Minute
@@ -376,10 +376,10 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
-			queueDuration := EventStoreWriteQueueDurationHistogram
+			queueDuration := eventStoreWriteQueueDurationHistogram
 
-			ioWriteDuration := EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
-			totalDuration := EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			ioWriteDuration := eventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
+			totalDuration := eventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalStart := time.Now()
 			for {
 				select {
@@ -505,7 +505,7 @@ func (e *eventStore) RegisterDispatcher(
 	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
-	EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
+	eventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
@@ -710,8 +710,8 @@ func (e *eventStore) RegisterDispatcher(
 				}
 			}
 			resolvedEventCount.Inc()
-			EventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
-			EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
+			eventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
+			eventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
 
@@ -743,7 +743,7 @@ func (e *eventStore) RegisterDispatcher(
 		CheckpointTs: startTs,
 		ResolvedTs:   startTs,
 	}
-	EventStoreSubscriptionGauge.Inc()
+	eventStoreSubscriptionGauge.Inc()
 	return true
 }
 
@@ -1010,7 +1010,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	startTime := time.Now()
 	hasFirstEvent := iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	EventStoreScanRequestsCount.Inc()
+	eventStoreScanRequestsCount.Inc()
 	if !hasFirstEvent {
 		// Empty range or first-read error. Close returns any accumulated
 		// iterator error while also releasing Pebble resources.
@@ -1211,7 +1211,7 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 			SubID:      uint64(sub.subID),
 			Span:       sub.span,
 		}
-		EventStoreSubscriptionGauge.Dec()
+		eventStoreSubscriptionGauge.Dec()
 	}
 }
 
@@ -1282,25 +1282,25 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
-		EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
+		eventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(diskSpaceUsage(stats)))
 		memorySize := stats.MemTable.Size
 		if stats.BlockCache.Size > 0 {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
-		EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+		eventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
 
-		EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
-		EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
-		EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
-		EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
-		EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
-		EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+		eventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		eventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		eventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		eventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		eventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		eventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
 
 		for level, metric := range stats.Levels {
-			EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+			eventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
 		}
-		EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
-		EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
+		eventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		eventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()
@@ -1365,7 +1365,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 					})
 				}
 			}
-			EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
+			eventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
 				globalMinResolvedTs = subResolvedTs
 			}
@@ -1373,7 +1373,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subCheckpointTs := subStat.checkpointTs.Load()
 			subCheckpointPhysicalTime := oracle.ExtractPhysical(subCheckpointTs)
 			subCheckpointTsLagInSec := float64(pdPhysicalTime-subCheckpointPhysicalTime) / 1e3
-			EventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
+			eventStoreSubscriptionDataGCLagHist.Observe(subCheckpointTsLagInSec)
 		}
 	}
 	e.dispatcherMeta.RUnlock()
@@ -1398,12 +1398,12 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			zap.Any("uninitializedSubscriptions", uninitializedSamples))
 	}
 	if globalMinResolvedTs == 0 {
-		EventStoreResolvedTsLagGauge.Set(0)
+		eventStoreResolvedTsLagGauge.Set(0)
 		return
 	}
 	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
 	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
-	EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
+	eventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
 func (e *eventStore) writeEvents(
@@ -1413,7 +1413,7 @@ func (e *eventStore) writeEvents(
 	compressionBuf *[]byte,
 	rawValueBuf *[]byte,
 ) error {
-	EventStoreWriteRequestsCount.Inc()
+	eventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
 	batch := db.NewBatch()
 	defer batch.Close()
@@ -1533,16 +1533,16 @@ func (e *eventStore) writeEvents(
 	insertKVEntryCount.Add(float64(insertCount))
 	updateKVEntryCount.Add(float64(updateCount))
 	deleteKVEntryCount.Add(float64(deleteCount))
-	EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
-	EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
-	EventStoreWriteBytes.Add(float64(batch.Len()))
+	eventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
+	eventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
+	eventStoreWriteBytes.Add(float64(batch.Len()))
 	if totalValueBytesAfter > 0 {
-		EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
+		eventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
-	EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
+	eventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
+	eventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -1568,7 +1568,7 @@ func encodeAndMaybeCompressValue(
 	value = encoder.EncodeAll(rawValue, value)
 	compressionType = CompressionZSTD
 	nextDstBuf = value[:0]
-	EventStoreCompressedRowsCount.Inc()
+	eventStoreCompressedRowsCount.Inc()
 	return value, compressionType, nextRawBuf, nextDstBuf
 }
 

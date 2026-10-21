@@ -262,7 +262,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		delete(m.closedMaintainerEpochs, cfId)
 		m.mutex.Unlock()
-		DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
+		dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	}
 
 	manager.MaintainerFenceMu.Lock()
@@ -690,7 +690,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		}
 		manager.MaintainerFenceMu.Unlock()
 		if decGauge {
-			DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+			dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 		}
 	}
 

@@ -21,7 +21,7 @@ import (
 var (
 	grpcMetrics = grpc_prometheus.NewClientMetrics()
 
-	EventFeedErrorCounter = prometheus.NewCounterVec(
+	eventFeedErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "kvclient",
@@ -29,7 +29,7 @@ var (
 			Help:      "The number of error return by tikv",
 		}, []string{"type"})
 
-	PullerEventCounter = prometheus.NewCounterVec(
+	pullerEventCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "kvclient",
@@ -37,7 +37,7 @@ var (
 			Help:      "event count received by this puller",
 		}, []string{"type"})
 
-	BatchResolvedEventSize = prometheus.NewHistogramVec(
+	batchResolvedEventSize = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "kvclient",
@@ -46,7 +46,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
 		}, []string{"type"})
 
-	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
+	logPullerPrewriteCacheRowNum = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -54,7 +54,7 @@ var (
 			Help:      "The number of rows in prewrite cache",
 		})
 
-	LogPullerMatcherCount = prometheus.NewGauge(
+	logPullerMatcherCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -62,7 +62,7 @@ var (
 			Help:      "The number of matchers",
 		})
 
-	LogPullerResolvedTsLag = prometheus.NewGauge(
+	logPullerResolvedTsLag = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -70,7 +70,7 @@ var (
 			Help:      "The lag of resolved ts",
 		})
 
-	LogPullerMemoryQuota = prometheus.NewGaugeVec(
+	logPullerMemoryQuota = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -78,7 +78,7 @@ var (
 			Help:      "The log puller local memory quota usage.",
 		}, []string{"type"})
 
-	LogPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
+	logPullerMemoryQuotaEventWaiterCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -86,7 +86,7 @@ var (
 			Help:      "The number of event receivers waiting at the log puller memory hard limit.",
 		})
 
-	LogPullerMemoryQuotaEventWaitDuration = prometheus.NewHistogram(
+	logPullerMemoryQuotaEventWaitDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -95,7 +95,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
 		})
 
-	LogPullerMemoryQuotaScanWaiterCount = prometheus.NewGauge(
+	logPullerMemoryQuotaScanWaiterCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -103,7 +103,7 @@ var (
 			Help:      "The number of region scans waiting at the log puller memory quota gate.",
 		})
 
-	LogPullerMemoryQuotaScanWaitDuration = prometheus.NewHistogram(
+	logPullerMemoryQuotaScanWaitDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
@@ -112,7 +112,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
 		})
 
-	SubscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
+	subscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -120,7 +120,7 @@ var (
 			Help:      "The resolved ts lag of subscription client.",
 		})
 
-	SubscriptionClientRequestedRegionCount = prometheus.NewGaugeVec(
+	subscriptionClientRequestedRegionCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -128,7 +128,7 @@ var (
 			Help:      "The number of region requests by state.",
 		}, []string{"state"})
 
-	RegionRequestFinishScanDuration = prometheus.NewHistogram(
+	regionRequestFinishScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -137,7 +137,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
 
-	SubscriptionClientSubscribedRegionCount = prometheus.NewGauge(
+	subscriptionClientSubscribedRegionCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -145,7 +145,7 @@ var (
 			Help:      "The number of locked ranges",
 		})
 
-	SubscriptionClientResolveLockTaskDropCounter = prometheus.NewCounter(
+	subscriptionClientResolveLockTaskDropCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -153,7 +153,7 @@ var (
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
 
-	SubscriptionClientResolveLockCounter = prometheus.NewCounterVec(
+	subscriptionClientResolveLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -161,7 +161,7 @@ var (
 			Help:      "The number of resolve lock executions",
 		}, []string{"status"})
 
-	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
+	subscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -170,7 +170,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		}, []string{"type"}) // types: entries, resolved, mixed, error.
 
-	SubscriptionClientConsumeKVEventsCallbackDuration = prometheus.NewHistogramVec(
+	subscriptionClientConsumeKVEventsCallbackDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -187,22 +187,22 @@ func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(grpcMetrics)
-	registry.MustRegister(EventFeedErrorCounter)
-	registry.MustRegister(PullerEventCounter)
-	registry.MustRegister(BatchResolvedEventSize)
-	registry.MustRegister(LogPullerPrewriteCacheRowNum)
-	registry.MustRegister(LogPullerMatcherCount)
-	registry.MustRegister(LogPullerResolvedTsLag)
-	registry.MustRegister(LogPullerMemoryQuota)
-	registry.MustRegister(LogPullerMemoryQuotaEventWaiterCount)
-	registry.MustRegister(LogPullerMemoryQuotaEventWaitDuration)
-	registry.MustRegister(LogPullerMemoryQuotaScanWaiterCount)
-	registry.MustRegister(LogPullerMemoryQuotaScanWaitDuration)
-	registry.MustRegister(SubscriptionClientRequestedRegionCount)
-	registry.MustRegister(RegionRequestFinishScanDuration)
-	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
-	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
-	registry.MustRegister(SubscriptionClientResolveLockCounter)
-	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
-	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
+	registry.MustRegister(eventFeedErrorCounter)
+	registry.MustRegister(pullerEventCounter)
+	registry.MustRegister(batchResolvedEventSize)
+	registry.MustRegister(logPullerPrewriteCacheRowNum)
+	registry.MustRegister(logPullerMatcherCount)
+	registry.MustRegister(logPullerResolvedTsLag)
+	registry.MustRegister(logPullerMemoryQuota)
+	registry.MustRegister(logPullerMemoryQuotaEventWaiterCount)
+	registry.MustRegister(logPullerMemoryQuotaEventWaitDuration)
+	registry.MustRegister(logPullerMemoryQuotaScanWaiterCount)
+	registry.MustRegister(logPullerMemoryQuotaScanWaitDuration)
+	registry.MustRegister(subscriptionClientRequestedRegionCount)
+	registry.MustRegister(regionRequestFinishScanDuration)
+	registry.MustRegister(subscriptionClientSubscribedRegionCount)
+	registry.MustRegister(subscriptionClientResolveLockTaskDropCounter)
+	registry.MustRegister(subscriptionClientResolveLockCounter)
+	registry.MustRegister(subscriptionClientRegionEventHandleDuration)
+	registry.MustRegister(subscriptionClientConsumeKVEventsCallbackDuration)
 }

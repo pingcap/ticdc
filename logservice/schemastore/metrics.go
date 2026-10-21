@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	SchemaStoreResolvedTsLagGauge = prometheus.NewGauge(
+	schemaStoreResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "schema_store",
@@ -26,7 +26,7 @@ var (
 			Help:      "The resolved ts lag of schema store in seconds",
 		})
 
-	SchemaStoreResolvedRegisterTableGauge = prometheus.NewGauge(
+	schemaStoreResolvedRegisterTableGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "schema_store",
@@ -34,7 +34,7 @@ var (
 			Help:      "The number of registered tables in schema store",
 		})
 
-	SchemaStoreGetTableInfoCounter = prometheus.NewCounter(
+	schemaStoreGetTableInfoCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "schema_store",
@@ -42,7 +42,7 @@ var (
 			Help:      "The number of GetTableInfo requests",
 		})
 
-	SchemaStoreGetTableInfoLagHist = prometheus.NewHistogram(
+	schemaStoreGetTableInfoLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "schema_store",
@@ -51,8 +51,8 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 28), // 10us to 1.5h
 		})
 
-	// SchemaStoreWaitResolvedTsDurationHist is the histogram of waiting duration for resolved ts in schema store.
-	SchemaStoreWaitResolvedTsDurationHist = prometheus.NewHistogram(
+	// schemaStoreWaitResolvedTsDurationHist is the histogram of waiting duration for resolved ts in schema store.
+	schemaStoreWaitResolvedTsDurationHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "schema_store",
@@ -64,9 +64,9 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(SchemaStoreResolvedTsLagGauge)
-	registry.MustRegister(SchemaStoreResolvedRegisterTableGauge)
-	registry.MustRegister(SchemaStoreGetTableInfoCounter)
-	registry.MustRegister(SchemaStoreGetTableInfoLagHist)
-	registry.MustRegister(SchemaStoreWaitResolvedTsDurationHist)
+	registry.MustRegister(schemaStoreResolvedTsLagGauge)
+	registry.MustRegister(schemaStoreResolvedRegisterTableGauge)
+	registry.MustRegister(schemaStoreGetTableInfoCounter)
+	registry.MustRegister(schemaStoreGetTableInfoLagHist)
+	registry.MustRegister(schemaStoreWaitResolvedTsDurationHist)
 }

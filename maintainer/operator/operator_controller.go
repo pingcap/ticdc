@@ -444,8 +444,8 @@ func (oc *Controller) finalizeOperator(
 	delete(oc.lastWarnTime, opID)
 	oc.mu.Unlock()
 
-	OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-	OperatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+	operatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
@@ -534,8 +534,8 @@ func (oc *Controller) pushOperatorWithAdmission(
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
-	TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	totalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 	return true
 }
 
@@ -702,9 +702,9 @@ func (oc *Controller) Close() {
 	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
 
 	for _, opType := range opTypes {
-		OperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		totalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
 	}
 }
 

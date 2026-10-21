@@ -126,18 +126,18 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 }
 
 func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
-	writelease.CaptureLeaseResponseCounter.WithLabelValues("received").Inc()
+	captureLeaseResponseCounter.WithLabelValues("received").Inc()
 	if msg.From != m.coordinatorID {
-		writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("sender").Inc()
+		captureLeaseResponseRejectedCounter.WithLabelValues("sender").Inc()
 		return
 	}
 	response := msg.Message[0].(*heartbeatpb.NodeHeartbeatResponse)
 	if response.GetCoordinatorVersion() != m.coordinatorVersion {
-		writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("coordinator_version").Inc()
+		captureLeaseResponseRejectedCounter.WithLabelValues("coordinator_version").Inc()
 		return
 	}
 	if response.GetTargetNodeEpoch() != m.node.nodeEpoch {
-		writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("node_epoch").Inc()
+		captureLeaseResponseRejectedCounter.WithLabelValues("node_epoch").Inc()
 		return
 	}
 
@@ -159,17 +159,17 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 	requestSeq := response.GetRequestSeq()
 	if requestSeq == 0 {
 		if challenge == nil {
-			writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("request_sequence").Inc()
+			captureLeaseResponseRejectedCounter.WithLabelValues("request_sequence").Inc()
 		}
 		return
 	}
 	if requestSeq <= m.node.lastAppliedLeaseSeq {
-		writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("replayed_sequence").Inc()
+		captureLeaseResponseRejectedCounter.WithLabelValues("replayed_sequence").Inc()
 		return
 	}
 	requestSentAt, ok := m.node.writeLeaseRequestSentAt[requestSeq]
 	if !ok {
-		writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("unknown_sequence").Inc()
+		captureLeaseResponseRejectedCounter.WithLabelValues("unknown_sequence").Inc()
 		return
 	}
 	leaseDurationMs := response.GetLeaseDurationMs()
@@ -180,16 +180,16 @@ func (m *Manager) onNodeHeartbeatResponse(msg *messaging.TargetMessage) {
 	} else {
 		duration := time.Duration(leaseDurationMs) * time.Millisecond
 		if duration <= 0 || duration > writelease.P2PLeaseDuration {
-			writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("lease_duration").Inc()
+			captureLeaseResponseRejectedCounter.WithLabelValues("lease_duration").Inc()
 			return
 		}
 		if !m.writeGate.RenewP2P(requestSentAt, duration) {
-			writelease.CaptureLeaseResponseRejectedCounter.WithLabelValues("expired_or_fenced").Inc()
+			captureLeaseResponseRejectedCounter.WithLabelValues("expired_or_fenced").Inc()
 			return
 		}
 		m.writeGate.SetP2PRequired(true)
 	}
-	writelease.CaptureLeaseResponseCounter.WithLabelValues("accepted").Inc()
+	captureLeaseResponseCounter.WithLabelValues("accepted").Inc()
 	m.node.lastAppliedLeaseSeq = requestSeq
 	for seq := range m.node.writeLeaseRequestSentAt {
 		if seq <= requestSeq {

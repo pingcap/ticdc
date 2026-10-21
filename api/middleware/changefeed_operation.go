@@ -90,7 +90,7 @@ func (s *recentChangefeedOperationStore) record(
 	// The dashboard only needs a recent investigation window. Keep this cache
 	// bounded so user names and detail strings do not become unbounded metric
 	// cardinality over long-running clusters.
-	ChangefeedOperationTimeGauge.WithLabelValues(labels.labelValues()...).Set(float64(operationTime.UnixMilli()))
+	changefeedOperationTimeGauge.WithLabelValues(labels.labelValues()...).Set(float64(operationTime.UnixMilli()))
 	s.events = append(s.events, labels)
 	if len(s.events) <= s.limit {
 		return
@@ -98,7 +98,7 @@ func (s *recentChangefeedOperationStore) record(
 
 	oldest := s.events[0]
 	s.events = s.events[1:]
-	ChangefeedOperationTimeGauge.DeleteLabelValues(oldest.labelValues()...)
+	changefeedOperationTimeGauge.DeleteLabelValues(oldest.labelValues()...)
 }
 
 // ChangefeedOperationMiddleware records user initiated changefeed mutations for

@@ -80,9 +80,9 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
-		metricCheckpointTs: misc.RedoCheckpointTsGauge.
+		metricCheckpointTs: redoCheckpointTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs: misc.RedoResolvedTsGauge.
+		metricResolvedTs: redoResolvedTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
@@ -129,7 +129,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 		}
 	}()
 
-	m.metricFlushLogDuration = misc.RedoFlushLogDurationHistogram.
+	m.metricFlushLogDuration = redoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 
 	err = m.preCleanupExtStorage(ctx)
@@ -477,9 +477,9 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 }
 
 func (m *RedoMeta) CleanupMetrics() {
-	misc.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	misc.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	misc.RedoFlushLogDurationHistogram.
+	redoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 

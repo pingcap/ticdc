@@ -91,15 +91,15 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 	quota.UpdateMetrics()
 
 	require.Equal(t, float64(66), testutil.ToFloat64(
-		LogPullerMemoryQuota.WithLabelValues("max")))
+		logPullerMemoryQuota.WithLabelValues("max")))
 	require.Equal(t, float64(55), testutil.ToFloat64(
-		LogPullerMemoryQuota.WithLabelValues("used")))
+		logPullerMemoryQuota.WithLabelValues("used")))
 	require.Equal(t, float64(7), testutil.ToFloat64(
-		LogPullerMemoryQuota.WithLabelValues("scan_estimated")))
+		logPullerMemoryQuota.WithLabelValues("scan_estimated")))
 	require.Equal(t, float64(2),
-		testutil.ToFloat64(LogPullerMemoryQuotaEventWaiterCount))
+		testutil.ToFloat64(logPullerMemoryQuotaEventWaiterCount))
 	require.Equal(t, float64(3),
-		testutil.ToFloat64(LogPullerMemoryQuotaScanWaiterCount))
+		testutil.ToFloat64(logPullerMemoryQuotaScanWaiterCount))
 }
 
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {

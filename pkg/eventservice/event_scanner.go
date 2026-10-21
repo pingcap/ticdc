@@ -142,7 +142,7 @@ func (s *eventScanner) scan(
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}
-	EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
+	eventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
 	scanCtx.merger = newEventMerger(events)
 	scanCtx.processor = newDMLProcessor(
@@ -575,10 +575,10 @@ func (s *session) isContextDone() bool {
 
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
-	EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
-	EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
+	eventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
+	eventServiceScannedCount.Observe(float64(s.scannedEntryCount))
+	eventServiceScannedTxnCount.Observe(float64(s.dmlCount))
+	eventServiceScannedDMLSize.Observe(float64(s.eventBytes))
 }
 
 func (s *session) appendEvents(events []event.Event) {

@@ -372,8 +372,8 @@ func TestRedoMetaMetrics(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test-redo-meta-metrics", common.DefaultKeyspaceName)
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
-	defer misc.RedoCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
-	defer misc.RedoResolvedTsGauge.DeleteLabelValues(keyspace, changefeed)
+	defer redoCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
+	defer redoResolvedTsGauge.DeleteLabelValues(keyspace, changefeed)
 
 	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
@@ -390,15 +390,15 @@ func TestRedoMetaMetrics(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		checkpointTs := promtestutil.ToFloat64(misc.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := promtestutil.ToFloat64(misc.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(redoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(redoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == float64(10_000) && resolvedTs == float64(10_000)
 	}, time.Second, 50*time.Millisecond)
 
 	m.UpdateMeta(oracle.ComposeTS(20_000, 0), oracle.ComposeTS(21_000, 0))
 	require.Eventually(t, func() bool {
-		checkpointTs := promtestutil.ToFloat64(misc.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := promtestutil.ToFloat64(misc.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(redoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(redoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == 20_000 && resolvedTs == 21_000
 	}, time.Second, 50*time.Millisecond)
 

@@ -79,6 +79,6 @@ func observeBigTxnMetric(rawKVBytes int64) {
 	if rawKVBytes <= 0 {
 		return
 	}
-	EventServiceBigTxnSize.Observe(float64(rawKVBytes))
-	EventServiceBigTxnCount.Inc()
+	eventServiceBigTxnSize.Observe(float64(rawKVBytes))
+	eventServiceBigTxnCount.Inc()
 }

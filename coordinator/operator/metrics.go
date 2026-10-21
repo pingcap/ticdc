@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	CoordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
+	coordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -26,7 +26,7 @@ var (
 			Help:      "number of created operators",
 		}, []string{"type"})
 
-	CoordinatorFinishedOperatorCount = prometheus.NewGaugeVec(
+	coordinatorFinishedOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -34,7 +34,7 @@ var (
 			Help:      "number of finished operators",
 		}, []string{"type"})
 
-	CoordinatorOperatorDuration = prometheus.NewHistogramVec(
+	coordinatorOperatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -46,7 +46,7 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CoordinatorCreatedOperatorCount)
-	registry.MustRegister(CoordinatorFinishedOperatorCount)
-	registry.MustRegister(CoordinatorOperatorDuration)
+	registry.MustRegister(coordinatorCreatedOperatorCount)
+	registry.MustRegister(coordinatorFinishedOperatorCount)
+	registry.MustRegister(coordinatorOperatorDuration)
 }

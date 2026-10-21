@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	SubscriptionClientResolveLockProcessedLockCounter = prometheus.NewCounterVec(
+	subscriptionClientResolveLockProcessedLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -26,7 +26,7 @@ var (
 			Help:      "The number of locks found or resolved by resolve lock",
 		}, []string{"status"})
 
-	SubscriptionClientResolveLockOperationDuration = prometheus.NewHistogramVec(
+	subscriptionClientResolveLockOperationDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
@@ -38,6 +38,6 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(SubscriptionClientResolveLockProcessedLockCounter)
-	registry.MustRegister(SubscriptionClientResolveLockOperationDuration)
+	registry.MustRegister(subscriptionClientResolveLockProcessedLockCounter)
+	registry.MustRegister(subscriptionClientResolveLockOperationDuration)
 }

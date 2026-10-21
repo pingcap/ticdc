@@ -162,7 +162,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 		resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
 		resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
-		SchemaStoreResolvedTsLagGauge.Set(resolvedLag)
+		schemaStoreResolvedTsLagGauge.Set(resolvedLag)
 	}()
 
 	if pendingTs <= resolvedTs {
@@ -306,7 +306,7 @@ func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64,
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	defer func() {
-		SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
+		schemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
 	}()
 	for {
 		if s.resolvedTs.Load() >= ts {
@@ -482,7 +482,7 @@ func (s *schemaStore) RegisterTable(ctx context.Context, keyspaceMeta common.Key
 	if err := store.waitResolvedTs(ctx, tableID, startTs, 5*time.Second); err != nil {
 		return err
 	}
-	SchemaStoreResolvedRegisterTableGauge.Inc()
+	schemaStoreResolvedRegisterTableGauge.Inc()
 	log.Info("register table",
 		zap.Any("keyspace", keyspaceMeta),
 		zap.Int64("tableID", tableID),
@@ -497,7 +497,7 @@ func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID 
 		return err
 	}
 	defer store.release()
-	SchemaStoreResolvedRegisterTableGauge.Dec()
+	schemaStoreResolvedRegisterTableGauge.Dec()
 	return store.dataStorage.unregisterTable(tableID)
 }
 
@@ -508,10 +508,10 @@ func (s *schemaStore) GetTableInfo(ctx context.Context, keyspaceMeta common.Keys
 	}
 	defer store.release()
 
-	SchemaStoreGetTableInfoCounter.Inc()
+	schemaStoreGetTableInfoCounter.Inc()
 	start := time.Now()
 	defer func() {
-		SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
+		schemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
 	if err := store.waitResolvedTs(ctx, tableID, ts, 2*time.Second); err != nil {
 		return nil, err

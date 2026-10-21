@@ -91,9 +91,9 @@ func initRedoComponet(
 		}
 	}
 	// register redo metrics
-	manager.metricTableTriggerRedoDispatcherCount = TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoEventDispatcherCount = EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoCreateDispatcherDuration = CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricTableTriggerRedoDispatcherCount = tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoEventDispatcherCount = eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoCreateDispatcherDuration = createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoMessageDs need register on every node
 	manager.writePathMu.Lock()

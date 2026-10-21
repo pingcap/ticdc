@@ -59,6 +59,6 @@ func TestSpanRegistryUpdateMetrics(t *testing.T) {
 
 	registry.UpdateMetrics()
 
-	require.Equal(t, float64(3), testutil.ToFloat64(SubscriptionClientSubscribedRegionCount))
-	require.InDelta(t, 5.0, testutil.ToFloat64(LogPullerResolvedTsLag), 0.001)
+	require.Equal(t, float64(3), testutil.ToFloat64(subscriptionClientSubscribedRegionCount))
+	require.InDelta(t, 5.0, testutil.ToFloat64(logPullerResolvedTsLag), 0.001)
 }

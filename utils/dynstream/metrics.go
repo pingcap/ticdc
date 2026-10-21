@@ -14,18 +14,10 @@
 package dynstream
 
 import (
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	DynamicStreamMemoryUsage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "dynamic_stream",
-			Name:      "memory_usage",
-		}, []string{"module", "type", metrics.GetKeyspaceLabel(), "area"})
-
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -40,7 +32,7 @@ var (
 			Name:      "pending_queue_len",
 		}, []string{"module"})
 
-	DynamicStreamAddPathNum = prometheus.NewGaugeVec(
+	dynamicStreamAddPathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -48,7 +40,7 @@ var (
 			Help:      "The number of add path command",
 		}, []string{"module"})
 
-	DynamicStreamRemovePathNum = prometheus.NewGaugeVec(
+	dynamicStreamRemovePathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -56,7 +48,7 @@ var (
 			Help:      "The number of remove path command",
 		}, []string{"module"})
 
-	DynamicStreamBatchCount = prometheus.NewHistogramVec(
+	dynamicStreamBatchCount = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -65,7 +57,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
 		}, []string{"module", "area"})
 
-	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
+	dynamicStreamBatchBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -74,7 +66,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
 		}, []string{"module", "area"})
 
-	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
+	dynamicStreamBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -86,12 +78,11 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DynamicStreamMemoryUsage)
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)
-	registry.MustRegister(DynamicStreamAddPathNum)
-	registry.MustRegister(DynamicStreamRemovePathNum)
-	registry.MustRegister(DynamicStreamBatchCount)
-	registry.MustRegister(DynamicStreamBatchBytes)
-	registry.MustRegister(DynamicStreamBatchDuration)
+	registry.MustRegister(dynamicStreamAddPathNum)
+	registry.MustRegister(dynamicStreamRemovePathNum)
+	registry.MustRegister(dynamicStreamBatchCount)
+	registry.MustRegister(dynamicStreamBatchBytes)
+	registry.MustRegister(dynamicStreamBatchDuration)
 }

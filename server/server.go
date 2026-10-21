@@ -511,7 +511,7 @@ func (c *server) monitorCaptureWriteGate(ctx context.Context, interval time.Dura
 				continue
 			}
 			if previous.Writable && !current.Writable {
-				writelease.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
+				captureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
 				log.Warn("capture write gate blocked", zap.String("reason", string(current.Reason)))
 			} else if !previous.Writable && current.Writable {
 				log.Info("capture write gate recovered")
@@ -533,10 +533,10 @@ func (c *server) recordCaptureWriteGateMetrics(status writelease.Status) {
 		if status.Reason == reason {
 			value = 1
 		}
-		writelease.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
+		captureWriteGateState.WithLabelValues(string(reason)).Set(value)
 	}
-	writelease.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
-	writelease.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
+	captureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
+	captureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
 }
 
 func (c *server) localFence(reason string) {

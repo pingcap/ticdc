@@ -39,7 +39,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -245,11 +244,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
-			ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
-			ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
-			ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
-			ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+			changefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+			changefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+			changefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+			changefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+			changefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
 			changefeedDownstreamTypes := make(map[common.ChangeFeedDisplayName]struct{})
 			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
@@ -566,10 +565,10 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
 	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
-		writelease.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
 		return
 	}
-	writelease.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
+	captureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
 	var initializedNodes []node.ID
 	if from == c.writeLease.selfNodeID {
 		// Only the coordinator capture needs remote membership to select a witness.
@@ -578,9 +577,9 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
 	if len(messages) == 0 {
-		writelease.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
 	} else {
-		writelease.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+		captureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
 	}
 	hasGrant := false
 	for _, message := range messages {
@@ -627,7 +626,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	})
 	for _, message := range messages {
 		if err := c.messageCenter.SendCommand(message); err != nil {
-			writelease.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+			captureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
 		}
 	}
 }
@@ -1065,7 +1064,7 @@ func (c *Controller) stopStaleBootstrapMaintainers(
 }
 
 func (c *Controller) Stop() {
-	writelease.CaptureP2PWitnessAvailable.Set(0)
+	captureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()

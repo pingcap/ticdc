@@ -178,7 +178,7 @@ func TestCaptureWriteGateMonitorRecordsBlockTransition(t *testing.T) {
 	require.True(t, gate.RenewEtcd(now, 200*time.Millisecond))
 	c := &server{writeGate: gate}
 
-	counter := writelease.CaptureWriteBlockCounter.WithLabelValues(string(writelease.BlockReasonBothExpired))
+	counter := captureWriteBlockCounter.WithLabelValues(string(writelease.BlockReasonBothExpired))
 	before := testutil.ToFloat64(counter)
 	go c.monitorCaptureWriteGate(t.Context(), 5*time.Millisecond)
 
@@ -186,7 +186,7 @@ func TestCaptureWriteGateMonitorRecordsBlockTransition(t *testing.T) {
 		return testutil.ToFloat64(counter) == before+1
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, float64(1), testutil.ToFloat64(
-		writelease.CaptureWriteGateState.WithLabelValues(string(writelease.BlockReasonBothExpired))))
+		captureWriteGateState.WithLabelValues(string(writelease.BlockReasonBothExpired))))
 }
 
 func TestLocalFenceIsIdempotent(t *testing.T) {

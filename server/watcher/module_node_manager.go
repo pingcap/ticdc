@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
-	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 )
@@ -168,7 +167,7 @@ func (c *NodeManager) Run(ctx context.Context) error {
 		"capture-manager")
 
 	state := orchestrator.NewGlobalState(c.etcdClient.GetClusterID(), cfg.CaptureSessionTTL)
-	writelease.CaptureSafeToRescheduleDelaySeconds.Set(float64(state.CaptureRemoveTTLSeconds()))
+	captureSafeToRescheduleDelaySeconds.Set(float64(state.CaptureRemoveTTLSeconds()))
 	return watcher.RunEtcdWorker(ctx, c, state, time.Millisecond*50)
 }
 

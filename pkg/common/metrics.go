@@ -15,7 +15,7 @@ package common
 
 import "github.com/prometheus/client_golang/prometheus"
 
-var SharedColumnSchemaCountGauge = prometheus.NewGauge(
+var sharedColumnSchemaCountGauge = prometheus.NewGauge(
 	prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "common",
@@ -25,5 +25,5 @@ var SharedColumnSchemaCountGauge = prometheus.NewGauge(
 
 // RegisterMetrics registers the etcd request counter.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(SharedColumnSchemaCountGauge)
+	registry.MustRegister(sharedColumnSchemaCountGauge)
 }

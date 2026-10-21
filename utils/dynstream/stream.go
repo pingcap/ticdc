@@ -114,9 +114,9 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	}
 	observers = batchMetricObservers{
-		duration: DynamicStreamBatchDuration.WithLabelValues(s.module, label),
-		count:    DynamicStreamBatchCount.WithLabelValues(s.module, label),
-		bytes:    DynamicStreamBatchBytes.WithLabelValues(s.module, label),
+		duration: dynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    dynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    dynamicStreamBatchBytes.WithLabelValues(s.module, label),
 	}
 	s.batchMetricCache[label] = observers
 	return observers

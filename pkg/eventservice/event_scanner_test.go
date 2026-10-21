@@ -594,7 +594,7 @@ func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) 
 func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	setLargeTxnThresholdForTest(t, 0)
 	insertCount := testutil.ToFloat64(
-		EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert"))
+		eventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert"))
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -676,7 +676,7 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
 	require.Nil(t, disp.getLargeTxnState())
 	require.Equal(t, insertCount, testutil.ToFloat64(
-		EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
+		eventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
 }
 
 func TestEventScannerFlushesSpilledUKUpdateBeforeSameCommitDDL(t *testing.T) {

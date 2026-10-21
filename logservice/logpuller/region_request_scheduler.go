@@ -213,7 +213,7 @@ func (s *regionRequestScheduler) requestedRegionCount() int {
 }
 
 func (s *regionRequestScheduler) UpdateMetrics() {
-	SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
+	subscriptionClientRequestedRegionCount.WithLabelValues("pending").
 		Set(float64(s.requestedRegionCount()))
 }
 

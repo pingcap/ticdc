@@ -94,11 +94,11 @@ func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetI
 	// NONE statuses bypass this path because they carry schedule side effects and
 	// are not expected to resend continuously.
 	if !q.trackPendingStatuses(request) {
-		HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
+		heartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return
 	}
 	q.queue <- request
-	HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
+	heartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 }
 
 func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusRequestWithTargetID {
@@ -109,7 +109,7 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 		// Move keys from "queued" to "in flight" under the same queue-local
 		// dedupe state machine before the collector starts sending the request.
 		q.markInFlight(request)
-		HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
+		heartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return request
 	}
 }

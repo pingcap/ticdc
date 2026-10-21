@@ -19,7 +19,7 @@ import (
 )
 
 // checker related
-var SplitSpanCheckDuration = prometheus.NewHistogramVec(
+var splitSpanCheckDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "maintainer",
@@ -30,5 +30,5 @@ var SplitSpanCheckDuration = prometheus.NewHistogramVec(
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(SplitSpanCheckDuration)
+	registry.MustRegister(splitSpanCheckDuration)
 }

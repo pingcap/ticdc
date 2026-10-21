@@ -143,14 +143,14 @@ func (d *dmlWriters) run(ctx context.Context) error {
 func (d *dmlWriters) deleteMetrics() {
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
-	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
+	cloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {
@@ -198,7 +198,7 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
 	defer func() {
-		sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
+		cloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
 			Observe(time.Since(start).Seconds())
 	}()
 

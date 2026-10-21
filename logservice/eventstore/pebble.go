@@ -91,13 +91,13 @@ func createPebbleDBs(rootDir string, dbNum int) ([]*pebble.DB, *pebble.Cache, *p
 				log.Warn("pebble background error", zap.String("id", id), zap.Error(err))
 			},
 			CompactionEnd: func(info pebble.CompactionInfo) {
-				EventStorePebbleCompactionDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
+				eventStorePebbleCompactionDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
 			},
 			FlushEnd: func(info pebble.FlushInfo) {
-				EventStorePebbleFlushDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
+				eventStorePebbleFlushDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
 			},
 			WriteStallBegin: func(info pebble.WriteStallBeginInfo) {
-				EventStorePebbleWriteStallCount.WithLabelValues(id, info.Reason).Inc()
+				eventStorePebbleWriteStallCount.WithLabelValues(id, info.Reason).Inc()
 				writeStallState.CompareAndSwap(nil, &eventStoreWriteStallState{startAt: time.Now(), reason: info.Reason})
 			},
 			WriteStallEnd: func() {
@@ -105,7 +105,7 @@ func createPebbleDBs(rootDir string, dbNum int) ([]*pebble.DB, *pebble.Cache, *p
 				if state == nil {
 					return
 				}
-				EventStorePebbleWriteStallDuration.WithLabelValues(id, state.reason).Add(time.Since(state.startAt).Seconds())
+				eventStorePebbleWriteStallDuration.WithLabelValues(id, state.reason).Add(time.Since(state.startAt).Seconds())
 			},
 		}
 		db, err := pebble.Open(fmt.Sprintf("%s/%04d", rootDir, i), opts)

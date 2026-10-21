@@ -144,7 +144,7 @@ func newSubscribedSpan(
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
 			resolveLockRateLimiter.cancel(key)
-			SubscriptionClientResolveLockTaskDropCounter.Inc()
+			subscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
 	return rt
@@ -252,14 +252,14 @@ func (r *spanRegistry) UpdateMetrics() {
 		}
 	}
 	r.RUnlock()
-	SubscriptionClientSubscribedRegionCount.Set(float64(count))
+	subscriptionClientSubscribedRegionCount.Set(float64(count))
 
 	if pullerMinResolvedTs != 0 {
 		pdTime := r.pdClock.CurrentTime()
 		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
 		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 		if resolvedTsLag > 0 {
-			LogPullerResolvedTsLag.Set(resolvedTsLag)
+			logPullerResolvedTsLag.Set(resolvedTsLag)
 		}
 	}
 }

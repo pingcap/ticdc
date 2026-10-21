@@ -158,7 +158,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 // the writer is shutting down, so callers must not execute the downstream write.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
-		writelease.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 		return true
 	}
 	for {
@@ -166,7 +166,7 @@ func (w *Writer) grantWrite() bool {
 			return false
 		}
 		if w.writeGate.IsWritable() {
-			writelease.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 			return true
 		}
 	}

@@ -167,7 +167,7 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 	initializedNodes []node.ID,
 ) []*messaging.TargetMessage {
 	if !c.p2pLeaseEnabled {
-		writelease.CaptureP2PWitnessAvailable.Set(0)
+		captureP2PWitnessAvailable.Set(0)
 		return []*messaging.TargetMessage{
 			c.newGrant(c.selfNodeID, heartbeat.GetNodeEpoch(), heartbeat.GetWriteLeaseRequestSeq()),
 		}
@@ -185,16 +185,16 @@ func (c *captureWriteLeaseController) handleSelfHeartbeat(
 		}
 	}
 	if !remoteExists {
-		writelease.CaptureP2PWitnessAvailable.Set(0)
+		captureP2PWitnessAvailable.Set(0)
 		return []*messaging.TargetMessage{
 			c.newGrant(c.selfNodeID, heartbeat.GetNodeEpoch(), heartbeat.GetWriteLeaseRequestSeq()),
 		}
 	}
 	if len(witnesses) == 0 {
-		writelease.CaptureP2PWitnessAvailable.Set(0)
+		captureP2PWitnessAvailable.Set(0)
 		return nil
 	}
-	writelease.CaptureP2PWitnessAvailable.Set(1)
+	captureP2PWitnessAvailable.Set(1)
 
 	if c.pendingWitness != nil {
 		if c.now().Before(c.pendingWitness.expiresAt) {

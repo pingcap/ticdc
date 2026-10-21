@@ -244,12 +244,12 @@ func (d *gcManager) run(ctx context.Context) error {
 					continue
 				}
 
-				EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
+				eventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
 
 				startTime := time.Now()
 				d.doGCJob(ranges)
 				d.updateCompactRanges(ranges)
-				EventStoreDeleteRangeCount.Add(float64(len(ranges)))
+				eventStoreDeleteRangeCount.Add(float64(len(ranges)))
 
 				duration := time.Since(startTime)
 				windowBatchCount++

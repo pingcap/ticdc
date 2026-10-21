@@ -548,8 +548,8 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		op.PostFinish()
 		item.IsRemoved.Store(true)
 		delete(oc.operators, opID)
-		CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
-		CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
+		coordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
+		coordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("operator", opID.String()),
@@ -577,7 +577,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.ChangeFeedID, *he
 	oc.operators[op.ID()] = opWithTime
 	op.Start()
 	heap.Push(&oc.runningQueue, opWithTime)
-	CoordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
+	coordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) {

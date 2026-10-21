@@ -18,7 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var DispatcherManagerGauge = prometheus.NewGaugeVec(
+var dispatcherManagerGauge = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "dispatchermanagermanager",
@@ -28,5 +28,5 @@ var DispatcherManagerGauge = prometheus.NewGaugeVec(
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DispatcherManagerGauge)
+	registry.MustRegister(dispatcherManagerGauge)
 }

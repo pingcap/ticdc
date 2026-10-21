@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package coordinator
+package logcoordinator
 
 import (
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	ChangefeedResolvedTsGauge = prometheus.NewGaugeVec(
+	changefeedResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
@@ -27,7 +27,7 @@ var (
 			Help:      "resolved ts of changefeeds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	ChangefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
+	changefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
@@ -38,6 +38,6 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ChangefeedResolvedTsGauge)
-	registry.MustRegister(ChangefeedResolvedTsLagGauge)
+	registry.MustRegister(changefeedResolvedTsGauge)
+	registry.MustRegister(changefeedResolvedTsLagGauge)
 }

@@ -28,16 +28,16 @@ import (
 )
 
 var (
-	metricFeedNotLeaderCounter        = EventFeedErrorCounter.WithLabelValues("NotLeader")
-	metricFeedEpochNotMatchCounter    = EventFeedErrorCounter.WithLabelValues("EpochNotMatch")
-	metricFeedRegionNotFoundCounter   = EventFeedErrorCounter.WithLabelValues("RegionNotFound")
-	metricFeedDuplicateRequestCounter = EventFeedErrorCounter.WithLabelValues("DuplicateRequest")
-	metricFeedUnknownErrorCounter     = EventFeedErrorCounter.WithLabelValues("Unknown")
-	metricFeedRPCCtxUnavailable       = EventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
-	metricGetStoreErr                 = EventFeedErrorCounter.WithLabelValues("GetStoreErr")
-	metricStoreSendRequestErr         = EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
-	metricKvIsBusyCounter             = EventFeedErrorCounter.WithLabelValues("KvIsBusy")
-	metricKvCongestedCounter          = EventFeedErrorCounter.WithLabelValues("KvCongested")
+	metricFeedNotLeaderCounter        = eventFeedErrorCounter.WithLabelValues("NotLeader")
+	metricFeedEpochNotMatchCounter    = eventFeedErrorCounter.WithLabelValues("EpochNotMatch")
+	metricFeedRegionNotFoundCounter   = eventFeedErrorCounter.WithLabelValues("RegionNotFound")
+	metricFeedDuplicateRequestCounter = eventFeedErrorCounter.WithLabelValues("DuplicateRequest")
+	metricFeedUnknownErrorCounter     = eventFeedErrorCounter.WithLabelValues("Unknown")
+	metricFeedRPCCtxUnavailable       = eventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
+	metricGetStoreErr                 = eventFeedErrorCounter.WithLabelValues("GetStoreErr")
+	metricStoreSendRequestErr         = eventFeedErrorCounter.WithLabelValues("SendRequestToStore")
+	metricKvIsBusyCounter             = eventFeedErrorCounter.WithLabelValues("KvIsBusy")
+	metricKvCongestedCounter          = eventFeedErrorCounter.WithLabelValues("KvCongested")
 )
 
 // regionFailureHandler handles failed regions and owns retry and reschedule decisions.

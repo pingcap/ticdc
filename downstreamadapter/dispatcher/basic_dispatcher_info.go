@@ -119,7 +119,7 @@ func NewSharedInfo(
 		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:            newBlockEventExecutor(),
 		errCh:                    errCh,
-		metricHandleDDLHis:       HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricHandleDDLHis:       handleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -346,5 +346,5 @@ func (s *SharedInfo) Close() {
 	}
 	keyspace := s.changefeedID.Keyspace()
 	changefeedID := s.changefeedID.Name()
-	HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	handleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }

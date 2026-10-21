@@ -386,8 +386,8 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
-	commandChLen := MessagingReceiveChannelLength.WithLabelValues("command")
-	eventChLen := MessagingReceiveChannelLength.WithLabelValues("event")
+	commandChLen := messagingReceiveChannelLength.WithLabelValues("command")
+	eventChLen := messagingReceiveChannelLength.WithLabelValues("event")
 	for {
 		select {
 		case <-ticker.C:

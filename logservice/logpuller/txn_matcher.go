@@ -28,8 +28,8 @@ const (
 )
 
 var (
-	prewriteCacheRowNum = LogPullerPrewriteCacheRowNum
-	matcherCount        = LogPullerMatcherCount
+	prewriteCacheRowNum = logPullerPrewriteCacheRowNum
+	matcherCount        = logPullerMatcherCount
 )
 
 type matchKey struct {

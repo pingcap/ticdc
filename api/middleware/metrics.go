@@ -18,9 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
+// changefeedOperationTimeGauge records a bounded set of recent user initiated
 // changefeed operation timestamps for the Grafana investigation panel.
-var ChangefeedOperationTimeGauge = prometheus.NewGaugeVec(
+var changefeedOperationTimeGauge = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "owner",
@@ -30,5 +30,5 @@ var ChangefeedOperationTimeGauge = prometheus.NewGaugeVec(
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ChangefeedOperationTimeGauge)
+	registry.MustRegister(changefeedOperationTimeGauge)
 }

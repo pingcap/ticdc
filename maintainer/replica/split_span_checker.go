@@ -197,7 +197,7 @@ func NewSplitSpanChecker(
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		splitSpanCheckDuration: SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
+		splitSpanCheckDuration: splitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 
 		refresher: refresher,
 	}

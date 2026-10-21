@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package metrics
+package cloudstorage
 
 import "github.com/prometheus/client_golang/prometheus"
 
@@ -21,8 +21,8 @@ const (
 
 // Metrics for cloud storage sink
 var (
-	// CloudStorageFlushBytesHist records the total number of bytes flushed to external storage.
-	CloudStorageFlushBytesHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// cloudStorageFlushBytesHist records the total number of bytes flushed to external storage.
+	cloudStorageFlushBytesHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_bytes",
@@ -30,8 +30,8 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KiB ~ 512MiB
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageFlushDurationHistogram records the latency distributions of flushLog.
-	CloudStorageFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// cloudStorageFlushDurationHistogram records the latency distributions of flushLog.
+	cloudStorageFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_duration_seconds",
@@ -39,8 +39,8 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 15), // 1ms ~ 16s
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageDDLFlushDMLDurationHistogram records DDL flush duration.
-	CloudStorageDDLFlushDMLDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// cloudStorageDDLFlushDMLDurationHistogram records DDL flush duration.
+	cloudStorageDDLFlushDMLDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_ddl_flush_dml_duration_seconds",
@@ -48,8 +48,8 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage writers.
-	CloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
+	// cloudStorageWorkerBusyRatio records the busy ratio of CloudStorage writers.
+	cloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
@@ -57,28 +57,28 @@ var (
 			Help:      "Busy ratio for cloud storage sink dml writers.",
 		}, []string{"namespace", "changefeed", "id"})
 
-	CloudStorageSpoolMemoryBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	cloudStorageSpoolMemoryBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_spool_memory_bytes",
 		Help:      "Current memory bytes used by cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolDiskBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	cloudStorageSpoolDiskBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_spool_disk_bytes",
 		Help:      "Current disk bytes used by cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStoragePendingPostEnqueueGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	cloudStoragePendingPostEnqueueGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_pending_post_enqueue",
 		Help:      "Current number of PostEnqueue callbacks waiting in cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolDiskQuotaWaitDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	cloudStorageSpoolDiskQuotaWaitDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_spool_disk_quota_wait_duration_seconds",
@@ -86,15 +86,15 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolDiskQuotaWaitersGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	cloudStorageSpoolDiskQuotaWaitersGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_spool_disk_quota_waiters",
 		Help:      "Current number of waiters blocked by cloud storage spool disk quota",
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageLoadBytesHistogram records loaded batch sizes.
-	CloudStorageLoadBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// cloudStorageLoadBytesHistogram records loaded batch sizes.
+	cloudStorageLoadBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_load_bytes",
@@ -102,21 +102,21 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KiB ~ 512MiB
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageRotateCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	cloudStorageRotateCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_rotate_total",
 		Help:      "Total number of local spool segment rotations in cloud storage sink",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolSegmentCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	cloudStorageSpoolSegmentCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_spool_segment_count",
 		Help:      "Current number of live cloud storage spool segments",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageFlushReasonCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	cloudStorageFlushReasonCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_total",
@@ -124,19 +124,19 @@ var (
 	}, []string{"namespace", "changefeed", "reason"})
 )
 
-// registerCloudStorageMetrics registers all metrics in this file.
-func registerCloudStorageMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CloudStorageFlushBytesHist)
-	registry.MustRegister(CloudStorageFlushDurationHistogram)
-	registry.MustRegister(CloudStorageDDLFlushDMLDurationHistogram)
-	registry.MustRegister(CloudStorageWorkerBusyRatio)
-	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
-	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
-	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
-	registry.MustRegister(CloudStorageSpoolDiskQuotaWaitDurationHistogram)
-	registry.MustRegister(CloudStorageSpoolDiskQuotaWaitersGauge)
-	registry.MustRegister(CloudStorageLoadBytesHistogram)
-	registry.MustRegister(CloudStorageRotateCountCounter)
-	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)
-	registry.MustRegister(CloudStorageFlushReasonCounter)
+// RegisterMetrics registers cloud storage sink metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(cloudStorageFlushBytesHist)
+	registry.MustRegister(cloudStorageFlushDurationHistogram)
+	registry.MustRegister(cloudStorageDDLFlushDMLDurationHistogram)
+	registry.MustRegister(cloudStorageWorkerBusyRatio)
+	registry.MustRegister(cloudStorageSpoolMemoryBytesGauge)
+	registry.MustRegister(cloudStorageSpoolDiskBytesGauge)
+	registry.MustRegister(cloudStoragePendingPostEnqueueGauge)
+	registry.MustRegister(cloudStorageSpoolDiskQuotaWaitDurationHistogram)
+	registry.MustRegister(cloudStorageSpoolDiskQuotaWaitersGauge)
+	registry.MustRegister(cloudStorageLoadBytesHistogram)
+	registry.MustRegister(cloudStorageRotateCountCounter)
+	registry.MustRegister(cloudStorageSpoolSegmentCountGauge)
+	registry.MustRegister(cloudStorageFlushReasonCounter)
 }

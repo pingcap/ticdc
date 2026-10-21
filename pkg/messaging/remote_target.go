@@ -192,17 +192,17 @@ func newRemoteMessageTarget(
 		errCh:           make(chan error, 32),
 
 		// Initialize metrics
-		sendEventCounter:           MessagingSendMsgCounter.WithLabelValues("event"),
-		dropEventCounter:           MessagingDropMsgCounter.WithLabelValues("event"),
-		recvEventCounter:           MessagingReceiveMsgCounter.WithLabelValues("event"),
-		congestedEventErrorCounter: MessagingErrorCounter.WithLabelValues("event", "message_congested"),
+		sendEventCounter:           messagingSendMsgCounter.WithLabelValues("event"),
+		dropEventCounter:           messagingDropMsgCounter.WithLabelValues("event"),
+		recvEventCounter:           messagingReceiveMsgCounter.WithLabelValues("event"),
+		congestedEventErrorCounter: messagingErrorCounter.WithLabelValues("event", "message_congested"),
 
-		sendCmdCounter:           MessagingSendMsgCounter.WithLabelValues("command"),
-		dropCmdCounter:           MessagingDropMsgCounter.WithLabelValues("command"),
-		recvCmdCounter:           MessagingReceiveMsgCounter.WithLabelValues("command"),
-		congestedCmdErrorCounter: MessagingErrorCounter.WithLabelValues("command", "message_congested"),
+		sendCmdCounter:           messagingSendMsgCounter.WithLabelValues("command"),
+		dropCmdCounter:           messagingDropMsgCounter.WithLabelValues("command"),
+		recvCmdCounter:           messagingReceiveMsgCounter.WithLabelValues("command"),
+		congestedCmdErrorCounter: messagingErrorCounter.WithLabelValues("command", "message_congested"),
 
-		errorCounter: MessagingErrorCounter.WithLabelValues("message", "error"),
+		errorCounter: messagingErrorCounter.WithLabelValues("message", "error"),
 	}
 
 	// initialize streams placeholder

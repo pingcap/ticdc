@@ -21,43 +21,43 @@ import (
 // IncPublishedDDLCount DDL
 func IncPublishedDDLCount(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "count").Inc()
+		publishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "count").Inc()
 		return
 	}
-	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
+	publishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
 }
 
 // IncPublishedDDLSuccess success
 func IncPublishedDDLSuccess(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "success").Inc()
+		publishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "success").Inc()
 		return
 	}
-	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
+	publishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
 }
 
 // IncPublishedDDLFail fail
 func IncPublishedDDLFail(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "fail").Inc()
+		publishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "fail").Inc()
 		return
 	}
-	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
+	publishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
 }
 
 // IncPublishedDMLCount count
 func IncPublishedDMLCount(topic, changefeed string) {
-	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
+	publishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
 }
 
 // IncPublishedDMLSuccess success
 func IncPublishedDMLSuccess(topic, changefeed string) {
-	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
+	publishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
 }
 
 // IncPublishedDMLFail fail
 func IncPublishedDMLFail(topic, changefeed string) {
-	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
+	publishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
 }
 
 func isResolvedMessage(messageType common.MessageType) bool {
@@ -72,7 +72,7 @@ const (
 
 var (
 	// pulsar producer DDL scheme, type: count/success/fail, May there are too many tables
-	PublishedDDLSchemaTableCount = prometheus.NewCounterVec(
+	publishedDDLSchemaTableCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
@@ -81,7 +81,7 @@ var (
 		}, []string{"topic", "changefeed", "type"})
 
 	// pulsar producer DML scheme, type:count/success/fail , May there are too many tables
-	PublishedDMLSchemaTableCount = prometheus.NewCounterVec(
+	publishedDMLSchemaTableCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
@@ -90,7 +90,7 @@ var (
 		}, []string{"topic", "changefeed", "type"})
 
 	// pulsar producer WATER count, type:count/success/fail , May there are too many tables
-	PulsarPublishedMessageTypeResolvedCount = prometheus.NewCounterVec(
+	publishedMessageTypeResolvedCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
@@ -101,7 +101,7 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(PublishedDDLSchemaTableCount)
-	registry.MustRegister(PublishedDMLSchemaTableCount)
-	registry.MustRegister(PulsarPublishedMessageTypeResolvedCount)
+	registry.MustRegister(publishedDDLSchemaTableCount)
+	registry.MustRegister(publishedDMLSchemaTableCount)
+	registry.MustRegister(publishedMessageTypeResolvedCount)
 }

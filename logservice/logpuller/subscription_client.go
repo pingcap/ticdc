@@ -54,8 +54,8 @@ const (
 )
 
 var (
-	metricResolveLockSuccessCounter = SubscriptionClientResolveLockCounter.WithLabelValues("success")
-	metricResolveLockFailureCounter = SubscriptionClientResolveLockCounter.WithLabelValues("failure")
+	metricResolveLockSuccessCounter = subscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter = subscriptionClientResolveLockCounter.WithLabelValues("failure")
 
 	metricSubscriptionClientDSChannelSize     = dynstream.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-store")

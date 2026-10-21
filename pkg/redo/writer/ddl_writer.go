@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	redocommon "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -89,9 +88,9 @@ func newDDLWriter(
 		op:         op,
 		extStorage: extStorage,
 		uuidGen:    uuidGen,
-		writeMetric: redocommon.RedoWriteBytesGauge.
+		writeMetric: redoWriteBytesGauge.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoDDLLogFileType),
-		flushMetric: redocommon.RedoFlushAllDurationHistogram.
+		flushMetric: redoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoDDLLogFileType),
 	}, nil
 }
@@ -179,9 +178,9 @@ func (l *ddlWriter) write(ctx context.Context, event *polymorphicRedoEvent) erro
 }
 
 func (l *ddlWriter) closeMetrics() {
-	redocommon.RedoFlushAllDurationHistogram.
+	redoFlushAllDurationHistogram.
 		DeleteLabelValues(l.cfg.ChangeFeedID().Keyspace(), l.cfg.ChangeFeedID().Name(), redo.RedoDDLLogFileType)
-	redocommon.RedoWriteBytesGauge.
+	redoWriteBytesGauge.
 		DeleteLabelValues(l.cfg.ChangeFeedID().Keyspace(), l.cfg.ChangeFeedID().Name(), redo.RedoDDLLogFileType)
 }
 

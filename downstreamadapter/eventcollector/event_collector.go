@@ -90,18 +90,18 @@ type changefeedStat struct {
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 	return &changefeedStat{
 		changefeedID:              changefeedID,
-		metricMemoryUsageMax:      dynstream.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageUsed:     dynstream.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageMaxRedo:  dynstream.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageUsedRedo: dynstream.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageMax:      dynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsed:     dynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageMaxRedo:  dynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsedRedo: dynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
 	}
 }
 
 func (c *changefeedStat) removeMetrics() {
-	dynstream.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	dynstream.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	dynstream.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	dynstream.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 /*
@@ -162,12 +162,12 @@ func New(serverId node.ID) *EventCollector {
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
 		redoReceiveChannels:                  redoReceiveChannels,
-		metricDispatcherReceivedKVEventCount: DispatcherReceivedEventCount.WithLabelValues("KVEvent", "eventDispatcher"),
-		metricDispatcherReceivedResolvedTsEventCount: DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "eventDispatcher"),
-		metricReceiveEventLagDuration:                EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
+		metricDispatcherReceivedKVEventCount: dispatcherReceivedEventCount.WithLabelValues("KVEvent", "eventDispatcher"),
+		metricDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "eventDispatcher"),
+		metricReceiveEventLagDuration:                eventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 
-		metricRedoDispatcherReceivedKVEventCount:         DispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
-		metricRedoDispatcherReceivedResolvedTsEventCount: DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
+		metricRedoDispatcherReceivedKVEventCount:         dispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
+		metricRedoDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
 
 		metricDSEventChanSize:     dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
 		metricDSPendingQueue:      dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
@@ -263,7 +263,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
 			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("mode", target.GetMode()))
 	}()
-	EventCollectorRegisteredDispatcherCount.Inc()
+	eventCollectorRegisteredDispatcherCount.Inc()
 
 	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
@@ -546,7 +546,7 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 
 	start := time.Now()
 	defer func() {
-		EventCollectorHandleEventDuration.Observe(time.Since(start).Seconds())
+		eventCollectorHandleEventDuration.Observe(time.Since(start).Seconds())
 	}()
 
 	// If the message is a log service event, we need to forward it to the

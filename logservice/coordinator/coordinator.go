@@ -311,8 +311,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					zap.Uint64("changefeedGIDHigh", gid.High))
 				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
 				if len(state.nodeStates) == 0 {
-					ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
-					ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
 					log.Info("changefeed state removed as it has no active nodes",
 						zap.Stringer("changefeedID", state.cfID),
@@ -338,8 +338,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				nodeStates:                   make(map[node.ID]uint64),
 				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
 				nodeReportPhyTs:              make(map[node.ID]int64),
-				resolvedTsGauge:              ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-				resolvedTsLagGauge:           ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsGauge:              changefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge:           changefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
 		}
 		changefeedState := c.changefeedStates.m[gid]

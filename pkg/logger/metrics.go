@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	LoggerWriteBytesTotal = prometheus.NewCounterFunc(
+	loggerWriteBytesTotal = prometheus.NewCounterFunc(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
@@ -28,7 +28,7 @@ var (
 		func() float64 { return float64(LogWriteBytesTotal()) },
 	)
 
-	LoggerFileSizeBytes = prometheus.NewGaugeFunc(
+	loggerFileSizeBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
@@ -38,7 +38,7 @@ var (
 		func() float64 { return float64(LogFileSizeBytes()) },
 	)
 
-	LoggerTotalSizeBytes = prometheus.NewGaugeFunc(
+	loggerTotalSizeBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
@@ -48,7 +48,7 @@ var (
 		func() float64 { return float64(LogTotalSizeBytes()) },
 	)
 
-	LoggerDiskTotalBytes = prometheus.NewGaugeFunc(
+	loggerDiskTotalBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
@@ -58,7 +58,7 @@ var (
 		func() float64 { return float64(LogDiskTotalBytes()) },
 	)
 
-	LoggerDiskUsedBytes = prometheus.NewGaugeFunc(
+	loggerDiskUsedBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
@@ -71,9 +71,9 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(LoggerWriteBytesTotal)
-	registry.MustRegister(LoggerFileSizeBytes)
-	registry.MustRegister(LoggerTotalSizeBytes)
-	registry.MustRegister(LoggerDiskTotalBytes)
-	registry.MustRegister(LoggerDiskUsedBytes)
+	registry.MustRegister(loggerWriteBytesTotal)
+	registry.MustRegister(loggerFileSizeBytes)
+	registry.MustRegister(loggerTotalSizeBytes)
+	registry.MustRegister(loggerDiskTotalBytes)
+	registry.MustRegister(loggerDiskUsedBytes)
 }

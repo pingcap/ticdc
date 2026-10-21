@@ -41,11 +41,11 @@ func newMetricCollector(changefeedID common.ChangeFeedID) *metricCollector {
 	return &metricCollector{
 		keyspace:            keyspace,
 		name:                name,
-		rowTotalCount:       redocommon.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
-		rowWriteLogDuration: redocommon.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
+		rowTotalCount:       redoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
+		rowWriteLogDuration: redoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
 
-		ddlTotalCount:       redocommon.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
-		ddlWriteLogDuration: redocommon.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+		ddlTotalCount:       redoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+		ddlWriteLogDuration: redoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 		ddlWorkerBusyRatio:  redocommon.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 	}
 }
@@ -67,8 +67,8 @@ func (m *metricCollector) observeDDLWrite(duration time.Duration) {
 
 func (m *metricCollector) close() {
 	for _, logType := range []string{redo.RedoRowLogFileType, redo.RedoDDLLogFileType} {
-		redocommon.RedoWriteLogDurationHistogram.DeleteLabelValues(m.keyspace, m.name, logType)
-		redocommon.RedoTotalRowsCountGauge.DeleteLabelValues(m.keyspace, m.name, logType)
+		redoWriteLogDurationHistogram.DeleteLabelValues(m.keyspace, m.name, logType)
+		redoTotalRowsCountGauge.DeleteLabelValues(m.keyspace, m.name, logType)
 	}
 	redocommon.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
 }

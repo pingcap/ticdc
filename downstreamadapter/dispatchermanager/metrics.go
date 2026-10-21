@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	TableTriggerEventDispatcherGauge = prometheus.NewGaugeVec(
+	tableTriggerEventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -27,7 +27,7 @@ var (
 			Help:      "The number of table dispatchers",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "event_type"})
 
-	EventDispatcherGauge = prometheus.NewGaugeVec(
+	eventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -35,7 +35,7 @@ var (
 			Help:      "The number of table dispatchers",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "event_type"})
 
-	CreateDispatcherDuration = prometheus.NewHistogramVec(
+	createDispatcherDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
@@ -44,7 +44,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.000001, 2, 20), // 1us~524ms
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "event_type"})
 
-	DispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
+	dispatcherManagerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -52,7 +52,7 @@ var (
 			Help:      "Resolved ts of event dispatcher manager(changefeed)",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	DispatcherManagerResolvedTsLagGauge = prometheus.NewGaugeVec(
+	dispatcherManagerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -60,7 +60,7 @@ var (
 			Help:      "Resolved ts lag of event dispatcher manager(changefeed) in seconds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	DispatcherManagerCheckpointTsGauge = prometheus.NewGaugeVec(
+	dispatcherManagerCheckpointTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -68,7 +68,7 @@ var (
 			Help:      "Checkpoint ts of event dispatcher manager(changefeed)",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	DispatcherManagerCheckpointTsLagGauge = prometheus.NewGaugeVec(
+	dispatcherManagerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -76,7 +76,7 @@ var (
 			Help:      "Checkpoint ts lag of event dispatcher manager(changefeed) in seconds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	DispatcherManagerBlockStatusesChanLenGauge = prometheus.NewGaugeVec(
+	dispatcherManagerBlockStatusesChanLenGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -84,7 +84,7 @@ var (
 			Help:      "length of dispatcher manager block statuses channel",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	HandleDispatcherRequsetCounter = prometheus.NewCounterVec(
+	handleDispatcherRequsetCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
@@ -92,7 +92,7 @@ var (
 			Help:      "Total count of dispatcher request.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
-	HeartbeatCollectorBlockStatusRequestQueueLenGauge = prometheus.NewGauge(
+	heartbeatCollectorBlockStatusRequestQueueLenGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "heartbeat_collector",
@@ -103,14 +103,14 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(TableTriggerEventDispatcherGauge)
-	registry.MustRegister(EventDispatcherGauge)
-	registry.MustRegister(CreateDispatcherDuration)
-	registry.MustRegister(DispatcherManagerResolvedTsGauge)
-	registry.MustRegister(DispatcherManagerResolvedTsLagGauge)
-	registry.MustRegister(DispatcherManagerCheckpointTsGauge)
-	registry.MustRegister(DispatcherManagerCheckpointTsLagGauge)
-	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
-	registry.MustRegister(HandleDispatcherRequsetCounter)
-	registry.MustRegister(HeartbeatCollectorBlockStatusRequestQueueLenGauge)
+	registry.MustRegister(tableTriggerEventDispatcherGauge)
+	registry.MustRegister(eventDispatcherGauge)
+	registry.MustRegister(createDispatcherDuration)
+	registry.MustRegister(dispatcherManagerResolvedTsGauge)
+	registry.MustRegister(dispatcherManagerResolvedTsLagGauge)
+	registry.MustRegister(dispatcherManagerCheckpointTsGauge)
+	registry.MustRegister(dispatcherManagerCheckpointTsLagGauge)
+	registry.MustRegister(dispatcherManagerBlockStatusesChanLenGauge)
+	registry.MustRegister(handleDispatcherRequsetCounter)
+	registry.MustRegister(heartbeatCollectorBlockStatusRequestQueueLenGauge)
 }

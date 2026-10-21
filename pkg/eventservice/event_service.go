@@ -147,8 +147,8 @@ func (s *eventService) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	dispatcherChanSize := EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
-	heartbeatChanSize := EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+	dispatcherChanSize := eventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := eventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
 		select {
 		case <-ctx.Done():

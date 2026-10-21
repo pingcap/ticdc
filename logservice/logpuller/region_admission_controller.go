@@ -52,7 +52,7 @@ func (r *regionReq) finish() bool {
 			zap.Uint64("regionID", r.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
 			zap.Int("inflightCount", r.controller.stats().inflight))
-		RegionRequestFinishScanDuration.Observe(cost)
+		regionRequestFinishScanDuration.Observe(cost)
 		return true
 	}
 	log.Info("region request duration abnormal, skip metric",
@@ -193,19 +193,19 @@ func (c *regionAdmissionController) pop(
 		case <-interrupt:
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+				logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, nil
 		case <-ctx.Done():
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+				logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, ctx.Err()
 		}
 		if waitingForMemory {
 			c.memoryQuota.scanWaiters.Add(-1)
-			LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+			logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 		}
 	}
 }

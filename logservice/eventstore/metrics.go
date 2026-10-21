@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	EventStoreSubscriptionGauge = prometheus.NewGauge(
+	eventStoreSubscriptionGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -27,7 +27,7 @@ var (
 			Help:      "The number of subscriptions in event store",
 		})
 
-	EventStoreReceivedEventCount = prometheus.NewCounterVec(
+	eventStoreReceivedEventCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -35,7 +35,7 @@ var (
 			Help:      "The number of events received by event store.",
 		}, []string{"type"}) // types : kv, resolved.
 
-	EventStoreKVEntryCount = prometheus.NewCounterVec(
+	eventStoreKVEntryCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -43,8 +43,8 @@ var (
 			Help:      "The number of KV entries received by event store.",
 		}, []string{"type"}) // types: insert, update, delete.
 
-	// EventStoreCompressedRowsCount is the counter of compressed rows.
-	EventStoreCompressedRowsCount = prometheus.NewCounter(
+	// eventStoreCompressedRowsCount is the counter of compressed rows.
+	eventStoreCompressedRowsCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -52,7 +52,7 @@ var (
 			Help:      "The total number of rows compressed by event store.",
 		})
 
-	EventStoreCompressionRatioHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	eventStoreCompressionRatioHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "compression_ratio",
@@ -60,7 +60,7 @@ var (
 		Buckets:   []float64{0.25, 0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2, 3, 4, 6, 8, 10, 15, 20},
 	})
 
-	EventStoreWriteDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	eventStoreWriteDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "write_duration",
@@ -68,7 +68,7 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 10),
 	})
 
-	EventStoreScanRequestsCount = prometheus.NewCounter(
+	eventStoreScanRequestsCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -76,14 +76,14 @@ var (
 			Help:      "The number of scan requests received by event store.",
 		})
 
-	EventStoreScanBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
+	eventStoreScanBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "scan_bytes",
 		Help:      "The number of bytes scanned by event store.",
 	}, []string{"type"})
 
-	EventStoreDeleteRangeCount = prometheus.NewCounter(
+	eventStoreDeleteRangeCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -91,7 +91,7 @@ var (
 			Help:      "The number of delete range operations executed by event store gc manager (after coalescing).",
 		})
 
-	EventStoreDeleteRangeFetchedCount = prometheus.NewCounter(
+	eventStoreDeleteRangeFetchedCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -99,7 +99,7 @@ var (
 			Help:      "The number of delete range items fetched by event store gc manager (before coalescing).",
 		})
 
-	EventStoreSubscriptionResolvedTsLagHist = prometheus.NewHistogram(
+	eventStoreSubscriptionResolvedTsLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -108,7 +108,7 @@ var (
 			Buckets:   metrics.LagBucket(),
 		})
 
-	EventStoreSubscriptionDataGCLagHist = prometheus.NewHistogram(
+	eventStoreSubscriptionDataGCLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -117,21 +117,21 @@ var (
 			Buckets:   metrics.LagBucket(),
 		})
 
-	EventStoreOnDiskDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStoreOnDiskDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "on_disk_data_size",
 		Help:      "The amount of pending data stored on-disk for event store",
 	}, []string{"id"})
 
-	EventStoreInMemoryDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStoreInMemoryDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "in_memory_data_size",
 		Help:      "The amount of pending data stored in-memory for event store",
 	}, []string{"id"})
 
-	EventStoreResolvedTsLagGauge = prometheus.NewGauge(
+	eventStoreResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -139,7 +139,7 @@ var (
 			Help:      "The resolved ts lag of event store.",
 		})
 
-	EventStoreWriteBatchEventsCountHist = prometheus.NewHistogram(
+	eventStoreWriteBatchEventsCountHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -148,7 +148,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(8, 2, 20),
 		})
 
-	EventStoreWriteBatchSizeHist = prometheus.NewHistogram(
+	eventStoreWriteBatchSizeHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -157,7 +157,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(32, 2, 20),
 		})
 
-	EventStoreWriteBytes = prometheus.NewCounter(
+	eventStoreWriteBytes = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -165,7 +165,7 @@ var (
 			Help:      "The number of bytes written by event store.",
 		})
 
-	EventStoreWriteRequestsCount = prometheus.NewCounter(
+	eventStoreWriteRequestsCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -173,7 +173,7 @@ var (
 			Help:      "The number of write requests received by event store.",
 		})
 
-	EventStoreReadDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	eventStoreReadDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "read_duration",
@@ -181,7 +181,7 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	}, []string{"type"})
 
-	EventStoreNotifyDispatcherCount = prometheus.NewCounter(
+	eventStoreNotifyDispatcherCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -189,7 +189,7 @@ var (
 			Help:      "The number of times event store notifies dispatchers with resolved ts.",
 		})
 
-	EventStoreNotifyDispatcherDurationHist = prometheus.NewHistogram(
+	eventStoreNotifyDispatcherDurationHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -198,8 +198,8 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2, 20), // 10us ~ 5.2s,
 		})
 
-	// EventStoreRegisterDispatcherStartTsLagHist is the histogram of startTs lag when registering a dispatcher.
-	EventStoreRegisterDispatcherStartTsLagHist = prometheus.NewHistogram(
+	// eventStoreRegisterDispatcherStartTsLagHist is the histogram of startTs lag when registering a dispatcher.
+	eventStoreRegisterDispatcherStartTsLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -208,7 +208,7 @@ var (
 			Buckets:   metrics.LagBucket(),
 		})
 
-	EventStoreWriteWorkerIODuration = prometheus.NewHistogramVec(
+	eventStoreWriteWorkerIODuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -217,7 +217,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"db", "worker"})
 
-	EventStoreWriteWorkerTotalDuration = prometheus.NewHistogramVec(
+	eventStoreWriteWorkerTotalDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_store",
@@ -226,7 +226,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"db", "worker"})
 
-	EventStoreWriteQueueDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	eventStoreWriteQueueDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "write_queue_duration",
@@ -234,7 +234,7 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	})
 
-	EventStoreWritePrepareDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	eventStoreWritePrepareDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "write_prepare_duration",
@@ -242,42 +242,42 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	})
 
-	EventStorePebbleIteratorGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleIteratorGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_iterator_count",
 		Help:      "The number of sstable iterators by event store pebble DB",
 	}, []string{"id"})
 
-	EventStorePebbleLevelFilesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleLevelFilesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_level_files",
 		Help:      "The number of files in each level by event store pebble DB",
 	}, []string{"id", "level"})
 
-	EventStorePebbleBlockCacheAccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleBlockCacheAccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_block_cache_access_total",
 		Help:      "The total number of event store pebble block cache access",
 	}, []string{"id", "type"})
 
-	EventStorePebbleWriteStallCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	eventStorePebbleWriteStallCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_write_stall_total",
 		Help:      "The total number of event store pebble write stalls",
 	}, []string{"id", "reason"})
 
-	EventStorePebbleWriteStallDuration = prometheus.NewCounterVec(prometheus.CounterOpts{
+	eventStorePebbleWriteStallDuration = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_write_stall_duration_seconds_total",
 		Help:      "The total duration (s) of event store pebble write stalls",
 	}, []string{"id", "reason"})
 
-	EventStorePebbleCompactionDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	eventStorePebbleCompactionDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_compaction_duration_seconds",
@@ -285,7 +285,7 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 20),
 	}, []string{"id"})
 
-	EventStorePebbleFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	eventStorePebbleFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_flush_duration_seconds",
@@ -293,35 +293,35 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 20),
 	}, []string{"id"})
 
-	EventStorePebbleCompactionDebtGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleCompactionDebtGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_compaction_debt_bytes",
 		Help:      "The estimated compaction debt in bytes for event store pebble DB",
 	}, []string{"id"})
 
-	EventStorePebbleCompactionInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleCompactionInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_compaction_in_progress",
 		Help:      "The number of in progress compactions for event store pebble DB",
 	}, []string{"id"})
 
-	EventStorePebbleCompactionInProgressBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleCompactionInProgressBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_compaction_in_progress_bytes",
 		Help:      "The total bytes of in progress compactions for event store pebble DB",
 	}, []string{"id"})
 
-	EventStorePebbleFlushInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleFlushInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_flush_in_progress",
 		Help:      "The number of in progress flushes for event store pebble DB",
 	}, []string{"id"})
 
-	EventStorePebbleReadAmpGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	eventStorePebbleReadAmpGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "pebble_read_amplification",
@@ -331,43 +331,43 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(EventStoreSubscriptionGauge)
-	registry.MustRegister(EventStoreReceivedEventCount)
-	registry.MustRegister(EventStoreKVEntryCount)
-	registry.MustRegister(EventStoreCompressedRowsCount)
-	registry.MustRegister(EventStoreCompressionRatioHistogram)
-	registry.MustRegister(EventStoreWriteDurationHistogram)
-	registry.MustRegister(EventStoreScanRequestsCount)
-	registry.MustRegister(EventStoreScanBytes)
-	registry.MustRegister(EventStoreDeleteRangeCount)
-	registry.MustRegister(EventStoreDeleteRangeFetchedCount)
-	registry.MustRegister(EventStoreSubscriptionResolvedTsLagHist)
-	registry.MustRegister(EventStoreSubscriptionDataGCLagHist)
-	registry.MustRegister(EventStoreOnDiskDataSizeGauge)
-	registry.MustRegister(EventStoreInMemoryDataSizeGauge)
-	registry.MustRegister(EventStoreResolvedTsLagGauge)
-	registry.MustRegister(EventStoreWriteBatchEventsCountHist)
-	registry.MustRegister(EventStoreWriteBatchSizeHist)
-	registry.MustRegister(EventStoreWriteBytes)
-	registry.MustRegister(EventStoreWriteRequestsCount)
-	registry.MustRegister(EventStoreReadDurationHistogram)
-	registry.MustRegister(EventStoreNotifyDispatcherCount)
-	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
-	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
-	registry.MustRegister(EventStoreWriteWorkerIODuration)
-	registry.MustRegister(EventStoreWriteWorkerTotalDuration)
-	registry.MustRegister(EventStoreWriteQueueDurationHistogram)
-	registry.MustRegister(EventStoreWritePrepareDurationHistogram)
-	registry.MustRegister(EventStorePebbleIteratorGauge)
-	registry.MustRegister(EventStorePebbleLevelFilesGauge)
-	registry.MustRegister(EventStorePebbleBlockCacheAccess)
-	registry.MustRegister(EventStorePebbleWriteStallCount)
-	registry.MustRegister(EventStorePebbleWriteStallDuration)
-	registry.MustRegister(EventStorePebbleCompactionDurationHistogram)
-	registry.MustRegister(EventStorePebbleFlushDurationHistogram)
-	registry.MustRegister(EventStorePebbleCompactionDebtGauge)
-	registry.MustRegister(EventStorePebbleCompactionInProgressGauge)
-	registry.MustRegister(EventStorePebbleCompactionInProgressBytesGauge)
-	registry.MustRegister(EventStorePebbleFlushInProgressGauge)
-	registry.MustRegister(EventStorePebbleReadAmpGauge)
+	registry.MustRegister(eventStoreSubscriptionGauge)
+	registry.MustRegister(eventStoreReceivedEventCount)
+	registry.MustRegister(eventStoreKVEntryCount)
+	registry.MustRegister(eventStoreCompressedRowsCount)
+	registry.MustRegister(eventStoreCompressionRatioHistogram)
+	registry.MustRegister(eventStoreWriteDurationHistogram)
+	registry.MustRegister(eventStoreScanRequestsCount)
+	registry.MustRegister(eventStoreScanBytes)
+	registry.MustRegister(eventStoreDeleteRangeCount)
+	registry.MustRegister(eventStoreDeleteRangeFetchedCount)
+	registry.MustRegister(eventStoreSubscriptionResolvedTsLagHist)
+	registry.MustRegister(eventStoreSubscriptionDataGCLagHist)
+	registry.MustRegister(eventStoreOnDiskDataSizeGauge)
+	registry.MustRegister(eventStoreInMemoryDataSizeGauge)
+	registry.MustRegister(eventStoreResolvedTsLagGauge)
+	registry.MustRegister(eventStoreWriteBatchEventsCountHist)
+	registry.MustRegister(eventStoreWriteBatchSizeHist)
+	registry.MustRegister(eventStoreWriteBytes)
+	registry.MustRegister(eventStoreWriteRequestsCount)
+	registry.MustRegister(eventStoreReadDurationHistogram)
+	registry.MustRegister(eventStoreNotifyDispatcherCount)
+	registry.MustRegister(eventStoreNotifyDispatcherDurationHist)
+	registry.MustRegister(eventStoreRegisterDispatcherStartTsLagHist)
+	registry.MustRegister(eventStoreWriteWorkerIODuration)
+	registry.MustRegister(eventStoreWriteWorkerTotalDuration)
+	registry.MustRegister(eventStoreWriteQueueDurationHistogram)
+	registry.MustRegister(eventStoreWritePrepareDurationHistogram)
+	registry.MustRegister(eventStorePebbleIteratorGauge)
+	registry.MustRegister(eventStorePebbleLevelFilesGauge)
+	registry.MustRegister(eventStorePebbleBlockCacheAccess)
+	registry.MustRegister(eventStorePebbleWriteStallCount)
+	registry.MustRegister(eventStorePebbleWriteStallDuration)
+	registry.MustRegister(eventStorePebbleCompactionDurationHistogram)
+	registry.MustRegister(eventStorePebbleFlushDurationHistogram)
+	registry.MustRegister(eventStorePebbleCompactionDebtGauge)
+	registry.MustRegister(eventStorePebbleCompactionInProgressGauge)
+	registry.MustRegister(eventStorePebbleCompactionInProgressBytesGauge)
+	registry.MustRegister(eventStorePebbleFlushInProgressGauge)
+	registry.MustRegister(eventStorePebbleReadAmpGauge)
 }

@@ -22,8 +22,11 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	mysqlsink "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -38,6 +41,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	redocommon "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
@@ -45,7 +49,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -54,6 +58,7 @@ var registry = prometheus.NewRegistry()
 
 func registerMetrics() {
 	RegisterMetrics(registry)
+	watcher.RegisterMetrics(registry)
 	middleware.RegisterMetrics(registry)
 	coordinator.RegisterMetrics(registry)
 	changefeed.RegisterMetrics(registry)
@@ -63,7 +68,10 @@ func registerMetrics() {
 	dispatcherorchestrator.RegisterMetrics(registry)
 	eventcollector.RegisterMetrics(registry)
 	sinkmetrics.RegisterMetrics(registry)
+	cloudstorage.RegisterMetrics(registry)
 	mysqlsink.RegisterMetrics(registry)
+	causality.RegisterMetrics(registry)
+	redo.RegisterMetrics(registry)
 	logcoordinator.RegisterMetrics(registry)
 	eventstore.RegisterMetrics(registry)
 	logpuller.RegisterMetrics(registry)
@@ -78,6 +86,7 @@ func registerMetrics() {
 	logger.RegisterMetrics(registry)
 	messaging.RegisterMetrics(registry)
 	redocommon.RegisterMetrics(registry)
+	writer.RegisterMetrics(registry)
 	codec.RegisterMetrics(registry)
 	codeccommon.RegisterMetrics(registry)
 	kafka.RegisterMetrics(registry)
@@ -85,6 +94,5 @@ func registerMetrics() {
 	mysql.RegisterMetrics(registry)
 	pulsar.RegisterMetrics(registry)
 	gc.RegisterMetrics(registry)
-	writelease.RegisterMetrics(registry)
 	dynstream.RegisterMetrics(registry)
 }

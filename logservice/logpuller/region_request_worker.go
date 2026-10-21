@@ -39,8 +39,8 @@ const storeReconnectBackoff = time.Second
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount  = PullerEventCounter.WithLabelValues("resolved_ts")
-	metricBatchResolvedSize = BatchResolvedEventSize.WithLabelValues("event-store")
+	metricsResolvedTsCount  = pullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = batchResolvedEventSize.WithLabelValues("event-store")
 )
 
 type deregisterRequest struct {

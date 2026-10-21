@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	CoordinatorCounter = prometheus.NewCounter(
+	coordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
@@ -26,17 +26,35 @@ var (
 			Help:      "The counter of ownership increases every 5 seconds on a owner capture",
 		})
 
-	ChangefeedStateGauge = prometheus.NewGaugeVec(
+	changefeedStateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
 			Name:      "changefeed_state",
 			Help:      "The total number of changefeed in different replication states",
 		}, []string{"state"})
+
+	captureLeaseHeartbeatCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "coordinator",
+			Name:      "capture_lease_heartbeat_total",
+			Help:      "Number of capture write lease heartbeats by handling result.",
+		}, []string{"result"})
+
+	captureP2PWitnessAvailable = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "coordinator",
+			Name:      "capture_p2p_witness_available",
+			Help:      "Whether a remote capture is available to witness the coordinator capture.",
+		})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CoordinatorCounter)
-	registry.MustRegister(ChangefeedStateGauge)
+	registry.MustRegister(captureLeaseHeartbeatCounter)
+	registry.MustRegister(captureP2PWitnessAvailable)
+	registry.MustRegister(coordinatorCounter)
+	registry.MustRegister(changefeedStateGauge)
 }

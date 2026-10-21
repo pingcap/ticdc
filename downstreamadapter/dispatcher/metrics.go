@@ -18,9 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// HandleDDLHistogram records the handling time of a DDL,
+// handleDDLHistogram records the handling time of a DDL,
 // which includes the time of executing the DDL and waiting for the DDL to be resolved.
-var HandleDDLHistogram = prometheus.NewHistogramVec(
+var handleDDLHistogram = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "ddl",
@@ -31,5 +31,5 @@ var HandleDDLHistogram = prometheus.NewHistogramVec(
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(HandleDDLHistogram)
+	registry.MustRegister(handleDDLHistogram)
 }

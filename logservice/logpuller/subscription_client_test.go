@@ -282,7 +282,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// Fill the channel to simulate the resolver goroutine being blocked.
 	client.resolveLockTaskCh <- resolveLockTask{}
 
-	before := testutil.ToFloat64(SubscriptionClientResolveLockTaskDropCounter)
+	before := testutil.ToFloat64(subscriptionClientResolveLockTaskDropCounter)
 	done := make(chan struct{})
 	go func() {
 		span.resolveStaleLocks(200)
@@ -298,7 +298,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// No new task is added because the channel is still full.
 	require.Equal(t, 1, len(client.resolveLockTaskCh))
 
-	after := testutil.ToFloat64(SubscriptionClientResolveLockTaskDropCounter)
+	after := testutil.ToFloat64(subscriptionClientResolveLockTaskDropCounter)
 	require.Equal(t, before+1, after)
 
 	<-client.resolveLockTaskCh

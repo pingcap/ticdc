@@ -101,7 +101,7 @@ func TestRecentChangefeedOperationStoreEvictsOldestMetric(t *testing.T) {
 	third := changefeedOperationMetricLabels{eventID: "3"}
 	t.Cleanup(func() {
 		for _, labels := range []changefeedOperationMetricLabels{first, second, third} {
-			ChangefeedOperationTimeGauge.DeleteLabelValues(labels.labelValues()...)
+			changefeedOperationTimeGauge.DeleteLabelValues(labels.labelValues()...)
 		}
 	})
 	store.record(first, now)
@@ -127,12 +127,12 @@ func TestNormalizeChangefeedOperationMetricText(t *testing.T) {
 func resetRecentChangefeedOperationStateForTest(t *testing.T) {
 	t.Helper()
 	for _, labels := range recentChangefeedOperations.events {
-		ChangefeedOperationTimeGauge.DeleteLabelValues(labels.labelValues()...)
+		changefeedOperationTimeGauge.DeleteLabelValues(labels.labelValues()...)
 	}
 	recentChangefeedOperations = newRecentChangefeedOperationStore(changefeedOperationHistoryLimit)
 	atomic.StoreUint64(&changefeedOperationEventID, 0)
 }
 
 func metricsGaugeForTest(labels changefeedOperationMetricLabels) prometheus.Gauge {
-	return ChangefeedOperationTimeGauge.WithLabelValues(labels.labelValues()...)
+	return changefeedOperationTimeGauge.WithLabelValues(labels.labelValues()...)
 }

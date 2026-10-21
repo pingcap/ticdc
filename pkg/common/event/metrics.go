@@ -16,7 +16,7 @@ package event
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	DMLDecodeDuration = prometheus.NewHistogram(
+	dmlDecodeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event",
@@ -25,7 +25,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
 
-	DMLIgnoreComputeDuration = prometheus.NewHistogram(
+	dmlIgnoreComputeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "event",
@@ -36,6 +36,6 @@ var (
 )
 
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DMLDecodeDuration)
-	registry.MustRegister(DMLIgnoreComputeDuration)
+	registry.MustRegister(dmlDecodeDuration)
+	registry.MustRegister(dmlIgnoreComputeDuration)
 }

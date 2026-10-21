@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	OperatorCount = prometheus.NewGaugeVec(
+	operatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -27,7 +27,7 @@ var (
 			Help:      "number of created operators",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
-	TotalOperatorCount = prometheus.NewGaugeVec(
+	totalOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -35,7 +35,7 @@ var (
 			Help:      "number of total operators",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
-	OperatorDuration = prometheus.NewHistogramVec(
+	operatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
@@ -47,7 +47,7 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(OperatorCount)
-	registry.MustRegister(TotalOperatorCount)
-	registry.MustRegister(OperatorDuration)
+	registry.MustRegister(operatorCount)
+	registry.MustRegister(totalOperatorCount)
+	registry.MustRegister(operatorDuration)
 }

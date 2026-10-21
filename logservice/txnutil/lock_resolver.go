@@ -46,10 +46,10 @@ func NewLockerResolver() LockResolver {
 const scanLockLimit = 1024
 
 var (
-	metricResolveLockFoundCounter      = SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
-	metricResolveLockResolvedCounter   = SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
-	metricScanLockOperationDuration    = SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
-	metricResolveLockOperationDuration = SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
+	metricResolveLockFoundCounter      = subscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
+	metricResolveLockResolvedCounter   = subscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
+	metricScanLockOperationDuration    = subscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
+	metricResolveLockOperationDuration = subscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
 func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {

@@ -32,24 +32,24 @@ import (
 )
 
 var (
-	metricEventServiceSendEventDuration   = EventServiceSendEventDuration.WithLabelValues("txn")
-	metricEventBrokerScanTaskCount        = EventServiceScanTaskCount
-	metricEventBrokerPendingScanTaskCount = EventServicePendingScanTaskCount
-	metricEventStoreOutputKv              = EventStoreOutputEventCount.WithLabelValues("kv", "default")
-	metricEventStoreOutputResolved        = EventStoreOutputEventCount.WithLabelValues("resolved", "default")
-	metricEventServiceSendKvCount         = EventServiceSendEventCount.WithLabelValues("kv", "default")
-	metricEventServiceSendResolvedTsCount = EventServiceSendEventCount.WithLabelValues("resolved_ts", "default")
-	metricEventServiceSendDDLCount        = EventServiceSendEventCount.WithLabelValues("ddl", "default")
-	metricEventServiceSendCommandCount    = EventServiceSendEventCount.WithLabelValues("command", "default")
-	metricEventServiceSkipResolvedTsCount = EventServiceSkipResolvedTsCount.WithLabelValues("default")
+	metricEventServiceSendEventDuration   = eventServiceSendEventDuration.WithLabelValues("txn")
+	metricEventBrokerScanTaskCount        = eventServiceScanTaskCount
+	metricEventBrokerPendingScanTaskCount = eventServicePendingScanTaskCount
+	metricEventStoreOutputKv              = eventStoreOutputEventCount.WithLabelValues("kv", "default")
+	metricEventStoreOutputResolved        = eventStoreOutputEventCount.WithLabelValues("resolved", "default")
+	metricEventServiceSendKvCount         = eventServiceSendEventCount.WithLabelValues("kv", "default")
+	metricEventServiceSendResolvedTsCount = eventServiceSendEventCount.WithLabelValues("resolved_ts", "default")
+	metricEventServiceSendDDLCount        = eventServiceSendEventCount.WithLabelValues("ddl", "default")
+	metricEventServiceSendCommandCount    = eventServiceSendEventCount.WithLabelValues("command", "default")
+	metricEventServiceSkipResolvedTsCount = eventServiceSkipResolvedTsCount.WithLabelValues("default")
 
-	metricRedoEventStoreOutputKv              = EventStoreOutputEventCount.WithLabelValues("kv", "redo")
-	metricRedoEventStoreOutputResolved        = EventStoreOutputEventCount.WithLabelValues("resolved", "redo")
-	metricRedoEventServiceSendKvCount         = EventServiceSendEventCount.WithLabelValues("kv", "redo")
-	metricRedoEventServiceSendResolvedTsCount = EventServiceSendEventCount.WithLabelValues("resolved_ts", "redo")
-	metricRedoEventServiceSendDDLCount        = EventServiceSendEventCount.WithLabelValues("ddl", "redo")
-	metricRedoEventServiceSendCommandCount    = EventServiceSendEventCount.WithLabelValues("command", "redo")
-	metricRedoEventServiceSkipResolvedTsCount = EventServiceSkipResolvedTsCount.WithLabelValues("redo")
+	metricRedoEventStoreOutputKv              = eventStoreOutputEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventStoreOutputResolved        = eventStoreOutputEventCount.WithLabelValues("resolved", "redo")
+	metricRedoEventServiceSendKvCount         = eventServiceSendEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventServiceSendResolvedTsCount = eventServiceSendEventCount.WithLabelValues("resolved_ts", "redo")
+	metricRedoEventServiceSendDDLCount        = eventServiceSendEventCount.WithLabelValues("ddl", "redo")
+	metricRedoEventServiceSendCommandCount    = eventServiceSendEventCount.WithLabelValues("command", "redo")
+	metricRedoEventServiceSkipResolvedTsCount = eventServiceSkipResolvedTsCount.WithLabelValues("redo")
 )
 
 func updateCounter(mode int64, defaultCounter, redoCounter prometheus.Counter) {
@@ -102,7 +102,7 @@ func updateMetricEventServiceSendDMLTypeCount(mode int64, rawType string, update
 	if rawType == "update" && updateUK {
 		rawType = "updateUK"
 	}
-	EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
+	eventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
 }
 
 // dispatcherHeapItem wraps dispatcherStat to implement heap.Item interface.
@@ -152,9 +152,9 @@ type metricsCollector struct {
 func newMetricsCollector(broker *eventBroker) *metricsCollector {
 	return &metricsCollector{
 		broker:                                  broker,
-		metricDispatcherCount:                   EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(broker.tidbClusterID, 10)),
-		metricEventServiceReceivedResolvedTsLag: EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTsLag:     EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+		metricDispatcherCount:                   eventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(broker.tidbClusterID, 10)),
+		metricEventServiceReceivedResolvedTsLag: eventServiceResolvedTsLagGauge.WithLabelValues("received"),
+		metricEventServiceSentResolvedTsLag:     eventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 		lastLogSlowDispatchersTime:              time.Now(),
 	}
 }
@@ -215,7 +215,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 	collect := func(dispatcher *dispatcherStat) {
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-		EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
+		eventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
 		// Track min resolved timestamps
 		resolvedTs := dispatcher.receivedResolvedTs.Load()
@@ -295,7 +295,7 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
 
 	// Update dispatcher status metrics
-	EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
+	eventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
 }
 
 // logSlowDispatchers logs warnings for dispatchers that are too slow

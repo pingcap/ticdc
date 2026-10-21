@@ -217,7 +217,7 @@ func (c *coordinator) run(ctx context.Context) error {
 				c.gcCleaner.OnUpdateGCSafepointSucceeded()
 			}
 			now := time.Now()
-			CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
+			coordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
 			c.lastTickTime = now
 		case changes := <-c.changefeedChangeCh:
 			if err := c.saveCheckpointTs(ctx, changes); err != nil {

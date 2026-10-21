@@ -81,7 +81,7 @@ func readBigTxnSizeMetric(t *testing.T) (uint64, float64) {
 	t.Helper()
 
 	metric := &dto.Metric{}
-	require.NoError(t, EventServiceBigTxnSize.Write(metric))
+	require.NoError(t, eventServiceBigTxnSize.Write(metric))
 	histogram := metric.GetHistogram()
 	require.NotNil(t, histogram)
 	return histogram.GetSampleCount(), histogram.GetSampleSum()
@@ -91,7 +91,7 @@ func readBigTxnCountMetric(t *testing.T) float64 {
 	t.Helper()
 
 	metric := &dto.Metric{}
-	require.NoError(t, EventServiceBigTxnCount.Write(metric))
+	require.NoError(t, eventServiceBigTxnCount.Write(metric))
 	counter := metric.GetCounter()
 	require.NotNil(t, counter)
 	return counter.GetValue()

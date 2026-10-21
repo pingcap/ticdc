@@ -67,14 +67,14 @@ func newLocalMessageTarget(id node.ID,
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,
 		recvCmdCh:          gatherRecvCmdChan,
-		sendEventCounter:   MessagingSendMsgCounter.WithLabelValues("event"),
-		dropMessageCounter: MessagingDropMsgCounter.WithLabelValues("message"),
-		sendCmdCounter:     MessagingSendMsgCounter.WithLabelValues("command"),
+		sendEventCounter:   messagingSendMsgCounter.WithLabelValues("event"),
+		dropMessageCounter: messagingDropMsgCounter.WithLabelValues("message"),
+		sendCmdCounter:     messagingSendMsgCounter.WithLabelValues("command"),
 	}
 }
 
 func (s *localMessageTarget) recordCongestedMessageError(typeE string) {
-	MessagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
+	messagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
 }
 
 func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*TargetMessage) error {
