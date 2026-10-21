@@ -90,7 +90,7 @@ tiup cluster reload test-cluster -R cdc
 
 ## How to compile TiCDC from source code
 
-### Prerequests
+### Prerequisites
 
 TiCDC can be built on the following operating systems:
 
