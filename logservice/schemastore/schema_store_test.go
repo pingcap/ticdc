@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parsermodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -113,8 +113,6 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.NotContains(t, tableNames, "t2")
 }
 
-<<<<<<< HEAD
-=======
 func TestRenameTableFromSystemSchema(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -133,7 +131,7 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			pstorage := newPersistentStorageForTest(dir, []mockDBInfo{{
-				dbInfo: &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: 100, Name: parsermodel.NewCIStr("test")},
 				tables: []*model.TableInfo{newEligibleTableInfoForTest(102, "b")},
 			}})
 			t.Cleanup(func() { require.NoError(t, pstorage.close()) })
@@ -161,8 +159,8 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 			job.Version = tc.version
 			job.FillArgs(&model.RenameTableArgs{
 				OldSchemaID:   1,
-				OldSchemaName: ast.NewCIStr("mysql"),
-				NewTableName:  ast.NewCIStr("a"),
+				OldSchemaName: parsermodel.NewCIStr("mysql"),
+				NewTableName:  parsermodel.NewCIStr("a"),
 			})
 			if tc.multiple {
 				job = buildRenameTablesJobForTest(
@@ -243,154 +241,6 @@ func TestRenameTableFromSystemSchema(t *testing.T) {
 	}
 }
 
-func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	dir := t.TempDir()
-	pstorage := newPersistentStorageForTest(dir, nil)
-	defer func() {
-		err := pstorage.close()
-		require.NoError(t, err)
-	}()
-	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failTimes: 1}
-
-	store := &keyspaceSchemaStore{
-		pdClock:       mockPDClock,
-		unsortedCache: newDDLCache(),
-		dataStorage:   pstorage,
-		notifyCh:      make(chan any, 1),
-	}
-	store.resolvedTs.Store(pstorage.gcTs)
-	store.pendingResolvedTs.Store(pstorage.gcTs)
-
-	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
-	createSchema.BinlogInfo.SchemaVersion = 1
-	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
-	createTable.BinlogInfo.SchemaVersion = 2
-
-	store.writeDDLEvent(DDLJobWithCommitTs{
-		Job:      createSchema,
-		CommitTs: 1000,
-	})
-	store.writeDDLEvent(DDLJobWithCommitTs{
-		Job:      createTable,
-		CommitTs: 1010,
-	})
-	store.advancePendingResolvedTs(1010)
-
-	// First attempt fails when writing create schema; dedup watermarks should not advance.
-	store.tryUpdateResolvedTs()
-	require.Equal(t, int64(0), store.schemaVersion)
-	require.Equal(t, uint64(0), store.finishedDDLTs)
-	require.Equal(t, uint64(0), store.resolvedTs.Load())
-
-	// Second attempt retries failed DDLs and succeeds.
-	store.tryUpdateResolvedTs()
-	require.Equal(t, int64(2), store.schemaVersion)
-	require.Equal(t, uint64(1010), store.finishedDDLTs)
-	require.Equal(t, uint64(1010), store.resolvedTs.Load())
-
-	tables, err := pstorage.getAllPhysicalTables(1010, nil)
-	require.NoError(t, err)
-	require.Len(t, tables, 1)
-	require.Equal(t, "t1", tables[0].TableName)
-}
-
-func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
-	defer func() {
-		require.NoError(t, pstorage.close())
-	}()
-	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failOnCall: 2}
-
-	store := &keyspaceSchemaStore{
-		pdClock:       mockPDClock,
-		unsortedCache: newDDLCache(),
-		dataStorage:   pstorage,
-		notifyCh:      make(chan any, 1),
-	}
-	store.resolvedTs.Store(pstorage.gcTs)
-	store.pendingResolvedTs.Store(pstorage.gcTs)
-
-	const commitTs = uint64(1010)
-	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
-	createSchema.BinlogInfo.SchemaVersion = 1
-	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
-	createTable.BinlogInfo.SchemaVersion = 2
-	store.writeDDLEvent(DDLJobWithCommitTs{Job: createSchema, CommitTs: commitTs})
-	store.writeDDLEvent(DDLJobWithCommitTs{Job: createTable, CommitTs: commitTs})
-	store.advancePendingResolvedTs(commitTs)
-
-	store.tryUpdateResolvedTs()
-	require.Equal(t, int64(1), store.schemaVersion)
-	require.Equal(t, uint64(1000), store.finishedDDLTs)
-	require.Less(t, store.resolvedTs.Load(), commitTs)
-
-	store.tryUpdateResolvedTs()
-	require.Equal(t, int64(2), store.schemaVersion)
-	require.Equal(t, uint64(1010), store.finishedDDLTs)
-	require.Equal(t, commitTs, store.resolvedTs.Load())
-}
-
-func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
-	dir := t.TempDir()
-	pstorage := newPersistentStorageForTest(dir, nil)
-	defer func() {
-		err := pstorage.close()
-		require.NoError(t, err)
-	}()
-	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
-
-	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
-	createSchema.BinlogInfo.SchemaVersion = 1
-	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
-	createTable.BinlogInfo.SchemaVersion = 2
-
-	err := pstorage.handleDDLJob(createSchema)
-	require.NoError(t, err)
-	err = pstorage.handleDDLJob(createTable)
-	require.NoError(t, err)
-
-	tables, err := pstorage.getAllPhysicalTables(1010, nil)
-	require.NoError(t, err)
-	require.Len(t, tables, 1)
-	require.Equal(t, int64(200), tables[0].TableID)
-	require.Equal(t, int64(100), tables[0].SchemaID)
-	require.Equal(t, "t1", tables[0].TableName)
-}
-
-func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
-	dir := t.TempDir()
-	pstorage := newPersistentStorageForTest(dir, nil)
-	defer func() {
-		err := pstorage.close()
-		require.NoError(t, err)
-	}()
-	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
-
-	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
-	createSchema.BinlogInfo.SchemaVersion = 1
-	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
-	createTable.BinlogInfo.SchemaVersion = 2
-
-	err := pstorage.handleDDLJob(createSchema)
-	require.NoError(t, err)
-	err = pstorage.handleDDLJob(createTable)
-	require.NoError(t, err)
-
-	err = pstorage.registerTable(200, 1010)
-	require.NoError(t, err)
-
-	tableInfo, err := pstorage.getTableInfo(200, 1010)
-	require.NoError(t, err)
-	require.NotNil(t, tableInfo)
-}
-
->>>>>>> 288838fe9 (schemastore: fix panic on table renames from system schemas (#6480))
 func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	dir := t.TempDir()
 	pstorage := newPersistentStorageForTest(dir, nil)
