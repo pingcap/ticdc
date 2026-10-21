@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
@@ -80,24 +81,7 @@ func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
 // isSplitable returns whether the table is eligible for split in all sinks
 // Only tables with a clustered primary key and no other unique key can be split in all sinks.
 func isSplitable(tableInfo *model.TableInfo) bool {
-<<<<<<< HEAD
-	if tableInfo.GetPkColInfo() == nil {
-		return false
-	}
-
-	indices := tableInfo.Indices
-	for _, index := range indices {
-		if index.Primary {
-			continue
-		}
-		if index.Unique {
-			return false
-		}
-	}
-	return true
-=======
 	return common.IsSplitable(tableInfo.PKIsHandle || tableInfo.IsCommonHandle, tableInfo.Indices)
->>>>>>> 40524331d (scheduler: prevent splitting tables with nonclustered primary keys (#6534))
 }
 
 func getIndexIDs(job *model.Job) []int64 {
