@@ -16,18 +16,18 @@ package logpuller
 import (
 	"testing"
 
-	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func withRedactMode(t *testing.T, mode string) func() {
 	t.Helper()
-	original := perrors.RedactLogEnabled.Load()
-	perrors.RedactLogEnabled.Store(mode)
+	original := errors.RedactLogEnabled.Load()
+	errors.RedactLogEnabled.Store(mode)
 	return func() {
-		perrors.RedactLogEnabled.Store(original)
+		errors.RedactLogEnabled.Store(original)
 	}
 }
 
@@ -36,15 +36,15 @@ func TestFormatUnlockedRanges(t *testing.T) {
 		{Span: heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0x74, 0x80}, EndKey: []byte{0x74, 0x81}}, ResolvedTs: 100},
 	}
 
-	restore := withRedactMode(t, perrors.RedactLogDisable)
+	restore := withRedactMode(t, "OFF")
 	require.Equal(t, []string{"tableID: 1, startKey: 7480, endKey: 7481, resolvedTs: 100"}, formatUnlockedRanges(ranges))
 	restore()
 
-	restore = withRedactMode(t, perrors.RedactLogEnable)
+	restore = withRedactMode(t, "ON")
 	require.Equal(t, []string{"tableID: 1, startKey: ?, endKey: ?, resolvedTs: 100"}, formatUnlockedRanges(ranges))
 	restore()
 
-	defer withRedactMode(t, perrors.RedactLogMarker)()
+	defer withRedactMode(t, "MARKER")()
 	require.Equal(t, []string{"tableID: 1, startKey: ‹7480›, endKey: ‹7481›, resolvedTs: 100"},
 		formatUnlockedRanges(ranges))
 	require.Empty(t, formatUnlockedRanges(nil))
