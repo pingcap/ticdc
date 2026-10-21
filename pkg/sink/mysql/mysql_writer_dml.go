@@ -793,9 +793,11 @@ func (w *Writer) sequenceExecute(
 func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, writeTimeout time.Duration,
 ) (bool, error) {
-	var multiStmtArgs []any
-	for _, value := range dmls.values {
-		multiStmtArgs = append(multiStmtArgs, value...)
+	var multiStmtArgs []driver.NamedValue
+	for _, values := range dmls.values {
+		for _, value := range values {
+			multiStmtArgs = append(multiStmtArgs, driver.NamedValue{Ordinal: len(multiStmtArgs) + 1, Value: value})
+		}
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
@@ -806,20 +808,57 @@ func (w *Writer) multiStmtExecute(
 
 	conn, err := w.db.Conn(w.ctx)
 	if err != nil {
-		return false, errors.Trace(err)
+		return false, cerror.WrapError(cerror.ErrMySQLConnectionError, err)
 	}
 	defer conn.Close()
 	if w.writeGate != nil && !w.writeGate.IsWritable() {
 		return false, nil
 	}
 
-	// we use conn.ExecContext to reduce the overhead of network latency.
-	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
-	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
-	// The txn can ensure the atomicity of the transaction.
-	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
+	// Raw exposes the MySQL driver's per-statement affected row counts.
+	err = conn.Raw(func(raw any) error {
+		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+		checker := raw.(driver.NamedValueChecker)
+		for i := range multiStmtArgs {
+			if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
+				return err
+			}
+		}
+		execer := raw.(driver.ExecerContext)
+		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
+		if err != nil {
+			// Use the driver directly because Raw holds the connection's lock.
+			rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
+			_, rbErr := execer.ExecContext(rbCtx, "ROLLBACK", nil)
+			rbCancel()
+			if rbErr != nil {
+				log.Info("failed to rollback after multi statement exec error",
+					zap.Int("writerID", w.id), zap.Error(rbErr))
+			}
+			// Let Raw discard bad connections before wrapping the execution error.
+			return err
+		}
+		var rowsAffected int64
+		if mysqlResult, ok := res.(dmysql.Result); ok {
+			for _, affected := range mysqlResult.AllRowsAffected() {
+				rowsAffected += affected
+			}
+		} else {
+			rowsAffected, err = res.RowsAffected()
+			if err != nil {
+				log.Warn("get rows affected failed", zap.Error(err))
+				return nil
+			}
+		}
+		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
+		return nil
+	})
 	if err != nil {
-		return true, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
+		args := make([]any, len(multiStmtArgs))
+		for i, arg := range multiStmtArgs {
+			args[i] = arg.Value
+		}
+		return true, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
 	}
 	return true, nil
 }

@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"testing"
 	"time"
@@ -37,12 +38,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-<<<<<<< HEAD
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-=======
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/prometheus/client_golang/prometheus/testutil"
->>>>>>> 4b87f223a (mysql: use raw connections for multi-statement DML execution (#6485))
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,7 +121,7 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 		WithArgs(1, "test", 2, "test2", 3, "test3").
 		WillReturnResult(newTestMysqlResult(t, 0, 3, 0))
 
-	actualRowsAffected := writer.getRowsAffectedCounter("actual", "total")
+	actualRowsAffected := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(writer.ChangefeedID.Keyspace(), writer.ChangefeedID.Name(), "actual", "total")
 	before := testutil.ToFloat64(actualRowsAffected)
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -132,6 +129,59 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMultiStmtExecute(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result driver.Result
+		err    error
+	}{
+		{name: "per statement counts"},
+		{name: "standard result", result: sqlmock.NewResult(0, 5)},
+		{name: "execution failure", err: context.Canceled},
+		{name: "bad connection", err: driver.ErrBadConn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer, db, mock := newTestMysqlWriter(t)
+			defer db.Close()
+			dmls := &preparedDMLs{
+				sqls:   []string{"INSERT INTO t VALUES (?)", "DELETE FROM t WHERE id = ?"},
+				values: [][]any{{1}, {2}},
+			}
+			expect := mock.ExpectExec("BEGIN;INSERT INTO t VALUES (?);DELETE FROM t WHERE id = ?;COMMIT;").WithArgs(1, 2)
+			if tc.err != nil {
+				expect.WillReturnError(tc.err)
+				mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
+				if tc.err == driver.ErrBadConn {
+					mock.ExpectClose()
+				}
+			} else if tc.result != nil {
+				expect.WillReturnResult(tc.result)
+			} else {
+				expect.WillReturnResult(newTestMysqlResult(t, 0, 2, 3, 0))
+			}
+			counter := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(
+				writer.ChangefeedID.Keyspace(), writer.ChangefeedID.Name(), "actual", "total")
+			before := testutil.ToFloat64(counter)
+			admitted, err := writer.multiStmtExecute(dmls, time.Second)
+			require.True(t, admitted)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				code, ok := cerror.RFCCode(err)
+				require.True(t, ok)
+				require.Equal(t, cerror.ErrMySQLTxnError.RFCCode(), code)
+				require.Equal(t, before, testutil.ToFloat64(counter))
+				if tc.err == driver.ErrBadConn {
+					require.Zero(t, db.Stats().OpenConnections)
+				}
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, before+5, testutil.ToFloat64(counter))
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
@@ -215,6 +265,8 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
 		WillReturnError(fmt.Errorf("Error 1062: Duplicate entry '1' for key 'PRIMARY'"))
+
+	mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Second execution should use REPLACE (safe mode) and succeed
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
