@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -66,7 +66,7 @@ type sink struct {
 	lastSendCheckpointTsTime time.Time
 
 	cron       *cron.Cron
-	statistics *sinkmetrics.Statistics
+	statistics *metrics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -137,7 +137,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := sinkmetrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
 	defer func() {
 		if err != nil {
 			statistics.Close()
@@ -344,11 +344,11 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		keyspace   = s.changefeedID.Keyspace()
 		changefeed = s.changefeedID.Name()
 	)
-	checkpointTsMessageDuration := sinkmetrics.CheckpointTsMessageDuration.WithLabelValues(keyspace, changefeed)
-	checkpointTsMessageCount := sinkmetrics.CheckpointTsMessageCount.WithLabelValues(keyspace, changefeed)
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(keyspace, changefeed)
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(keyspace, changefeed)
 	defer func() {
-		sinkmetrics.CheckpointTsMessageDuration.DeleteLabelValues(keyspace, changefeed)
-		sinkmetrics.CheckpointTsMessageCount.DeleteLabelValues(keyspace, changefeed)
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(keyspace, changefeed)
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(keyspace, changefeed)
 	}()
 
 	var checkpoint uint64

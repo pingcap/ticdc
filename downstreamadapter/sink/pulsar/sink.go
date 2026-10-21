@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -52,7 +52,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *sinkmetrics.Statistics
+	statistics *metrics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -134,7 +134,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *sinkmetrics.Statistics
+		statistics  *metrics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -152,7 +152,7 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = sinkmetrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
+	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -295,12 +295,12 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
-	checkpointTsMessageDuration := sinkmetrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	checkpointTsMessageCount := sinkmetrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
 	defer func() {
-		sinkmetrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-		sinkmetrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 	var (
 		msg *common.Message
@@ -446,11 +446,11 @@ const (
 // batchEncodeRun collect messages into batch and add them to the encoder group.
 func (s *sink) batchEncodeRun(ctx context.Context) error {
 	keyspace, changefeed := s.changefeedID.Keyspace(), s.changefeedID.Name()
-	metricBatchDuration := sinkmetrics.WorkerBatchDuration.WithLabelValues(keyspace, changefeed)
-	metricBatchSize := sinkmetrics.WorkerBatchSize.WithLabelValues(keyspace, changefeed)
+	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(keyspace, changefeed)
+	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(keyspace, changefeed)
 	defer func() {
-		sinkmetrics.WorkerBatchDuration.DeleteLabelValues(keyspace, changefeed)
-		sinkmetrics.WorkerBatchSize.DeleteLabelValues(keyspace, changefeed)
+		metrics.WorkerBatchDuration.DeleteLabelValues(keyspace, changefeed)
+		metrics.WorkerBatchSize.DeleteLabelValues(keyspace, changefeed)
 	}()
 
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
@@ -536,8 +536,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 }
 
 func (s *sink) sendMessages(ctx context.Context) error {
-	metricSendMessageDuration := sinkmetrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	defer sinkmetrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
 	var err error
 	outCh := s.comp.encoderGroup.Output()

@@ -17,7 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/writelease"
@@ -29,13 +29,13 @@ import (
 // Including DDL and DML.
 type Sink struct {
 	eventCh    *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
-	statistics *sinkmetrics.Statistics
+	statistics *metrics.Statistics
 }
 
 func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: sinkmetrics.NewStatistics(changefeedID, keyspaceID, "sink"),
+		statistics: metrics.NewStatistics(changefeedID, keyspaceID, "sink"),
 	}, nil
 }
 

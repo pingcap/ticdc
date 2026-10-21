@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -60,7 +60,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := sinkmetrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -480,7 +480,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := sinkmetrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -702,7 +702,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := sinkmetrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -768,7 +768,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := sinkmetrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)

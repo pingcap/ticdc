@@ -121,6 +121,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
+	server.RecordBuildInfo()
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()

@@ -25,7 +25,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
 	"github.com/pingcap/ticdc/cmd/util"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -250,7 +250,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := sinkmetrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+			stat := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{

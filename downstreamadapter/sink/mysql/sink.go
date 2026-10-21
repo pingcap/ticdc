@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -56,7 +56,7 @@ type Sink struct {
 	dmlDB          *sql.DB
 	controlDB      *sql.DB
 	controlAsyncDB *sql.DB
-	statistics     *sinkmetrics.Statistics
+	statistics     *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -195,7 +195,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := sinkmetrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
