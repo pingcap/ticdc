@@ -319,7 +319,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 	if !ok {
 		// generate Column Schema
 		columnSchema := newColumnSchema(tableInfo, digest)
-		SharedColumnSchemaCountGauge.Inc()
+		sharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = make([]ColumnSchemaWithCount, 1)
 		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
 		return columnSchema
@@ -333,7 +333,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 		}
 		// not found the same column info, create a new one
 		columnSchema := newColumnSchema(tableInfo, digest)
-		SharedColumnSchemaCountGauge.Inc()
+		sharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
 		return columnSchema
 	}
@@ -386,7 +386,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 			s.m[columnSchema.Digest][idx].count--
 			if s.m[columnSchema.Digest][idx].count == 0 {
 				// release the columnSchema object
-				SharedColumnSchemaCountGauge.Dec()
+				sharedColumnSchemaCountGauge.Dec()
 				s.m[columnSchema.Digest] = slices.Delete(s.m[columnSchema.Digest], idx, idx+1)
 				if len(s.m[columnSchema.Digest]) == 0 {
 					delete(s.m, columnSchema.Digest)

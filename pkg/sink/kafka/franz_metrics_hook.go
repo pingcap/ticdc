@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -87,8 +88,8 @@ func (h *metricsHook) broker(nodeID int32) *brokerMetrics {
 // cleanupMetrics removes producer series after all clients are closed.
 func cleanupMetrics(changefeedID common.ChangeFeedID) {
 	labels := prometheus.Labels{
-		"namespace":  changefeedID.Keyspace(),
-		"changefeed": changefeedID.Name(),
+		metrics.GetKeyspaceLabel(): changefeedID.Keyspace(),
+		"changefeed":               changefeedID.Name(),
 	}
 
 	outgoingBytesTotal.DeletePartialMatch(labels)

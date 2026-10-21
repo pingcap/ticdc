@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -136,8 +135,8 @@ func TestRemoveChangefeed(t *testing.T) {
 }
 
 func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+	ResetOwnerChangefeedMetrics()
+	t.Cleanup(ResetOwnerChangefeedMetrics)
 
 	db := NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test-metrics", common.DefaultKeyspaceName)
@@ -150,18 +149,18 @@ func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
 	}, 100, false)
 	db.AddReplicatingMaintainer(cf, "node1")
 
-	metrics.ChangefeedStatusGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(1)
-	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(100)
-	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(10)
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedStatusGauge))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+	ChangefeedStatusGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(1)
+	ChangefeedCheckpointTsGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(100)
+	ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(10)
+	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedStatusGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsLagGauge))
 
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf.ID, true))
 
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedStatusGauge))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedStatusGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedCheckpointTsGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedCheckpointTsLagGauge))
 }
 
 func TestGetByID(t *testing.T) {

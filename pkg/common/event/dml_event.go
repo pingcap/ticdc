@@ -577,7 +577,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	start := time.Now()
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
-	DMLDecodeDuration.Observe(time.Since(start).Seconds())
+	dmlDecodeDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return err
 	}
@@ -614,7 +614,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if filter != nil {
 		start := time.Now()
 		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs, filterContext)
-		DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
+		dmlIgnoreComputeDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return errors.Trace(err)
 		}

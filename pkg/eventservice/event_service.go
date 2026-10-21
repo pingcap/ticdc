@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
@@ -148,8 +147,8 @@ func (s *eventService) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	dispatcherChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
-	heartbeatChanSize := metrics.EventServiceChannelSizeGauge.WithLabelValues("heartbeat")
+	dispatcherChanSize := eventServiceChannelSizeGauge.WithLabelValues("dispatcherInfo")
+	heartbeatChanSize := eventServiceChannelSizeGauge.WithLabelValues("heartbeat")
 	for {
 		select {
 		case <-ctx.Done():

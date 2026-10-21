@@ -26,10 +26,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
 	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -123,11 +121,11 @@ func (o *options) run(cmd *cobra.Command) error {
 	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
+	server.RecordBuildInfo()
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
-	metrics.RecordGoRuntimeSettings()
+	server.RecordGoRuntimeSettings()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
 	if err != nil {
 		log.Error("create cdc server failed", zap.Error(err))

@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -92,15 +91,15 @@ func TestMemoryQuotaUpdateMetrics(t *testing.T) {
 	quota.UpdateMetrics()
 
 	require.Equal(t, float64(66), testutil.ToFloat64(
-		metrics.LogPullerMemoryQuota.WithLabelValues("max")))
+		logPullerMemoryQuota.WithLabelValues("max")))
 	require.Equal(t, float64(55), testutil.ToFloat64(
-		metrics.LogPullerMemoryQuota.WithLabelValues("used")))
+		logPullerMemoryQuota.WithLabelValues("used")))
 	require.Equal(t, float64(7), testutil.ToFloat64(
-		metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated")))
+		logPullerMemoryQuota.WithLabelValues("scan_estimated")))
 	require.Equal(t, float64(2),
-		testutil.ToFloat64(metrics.LogPullerMemoryQuotaEventWaiterCount))
+		testutil.ToFloat64(logPullerMemoryQuotaEventWaiterCount))
 	require.Equal(t, float64(3),
-		testutil.ToFloat64(metrics.LogPullerMemoryQuotaScanWaiterCount))
+		testutil.ToFloat64(logPullerMemoryQuotaScanWaiterCount))
 }
 
 func TestMemoryQuotaAdmissionLevels(t *testing.T) {

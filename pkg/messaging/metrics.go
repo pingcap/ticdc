@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package messaging
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	MessagingSendMsgCounter = prometheus.NewCounterVec(
+	messagingSendMsgCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -26,7 +26,7 @@ var (
 			Help:      "The counter of messages sent by a message center",
 		}, []string{"type"}) // target: its addr, type: event, command
 
-	MessagingReceiveMsgCounter = prometheus.NewCounterVec(
+	messagingReceiveMsgCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -34,7 +34,7 @@ var (
 			Help:      "The counter of messages received by a message center",
 		}, []string{"type"}) // target: its addr, type: event, command
 
-	MessagingDropMsgCounter = prometheus.NewCounterVec(
+	messagingDropMsgCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -42,14 +42,15 @@ var (
 			Help:      "The counter of messages dropped by a message center",
 		}, []string{"type"}) // target: its addr, type: event, command
 
-	MessagingErrorCounter = prometheus.NewCounterVec(
+	messagingErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
 			Name:      "error_counter",
 			Help:      "The counter of errors occurred in a message center",
 		}, []string{"type", "message"}) // type: event, command, message: error info
-	MessagingStreamGauge = prometheus.NewGaugeVec(
+
+	messagingStreamGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -57,7 +58,7 @@ var (
 			Help:      "The gauge of streams in a message center",
 		}, []string{"from"}) // target: its addr
 
-	MessagingReceiveChannelLength = prometheus.NewGaugeVec(
+	messagingReceiveChannelLength = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -65,7 +66,7 @@ var (
 			Help:      "The length of the receive channel in a message center",
 		}, []string{"type"}) // type: event, command
 
-	MessagingSlowHandleCounter = prometheus.NewCounterVec(
+	messagingSlowHandleCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "messaging",
@@ -74,13 +75,12 @@ var (
 		}, []string{"type"}) // type: message type
 )
 
-// InitMetrics registers all metrics used in owner
-func initMessagingMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(MessagingSendMsgCounter)
-	registry.MustRegister(MessagingReceiveMsgCounter)
-	registry.MustRegister(MessagingDropMsgCounter)
-	registry.MustRegister(MessagingErrorCounter)
-	registry.MustRegister(MessagingStreamGauge)
-	registry.Register(MessagingReceiveChannelLength)
-	registry.MustRegister(MessagingSlowHandleCounter)
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(messagingSendMsgCounter)
+	registry.MustRegister(messagingReceiveMsgCounter)
+	registry.MustRegister(messagingDropMsgCounter)
+	registry.MustRegister(messagingErrorCounter)
+	registry.MustRegister(messagingStreamGauge)
+	registry.MustRegister(messagingSlowHandleCounter)
 }

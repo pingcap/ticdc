@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -46,7 +45,7 @@ type writer struct {
 	// the channel does not need to be closed explicitly.
 	flushCh chan flushTask
 
-	statistics        *pmetrics.Statistics
+	statistics        *metrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
 	metricFlushBytes    prometheus.Observer
@@ -81,7 +80,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *pmetrics.Statistics,
+	statistics *metrics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (
@@ -98,8 +97,8 @@ func newWriter(
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricFlushBytes:    cloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration: cloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 	}
 	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
@@ -123,10 +122,10 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 	overseerTicker := time.NewTicker(d.config.FlushInterval * 2)
 	writerLabel := strconv.Itoa(d.shardID)
-	metricBusyRatio := metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
+	metricBusyRatio := cloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
 	defer func() {
 		overseerTicker.Stop()
-		metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
+		cloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
 	}()
 
 	for {

@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,28 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package logcoordinator
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
-	ChangefeedResolvedTsGauge = prometheus.NewGaugeVec(
+	changefeedResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "resolved_ts",
 			Help:      "resolved ts of changefeeds",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-	ChangefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	changefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "resolved_ts_lag",
 			Help:      "maximum per-node resolved ts lag at report time in seconds",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 )
 
-func initLogCoordinatorMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ChangefeedResolvedTsGauge)
-	registry.MustRegister(ChangefeedResolvedTsLagGauge)
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(changefeedResolvedTsGauge)
+	registry.MustRegister(changefeedResolvedTsLagGauge)
 }

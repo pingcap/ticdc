@@ -21,12 +21,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -109,14 +109,14 @@ func New(
 	}
 
 	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
-	// dashboards can display "tidb" when we can prove it. Otherwise, the
-	// scheme-based label remains "mysql/tidb".
+	// dashboards can display "tidb" for downstreams configured with MySQL URIs.
+	// Otherwise, the label is derived from the sink URI scheme.
 	keyspace := changefeedID.Keyspace()
 	name := changefeedID.Name()
 	if cfg.IsTiDB {
-		metrics.ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
+		changefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
 	} else {
-		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
+		changefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
 	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
@@ -266,18 +266,18 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
-	workerBatchFlushDuration := mysql.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerFlushDuration := mysql.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerTotalDuration := mysql.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerHandledRows := mysql.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerEventRowCount := mysql.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerBatchFlushDuration := workerBatchFlushDurationHistogram.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerFlushDuration := workerFlushDurationHistogram.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := workerTotalDurationHistogram.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := workerHandledRowsCounter.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerEventRowCount := workerEventRowCountHistogram.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
-		mysql.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		mysql.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		mysql.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		mysql.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		mysql.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		workerFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		workerTotalDurationHistogram.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		workerHandledRowsCounter.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		workerBatchFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		workerEventRowCountHistogram.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -511,7 +511,7 @@ func (s *Sink) Close() {
 	s.statistics.Close()
 	mysql.DeleteDMLEventRowsAffectedMetrics(s.changefeedID)
 
-	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	changefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 }
 
 func (s *Sink) closeDBPool(role string, db *sql.DB) {
