@@ -16,15 +16,29 @@ package causality
 import (
 	"encoding/binary"
 	"hash/fnv"
-	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/tablecodec"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/collate"
 	"go.uber.org/zap"
 )
+
+// TiDB enables new collations during package initialization. Cache the supported
+// collators before CDC disables the global switch in main for handle decoding.
+// Unsupported collations must use a shared index key instead of TiDB's binary
+// fallback, which could miss dependencies under the downstream collation.
+var conflictCollators = func() map[string]collate.Collator {
+	collators := make(map[string]collate.Collator)
+	for _, collation := range collate.GetSupportedCollations() {
+		collators[collation.Name] = collate.GetCollatorWithCollate(true, collation.Name)
+	}
+	return collators
+}()
 
 // ConflictKeys implements causality.txnEvent interface.
 func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
@@ -57,22 +71,30 @@ func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
 func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
 	var keys [][]byte
 
-	if !row.Row.IsEmpty() {
-		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
-			key := genKeyList(&row.Row, iIdx, idxColID, dispatcherID, tableInfo)
-			if len(key) == 0 {
-				continue
-			}
-			keys = append(keys, key)
+	for _, rowData := range []chunk.Row{row.Row, row.PreRow} {
+		if rowData.IsEmpty() {
+			continue
 		}
-	}
-	if !row.PreRow.IsEmpty() {
-		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
-			key := genKeyList(&row.PreRow, iIdx, idxColID, dispatcherID, tableInfo)
-			if len(key) == 0 {
+		// An integer primary key (or an explicit extra handle) may not have
+		// an IndexInfo, so retain its dependency separately.
+		pkIndex := tableInfo.GetPKIndex()
+		if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == model.ExtraHandleID) {
+			pkColumns := []*model.IndexColumn{{
+				Offset: tableInfo.MustGetColumnOffsetByID(pkIndex[0]),
+				Length: types.UnspecifiedLength,
+			}}
+			if key := genKeyList(&rowData, -1, pkColumns, dispatcherID, tableInfo); len(key) > 0 {
+				keys = append(keys, key)
+			}
+		}
+		// Use the actual index metadata to preserve prefix lengths.
+		for _, index := range tableInfo.GetIndices() {
+			if !index.Primary && !index.Unique {
 				continue
 			}
-			keys = append(keys, key)
+			if key := genKeyList(&rowData, index.ID, index.Columns, dispatcherID, tableInfo); len(key) > 0 {
+				keys = append(keys, key)
+			}
 		}
 	}
 	if len(keys) == 0 {
@@ -87,19 +109,22 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 }
 
 func genKeyList(
-	row *chunk.Row, iIdx int, idxColID []int64, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
+	row *chunk.Row, indexID int64, indexColumns []*model.IndexColumn, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
 ) []byte {
+	indexKey := make([]byte, 16)
+	binary.BigEndian.PutUint64(indexKey[:8], uint64(indexID))
+	binary.BigEndian.PutUint64(indexKey[8:], dispatcherID.GetLow())
+
 	var key []byte
-	for _, colID := range idxColID {
-		// chunk.Row is laid out in schema column order (TableInfo.GetColumns()).
-		// RowColumnsOffset is based on CDC-visible columns and may skip virtual generated columns,
-		// which would cause extracting a different column value and break causality ordering.
-		// Thus, we should not use RowColumnsOffset here.
-		offsetIdx := tableInfo.MustGetColumnOffsetByID(colID)
+	for _, indexColumn := range indexColumns {
+		// IndexColumn.Offset and chunk.Row both use schema column order,
+		// including placeholders for virtual generated columns.
+		offsetIdx := indexColumn.Offset
 		info := tableInfo.GetColumns()[offsetIdx]
-		// If the index contains a generated column, we can't use this key to detect conflicts with other DML.
-		if info == nil || info.ID != colID || info.IsGenerated() {
-			return nil
+		if info == nil || info.IsVirtualGenerated() {
+			// Virtual values are not carried in row events. Serialize this
+			// index even when another index, such as the PK, is available.
+			return indexKey
 		}
 		value := common.ExtractColVal(row, info, offsetIdx)
 
@@ -108,33 +133,24 @@ func genKeyList(
 			return nil
 		}
 
-		val := common.ColumnValueString(value)
-		if columnNeeds2LowerCase(info.GetType(), info.GetCollate()) {
-			val = strings.ToLower(val)
+		if types.IsString(info.GetType()) {
+			collator, ok := conflictCollators[info.GetCollate()]
+			if !ok {
+				return indexKey
+			}
+			// Match TiDB's index encoding: truncate by characters (or bytes
+			// for binary/ASCII columns), then apply the collation's weights.
+			datum := row.GetDatum(offsetIdx, &info.FieldType)
+			tablecodec.TruncateIndexValue(&datum, indexColumn, info)
+			key = append(key, collator.ImmutableKey(datum.GetString())...)
+		} else {
+			key = append(key, common.ColumnValueString(value)...)
 		}
-
-		key = append(key, []byte(val)...)
 		key = append(key, 0)
 	}
 	if len(key) == 0 {
 		return nil
 	}
-	tableKey := make([]byte, 16)
-	binary.BigEndian.PutUint64(tableKey[:8], uint64(iIdx))
-	binary.BigEndian.PutUint64(tableKey[8:], dispatcherID.GetLow())
-	key = append(key, tableKey...)
+	key = append(key, indexKey...)
 	return key
-}
-
-func columnNeeds2LowerCase(mysqlType byte, collation string) bool {
-	switch mysqlType {
-	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
-		mysql.TypeMediumBlob, mysql.TypeBlob, mysql.TypeLongBlob:
-		return collationNeeds2LowerCase(collation)
-	}
-	return false
-}
-
-func collationNeeds2LowerCase(collation string) bool {
-	return strings.HasSuffix(collation, "_ci")
 }

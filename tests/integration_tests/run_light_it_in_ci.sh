@@ -42,7 +42,7 @@ mysql_groups=(
 	# G04
 	'ci_collation_compatibility resourcecontrol fail_over_ddl_E changefeed_create_paused'
 	# G05
-	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column mysql_conflict_keys wide_table'
 	# G06
 	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
