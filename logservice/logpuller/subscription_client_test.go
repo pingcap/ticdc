@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -283,7 +282,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// Fill the channel to simulate the resolver goroutine being blocked.
 	client.resolveLockTaskCh <- resolveLockTask{}
 
-	before := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	before := testutil.ToFloat64(SubscriptionClientResolveLockTaskDropCounter)
 	done := make(chan struct{})
 	go func() {
 		span.resolveStaleLocks(200)
@@ -299,7 +298,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// No new task is added because the channel is still full.
 	require.Equal(t, 1, len(client.resolveLockTaskCh))
 
-	after := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	after := testutil.ToFloat64(SubscriptionClientResolveLockTaskDropCounter)
 	require.Equal(t, before+1, after)
 
 	<-client.resolveLockTaskCh

@@ -26,7 +26,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
@@ -549,8 +548,8 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		op.PostFinish()
 		item.IsRemoved.Store(true)
 		delete(oc.operators, opID)
-		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
-		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
+		CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
+		CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("operator", opID.String()),
@@ -578,7 +577,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.ChangeFeedID, *he
 	oc.operators[op.ID()] = opWithTime
 	op.Start()
 	heap.Push(&oc.runningQueue, opWithTime)
-	metrics.CoordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
+	CoordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) {

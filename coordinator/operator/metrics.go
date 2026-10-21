@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package operator
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	CoordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
@@ -40,19 +42,11 @@ var (
 			Help:      "Bucketed histogram of processing time (s) of finished operator.",
 			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
 		}, []string{"type"})
-
-	ChangefeedStateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "changefeed_state",
-			Help:      "The total number of changefeed in different replication states",
-		}, []string{"state"})
 )
 
-func initCoordinatorMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CoordinatorCreatedOperatorCount)
 	registry.MustRegister(CoordinatorFinishedOperatorCount)
 	registry.MustRegister(CoordinatorOperatorDuration)
-	registry.MustRegister(ChangefeedStateGauge)
 }

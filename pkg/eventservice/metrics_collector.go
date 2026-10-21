@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -33,24 +32,24 @@ import (
 )
 
 var (
-	metricEventServiceSendEventDuration   = metrics.EventServiceSendEventDuration.WithLabelValues("txn")
-	metricEventBrokerScanTaskCount        = metrics.EventServiceScanTaskCount
-	metricEventBrokerPendingScanTaskCount = metrics.EventServicePendingScanTaskCount
-	metricEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv", "default")
-	metricEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved", "default")
-	metricEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv", "default")
-	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts", "default")
-	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl", "default")
-	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command", "default")
-	metricEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount.WithLabelValues("default")
+	metricEventServiceSendEventDuration   = EventServiceSendEventDuration.WithLabelValues("txn")
+	metricEventBrokerScanTaskCount        = EventServiceScanTaskCount
+	metricEventBrokerPendingScanTaskCount = EventServicePendingScanTaskCount
+	metricEventStoreOutputKv              = EventStoreOutputEventCount.WithLabelValues("kv", "default")
+	metricEventStoreOutputResolved        = EventStoreOutputEventCount.WithLabelValues("resolved", "default")
+	metricEventServiceSendKvCount         = EventServiceSendEventCount.WithLabelValues("kv", "default")
+	metricEventServiceSendResolvedTsCount = EventServiceSendEventCount.WithLabelValues("resolved_ts", "default")
+	metricEventServiceSendDDLCount        = EventServiceSendEventCount.WithLabelValues("ddl", "default")
+	metricEventServiceSendCommandCount    = EventServiceSendEventCount.WithLabelValues("command", "default")
+	metricEventServiceSkipResolvedTsCount = EventServiceSkipResolvedTsCount.WithLabelValues("default")
 
-	metricRedoEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv", "redo")
-	metricRedoEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved", "redo")
-	metricRedoEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv", "redo")
-	metricRedoEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts", "redo")
-	metricRedoEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl", "redo")
-	metricRedoEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command", "redo")
-	metricRedoEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount.WithLabelValues("redo")
+	metricRedoEventStoreOutputKv              = EventStoreOutputEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventStoreOutputResolved        = EventStoreOutputEventCount.WithLabelValues("resolved", "redo")
+	metricRedoEventServiceSendKvCount         = EventServiceSendEventCount.WithLabelValues("kv", "redo")
+	metricRedoEventServiceSendResolvedTsCount = EventServiceSendEventCount.WithLabelValues("resolved_ts", "redo")
+	metricRedoEventServiceSendDDLCount        = EventServiceSendEventCount.WithLabelValues("ddl", "redo")
+	metricRedoEventServiceSendCommandCount    = EventServiceSendEventCount.WithLabelValues("command", "redo")
+	metricRedoEventServiceSkipResolvedTsCount = EventServiceSkipResolvedTsCount.WithLabelValues("redo")
 )
 
 func updateCounter(mode int64, defaultCounter, redoCounter prometheus.Counter) {
@@ -103,7 +102,7 @@ func updateMetricEventServiceSendDMLTypeCount(mode int64, rawType string, update
 	if rawType == "update" && updateUK {
 		rawType = "updateUK"
 	}
-	metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
+	EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(mode), rawType).Inc()
 }
 
 // dispatcherHeapItem wraps dispatcherStat to implement heap.Item interface.
@@ -153,9 +152,9 @@ type metricsCollector struct {
 func newMetricsCollector(broker *eventBroker) *metricsCollector {
 	return &metricsCollector{
 		broker:                                  broker,
-		metricDispatcherCount:                   metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(broker.tidbClusterID, 10)),
-		metricEventServiceReceivedResolvedTsLag: metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTsLag:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+		metricDispatcherCount:                   EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(broker.tidbClusterID, 10)),
+		metricEventServiceReceivedResolvedTsLag: EventServiceResolvedTsLagGauge.WithLabelValues("received"),
+		metricEventServiceSentResolvedTsLag:     EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 		lastLogSlowDispatchersTime:              time.Now(),
 	}
 }
@@ -216,7 +215,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 	collect := func(dispatcher *dispatcherStat) {
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
+		EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
 		// Track min resolved timestamps
 		resolvedTs := dispatcher.receivedResolvedTs.Load()
@@ -296,7 +295,7 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
 
 	// Update dispatcher status metrics
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
+	EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
 }
 
 // logSlowDispatchers logs warnings for dispatchers that are too slow

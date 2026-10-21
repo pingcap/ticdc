@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package messaging
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -49,6 +49,7 @@ var (
 			Name:      "error_counter",
 			Help:      "The counter of errors occurred in a message center",
 		}, []string{"type", "message"}) // type: event, command, message: error info
+
 	MessagingStreamGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -74,13 +75,12 @@ var (
 		}, []string{"type"}) // type: message type
 )
 
-// InitMetrics registers all metrics used in owner
-func initMessagingMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MessagingSendMsgCounter)
 	registry.MustRegister(MessagingReceiveMsgCounter)
 	registry.MustRegister(MessagingDropMsgCounter)
 	registry.MustRegister(MessagingErrorCounter)
 	registry.MustRegister(MessagingStreamGauge)
-	registry.Register(MessagingReceiveChannelLength)
 	registry.MustRegister(MessagingSlowHandleCounter)
 }

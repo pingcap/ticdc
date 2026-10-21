@@ -40,7 +40,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -340,6 +339,8 @@ func (c *server) Run(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	registerMetrics()
+
 	err := c.initialize(ctx)
 	if err != nil {
 		log.Error("init server failed", zap.Error(err))
@@ -510,7 +511,7 @@ func (c *server) monitorCaptureWriteGate(ctx context.Context, interval time.Dura
 				continue
 			}
 			if previous.Writable && !current.Writable {
-				metrics.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
+				writelease.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
 				log.Warn("capture write gate blocked", zap.String("reason", string(current.Reason)))
 			} else if !previous.Writable && current.Writable {
 				log.Info("capture write gate recovered")
@@ -532,10 +533,10 @@ func (c *server) recordCaptureWriteGateMetrics(status writelease.Status) {
 		if status.Reason == reason {
 			value = 1
 		}
-		metrics.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
+		writelease.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
 	}
-	metrics.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
-	metrics.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
+	writelease.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
+	writelease.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
 }
 
 func (c *server) localFence(reason string) {

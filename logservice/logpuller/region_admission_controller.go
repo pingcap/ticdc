@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
@@ -53,7 +52,7 @@ func (r *regionReq) finish() bool {
 			zap.Uint64("regionID", r.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
 			zap.Int("inflightCount", r.controller.stats().inflight))
-		metrics.RegionRequestFinishScanDuration.Observe(cost)
+		RegionRequestFinishScanDuration.Observe(cost)
 		return true
 	}
 	log.Info("region request duration abnormal, skip metric",
@@ -194,19 +193,19 @@ func (c *regionAdmissionController) pop(
 		case <-interrupt:
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+				LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, nil
 		case <-ctx.Done():
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+				LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, ctx.Err()
 		}
 		if waitingForMemory {
 			c.memoryQuota.scanWaiters.Add(-1)
-			metrics.LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
+			LogPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 		}
 	}
 }

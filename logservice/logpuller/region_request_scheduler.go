@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -214,7 +213,7 @@ func (s *regionRequestScheduler) requestedRegionCount() int {
 }
 
 func (s *regionRequestScheduler) UpdateMetrics() {
-	metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
+	SubscriptionClientRequestedRegionCount.WithLabelValues("pending").
 		Set(float64(s.requestedRegionCount()))
 }
 

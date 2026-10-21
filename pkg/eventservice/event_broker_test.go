@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -888,21 +887,21 @@ func TestDispatcherCountOnReplacement(t *testing.T) {
 			if tableTrigger {
 				info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 			}
-			baseline := testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1"))
+			baseline := testutil.ToFloat64(EventServiceDispatcherGauge.WithLabelValues("1"))
 			require.NoError(t, broker.addDispatcher(info))
 			require.Equal(t, int64(1), broker.dispatcherCount.Load())
-			require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			require.InDelta(t, baseline+1, testutil.ToFloat64(EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 
 			original := broker.getDispatcher(info.GetID()).Load()
 			require.NoError(t, broker.addDispatcher(info))
 			require.NotSame(t, original, broker.getDispatcher(info.GetID()).Load())
 			require.True(t, original.isRemoved.Load())
 			require.Equal(t, int64(1), broker.dispatcherCount.Load())
-			require.InDelta(t, baseline+1, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			require.InDelta(t, baseline+1, testutil.ToFloat64(EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 
 			broker.removeDispatcher(info)
 			require.Zero(t, broker.dispatcherCount.Load())
-			require.InDelta(t, baseline, testutil.ToFloat64(metrics.EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
+			require.InDelta(t, baseline, testutil.ToFloat64(EventServiceDispatcherGauge.WithLabelValues("1")), 1e-9)
 			expectedRegistrations := 2
 			if tableTrigger {
 				expectedRegistrations = 0

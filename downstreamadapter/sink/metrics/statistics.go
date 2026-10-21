@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -30,7 +31,7 @@ func NewStatistics(
 	statistics := &Statistics{
 		sinkType:     sinkType,
 		changefeedID: changefeed,
-		keyspaceID:   FormatKeyspaceID(keyspaceID),
+		keyspaceID:   metrics.FormatKeyspaceID(keyspaceID),
 		ddlTypes:     sync.Map{},
 	}
 

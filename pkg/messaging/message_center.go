@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -387,8 +386,8 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
-	commandChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("command")
-	eventChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("event")
+	commandChLen := MessagingReceiveChannelLength.WithLabelValues("command")
+	eventChLen := MessagingReceiveChannelLength.WithLabelValues("event")
 	for {
 		select {
 		case <-ticker.C:

@@ -140,7 +140,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 		info := cf.GetInfo()
 		if info != nil {
 			downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
-			metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
+			ChangefeedDownstreamInfoGauge.DeleteLabelValues(
 				cfID.Keyspace(),
 				cfID.Name(),
 				downstreamType,
@@ -155,12 +155,12 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if info := cf.GetInfo(); info != nil {
 		keyspaceID = info.KeyspaceID
 	}
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(
+	ChangefeedStatusGauge.DeleteLabelValues(
 		cfID.Keyspace(),
 		cfID.Name(),
 		metrics.FormatKeyspaceID(keyspaceID),
 	)
-	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
+	DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
 
 	return nodeID
 }

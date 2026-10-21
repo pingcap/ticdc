@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,35 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package operator
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
-	MaintainerHandleEventDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "handle_event_duration",
-			Help:      "Bucketed histogram of maintainer handle event time (s).",
-			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	MaintainerEventChLenGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "event_ch_len",
-			Help:      "length of maintainer event channel",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
 	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
 			Name:      "created_count",
 			Help:      "number of created operators",
-		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
 	TotalOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -47,7 +33,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "total_operator_count",
 			Help:      "number of total operators",
-		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "mode"})
 
 	OperatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -56,13 +42,12 @@ var (
 			Name:      "finish_operators_duration_seconds",
 			Help:      "Bucketed histogram of processing time (s) of finished operator.",
 			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
-		}, []string{GetKeyspaceLabel(), "changefeed", "type", "mode"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "mode"})
 )
 
-func initMaintainerMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(MaintainerHandleEventDuration)
-	registry.MustRegister(MaintainerEventChLenGauge)
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(OperatorCount)
-	registry.MustRegister(OperatorDuration)
 	registry.MustRegister(TotalOperatorCount)
+	registry.MustRegister(OperatorDuration)
 }

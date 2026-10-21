@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -39,4 +40,30 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 
 	statistics.Close()
 	require.Equal(t, 0, testutil.CollectAndCount(ExecBatchHistogram))
+}
+
+func requireMetricHasLabel(
+	t *testing.T,
+	collector prometheus.Collector,
+	labelName string,
+	labelValue string,
+) {
+	t.Helper()
+
+	registry := prometheus.NewPedanticRegistry()
+	registry.MustRegister(collector)
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	require.NotEmpty(t, metricFamilies)
+
+	for _, metricFamily := range metricFamilies {
+		for _, metric := range metricFamily.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == labelName && label.GetValue() == labelValue {
+					return
+				}
+			}
+		}
+	}
+	require.Failf(t, "metric label not found", "%s=%q", labelName, labelValue)
 }

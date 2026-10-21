@@ -14,52 +14,94 @@
 package pulsar
 
 import (
-	ticdcMetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // IncPublishedDDLCount DDL
 func IncPublishedDDLCount(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		ticdcMetrics.PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "count").Inc()
+		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "count").Inc()
 		return
 	}
-	ticdcMetrics.PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
+	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
 }
 
 // IncPublishedDDLSuccess success
 func IncPublishedDDLSuccess(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		ticdcMetrics.PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "success").Inc()
+		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "success").Inc()
 		return
 	}
-	ticdcMetrics.PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
+	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
 }
 
 // IncPublishedDDLFail fail
 func IncPublishedDDLFail(topic, changefeed string, messageType common.MessageType) {
 	if isResolvedMessage(messageType) {
-		ticdcMetrics.PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "fail").Inc()
+		PulsarPublishedMessageTypeResolvedCount.WithLabelValues(topic, changefeed, "fail").Inc()
 		return
 	}
-	ticdcMetrics.PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
+	PublishedDDLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
 }
 
 // IncPublishedDMLCount count
 func IncPublishedDMLCount(topic, changefeed string) {
-	ticdcMetrics.PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
+	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "count").Inc()
 }
 
 // IncPublishedDMLSuccess success
 func IncPublishedDMLSuccess(topic, changefeed string) {
-	ticdcMetrics.PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
+	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "success").Inc()
 }
 
 // IncPublishedDMLFail fail
 func IncPublishedDMLFail(topic, changefeed string) {
-	ticdcMetrics.PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
+	PublishedDMLSchemaTableCount.WithLabelValues(topic, changefeed, "fail").Inc()
 }
 
 func isResolvedMessage(messageType common.MessageType) bool {
 	return messageType == common.MessageTypeResolved
+}
+
+const (
+	pulsarPublishedDDLSchemaTableCount      = "published_DDL_schema_table_count"
+	pulsarPublishedDMLSchemaTableCount      = "published_DML_schema_table_count"
+	pulsarPublishedMessageTypeResolvedCount = "published_message_type_resolved_count"
+)
+
+var (
+	// pulsar producer DDL scheme, type: count/success/fail, May there are too many tables
+	PublishedDDLSchemaTableCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "pulsar",
+			Name:      pulsarPublishedDDLSchemaTableCount,
+			Help:      "pulsar published schema count",
+		}, []string{"topic", "changefeed", "type"})
+
+	// pulsar producer DML scheme, type:count/success/fail , May there are too many tables
+	PublishedDMLSchemaTableCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "pulsar",
+			Name:      pulsarPublishedDMLSchemaTableCount,
+			Help:      "pulsar published dml message count",
+		}, []string{"topic", "changefeed", "type"})
+
+	// pulsar producer WATER count, type:count/success/fail , May there are too many tables
+	PulsarPublishedMessageTypeResolvedCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "pulsar",
+			Name:      pulsarPublishedMessageTypeResolvedCount,
+			Help:      "pulsar published message type resolved count ",
+		}, []string{"topic", "changefeed", "type"})
+)
+
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(PublishedDDLSchemaTableCount)
+	registry.MustRegister(PublishedDMLSchemaTableCount)
+	registry.MustRegister(PulsarPublishedMessageTypeResolvedCount)
 }

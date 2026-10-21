@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package common
 
 import (
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -29,7 +30,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "resolved_ts",
 		Help:      "Resolved ts persisted by redo meta",
-	}, []string{GetKeyspaceLabel(), "changefeed"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// RedoCheckpointTsGauge records the checkpoint ts persisted by redo meta.
 	RedoCheckpointTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -37,7 +38,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "checkpoint_ts",
 		Help:      "Checkpoint ts persisted by redo meta",
-	}, []string{GetKeyspaceLabel(), "changefeed"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// RedoWriteBytesGauge records the total number of bytes written to redo log.
 	RedoWriteBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -45,7 +46,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "write_bytes_total",
 		Help:      "Total number of bytes redo log written",
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFsyncDurationHistogram records the latency distributions of fsync called by redo writer.
 	RedoFsyncDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -54,7 +55,7 @@ var (
 		Name:      "fsync_duration_seconds",
 		Help:      "The latency distributions of fsync called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushAllDurationHistogram records the latency distributions of flushAll
 	// called by redo writer.
@@ -64,7 +65,7 @@ var (
 		Name:      "flush_all_duration_seconds",
 		Help:      "The latency distributions of flushall called by redo writer",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoTotalRowsCountGauge records the total number of rows written to redo log.
 	RedoTotalRowsCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -72,7 +73,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "total_rows_count",
 		Help:      "The total count of rows that are processed by redo writer",
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoWriteLogDurationHistogram records the latency distributions of writeLog.
 	RedoWriteLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -81,7 +82,7 @@ var (
 		Name:      "write_log_duration_seconds",
 		Help:      "The latency distributions of writeLog called by redo sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoFlushLogDurationHistogram records the latency distributions of flushLog.
 	RedoFlushLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -90,7 +91,7 @@ var (
 		Name:      "flush_log_duration_seconds",
 		Help:      "The latency distributions of flushLog called by redo sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
-	}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 
 	// RedoWorkerBusyRatio records the busy time of redo writer workers.
 	RedoWorkerBusyRatio = prometheus.NewCounterVec(
@@ -99,16 +100,17 @@ var (
 			Subsystem: subsystem,
 			Name:      "worker_busy_ratio",
 			Help:      "Busy time in seconds for redo writer workers.",
-		}, []string{GetKeyspaceLabel(), "changefeed", "type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 )
 
-func initRedoMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RedoResolvedTsGauge)
 	registry.MustRegister(RedoCheckpointTsGauge)
-	registry.MustRegister(RedoFsyncDurationHistogram)
-	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteBytesGauge)
+	registry.MustRegister(RedoFsyncDurationHistogram)
 	registry.MustRegister(RedoFlushAllDurationHistogram)
+	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteLogDurationHistogram)
 	registry.MustRegister(RedoFlushLogDurationHistogram)
 	registry.MustRegister(RedoWorkerBusyRatio)

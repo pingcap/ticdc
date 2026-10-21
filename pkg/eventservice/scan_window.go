@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -312,7 +311,7 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 	}
 
 	c.scanInterval.Store(int64(decision.newInterval))
-	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(decision.newInterval.Seconds())
+	EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(decision.newInterval.Seconds())
 
 	log.Info("scan interval adjusted",
 		zap.Stringer("changefeedID", c.changefeedID),
@@ -333,38 +332,38 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 }
 
 func initializeScanWindowMetrics(changefeed string) {
-	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeed).Set(0)
-	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeed).Set(defaultScanInterval.Seconds())
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(0)
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(0)
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(0)
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
-	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report").Set(0)
-	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
-	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
-	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(0)
+	EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeed).Set(0)
+	EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeed).Set(defaultScanInterval.Seconds())
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(0)
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(0)
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(0)
+	EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
+	EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
+	EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report").Set(0)
+	EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
+	EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
+	EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(0)
 }
 
 func deleteScanWindowMetrics(changefeed string) {
 	// Available memory quota is a changefeed-lifecycle metric that is cleaned
 	// together with scan window metrics when the changefeed status is removed.
-	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeed)
-	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeed)
-	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeed)
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "report")
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "avg")
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "max")
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "fast")
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "slow")
-	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "report")
-	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "fast")
-	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "slow")
-	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "report")
-	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "fast")
-	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "slow")
-	metrics.EventServiceScanWindowPressureScoreGaugeVec.DeleteLabelValues(changefeed)
-	metrics.EventServiceScanWindowMemoryReleaseCount.DeleteLabelValues(changefeed)
+	EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeed)
+	EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeed)
+	EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeed)
+	EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "report")
+	EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "avg")
+	EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "max")
+	EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "fast")
+	EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "slow")
+	EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "report")
+	EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "fast")
+	EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "slow")
+	EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "report")
+	EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "fast")
+	EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "slow")
+	EventServiceScanWindowPressureScoreGaugeVec.DeleteLabelValues(changefeed)
+	EventServiceScanWindowMemoryReleaseCount.DeleteLabelValues(changefeed)
 	for _, reason := range []scanWindowDecisionReason{
 		scanWindowDecisionNone,
 		scanWindowDecisionCriticalBrake,
@@ -373,7 +372,7 @@ func deleteScanWindowMetrics(changefeed string) {
 		scanWindowDecisionLowRecovery,
 		scanWindowDecisionVeryLowRecovery,
 	} {
-		metrics.EventServiceScanWindowAdjustCount.DeleteLabelValues(changefeed, string(reason))
+		EventServiceScanWindowAdjustCount.DeleteLabelValues(changefeed, string(reason))
 	}
 }
 
@@ -384,20 +383,20 @@ func (c *changefeedStatus) observeScanWindowControllerMetrics(
 	decision scanWindowDecision,
 ) {
 	changefeed := c.changefeedID.String()
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(usageRatio)
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(decision.usage.avg)
-	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(decision.usage.max)
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(decision.fastUsageEMA)
-	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(decision.slowUsageEMA)
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(usageRatio)
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(decision.usage.avg)
+	EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(decision.usage.max)
+	EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(decision.fastUsageEMA)
+	EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(decision.slowUsageEMA)
 	c.observeScanWindowTargetBandMetrics(changefeed, "report", usageRatio, &c.reportBandState)
 	c.observeScanWindowTargetBandMetrics(changefeed, "fast", decision.fastUsageEMA, &c.fastBandState)
 	c.observeScanWindowTargetBandMetrics(changefeed, "slow", decision.slowUsageEMA, &c.slowBandState)
-	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(decision.pressureScore)
+	EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(decision.pressureScore)
 	if memoryReleaseCount > 0 {
-		metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed).Add(float64(memoryReleaseCount))
+		EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed).Add(float64(memoryReleaseCount))
 	}
 	if decision.newInterval != current {
-		metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(decision.reason)).Inc()
+		EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(decision.reason)).Inc()
 	}
 }
 
@@ -409,14 +408,14 @@ func (c *changefeedStatus) observeScanWindowTargetBandMetrics(
 ) {
 	currentState := classifyScanWindowBandState(value)
 	if currentState == scanWindowBandIn {
-		metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(1)
+		EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(1)
 	} else {
-		metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(0)
+		EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(0)
 	}
 
 	previousState := scanWindowBandState(state.Swap(int32(currentState)))
 	if previousState != scanWindowBandUnknown && previousState != currentState {
-		metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, metricType).Inc()
+		EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, metricType).Inc()
 	}
 }
 
@@ -881,7 +880,7 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 	}
 	c.minSentTs.Store(value)
 	if c.scanWindowController != nil {
-		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
+		EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
 	}
 }
 

@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -595,7 +594,7 @@ func TestEventScannerDoesNotSplitCurrentTxnBelowLargeTxnThreshold(t *testing.T) 
 func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	setLargeTxnThresholdForTest(t, 0)
 	insertCount := testutil.ToFloat64(
-		metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert"))
+		EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert"))
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -677,7 +676,7 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
 	require.Nil(t, disp.getLargeTxnState())
 	require.Equal(t, insertCount, testutil.ToFloat64(
-		metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
+		EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
 }
 
 func TestEventScannerFlushesSpilledUKUpdateBeforeSameCommitDDL(t *testing.T) {

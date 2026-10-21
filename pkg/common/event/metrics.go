@@ -35,7 +35,7 @@ var (
 		})
 )
 
-func InitEventMetrics(registry *prometheus.Registry) {
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DMLDecodeDuration)
 	registry.MustRegister(DMLIgnoreComputeDuration)
 }

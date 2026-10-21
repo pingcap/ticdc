@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -224,20 +223,20 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
-		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
-		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsGauge:    MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsLagGauge: MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsGauge:      MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsLagGauge:   MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:      MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
-		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
-		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
-		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
-		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
+		scheduledTaskGauge:  ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
+		spanCountGauge:      SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		tableCountGauge:     TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		handleEventDuration: MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoScheduledTaskGauge: ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoSpanCountGauge:     SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoTableCountGauge:    TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
 	m.controller.SetErrorReporter(m.handleError)
@@ -260,7 +259,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
+	MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctx = ctx
 	m.cancel = cancel
@@ -480,31 +479,31 @@ func (m *Maintainer) initialize() error {
 func (m *Maintainer) cleanupMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	name := m.changefeedID.Name()
-	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+	MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+	MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+	MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+	MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+	MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
-	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+	TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+	TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+	TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+	TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
 
-	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
-	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
-	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
-	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+	ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+	SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
+	SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	TableCountGauge.DeleteLabelValues(keyspace, name, "default")
+	TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
 func (m *Maintainer) markRemoved() {
 	if !m.removed.CompareAndSwap(false, true) {
 		return
 	}
-	metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
+	MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 }
 
 func (m *Maintainer) onInit() bool {
@@ -1369,9 +1368,9 @@ func (m *Maintainer) collectMetrics() {
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
 			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
-		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
-		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
-		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
+		ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
+		TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
+		TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		m.eventChLenGauge.Set(float64(m.eventCh.Len()))

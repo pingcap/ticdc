@@ -20,7 +20,6 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -245,12 +244,12 @@ func (d *gcManager) run(ctx context.Context) error {
 					continue
 				}
 
-				metrics.EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
+				EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
 
 				startTime := time.Now()
 				d.doGCJob(ranges)
 				d.updateCompactRanges(ranges)
-				metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
+				EventStoreDeleteRangeCount.Add(float64(len(ranges)))
 
 				duration := time.Since(startTime)
 				windowBatchCount++

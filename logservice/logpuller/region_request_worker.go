@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -40,8 +39,8 @@ const storeReconnectBackoff = time.Second
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
+	metricsResolvedTsCount  = PullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = BatchResolvedEventSize.WithLabelValues("event-store")
 )
 
 type deregisterRequest struct {

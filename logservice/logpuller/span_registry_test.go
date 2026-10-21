@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -60,6 +59,6 @@ func TestSpanRegistryUpdateMetrics(t *testing.T) {
 
 	registry.UpdateMetrics()
 
-	require.Equal(t, float64(3), testutil.ToFloat64(metrics.SubscriptionClientSubscribedRegionCount))
-	require.InDelta(t, 5.0, testutil.ToFloat64(metrics.LogPullerResolvedTsLag), 0.001)
+	require.Equal(t, float64(3), testutil.ToFloat64(SubscriptionClientSubscribedRegionCount))
+	require.InDelta(t, 5.0, testutil.ToFloat64(LogPullerResolvedTsLag), 0.001)
 }

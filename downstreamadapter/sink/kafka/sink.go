@@ -22,12 +22,12 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
@@ -54,7 +54,7 @@ type sink struct {
 	metricsCollector kafka.MetricsCollector
 
 	comp       components
-	statistics *metrics.Statistics
+	statistics *sinkmetrics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -167,7 +167,7 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
+	statistics := sinkmetrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -368,11 +368,11 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 }
 
 func (s *sink) batchEncodeRun(ctx context.Context) error {
-	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	metricBatchDuration := sinkmetrics.WorkerBatchDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	metricBatchSize := sinkmetrics.WorkerBatchSize.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	defer func() {
-		metrics.WorkerBatchDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-		metrics.WorkerBatchSize.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		sinkmetrics.WorkerBatchDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		sinkmetrics.WorkerBatchSize.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
 	msgsBuf := make([]*commonEvent.MQRowEvent, 0, batchSize)
@@ -429,8 +429,8 @@ func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[commonEvent.TopicPartit
 }
 
 func (s *sink) sendMessages(ctx context.Context) error {
-	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	metricSendMessageDuration := sinkmetrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	defer sinkmetrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 
 	var err error
 	outCh := s.comp.encoderGroup.Output()
@@ -529,11 +529,11 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *sink) sendCheckpoint(ctx context.Context) error {
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	checkpointTsMessageDuration := sinkmetrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	checkpointTsMessageCount := sinkmetrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		sinkmetrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		sinkmetrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
 	var (

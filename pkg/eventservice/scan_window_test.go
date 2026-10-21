@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -259,16 +258,16 @@ func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
 
 	status.updateMemoryUsage(now, 0.6, 1)
 
-	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
-	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg")), 1e-9)
-	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max")), 1e-9)
-	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
-	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
-	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
-	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
-	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
-	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed)), 1e-9)
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed)), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed)), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed)), 1e-9)
 }
 
 func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
@@ -285,7 +284,7 @@ func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
 	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
 
 	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(scanWindowDecisionHighPressure))), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(scanWindowDecisionHighPressure))), 1e-9)
 }
 
 func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
@@ -300,12 +299,12 @@ func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
 	status.updateMemoryUsage(start.Add(time.Second), 0.40, 0)
 	status.updateMemoryUsage(start.Add(2*time.Second), 0.60, 0)
 
-	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
-	require.InDelta(t, 2, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "report")), 1e-9)
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "fast")), 1e-9)
-	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 2, testutil.ToFloat64(EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "slow")), 1e-9)
 }
 
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {

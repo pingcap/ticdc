@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	. "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -68,14 +67,14 @@ func newLocalMessageTarget(id node.ID,
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,
 		recvCmdCh:          gatherRecvCmdChan,
-		sendEventCounter:   metrics.MessagingSendMsgCounter.WithLabelValues("event"),
-		dropMessageCounter: metrics.MessagingDropMsgCounter.WithLabelValues("message"),
-		sendCmdCounter:     metrics.MessagingSendMsgCounter.WithLabelValues("command"),
+		sendEventCounter:   MessagingSendMsgCounter.WithLabelValues("event"),
+		dropMessageCounter: MessagingDropMsgCounter.WithLabelValues("message"),
+		sendCmdCounter:     MessagingSendMsgCounter.WithLabelValues("command"),
 	}
 }
 
 func (s *localMessageTarget) recordCongestedMessageError(typeE string) {
-	metrics.MessagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
+	MessagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
 }
 
 func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*TargetMessage) error {

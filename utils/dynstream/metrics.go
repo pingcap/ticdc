@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package dynstream
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	DynamicStreamMemoryUsage = prometheus.NewGaugeVec(
@@ -21,19 +24,22 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "memory_usage",
-		}, []string{"module", "type", GetKeyspaceLabel(), "area"})
+		}, []string{"module", "type", metrics.GetKeyspaceLabel(), "area"})
+
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "event_chan_size",
 		}, []string{"module"})
+
 	DynamicStreamPendingQueueLen = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "pending_queue_len",
 		}, []string{"module"})
+
 	DynamicStreamAddPathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -41,6 +47,7 @@ var (
 			Name:      "add_path_num",
 			Help:      "The number of add path command",
 		}, []string{"module"})
+
 	DynamicStreamRemovePathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -57,6 +64,7 @@ var (
 			Help:      "The number of events in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
 		}, []string{"module", "area"})
+
 	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -65,6 +73,7 @@ var (
 			Help:      "The total bytes in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
 		}, []string{"module", "area"})
+
 	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -75,7 +84,8 @@ var (
 		}, []string{"module", "area"})
 )
 
-func initDynamicStreamMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamMemoryUsage)
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)

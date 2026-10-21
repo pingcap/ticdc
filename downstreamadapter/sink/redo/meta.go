@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -81,9 +80,9 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
-		metricCheckpointTs: metrics.RedoCheckpointTsGauge.
+		metricCheckpointTs: misc.RedoCheckpointTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs: metrics.RedoResolvedTsGauge.
+		metricResolvedTs: misc.RedoResolvedTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
@@ -130,7 +129,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 		}
 	}()
 
-	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
+	m.metricFlushLogDuration = misc.RedoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 
 	err = m.preCleanupExtStorage(ctx)
@@ -478,9 +477,9 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 }
 
 func (m *RedoMeta) CleanupMetrics() {
-	metrics.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoFlushLogDurationHistogram.
+	misc.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	misc.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	misc.RedoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 

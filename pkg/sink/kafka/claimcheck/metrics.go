@@ -36,8 +36,8 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-// InitMetrics registers all claim check related metrics
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers all claim check related metrics
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(claimCheckSendMessageDuration)
 	registry.MustRegister(claimCheckSendMessageCount)
 }

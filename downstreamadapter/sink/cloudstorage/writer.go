@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -46,7 +45,7 @@ type writer struct {
 	// the channel does not need to be closed explicitly.
 	flushCh chan flushTask
 
-	statistics        *pmetrics.Statistics
+	statistics        *metrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
 	metricFlushBytes    prometheus.Observer
@@ -81,7 +80,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *pmetrics.Statistics,
+	statistics *metrics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (

@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package eventstore
 
 import (
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -58,13 +59,6 @@ var (
 		Help:      "The compression ratio (uncompressed_bytes / compressed_bytes) for values written by event store.",
 		Buckets:   []float64{0.25, 0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2, 3, 4, 6, 8, 10, 15, 20},
 	})
-	// EventStoreOutputEventCount is the metric that counts events output by the sorter.
-	EventStoreOutputEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "event_store",
-		Name:      "output_event_count",
-		Help:      "The number of events output by the sorter",
-	}, []string{"type", "mode"}) // types : kv, resolved.
 
 	EventStoreWriteDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
@@ -111,7 +105,7 @@ var (
 			Subsystem: "event_store",
 			Name:      "subscription_resolved_ts_lag",
 			Help:      "The Resolved Ts lag of subscriptions for event store.",
-			Buckets:   LagBucket(),
+			Buckets:   metrics.LagBucket(),
 		})
 
 	EventStoreSubscriptionDataGCLagHist = prometheus.NewHistogram(
@@ -120,7 +114,7 @@ var (
 			Subsystem: "event_store",
 			Name:      "subscription_data_gc_lag",
 			Help:      "The data gc lag of subscriptions for event store.",
-			Buckets:   LagBucket(),
+			Buckets:   metrics.LagBucket(),
 		})
 
 	EventStoreOnDiskDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -211,7 +205,7 @@ var (
 			Subsystem: "event_store",
 			Name:      "register_dispatcher_start_ts_lag",
 			Help:      "The lag of startTs when registering a dispatcher.",
-			Buckets:   LagBucket(),
+			Buckets:   metrics.LagBucket(),
 		})
 
 	EventStoreWriteWorkerIODuration = prometheus.NewHistogramVec(
@@ -335,26 +329,26 @@ var (
 	}, []string{"id"})
 )
 
-func initEventStoreMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
-	registry.MustRegister(EventStoreCompressedRowsCount)
-	registry.MustRegister(EventStoreCompressionRatioHistogram)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreKVEntryCount)
-	registry.MustRegister(EventStoreOutputEventCount)
+	registry.MustRegister(EventStoreCompressedRowsCount)
+	registry.MustRegister(EventStoreCompressionRatioHistogram)
 	registry.MustRegister(EventStoreWriteDurationHistogram)
 	registry.MustRegister(EventStoreScanRequestsCount)
 	registry.MustRegister(EventStoreScanBytes)
 	registry.MustRegister(EventStoreDeleteRangeCount)
 	registry.MustRegister(EventStoreDeleteRangeFetchedCount)
 	registry.MustRegister(EventStoreSubscriptionResolvedTsLagHist)
+	registry.MustRegister(EventStoreSubscriptionDataGCLagHist)
 	registry.MustRegister(EventStoreOnDiskDataSizeGauge)
 	registry.MustRegister(EventStoreInMemoryDataSizeGauge)
 	registry.MustRegister(EventStoreResolvedTsLagGauge)
-	registry.MustRegister(EventStoreWriteBytes)
-	registry.MustRegister(EventStoreSubscriptionDataGCLagHist)
 	registry.MustRegister(EventStoreWriteBatchEventsCountHist)
 	registry.MustRegister(EventStoreWriteBatchSizeHist)
+	registry.MustRegister(EventStoreWriteBytes)
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
 	registry.MustRegister(EventStoreNotifyDispatcherCount)

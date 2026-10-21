@@ -124,8 +124,8 @@ var (
 	}, []string{"namespace", "changefeed", "reason"})
 )
 
-// InitCloudStorageMetrics registers all metrics in this file.
-func InitCloudStorageMetrics(registry *prometheus.Registry) {
+// registerCloudStorageMetrics registers all metrics in this file.
+func registerCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFlushBytesHist)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageDDLFlushDMLDurationHistogram)

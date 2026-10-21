@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,10 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package logger
 
 import (
-	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -26,7 +25,7 @@ var (
 			Name:      "write_bytes_total",
 			Help:      "Total number of bytes written to TiCDC log file.",
 		},
-		func() float64 { return float64(logger.LogWriteBytesTotal()) },
+		func() float64 { return float64(LogWriteBytesTotal()) },
 	)
 
 	LoggerFileSizeBytes = prometheus.NewGaugeFunc(
@@ -36,7 +35,7 @@ var (
 			Name:      "file_size_bytes",
 			Help:      "Size of the current TiCDC log file.",
 		},
-		func() float64 { return float64(logger.LogFileSizeBytes()) },
+		func() float64 { return float64(LogFileSizeBytes()) },
 	)
 
 	LoggerTotalSizeBytes = prometheus.NewGaugeFunc(
@@ -46,7 +45,7 @@ var (
 			Name:      "total_size_bytes",
 			Help:      "Total size of the TiCDC log file and its rotated backups in the same directory.",
 		},
-		func() float64 { return float64(logger.LogTotalSizeBytes()) },
+		func() float64 { return float64(LogTotalSizeBytes()) },
 	)
 
 	LoggerDiskTotalBytes = prometheus.NewGaugeFunc(
@@ -56,7 +55,7 @@ var (
 			Name:      "disk_total_bytes",
 			Help:      "Total size of the filesystem containing TiCDC log file directory.",
 		},
-		func() float64 { return float64(logger.LogDiskTotalBytes()) },
+		func() float64 { return float64(LogDiskTotalBytes()) },
 	)
 
 	LoggerDiskUsedBytes = prometheus.NewGaugeFunc(
@@ -66,11 +65,12 @@ var (
 			Name:      "disk_used_bytes",
 			Help:      "Used bytes of the filesystem containing TiCDC log file directory.",
 		},
-		func() float64 { return float64(logger.LogDiskUsedBytes()) },
+		func() float64 { return float64(LogDiskUsedBytes()) },
 	)
 )
 
-func initLoggerMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LoggerWriteBytesTotal)
 	registry.MustRegister(LoggerFileSizeBytes)
 	registry.MustRegister(LoggerTotalSizeBytes)

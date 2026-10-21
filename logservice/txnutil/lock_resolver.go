@@ -23,7 +23,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -47,10 +46,10 @@ func NewLockerResolver() LockResolver {
 const scanLockLimit = 1024
 
 var (
-	metricResolveLockFoundCounter      = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
-	metricResolveLockResolvedCounter   = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
-	metricScanLockOperationDuration    = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
-	metricResolveLockOperationDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
+	metricResolveLockFoundCounter      = SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
+	metricResolveLockResolvedCounter   = SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
+	metricScanLockOperationDuration    = SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
+	metricResolveLockOperationDuration = SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
 func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {

@@ -13,8 +13,6 @@
 
 package eventservice
 
-import "github.com/pingcap/ticdc/pkg/metrics"
-
 type pendingBigTxnMetric struct {
 	startTs    uint64
 	commitTs   uint64
@@ -81,6 +79,6 @@ func observeBigTxnMetric(rawKVBytes int64) {
 	if rawKVBytes <= 0 {
 		return
 	}
-	metrics.EventServiceBigTxnSize.Observe(float64(rawKVBytes))
-	metrics.EventServiceBigTxnCount.Inc()
+	EventServiceBigTxnSize.Observe(float64(rawKVBytes))
+	EventServiceBigTxnCount.Inc()
 }

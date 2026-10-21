@@ -93,8 +93,8 @@ var (
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
 )
 
-// InitMetrics registers MySQL sink metrics.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers MySQL sink metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execDMLEventRowsAffectedCounter)
 	registry.MustRegister(activeActiveConflictSkipRowsCounter)
 	registry.MustRegister(ConflictDetectDuration)

@@ -21,12 +21,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -56,7 +56,7 @@ type Sink struct {
 	dmlDB          *sql.DB
 	controlDB      *sql.DB
 	controlAsyncDB *sql.DB
-	statistics     *metrics.Statistics
+	statistics     *sinkmetrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -114,9 +114,9 @@ func New(
 	keyspace := changefeedID.Keyspace()
 	name := changefeedID.Name()
 	if cfg.IsTiDB {
-		metrics.ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
+		ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
 	} else {
-		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
+		ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
 	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
@@ -195,7 +195,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := sinkmetrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -511,7 +511,7 @@ func (s *Sink) Close() {
 	s.statistics.Close()
 	mysql.DeleteDMLEventRowsAffectedMetrics(s.changefeedID)
 
-	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 }
 
 func (s *Sink) closeDBPool(role string, db *sql.DB) {

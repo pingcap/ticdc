@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/conn"
@@ -193,17 +192,17 @@ func newRemoteMessageTarget(
 		errCh:           make(chan error, 32),
 
 		// Initialize metrics
-		sendEventCounter:           metrics.MessagingSendMsgCounter.WithLabelValues("event"),
-		dropEventCounter:           metrics.MessagingDropMsgCounter.WithLabelValues("event"),
-		recvEventCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues("event"),
-		congestedEventErrorCounter: metrics.MessagingErrorCounter.WithLabelValues("event", "message_congested"),
+		sendEventCounter:           MessagingSendMsgCounter.WithLabelValues("event"),
+		dropEventCounter:           MessagingDropMsgCounter.WithLabelValues("event"),
+		recvEventCounter:           MessagingReceiveMsgCounter.WithLabelValues("event"),
+		congestedEventErrorCounter: MessagingErrorCounter.WithLabelValues("event", "message_congested"),
 
-		sendCmdCounter:           metrics.MessagingSendMsgCounter.WithLabelValues("command"),
-		dropCmdCounter:           metrics.MessagingDropMsgCounter.WithLabelValues("command"),
-		recvCmdCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues("command"),
-		congestedCmdErrorCounter: metrics.MessagingErrorCounter.WithLabelValues("command", "message_congested"),
+		sendCmdCounter:           MessagingSendMsgCounter.WithLabelValues("command"),
+		dropCmdCounter:           MessagingDropMsgCounter.WithLabelValues("command"),
+		recvCmdCounter:           MessagingReceiveMsgCounter.WithLabelValues("command"),
+		congestedCmdErrorCounter: MessagingErrorCounter.WithLabelValues("command", "message_congested"),
 
-		errorCounter: metrics.MessagingErrorCounter.WithLabelValues("message", "error"),
+		errorCounter: MessagingErrorCounter.WithLabelValues("message", "error"),
 	}
 
 	// initialize streams placeholder

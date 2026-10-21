@@ -1,4 +1,4 @@
-// Copyright 2026 PingCAP, Inc.
+// Copyright 2020 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package writelease
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	CaptureWriteGateState = prometheus.NewGaugeVec(
@@ -23,6 +25,7 @@ var (
 			Name:      "capture_write_gate_state",
 			Help:      "Whether the capture write gate is in the labeled state.",
 		}, []string{"state"})
+
 	CaptureP2PLeaseRemainingSeconds = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -30,6 +33,7 @@ var (
 			Name:      "capture_p2p_lease_remaining_seconds",
 			Help:      "Remaining lifetime of the capture P2P write lease.",
 		})
+
 	CaptureEtcdProofRemainingSeconds = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -37,6 +41,7 @@ var (
 			Name:      "capture_etcd_proof_remaining_seconds",
 			Help:      "Remaining lifetime of the capture etcd write proof.",
 		})
+
 	CaptureWriteBlockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -44,6 +49,7 @@ var (
 			Name:      "capture_write_block_total",
 			Help:      "Number of capture write gate transitions from writable to blocked.",
 		}, []string{"reason"})
+
 	CaptureLastWriteAdmissionTimestamp = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -51,6 +57,7 @@ var (
 			Name:      "capture_last_write_admission_timestamp_seconds",
 			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
 		})
+
 	CaptureLeaseResponseRejectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -58,6 +65,7 @@ var (
 			Name:      "capture_lease_response_rejected_total",
 			Help:      "Number of rejected P2P write lease responses.",
 		}, []string{"reason"})
+
 	CaptureLeaseHeartbeatCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -65,6 +73,7 @@ var (
 			Name:      "capture_lease_heartbeat_total",
 			Help:      "Number of capture write lease heartbeats by handling result.",
 		}, []string{"result"})
+
 	CaptureLeaseResponseCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -72,6 +81,7 @@ var (
 			Name:      "capture_lease_response_total",
 			Help:      "Number of capture write lease responses by handling result.",
 		}, []string{"result"})
+
 	CaptureSafeToRescheduleDelaySeconds = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -79,6 +89,7 @@ var (
 			Name:      "capture_safe_to_reschedule_delay_seconds",
 			Help:      "Conservative fallback delay after capture lease-key deletion before removal is published.",
 		})
+
 	CaptureP2PWitnessAvailable = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -88,7 +99,8 @@ var (
 		})
 )
 
-func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CaptureWriteGateState)
 	registry.MustRegister(CaptureP2PLeaseRemainingSeconds)
 	registry.MustRegister(CaptureEtcdProofRemainingSeconds)
