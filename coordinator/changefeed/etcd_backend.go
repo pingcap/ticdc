@@ -353,10 +353,10 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 		return errors.Trace(err)
 	}
 	status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-	status.Progress = config.ProgressStopping
 	if err != nil {
 		return errors.Trace(err)
 	}
+	status.Progress = config.ProgressStopping
 	jobValue, err := status.Marshal()
 	if err != nil {
 		return errors.Trace(err)
