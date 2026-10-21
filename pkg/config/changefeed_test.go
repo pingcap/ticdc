@@ -241,6 +241,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
+<<<<<<< HEAD
 func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	replicaConfig := GetDefaultReplicaConfig()
 	replicaConfig.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
@@ -289,6 +290,8 @@ func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 	}
 }
 
+=======
+>>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.KafkaConfig = &KafkaConfig{
@@ -297,7 +300,10 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	changefeedConfig := &ChangefeedConfig{
 		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
 		SinkConfig: cfg.Sink,
+<<<<<<< HEAD
 		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+=======
+>>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 	}
 	original, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
@@ -307,17 +313,24 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 		"sink-password-sentinel",
 		"uri-secret-sentinel",
 		"plain-password-sentinel",
+<<<<<<< HEAD
 		"redo-secret-sentinel",
+=======
+>>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 	} {
 		require.NotContains(t, output, secret)
 	}
 	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+<<<<<<< HEAD
 	require.Contains(t, output, "secret-access-key=xxxxx")
+=======
+>>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 	after, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
 	require.Equal(t, original, after)
 }
 
+<<<<<<< HEAD
 func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 	storage := "azblob://container/prefix?account-name=account&endpoint=" +
 		"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel"
@@ -350,6 +363,8 @@ func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 	require.Equal(t, upperOriginal, upperAfter)
 }
 
+=======
+>>>>>>> 3c2580634 (config: mask sink URI credentials in logs (#6347))
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {
