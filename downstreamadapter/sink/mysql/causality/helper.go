@@ -28,17 +28,18 @@ import (
 	"go.uber.org/zap"
 )
 
+var conflictCollators map[string]collate.Collator
+
 // TiDB enables new collations during package initialization. Cache the supported
 // collators before CDC disables the global switch in main for handle decoding.
 // Unsupported collations must use a shared index key instead of TiDB's binary
 // fallback, which could miss dependencies under the downstream collation.
-var conflictCollators = func() map[string]collate.Collator {
-	collators := make(map[string]collate.Collator)
+func init() {
+	conflictCollators = make(map[string]collate.Collator)
 	for _, collation := range collate.GetSupportedCollations() {
-		collators[collation.Name] = collate.GetCollatorWithCollate(true, collation.Name)
+		conflictCollators[collation.Name] = collate.GetCollatorWithCollate(true, collation.Name)
 	}
-	return collators
-}()
+}
 
 // ConflictKeys implements causality.txnEvent interface.
 func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
