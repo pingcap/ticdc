@@ -2724,7 +2724,7 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: ast.NewCIStr("test"),
+						Name: parser_model.NewCIStr("test"),
 					},
 				},
 			},
@@ -2746,7 +2746,7 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: ast.NewCIStr("test"),
+						Name: parser_model.NewCIStr("test"),
 					},
 				},
 			},
@@ -2918,14 +2918,14 @@ func TestRegisterTable(t *testing.T) {
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
-						Name: ast.NewCIStr("test"),
+						Name: parser_model.NewCIStr("test"),
 					},
 					tables: []*model.TableInfo{
 						newEligibleTableInfoForTest(99, "t1"),
 						newEligibleTableInfoForTest(100, "t2"),
 						{
 							ID:        102,
-							Name:      ast.NewCIStr("pt"),
+							Name:      parser_model.NewCIStr("pt"),
 							Partition: buildPartitionDefinitionsForTest([]int64{201, 202}),
 						},
 					},
