@@ -232,7 +232,7 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 				require.NoError(t, err)
 
 				require.Equal(t, int64(i+1), callbackCount.Load())
-				dataDir := path.Join(parentDir, "test/table1", fmt.Sprint(tc.versions[0]))
+				dataDir := path.Join(parentDir, "test/table1", fmt.Sprint(version))
 				dataFileName := fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String())
 				content, err := os.ReadFile(path.Join(dataDir, dataFileName))
 				require.NoError(t, err, "acknowledged DML must be persisted regardless of dispatcher startTs")
@@ -245,8 +245,7 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 
 			schemaFiles, err := os.ReadDir(path.Join(parentDir, "test/table1/meta"))
 			require.NoError(t, err)
-			require.Len(t, schemaFiles, 1)
-			require.True(t, cloudstorage.IsSchemaFile(path.Join("meta", schemaFiles[0].Name())))
+			require.Len(t, schemaFiles, 2)
 		})
 	}
 }

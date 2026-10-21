@@ -168,11 +168,14 @@ func (t *TableCol) toTiColumnInfo(colID int64) *model.ColumnInfo {
 // It carries table structure in Columns/TotalColumns and DDL replay metadata in
 // Query/Type/TableVersion.
 type SchemaFile struct {
-	Table   string `json:"Table"`
-	Schema  string `json:"Schema"`
-	Version uint64 `json:"Version"`
+	// DispatcherID scopes DML-generated schema file names. It is path metadata,
+	// so it is not included in the JSON payload or the schema checksum.
+	DispatcherID string `json:"-"`
+	Table        string `json:"Table"`
+	Schema       string `json:"Schema"`
+	Version      uint64 `json:"Version"`
 	// TableVersion is the schema version encoded into schema file name:
-	// schema_{TableVersion}_{checksum}.json.
+	// schema_[{DispatcherID}_]{TableVersion}_{checksum}.json.
 	// It is passed from tableInfoVersion in path generation.
 	TableVersion uint64     `json:"TableVersion"`
 	Query        string     `json:"Query"`
@@ -309,6 +312,7 @@ func (t *SchemaFile) Checksum() uint32 {
 // Database-level schema files use <schema>/meta/...
 // Table-level schema files use <schema>/<table>/meta/... or <tableID>/meta/...
 // when useTableIDAsPath is true. The file name includes the generated checksum.
+// A nonempty DispatcherID scopes the file to its producing dispatcher.
 func (t *SchemaFile) Path(useTableIDAsPath bool, tableID int64) string {
 	tableLevel := t.TotalColumns != 0
 	table := t.Table
@@ -316,5 +320,5 @@ func (t *SchemaFile) Path(useTableIDAsPath bool, tableID int64) string {
 		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
 	}
 	omitSchema := useTableIDAsPath && tableLevel
-	return generateSchemaFilePath(t.Schema, table, t.TableVersion, t.Checksum(), omitSchema)
+	return generateSchemaFilePath(t.Schema, table, t.TableVersion, t.Checksum(), omitSchema, t.DispatcherID)
 }
