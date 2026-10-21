@@ -15,10 +15,12 @@
 package kafka
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rcrowley/go-metrics"
@@ -98,9 +100,13 @@ func TestInitMetricsRegistersThrottleTime(t *testing.T) {
 	throttleTimeGauge.WithLabelValues(labels...).Set(0.025)
 	t.Cleanup(func() { throttleTimeGauge.DeleteLabelValues(labels...) })
 
-	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
+	keyspaceLabel := "namespace"
+	if kerneltype.IsNextGen() {
+		keyspaceLabel = "keyspace_name"
+	}
+	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(fmt.Sprintf(`
 # HELP ticdc_sink_kafka_producer_throttle_time Kafka broker throttle time in seconds.
 # TYPE ticdc_sink_kafka_producer_throttle_time gauge
-ticdc_sink_kafka_producer_throttle_time{broker="1",changefeed="throttle-metric-registration",namespace="test-keyspace",type="avg"} 0.025
-`), "ticdc_sink_kafka_producer_throttle_time"))
+ticdc_sink_kafka_producer_throttle_time{broker="1",changefeed="throttle-metric-registration",%s="test-keyspace",type="avg"} 0.025
+`, keyspaceLabel)), "ticdc_sink_kafka_producer_throttle_time"))
 }

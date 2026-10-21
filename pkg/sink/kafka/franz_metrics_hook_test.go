@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -110,6 +111,25 @@ func TestMetricsHook(t *testing.T) {
 	require.NoError(t, throttleMetric.Write(throttleHistogram))
 	require.Equal(t, uint64(2), throttleHistogram.GetHistogram().GetSampleCount())
 	require.InDelta(t, 0.06, throttleHistogram.GetHistogram().GetSampleSum(), 0.000001)
+
+	keyspaceLabel := "namespace"
+	if kerneltype.IsNextGen() {
+		keyspaceLabel = "keyspace_name"
+	}
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string)
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["changefeed"] == changefeedID.Name() {
+				require.Equal(t, changefeedID.Keyspace(), labels[keyspaceLabel], family.GetName())
+			}
+		}
+	}
+
 	keyspace, changefeed, broker := changefeedID.Keyspace(), changefeedID.Name(), "1"
 	cleanupMetrics(changefeedID)
 	require.False(t, outgoingBytesTotal.DeleteLabelValues(keyspace, changefeed, broker))
