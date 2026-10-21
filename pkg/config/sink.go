@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -809,13 +810,9 @@ func CheckUseTableIDAsPathCompatibility(
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
-	dispatchRules := s.DispatchRules[:0]
-	for _, rule := range s.DispatchRules {
-		if rule != nil {
-			dispatchRules = append(dispatchRules, rule)
-		}
-	}
-	s.DispatchRules = dispatchRules
+	s.DispatchRules = slices.DeleteFunc(s.DispatchRules, func(rule *DispatchRule) bool {
+		return rule == nil
+	})
 
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
 		return err

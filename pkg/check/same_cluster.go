@@ -203,14 +203,6 @@ func parseRouteRules(rules []*config.DispatchRule, caseSensitive bool) ([]routeR
 			continue
 		}
 		route := routeRuleToCheck{rawMatchers: rule.Matcher, schemaExpression: rule.TargetSchema}
-		matchers := make([]tablePattern, 0, len(rule.Matcher))
-		for _, matcher := range rule.Matcher {
-			pattern, err := parseRulePattern("dispatch rule matcher", matcher, caseSensitive)
-			if err != nil {
-				return nil, err
-			}
-			matchers = append(matchers, pattern)
-		}
 		var reason string
 		var ok bool
 		if route.schema, reason, ok = parseTargetExpression(rule.TargetSchema, schemaPlaceholder); !ok {
@@ -224,8 +216,12 @@ func parseRouteRules(rules []*config.DispatchRule, caseSensitive bool) ([]routeR
 		route.schema.literal = normalizeName(route.schema.literal, caseSensitive)
 		route.schema.prefix = normalizeName(route.schema.prefix, caseSensitive)
 		route.schema.suffix = normalizeName(route.schema.suffix, caseSensitive)
-		for _, matcher := range matchers {
-			route.matcher = matcher
+		for _, matcher := range rule.Matcher {
+			pattern, err := parseRulePattern("dispatch rule matcher", matcher, caseSensitive)
+			if err != nil {
+				return nil, err
+			}
+			route.matcher = pattern
 			parsed = append(parsed, route)
 		}
 	}
