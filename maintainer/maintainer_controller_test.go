@@ -2609,48 +2609,6 @@ func TestFinishBootstrapSkipsMergeJournalConflictingWithWorkingOperator(t *testi
 	}
 }
 
-<<<<<<< HEAD
-=======
-// TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup covers the post-bootstrap
-// merge cleanup window where source dispatchers still report terminal statuses after the merge journal
-// is gone. The test bootstraps overlapping source and merged spans, then sends terminal source
-// heartbeats and expects the obsolete sources to be removed instead of rescheduled as absent spans.
-func TestHandleStatusDropsTerminalSourcesCoveredByMergedSpanAfterJournalCleanup(t *testing.T) {
-	env := newMergeBootstrapTestEnv(t)
-
-	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
-		nil,
-		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_WaitingMerge),
-		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_WaitingMerge),
-		env.bootstrapSpan(env.mergedDispatcherID, env.mergedSpan, heartbeatpb.ComponentState_Initializing),
-	), false)
-	require.NoError(t, err)
-
-	env.controller.HandleStatus(env.nodeID, []*heartbeatpb.TableSpanStatus{
-		{
-			ID:              env.sourceDispatcherID1.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Stopped,
-			CheckpointTs:    10,
-			Mode:            common.DefaultMode,
-		},
-		{
-			ID:              env.sourceDispatcherID2.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Removed,
-			CheckpointTs:    10,
-			Mode:            common.DefaultMode,
-		},
-	})
-
-	require.Zero(t, env.controller.spanController.GetAbsentSize())
-	require.Zero(t, env.controller.spanController.GetSchedulingSize())
-	require.Equal(t, 1, env.controller.spanController.GetReplicatingSize())
-	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
-	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
-	require.NotNil(t, env.controller.spanController.GetTaskByID(env.mergedDispatcherID))
-	require.Len(t, env.controller.spanController.GetTasksByTableID(1), 1)
-}
-
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

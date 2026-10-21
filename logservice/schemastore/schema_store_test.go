@@ -14,10 +14,12 @@
 package schemastore
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -25,6 +27,29 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestSchemaReadsRespectCallerCancellation(t *testing.T) {
+	keyspaceStore := &keyspaceSchemaStore{}
+	store := &schemaStore{
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			common.DefaultKeyspace.ID: keyspaceStore,
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := store.GetAllPhysicalTables(ctx, common.DefaultKeyspace, 1, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, store.RegisterTable(ctx, common.DefaultKeyspace, 1, 1), context.Canceled)
+	_, err = store.GetTableInfo(ctx, common.DefaultKeyspace, 1, 1)
+	require.ErrorIs(t, err, context.Canceled)
+
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, keyspaceStore.waitResolvedTs(ctx, 1, 1, time.Second), context.DeadlineExceeded)
+	keyspaceStore.resolvedTs.Store(1)
+	require.NoError(t, keyspaceStore.waitResolvedTs(context.Background(), 1, 1, time.Second))
+}
 
 func TestIgnoreDDLByCommitTs(t *testing.T) {
 	// 1. Setup a mock SchemaStore.

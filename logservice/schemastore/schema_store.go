@@ -212,32 +212,23 @@ func (s *keyspaceSchemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 
 // TODO: use notify instead of sleep
 // waitResolvedTs will wait until the schemaStore resolved ts is greater than or equal to ts.
-<<<<<<< HEAD
-func (s *keyspaceSchemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
-=======
 func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64, ts uint64, logInterval time.Duration) error {
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 	start := time.Now()
 	lastLogTime := time.Now()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	defer func() {
 		metrics.SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
 	}()
 	for {
 		if s.resolvedTs.Load() >= ts {
-<<<<<<< HEAD
-			return
-=======
 			return nil
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-done:
-			return errors.ErrKeyspaceNotFound.FastGenByArgs(s.dataStorage.keyspaceID)
 		case <-ticker.C:
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 		}
-		time.Sleep(time.Millisecond * 10)
 		if time.Since(lastLogTime) > logInterval {
 			log.Info("wait resolved ts slow",
 				zap.Int64("tableID", tableID),
@@ -274,13 +265,7 @@ func (s *schemaStore) Name() string {
 	return appcontext.SchemaStore
 }
 
-<<<<<<< HEAD
-func (s *schemaStore) getKeyspaceSchemaStore(keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
-=======
-// acquireKeyspaceSchemaStore returns a store with its lifecycle read lock held.
-// The caller must call store.release when it no longer accesses the store.
-func (s *schemaStore) acquireKeyspaceSchemaStore(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+func (s *schemaStore) getKeyspaceSchemaStore(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
 	s.keyspaceLocker.RLock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	s.keyspaceLocker.RUnlock()
@@ -366,25 +351,12 @@ func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) 
 	return err
 }
 
-<<<<<<< HEAD
-func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
 func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	store, err := s.acquireKeyspaceSchemaStore(ctx, keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
 
-<<<<<<< HEAD
-	store.waitResolvedTs(0, snapTs, 10*time.Second)
-	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
-}
-
-func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
 	if err := store.waitResolvedTs(ctx, 0, snapTs, 10*time.Second); err != nil {
 		return nil, err
 	}
@@ -392,20 +364,15 @@ func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID in
 }
 
 func (s *schemaStore) RegisterTable(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
-	store, err := s.acquireKeyspaceSchemaStore(ctx, keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return err
 	}
 
-<<<<<<< HEAD
-=======
 	if err := store.waitResolvedTs(ctx, tableID, startTs, 5*time.Second); err != nil {
 		return err
 	}
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 	metrics.SchemaStoreResolvedRegisterTableGauge.Inc()
-	store.waitResolvedTs(tableID, startTs, 5*time.Second)
 	log.Info("register table",
 		zap.Any("keyspace", keyspaceMeta),
 		zap.Int64("tableID", tableID),
@@ -415,11 +382,7 @@ func (s *schemaStore) RegisterTable(ctx context.Context, keyspaceMeta common.Key
 }
 
 func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error {
-<<<<<<< HEAD
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
-	store, err := s.acquireKeyspaceSchemaStore(context.Background(), keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return err
 	}
@@ -427,13 +390,8 @@ func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID 
 	return store.dataStorage.unregisterTable(tableID)
 }
 
-<<<<<<< HEAD
-func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
 func (s *schemaStore) GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
-	store, err := s.acquireKeyspaceSchemaStore(ctx, keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -443,22 +401,14 @@ func (s *schemaStore) GetTableInfo(ctx context.Context, keyspaceMeta common.Keys
 	defer func() {
 		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
-<<<<<<< HEAD
-	store.waitResolvedTs(tableID, ts, 2*time.Second)
-=======
 	if err := store.waitResolvedTs(ctx, tableID, ts, 2*time.Second); err != nil {
 		return nil, err
 	}
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 	return store.dataStorage.getTableInfo(tableID, ts)
 }
 
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {
-<<<<<<< HEAD
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
-	store, err := s.acquireKeyspaceSchemaStore(context.Background(), keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return DDLEventState{}, err
 	}
@@ -475,11 +425,7 @@ func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, ta
 func (s *schemaStore) FetchTableDDLEvents(
 	keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64,
 ) ([]commonEvent.DDLEvent, error) {
-<<<<<<< HEAD
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
-	store, err := s.acquireKeyspaceSchemaStore(context.Background(), keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -504,11 +450,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
 func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
-<<<<<<< HEAD
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-=======
-	store, err := s.acquireKeyspaceSchemaStore(context.Background(), keyspaceMeta)
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
 	}

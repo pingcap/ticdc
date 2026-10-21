@@ -122,14 +122,7 @@ func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.Keysp
 	return m.Tables, nil
 }
 
-<<<<<<< HEAD
 func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
-=======
-func (m *mockSchemaStore) GetTableDDLEventState(_ common.KeyspaceMeta, _ int64) (schemastore.DDLEventState, error) {
-	if m.onGetTableDDLEventState != nil {
-		m.onGetTableDDLEventState()
-	}
->>>>>>> d1e7db93f (schemastore: respect context cancellation during schema waits (#6516))
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
 		MaxEventCommitTs: m.maxDDLCommitTs,
