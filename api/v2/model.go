@@ -372,6 +372,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.Sink != nil {
 		var dispatchRules []*config.DispatchRule
+		if c.Sink.DispatchRules != nil {
+			dispatchRules = make([]*config.DispatchRule, 0, len(c.Sink.DispatchRules))
+		}
 		for _, rule := range c.Sink.DispatchRules {
 			if rule == nil {
 				continue
@@ -769,6 +772,10 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	}
 	if cloned.Sink != nil {
 		var dispatchRules []*DispatchRule
+		// Clone omits empty slices; use the original to preserve an explicit clear.
+		if c.Sink.DispatchRules != nil {
+			dispatchRules = make([]*DispatchRule, 0, len(c.Sink.DispatchRules))
+		}
 		for _, rule := range cloned.Sink.DispatchRules {
 			if rule == nil {
 				continue
@@ -1245,11 +1252,12 @@ type Table struct {
 
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
+// Nil dispatchers preserve stored routes on update; an empty list clears them.
 type SinkConfig struct {
 	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
 	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
 	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule       `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitzero" toml:"dispatchers,omitempty"`
 	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
 	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
 	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`

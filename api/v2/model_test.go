@@ -33,6 +33,38 @@ func TestSinkConfigDateSeparator(t *testing.T) {
 	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
 }
 
+func TestSinkDispatchRulesUpdate(t *testing.T) {
+	storedRules := []*DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst"}}
+	for _, tc := range []struct {
+		name  string
+		rules []*DispatchRule
+	}{
+		{name: "omitted"},
+		{name: "clear", rules: []*DispatchRule{}},
+		{name: "replace", rules: []*DispatchRule{{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: tc.rules}}
+			converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+			require.Equal(t, tc.rules, converted.Sink.DispatchRules)
+
+			info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+			require.NoError(t, err)
+			require.Equal(t, tc.rules, info.Config.Sink.DispatchRules)
+
+			body, err := json.Marshal(info.Config)
+			require.NoError(t, err)
+			stored := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: storedRules}}
+			require.NoError(t, json.Unmarshal(body, stored))
+			want := tc.rules
+			if tc.rules == nil {
+				want = storedRules
+			}
+			require.Equal(t, want, stored.Sink.DispatchRules)
+		})
+	}
+}
+
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",

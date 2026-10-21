@@ -16,6 +16,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -242,6 +244,7 @@ target-table = '{table}_routed'
 			config:               "[sink]\ndispatchers = []\n",
 			wantAllowSameCluster: true,
 			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    []*v2.DispatchRule{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,6 +261,20 @@ target-table = '{table}_routed'
 			require.Equal(t, tc.wantFilterRules, updated.Config.Filter.Rules)
 			require.Equal(t, tc.wantDispatchRules, updated.Config.Sink.DispatchRules)
 			require.Equal(t, original, oldInfo.Config)
+
+			body, err := json.Marshal(o.getChangefeedConfig(cmd, updated))
+			require.NoError(t, err)
+			// The API applies the serialized request to the stored configuration.
+			request := &v2.ChangefeedConfig{ReplicaConfig: v2.ToAPIReplicaConfig(replica)}
+			require.NoError(t, json.Unmarshal(body, request))
+			require.Equal(t, tc.wantDispatchRules, request.ReplicaConfig.Sink.DispatchRules)
+			info := &config.ChangeFeedInfo{Config: request.ReplicaConfig.ToInternalReplicaConfig()}
+			err = check.ValidateSameClusterRouting(info.ToChangefeedConfig())
+			if tc.wantAllowSameCluster && len(tc.wantDispatchRules) == 0 {
+				require.True(t, errors.ErrInvalidReplicaConfig.Equal(err), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }
