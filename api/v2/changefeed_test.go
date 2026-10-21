@@ -52,8 +52,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-<<<<<<< HEAD
-=======
 func TestCreateChangefeedRejectsRunningImport(t *testing.T) {
 	_, etcdServer, err := etcd.SetupEmbedEtcd(t.TempDir())
 	require.NoError(t, err)
@@ -79,7 +77,7 @@ func TestCreateChangefeedRejectsRunningImport(t *testing.T) {
 			cdcEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
 			cdcEtcdClient.EXPECT().GetEtcdClient().Return(wrappedClient)
 			srv := mock.NewMockServer(ctrl)
-			srv.EXPECT().GetCoordinator().Return(&deleteMissingCoordinator{}, nil)
+			srv.EXPECT().GetCoordinator().Return(&resumeNormalCoordinator{info: &config.ChangeFeedInfo{}}, nil)
 			srv.EXPECT().GetPdClient().Return(&gc.MockPDClient{ClusterID: 123}).AnyTimes()
 			srv.EXPECT().GetEtcdClient().Return(cdcEtcdClient)
 			h := OpenAPIV2{server: srv}
@@ -107,65 +105,6 @@ func TestCreateChangefeedRejectsRunningImport(t *testing.T) {
 	}
 }
 
-func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	originalConfig := config.GetGlobalServerConfig()
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(originalConfig)
-	})
-	cfg := originalConfig.Clone()
-	cfg.Security.ClientUserRequired = true
-	cfg.Security.ClientAllowedUser = []string{"alice"}
-	config.StoreGlobalServerConfig(cfg)
-
-	ctrl := gomock.NewController(t)
-	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient.EXPECT().GetEtcdClient().Return(nil)
-
-	coordinator := &deleteMissingCoordinator{}
-	handler := &OpenAPIV2{server: &deleteMissingServer{
-		coordinator: coordinator,
-		etcdClient:  etcdClient,
-	}}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(
-		http.MethodDelete,
-		"/api/v2/changefeeds/missing?keyspace=test",
-		nil,
-	)
-	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "missing"}}
-
-	handler.DeleteChangefeed(c)
-
-	require.Equal(t, http.StatusUnauthorized, w.Code)
-	require.False(t, coordinator.removeCalled)
-}
-
-func TestLoadKeyspaceInContext(t *testing.T) {
-	if !kerneltype.IsNextGen() {
-		t.Skip("keyspace authentication context is only needed in next-gen")
-	}
-
-	ctrl := gomock.NewController(t)
-	keyspaceManager := keyspace.NewMockManager(ctrl)
-	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), "test").Return(&keyspacepb.KeyspaceMeta{
-		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
-		Name:     "test",
-	}, nil)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v2/changefeeds/missing?keyspace=test", nil)
-
-	loadKeyspaceInContext(c, keyspaceManager)
-
-	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
-}
-
->>>>>>> be38e502a (api: reject changefeed creation during upstream import or restore (#6525))
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
 // resume GC safepoint/barrier setup. Running states must fail fast, while states
 // that are actually stopped can proceed to the remaining resume validation.
