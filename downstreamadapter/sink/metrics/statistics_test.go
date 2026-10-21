@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,34 +37,10 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 	}))
 
 	require.Equal(t, 1, testutil.CollectAndCount(ExecBatchHistogram))
-	requireMetricHasLabel(t, ExecBatchHistogram, "keyspace_id", "123")
+	metric := &dto.Metric{}
+	require.NoError(t, statistics.metricExecBatchHis.(prometheus.Metric).Write(metric))
+	require.Contains(t, metric.GetLabel(), &dto.LabelPair{Name: new("keyspace_id"), Value: new("123")})
 
 	statistics.Close()
 	require.Equal(t, 0, testutil.CollectAndCount(ExecBatchHistogram))
-}
-
-func requireMetricHasLabel(
-	t *testing.T,
-	collector prometheus.Collector,
-	labelName string,
-	labelValue string,
-) {
-	t.Helper()
-
-	registry := prometheus.NewPedanticRegistry()
-	registry.MustRegister(collector)
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	require.NotEmpty(t, metricFamilies)
-
-	for _, metricFamily := range metricFamilies {
-		for _, metric := range metricFamily.Metric {
-			for _, label := range metric.Label {
-				if label.GetName() == labelName && label.GetValue() == labelValue {
-					return
-				}
-			}
-		}
-	}
-	require.Failf(t, "metric label not found", "%s=%q", labelName, labelValue)
 }

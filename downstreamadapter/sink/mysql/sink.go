@@ -109,8 +109,8 @@ func New(
 	}
 
 	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
-	// dashboards can display "tidb" when we can prove it. Otherwise, the
-	// scheme-based label remains "mysql/tidb".
+	// dashboards can display "tidb" for downstreams configured with MySQL URIs.
+	// Otherwise, the label is derived from the sink URI scheme.
 	keyspace := changefeedID.Keyspace()
 	name := changefeedID.Name()
 	if cfg.IsTiDB {
