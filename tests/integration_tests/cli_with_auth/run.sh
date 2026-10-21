@@ -40,6 +40,8 @@ function run() {
   [security]
    client-user-required = true
    client-allowed-user = [\"ticdc\"]
+  [debug]
+   enable-kafka-franz-go = true
   " >$WORK_DIR/server.toml
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$WORK_DIR/server.toml"
