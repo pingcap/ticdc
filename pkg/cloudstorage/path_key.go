@@ -55,6 +55,7 @@ func (s *SchemaPathKey) GetKey() string {
 // Input:
 //   - <schema>/meta/schema_<tableVersion>_<checksum>.json
 //   - <schema>/<table>/meta/schema_<tableVersion>_<checksum>.json
+//   - <schema>/<table>/meta/schema_<dispatcherID>_<tableVersion>_<checksum>.json
 //
 // Output fields are Schema, Table, and TableVersion. Table is empty for
 // database-level schema files. Invalid paths panic.
@@ -78,13 +79,13 @@ func (s *SchemaPathKey) Parse(path string) {
 		log.Panic("cannot match schema path pattern", zap.String("path", path))
 	}
 
-	schemaFileName := matches[len(matches)-1]
-	version, _ := mustParseSchemaFileName(schemaFileName)
+	var schemaFileName SchemaFileName
+	schemaFileName.Parse(matches[len(matches)-1])
 
 	*s = SchemaPathKey{
 		Schema:       schema,
 		Table:        table,
-		TableVersion: version,
+		TableVersion: schemaFileName.TableVersion,
 	}
 }
 

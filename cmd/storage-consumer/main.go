@@ -46,7 +46,7 @@ var (
 	timezone         string
 )
 
-func init() {
+func main() {
 	version.LogVersionInfo("storage consumer")
 	flag.StringVar(&upstreamURIStr, "upstream-uri", "", "storage uri")
 	flag.StringVar(&downstreamURIStr, "downstream-uri", "", "downstream sink uri")
@@ -80,12 +80,8 @@ func init() {
 		log.Error("invalid storage scheme, the scheme of upstream-uri must be file/s3/azblob/gcs")
 		os.Exit(1)
 	}
-}
-
-func main() {
 	debug.SetMemoryLimit(8 * 1024 * 1024 * 1024)
 	var consumer *consumer
-	var err error
 
 	if enableProfiling {
 		go func() {
