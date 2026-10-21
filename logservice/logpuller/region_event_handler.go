@@ -253,6 +253,9 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	}
 
 	state := event.states[0]
+	if span := state.region.subscribedSpan; span != nil && span.stopped.Load() {
+		return nil
+	}
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
