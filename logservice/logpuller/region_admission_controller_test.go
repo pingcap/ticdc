@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -59,8 +60,21 @@ func submitRegionForAdmission(
 	require.True(t, controller.submit(task))
 }
 
+func newTestRegionAdmissionController(
+	currentWindow int,
+	maxWindowMultiplier int,
+) *regionAdmissionController {
+	clock := pdutil.NewClock4Test()
+	return newRegionAdmissionController(
+		currentWindow,
+		maxWindowMultiplier,
+		newMemoryQuotaController(1024*1024*1024, 8*1024*1024),
+		clock,
+	)
+}
+
 func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	checkpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), checkpointTs)
@@ -85,7 +99,7 @@ func TestRegionAdmissionControllerNormalWindow(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 
@@ -121,7 +135,7 @@ func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
-	controller := newRegionAdmissionController(1, 2)
+	controller := newTestRegionAdmissionController(1, 2)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	slowCheckpointTs := oracle.GoTimeToTS(time.Now().Add(-time.Hour))
 
@@ -151,7 +165,7 @@ func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 }
 
 func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1)
+	controller := newTestRegionAdmissionController(1, 1)
 	currentTs := oracle.GoTimeToTS(time.Now())
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), currentTs)
 	submitRegionForAdmission(t, controller, region, currentTs)
@@ -187,7 +201,7 @@ func TestRegionAdmissionLeaseReleasedOnce(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerClose(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1)
+	controller := newTestRegionAdmissionController(1, 1)
 	controller.close()
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	require.False(t, controller.submit(newRegionPriorityTask(region, 1)))
@@ -197,7 +211,7 @@ func TestRegionAdmissionControllerClose(t *testing.T) {
 }
 
 func TestRegionAdmissionControllerDrainPending(t *testing.T) {
-	controller := newRegionAdmissionController(1, 1)
+	controller := newTestRegionAdmissionController(1, 1)
 	region1 := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	region2 := prepareRegionForAdmission(createTestRegionInfo(1, 2), 1)
 	submitRegionForAdmission(t, controller, region1, 1)
