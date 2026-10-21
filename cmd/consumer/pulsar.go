@@ -354,6 +354,11 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 		batch []pulsarInput
 		bytes int64
 	)
+	defer func() {
+		if d := c.memory.diagnostics; d != nil {
+			d.readBytes.Add(uint64(bytes))
+		}
+	}()
 	for {
 		partition := c.partitions[message.Topic()]
 		if partition == nil {

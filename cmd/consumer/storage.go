@@ -149,6 +149,9 @@ func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, erro
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
 	}
+	if d := c.memory.diagnostics; d != nil {
+		d.readBytes.Add(uint64(len(data)))
+	}
 	return data, nil
 }
 

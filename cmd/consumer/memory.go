@@ -27,11 +27,12 @@ const maxMemoryBytes = 1 << 30
 // memoryUsage is a soft backpressure budget for input contents and decoded rows.
 // It uses existing data sizes; it does not model process or object overhead.
 type memoryUsage struct {
-	limit   int64
-	bytes   atomic.Int64
-	waiting atomic.Bool
-	mu      sync.Mutex
-	changed chan struct{}
+	diagnostics *consumerDiagnostics
+	limit       int64
+	bytes       atomic.Int64
+	waiting     atomic.Bool
+	mu          sync.Mutex
+	changed     chan struct{}
 }
 
 func newMemoryUsage() *memoryUsage {

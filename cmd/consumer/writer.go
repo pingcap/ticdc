@@ -406,8 +406,12 @@ func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+		rows := uint64(dml.Len())
 		dml.AddPostFlushFunc(func() {
 			if batch.finished[index].CAS(false, true) {
+				if d := w.memory.diagnostics; d != nil {
+					d.writtenRows.Add(rows)
+				}
 				if batch.flushed.Add(1) == int64(len(batch.events)) {
 					w.memory.release(batch.bytes)
 					close(batch.done)
