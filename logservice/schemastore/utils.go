@@ -79,9 +79,9 @@ func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
 }
 
 // isSplitable returns whether the table is eligible for split in all sinks
-// Only the table with pk and no uk can be splitted in all sinks.
+// Only tables with a clustered primary key and no other unique key can be split in all sinks.
 func isSplitable(tableInfo *model.TableInfo) bool {
-	return common.IsSplitable(tableInfo.GetPkColInfo(), tableInfo.Indices)
+	return common.IsSplitable(tableInfo.PKIsHandle || tableInfo.IsCommonHandle, tableInfo.Indices)
 }
 
 func getIndexIDs(job *model.Job) []int64 {
