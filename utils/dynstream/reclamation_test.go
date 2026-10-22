@@ -160,6 +160,34 @@ func TestReclamationSkipsRetainedMarkersUntilNewData(t *testing.T) {
 	require.Len(t, feedback, 1, "new data makes the path reclaimable again")
 }
 
+func TestPressureConvertedMarkerDoesNotRearmReclamation(t *testing.T) {
+	h := &recoveryHandler{}
+	q := newEventQueue[int, string, *mockEvent, any](h, newTestBatchConfigRegistry())
+	p := newPathInfo[int, string, *mockEvent, any, *recoveryHandler](0, "test", "a", nil)
+	mc := newMemControl[int, string, *mockEvent, any, *recoveryHandler]()
+	feedback := make(chan Feedback[int, string, any], 1)
+	mc.addPathToArea(p, AreaSettings{maxPendingSize: 1024, algorithm: MemoryControlForEventCollector}, feedback)
+	q.initPath(p)
+	q.blockPath(p)
+	marker := &mockEvent{id: -1, value: 32}
+	for range 50 {
+		q.appendEvent(eventWrap[int, string, *mockEvent, any, *recoveryHandler]{pathInfo: p, event: marker, eventSize: marker.value, eventType: h.GetType(marker)})
+	}
+	q.releasePath(p, false)
+	require.True(t, p.reclaimed.Load())
+
+	e := &mockEvent{id: 1, value: 280}
+	q.appendEvent(eventWrap[int, string, *mockEvent, any, *recoveryHandler]{pathInfo: p, event: e, eventSize: e.value, eventType: h.GetType(e)})
+	last, ok := p.pendingQueue.BackRef()
+	require.True(t, ok)
+	require.Equal(t, -1, last.event.id, "pressure must convert incoming data to a recovery marker")
+	require.True(t, p.reclaimed.Load(), "a retained marker has no payload to reclaim")
+	p.areaMemStat.lastSizeDecreaseTime.Store(time.Now().Add(-time.Minute))
+	p.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-time.Minute))
+	mc.checkMemoryPressure()
+	require.Empty(t, feedback)
+}
+
 func TestReleaseFeedbackKeepsOriginalPathIdentity(t *testing.T) {
 	h := &recoveryHandler{}
 	ds := newParallelDynamicStream("reclamation-identity", h, Option{StreamCount: 1, EnableMemoryControl: true})
@@ -217,6 +245,32 @@ func TestRemoveDuringReclamationPreservesOtherPathAccounting(t *testing.T) {
 	require.Zero(t, a.pendingQueue.Length())
 	require.Equal(t, int64(900), b.pendingSize.Load())
 	require.Equal(t, int64(900), b.areaMemStat.totalPendingSize.Load())
+}
+
+func TestLastRemovedPathKeepsAreaAccountingUntilDrained(t *testing.T) {
+	h := &recoveryHandler{}
+	q := newEventQueue[int, string, *mockEvent, any](h, newTestBatchConfigRegistry())
+	mc := newMemControl[int, string, *mockEvent, any, *recoveryHandler]()
+	feedback := make(chan Feedback[int, string, any], 1)
+	settings := AreaSettings{maxPendingSize: 1024, algorithm: MemoryControlForEventCollector}
+	old := newPathInfo[int, string, *mockEvent, any, *recoveryHandler](0, "test", "old", nil)
+	mc.addPathToArea(old, settings, feedback)
+	q.initPath(old)
+	e := &mockEvent{id: 1, value: 900}
+	q.appendEvent(eventWrap[int, string, *mockEvent, any, *recoveryHandler]{pathInfo: old, event: e, eventSize: e.value, eventType: h.GetType(e)})
+	old.removed.Store(true)
+	mc.removePathFromArea(old)
+
+	current := newPathInfo[int, string, *mockEvent, any, *recoveryHandler](0, "test", "current", nil)
+	mc.addPathToArea(current, settings, feedback)
+	require.Same(t, old.areaMemStat, current.areaMemStat)
+	require.Equal(t, int64(900), mc.getMetrics().AreaMemoryMetrics[0].MemoryUsage())
+
+	current.removed.Store(true)
+	mc.removePathFromArea(current)
+	require.Contains(t, mc.areaStatMap, 0, "pending bytes still belong to the area")
+	q.releasePath(old, true)
+	require.NotContains(t, mc.areaStatMap, 0, "draining the last queue releases the area")
 }
 
 func TestPressureDropChargesRecoveryMarkerSize(t *testing.T) {

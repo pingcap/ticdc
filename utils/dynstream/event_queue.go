@@ -76,7 +76,9 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 	if !appended {
 		return
 	}
-	if event.eventType.Droppable && event.eventType.Property != PeriodicSignal {
+	// Admission may have replaced droppable data with a recovery marker.
+	queued, _ := path.pendingQueue.BackRef()
+	if queued.eventType.Droppable && queued.eventType.Property != PeriodicSignal {
 		path.reclaimed.Store(false)
 	}
 	addSignal()
@@ -107,6 +109,9 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(
 	}
 
 	path.pendingSize.Store(0)
+	if path.removed.Load() && path.areaMemStat != nil {
+		path.areaMemStat.memControl.removeAreaIfUnused(path.areaMemStat)
+	}
 }
 
 // reclaimBlockedPath runs only on the queue owner. Keep recovery notifications

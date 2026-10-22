@@ -358,6 +358,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // The owning stream reconciles the path's pending memory when it clears the
 // pending queue. Do not deduct it here, because RemovePath can race with the
 // stream popping an event and cause the same memory to be deducted twice.
+// Keep the area until the owner has cleared the last removed path's queue.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
 
@@ -366,7 +367,12 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 
 	area.pathMap.Delete(path.path)
 	area.pathCount.Add(-1)
-	if area.pathCount.Load() == 0 {
+}
+
+func (m *memControl[A, P, T, D, H]) removeAreaIfUnused(area *areaMemStat[A, P, T, D, H]) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if area.pathCount.Load() == 0 && area.totalPendingSize.Load() == 0 && m.areaStatMap[area.area] == area {
 		delete(m.areaStatMap, area.area)
 	}
 }
