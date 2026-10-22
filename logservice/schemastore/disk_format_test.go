@@ -19,6 +19,8 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
@@ -75,6 +77,51 @@ func TestGetAllPhysicalTablesSkipsViews(t *testing.T) {
 			},
 		},
 	}, tables)
+}
+
+func TestPhysicalTableTraitsFromTiDBTableInfo(t *testing.T) {
+	noKeyTable := &model.TableInfo{ID: 201, Name: parser_model.NewCIStr("t_no_key")}
+	view := &model.TableInfo{ID: 202, Name: parser_model.NewCIStr("v1"), View: &model.ViewInfo{}}
+	sequence := &model.TableInfo{ID: 203, Name: parser_model.NewCIStr("s1"), Sequence: &model.SequenceInfo{}}
+	testCases := []struct {
+		name           string
+		tableInfo      *model.TableInfo
+		forceReplicate bool
+		want           physicalTableTraits
+	}{
+		{"table with primary key", newEligibleTableInfoForTest(200, "t1"), false, physicalTableTraits{eligible: true, splitable: true}},
+		{"table without key", noKeyTable, false, physicalTableTraits{}},
+		{"table without key with force replicate", noKeyTable, true, physicalTableTraits{eligible: true}},
+		{"view", view, false, physicalTableTraits{isView: true, eligible: true}},
+		{"sequence with force replicate", sequence, true, physicalTableTraits{}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			tableFilter, err := filter.NewFilter(config.NewDefaultFilterConfig(), "", false, testCase.forceReplicate)
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, physicalTableTraitsFromTiDBTableInfo(testCase.tableInfo, tableFilter))
+		})
+	}
+}
+
+func TestAddTableInfoToBatchReusesMarshalBuffer(t *testing.T) {
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+
+	const snapshotTs = uint64(100)
+	dbInfo := &model.DBInfo{ID: 100, Name: parser_model.NewCIStr("test")}
+	tableInfo := newEligibleTableInfoForTest(200, "t1")
+	batch := db.NewBatch()
+	defer func() { require.NoError(t, batch.Close()) }()
+	_, _, _, marshalBuf, err := addTableInfoToBatch(batch, snapshotTs, dbInfo, tableInfo, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, marshalBuf)
+	firstByte := &marshalBuf[0]
+	_, _, _, marshalBuf, err = addTableInfoToBatch(batch, snapshotTs, dbInfo, tableInfo, marshalBuf)
+	require.NoError(t, err)
+	require.NotEmpty(t, marshalBuf)
+	require.Same(t, firstByte, &marshalBuf[0])
 }
 
 type snapshotLostByGCError struct{}

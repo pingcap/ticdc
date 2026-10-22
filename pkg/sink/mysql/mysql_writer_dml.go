@@ -793,9 +793,11 @@ func (w *Writer) sequenceExecute(
 func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, writeTimeout time.Duration,
 ) (bool, error) {
-	var multiStmtArgs []any
-	for _, value := range dmls.values {
-		multiStmtArgs = append(multiStmtArgs, value...)
+	var multiStmtArgs []driver.NamedValue
+	for _, values := range dmls.values {
+		for _, value := range values {
+			multiStmtArgs = append(multiStmtArgs, driver.NamedValue{Ordinal: len(multiStmtArgs) + 1, Value: value})
+		}
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
@@ -813,15 +815,47 @@ func (w *Writer) multiStmtExecute(
 		return false, nil
 	}
 
-	// we use conn.ExecContext to reduce the overhead of network latency.
-	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
-	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
-	// The txn can ensure the atomicity of the transaction.
-	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
-	if err != nil {
-		return true, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
-	}
-	return true, nil
+	// We use conn.Raw to record the all affected rows.
+	// See https://github.com/go-sql-driver/mysql/pull/1309
+	err = conn.Raw(func(raw any) error {
+		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+		checker := raw.(driver.NamedValueChecker)
+		for i := range multiStmtArgs {
+			if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
+				return err
+			}
+		}
+		execer := raw.(driver.ExecerContext)
+		// we use ExecContext to reduce the overhead of network latency.
+		// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+		// When an error happens before COMMIT, the server session can be left with an open transaction.
+		// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
+		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
+		if err != nil {
+			// An error before COMMIT can leave an open transaction. Use the driver
+			// directly because Raw already holds the underlying connection's lock.
+			rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
+			_, rbErr := execer.ExecContext(rbCtx, "ROLLBACK", nil)
+			rbCancel()
+			if rbErr != nil {
+				log.Info("failed to rollback after multi statement exec error",
+					zap.Int("writerID", w.id),
+					zap.Error(rbErr))
+			}
+			args := make([]any, len(multiStmtArgs))
+			for i, arg := range multiStmtArgs {
+				args[i] = arg.Value
+			}
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
+		}
+		var rowsAffected int64
+		for _, affected := range res.(dmysql.Result).AllRowsAffected() {
+			rowsAffected += affected
+		}
+		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
+		return nil
+	})
+	return true, err
 }
 
 func (w *Writer) logDMLTxnErr(
