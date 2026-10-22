@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -508,6 +509,54 @@ func TestAdmissionWaitsForMemoryAndReleasesScanMemory(t *testing.T) {
 	require.True(t, req.abort())
 	state = getMemoryQuotaTestState(quota)
 	require.Zero(t, state.scanUsed)
+}
+
+func TestAdmissionScanWaitDurationObservedOnceAfterNotifications(t *testing.T) {
+	quota := newMemoryQuotaController(100, 10)
+	span := newTestQuotaSpan(1)
+	currentTs := setTestQuotaSpanLag(span, time.Hour)
+	clock := pdutil.NewClock4Test().(*pdutil.Clock4Test)
+	clock.SetTS(currentTs)
+	controller := newRegionAdmissionController(1, 1, quota, clock)
+
+	require.True(t, quota.AcquireEvent(context.Background(), span, 20))
+	region := newTestQuotaRegionWithPriority(span, cdcpb.ScanPriority_SCAN_PRIORITY_LOW)
+	require.True(t, controller.submit(newRegionPriorityTask(region, 1)))
+
+	countObservations := func() uint64 {
+		metric := &dto.Metric{}
+		require.NoError(t, metrics.LogPullerMemoryQuotaScanWaitDuration.Write(metric))
+		return metric.GetHistogram().GetSampleCount()
+	}
+	initialCount := countObservations()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interrupt := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		_, err := controller.pop(ctx, interrupt)
+		result <- err
+	}()
+	require.Eventually(t, func() bool {
+		return quota.scanWaiters.Load() == 1 && len(controller.notify) == 0
+	}, time.Second, time.Millisecond)
+
+	func() {
+		controller.state.Lock()
+		defer controller.state.Unlock()
+		controller.notify <- struct{}{}
+		require.Eventually(t, func() bool {
+			return quota.scanWaiters.Load() == 0
+		}, time.Second, time.Millisecond)
+		require.Equal(t, initialCount, countObservations())
+	}()
+	require.Eventually(t, func() bool {
+		return quota.scanWaiters.Load() == 1
+	}, time.Second, time.Millisecond)
+	close(interrupt)
+	require.NoError(t, <-result)
+	require.Equal(t, initialCount+1, countObservations())
+	quota.ReleaseEvent(20)
 }
 
 func TestAdmissionWakesWhenBlockedSpanStops(t *testing.T) {
