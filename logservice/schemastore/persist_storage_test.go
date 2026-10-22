@@ -4094,7 +4094,6 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 	})
 }
 
-<<<<<<< HEAD
 func TestBuildPersistedDDLEventForRenameTablesTiDB81Compat(t *testing.T) {
 	// This test is not redundant with TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName.
 	// It specifically simulates TiDB <= 8.1 JobVersion1 RawArgs, where oldTableNames
@@ -4288,7 +4287,7 @@ func TestBuildTableDDLEventTableStateChange(t *testing.T) {
 		})
 	}
 }
-=======
+
 func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -4301,7 +4300,7 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 			name: "drop schema",
 			initial: []mockDBInfo{
 				{
-					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 					tables: []*model.TableInfo{
 						newEligibleTableInfoForTest(100, "t"),
 						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
@@ -4316,13 +4315,13 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 			name: "exchange partition",
 			initial: []mockDBInfo{
 				{
-					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 					tables: []*model.TableInfo{
 						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}, {ID: 203}}),
 					},
 				},
 				{
-					dbInfo: &model.DBInfo{ID: 20, Name: ast.NewCIStr("test2")},
+					dbInfo: &model.DBInfo{ID: 20, Name: parser_model.NewCIStr("test2")},
 					tables: []*model.TableInfo{newEligibleTableInfoForTest(300, "t")},
 				},
 			},
@@ -4336,7 +4335,7 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 			name: "rename tables",
 			initial: []mockDBInfo{
 				{
-					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 					tables: []*model.TableInfo{
 						newEligibleTableInfoForTest(100, "t1"),
 						newEligibleTableInfoForTest(101, "t2"),
@@ -4354,7 +4353,7 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 		{
 			name: "create tables",
 			initial: []mockDBInfo{
-				{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+				{dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")}},
 			},
 			jobs: []*model.Job{
 				buildCreateTablesJobForTest(10, []int64{100, 101}, []string{"t1", "t2"}, 1000),
@@ -4366,7 +4365,7 @@ func TestGetAllPhysicalTablesReplaysTopologyChangingDDL(t *testing.T) {
 			name: "reorganize partition",
 			initial: []mockDBInfo{
 				{
-					dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+					dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 					tables: []*model.TableInfo{
 						newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}, {ID: 203}}),
 					},
@@ -4435,7 +4434,7 @@ func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 	t.Run("rename tables", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
 			{
-				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 				tables: []*model.TableInfo{
 					newEligibleTableInfoForTest(100, "t1"),
 					newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
@@ -4462,7 +4461,7 @@ func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 	t.Run("alter table partitioning", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
 			{
-				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 				tables: []*model.TableInfo{newEligibleTableInfoForTest(100, "t")},
 			},
 		})
@@ -4479,7 +4478,7 @@ func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 	t.Run("remove partitioning", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
 			{
-				dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+				dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 				tables: []*model.TableInfo{
 					newEligiblePartitionTableInfoForTest(200, "pt", []model.PartitionDefinition{{ID: 201}, {ID: 202}}),
 				},
@@ -4578,7 +4577,7 @@ func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
 
 	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
 		{
-			dbInfo: &model.DBInfo{ID: job.SchemaID, Name: ast.NewCIStr("test")},
+			dbInfo: &model.DBInfo{ID: job.SchemaID, Name: parser_model.NewCIStr("test")},
 			tables: []*model.TableInfo{newEligibleTableInfoForTest(job.TableID, "t")},
 		},
 	})
@@ -4597,7 +4596,7 @@ func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
 func TestHandleDDLJobSkipRules(t *testing.T) {
 	t.Run("duplicate create table", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
-			{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+			{dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")}},
 		})
 		t.Cleanup(func() { require.NoError(t, storage.close()) })
 
@@ -4610,7 +4609,7 @@ func TestHandleDDLJobSkipRules(t *testing.T) {
 
 	t.Run("duplicate create tables", func(t *testing.T) {
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
-			{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+			{dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")}},
 		})
 		t.Cleanup(func() { require.NoError(t, storage.close()) })
 
@@ -4665,4 +4664,3 @@ func assertTableDeleted(t *testing.T, storage *persistentStorage, tableID int64,
 	require.Nil(t, info)
 	require.IsType(t, &TableDeletedError{}, err)
 }
->>>>>>> 669facfa2 (schemastore: fix partitioning DDL replay and add more unit tests (#5976))

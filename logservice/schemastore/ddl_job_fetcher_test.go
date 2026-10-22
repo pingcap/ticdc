@@ -160,7 +160,7 @@ func TestDDLJobFetcherInputLegacyFormat(t *testing.T) {
 }
 
 func TestDDLJobFetcherInputJobTableFormat(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelperWithPrivateStore(t)
 	t.Cleanup(helper.Close)
 	job := &model.Job{
 		ID:         101,
@@ -195,5 +195,5 @@ func TestDDLJobFetcherInputJobTableFormat(t *testing.T) {
 	require.Equal(t, rawKVs[0].StartTs, cached[0].Job.StartTS)
 	require.Equal(t, rawKVs[0].CRTs, cached[0].Job.BinlogInfo.FinishedTS)
 	require.NotNil(t, fetcher.ddlTableInfo)
-	require.Equal(t, common.JobTableID, fetcher.ddlTableInfo.DDLJobTable.TableName.TableID)
+	require.Equal(t, int64(common.JobTableID), fetcher.ddlTableInfo.DDLJobTable.TableName.TableID)
 }
