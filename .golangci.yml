@@ -57,6 +57,11 @@ linters:
         - pkg: github.com/pingcap/ticdc/pkg/errors
           alias: ""
 
+    modernize:
+      # Keep pointer construction consistent with the repository's util.AddressOf convention.
+      disable:
+        - newexpr
+
     revive:
       rules:
         - name: blank-imports

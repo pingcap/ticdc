@@ -101,15 +101,72 @@ func (s *trackingSubscriptionClient) subscriptionPriorities() []cdcpb.ScanPriori
 	return priorities
 }
 
+func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:                    lifecycleCtx,
+		cancel:                 lifecycleCancel,
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	initializationCtx, cancel := store.newInitializationContext(context.Background())
+	defer cancel()
+
+	// Registration holds this lock while loading the initial snapshot. Close
+	// must cancel that work before waiting for the lock.
+	store.keyspaceLocker.Lock()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close(context.Background())
+	}()
+	select {
+	case <-initializationCtx.Done():
+		require.ErrorIs(t, initializationCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		store.keyspaceLocker.Unlock()
+		require.FailNow(t, "keyspace initialization context was not canceled")
+	}
+	store.keyspaceLocker.Unlock()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema store did not close after registration finished")
+	}
+}
+
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	keyspaceCtx, keyspaceCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {
+				ctx:    keyspaceCtx,
+				cancel: keyspaceCancel,
+			},
+		},
+		tombstoneKeyspaces: make(map[uint32]struct{}),
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
+
 func TestRemoveTombstoneKeyspace(t *testing.T) {
 	const keyspaceID = uint32(42)
 	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
-	storeCtx, cancel := context.WithCancel(context.Background())
+	schemaStoreCtx, cancelSchemaStore := context.WithCancel(context.Background())
+	defer cancelSchemaStore()
+	keyspaceCtx, cancelKeyspace := context.WithCancel(schemaStoreCtx)
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
 	require.NoError(t, storage.run())
 
 	subClient := newTrackingSubscriptionClient()
-	fetcher := newDDLJobFetcher(storeCtx, subClient, nil, keyspaceID, nil, nil)
+	fetcher := newDDLJobFetcher(keyspaceCtx, subClient, nil, keyspaceID, nil, nil)
 	subID := subClient.AllocSubscriptionID()
 	subClient.Subscribe(
 		subID,
@@ -124,14 +181,16 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 
 	keyspaceStore := &keyspaceSchemaStore{
-		ctx:           storeCtx,
-		cancel:        cancel,
+		ctx:           keyspaceCtx,
+		cancel:        cancelKeyspace,
 		ddlJobFetcher: fetcher,
 		dataStorage:   storage,
 		unsortedCache: newDDLCache(),
 		notifyCh:      make(chan any, 1),
 	}
 	store := &schemaStore{
+		ctx:                    schemaStoreCtx,
+		cancel:                 cancelSchemaStore,
 		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{keyspaceID: keyspaceStore},
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
@@ -170,7 +229,7 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 
-	require.ErrorIs(t, storeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
 	require.False(t, subClient.contains(subID))
 	var panicValue any
 	func() {

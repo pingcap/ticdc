@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -800,4 +801,15 @@ func TestRetryableError(t *testing.T) {
 	require.True(t, isRetryableError(errors.ErrReachMaxTry.Wrap(rpctypes.ErrTimeoutDueToLeaderFail)))
 	require.True(t, isRetryableError(errors.Trace(context.DeadlineExceeded)))
 	require.False(t, isRetryableError(context.Canceled))
+}
+
+func TestEtcdEventKeysOmitValues(t *testing.T) {
+	events := []*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Key: []byte("/key1"), Value: []byte("secret-value")}},
+		{Type: mvccpb.DELETE, Kv: &mvccpb.KeyValue{Key: []byte("/key2")}},
+	}
+	keys := etcdEventKeys(events)
+	require.Equal(t, []string{"PUT /key1", "DELETE /key2"}, keys)
+	require.NotContains(t, strings.Join(keys, ","), "secret-value")
+	require.Empty(t, etcdEventKeys(nil))
 }

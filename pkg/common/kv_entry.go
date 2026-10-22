@@ -16,6 +16,8 @@ package common
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/pingcap/ticdc/pkg/util"
 )
 
 // OpType for the kv, delete or put
@@ -131,10 +133,10 @@ func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error)
 }
 
 func (v *RawKVEntry) String() string {
-	// TODO: redact values.
 	return fmt.Sprintf(
 		"OpType: %v, Key: %s, Value: %s, OldValue: %s, StartTs: %d, CRTs: %d, RegionID: %d",
-		v.OpType, string(v.Key), string(v.Value), string(v.OldValue), v.StartTs, v.CRTs, v.RegionID)
+		v.OpType, util.RedactValue(string(v.Key)), util.RedactValue(string(v.Value)),
+		util.RedactValue(string(v.OldValue)), v.StartTs, v.CRTs, v.RegionID)
 }
 
 // GetSize return the size of the RawKVEntry in bytes
