@@ -64,6 +64,7 @@ run_mockgen -source pkg/sink/kafka/admin_client.go -destination pkg/sink/kafka/a
 run_mockgen -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/sarama_admin_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/sarama_sync_producer.go -destination pkg/sink/kafka/sarama_sync_producer_mock.go -package kafka
+run_mockgen -destination pkg/sink/mysql/mock/mysql_result.go -package mock github.com/go-sql-driver/mysql Result
 run_mockgen -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 run_mockgen -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
 run_mockgen -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/gc_client_mock.go -package gc
