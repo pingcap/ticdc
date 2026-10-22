@@ -68,8 +68,12 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		q.totalPendingLength.Add(1)
 	}
 
-	if !path.appendEvent(event, q.handler) {
+	accepted, appended := path.appendEvent(event, q.handler)
+	if !accepted {
 		q.handler.OnDrop(event.event)
+		return
+	}
+	if !appended {
 		return
 	}
 	addSignal()

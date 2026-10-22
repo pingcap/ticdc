@@ -57,6 +57,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
 		resolveLockTaskCh:      make(chan resolveLockTask, 10),
 		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -111,7 +112,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil)
+	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil, nil)
 	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
@@ -305,8 +306,9 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		memoryQuota:       newMemoryQuotaController(1024, 8),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -391,7 +393,25 @@ func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
 	}, &requestCancelledErr{}))
 
 	require.Len(t, client.failureHandler.cache.cache, 1)
-	require.Nil(t, client.spanRegistry.Get(span.subID))
+	require.Same(t, span, client.spanRegistry.Get(span.subID))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.failureHandler.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return client.spanRegistry.Get(span.subID) == nil
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	select {
+	case err := <-runDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("failure handler did not exit after context cancellation")
+	}
 }
 
 type mockDynamicStream struct{}
@@ -458,7 +478,6 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 			},
 		},
 	}
-
 	done := make(chan struct{})
 	go func() {
 		sink.Push(SubscriptionID(1), event)
@@ -467,7 +486,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("regionEventSink.Push should block when event memory is exhausted")
+		t.Fatal("pushRegionEventToDS should block when event memory is exhausted")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -476,7 +495,7 @@ func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("regionEventSink.Push should be unblocked by Close")
+		t.Fatal("pushRegionEventToDS should be unblocked by Close")
 	}
 }
 

@@ -72,6 +72,13 @@ type updateSchemaMetadataFuncArgs struct {
 	partitionMap map[int64]BasicPartitionInfo
 }
 
+type iterateEventTablesFuncArgs struct {
+	event        *PersistedDDLEvent
+	databaseMap  map[int64]*BasicDatabaseInfo
+	partitionMap map[int64]BasicPartitionInfo
+	apply        func(tableIDs ...int64)
+}
+
 func (args *updateSchemaMetadataFuncArgs) addTableToDB(tableID int64, schemaID int64) {
 	databaseInfo, ok := args.databaseMap[schemaID]
 	if !ok {
@@ -113,7 +120,7 @@ type persistStorageDDLHandler struct {
 	// iterateEventTablesFunc iterates through all physical table IDs affected by the DDL event
 	// and calls the provided `apply` function with those IDs. For partition tables, it includes
 	// all partition IDs.
-	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableIDs ...int64))
+	iterateEventTablesFunc func(args iterateEventTablesFuncArgs)
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
@@ -139,8 +146,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
 		updateFullTableInfoFunc:    updateFullTableInfoForDropSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
-		iterateEventTablesFunc:     iterateEventTablesIgnore,
-		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForDropSchema,
+		extractTableInfoFunc:       extractTableInfoFuncForDropSchema,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
 	model.ActionCreateTable: {
@@ -460,7 +467,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterTablePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForAlterTablePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTablePartitioning,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForPartitioningDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAlterTablePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForAlterTablePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForAlterTablePartitioning,
@@ -469,7 +476,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRemovePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRemovePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForRemovePartitioning,
-		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForPartitioningDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRemovePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForRemovePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForRemovePartitioning,
@@ -1244,8 +1251,8 @@ func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.databaseMap[args.ddlEvent.SchemaID].Tables {
 		if partitionInfo, ok := args.partitionMap[tableID]; ok {
-			for id := range partitionInfo {
-				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			for partitionID := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
 			}
 		} else {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
@@ -1471,6 +1478,11 @@ func updateFullTableInfoForDropTable(args updateFullTableInfoFuncArgs) {
 func updateFullTableInfoForTruncateTable(args updateFullTableInfoFuncArgs) {
 	delete(args.tableInfoMap, args.event.TableID)
 	args.tableInfoMap[args.event.ExtraTableID] = args.event.TableInfo
+}
+
+func updateFullTableInfoForPartitioningDDL(args updateFullTableInfoFuncArgs) {
+	delete(args.tableInfoMap, args.event.ExtraTableID)
+	args.tableInfoMap[args.event.TableID] = args.event.TableInfo
 }
 
 func updateFullTableInfoForExchangeTablePartition(args updateFullTableInfoFuncArgs) {
@@ -1708,9 +1720,22 @@ func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs
 // iterateEventTablesFunc begin
 // =======
 
-func iterateEventTablesIgnore(event *PersistedDDLEvent, apply func(tableId ...int64)) {}
+func iterateEventTablesIgnore(_ iterateEventTablesFuncArgs) {}
 
-func iterateEventTablesForSingleTableDDL(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForDropSchema(args iterateEventTablesFuncArgs) {
+	for tableID := range args.databaseMap[args.event.SchemaID].Tables {
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for partitionID := range partitionInfo {
+				args.apply(partitionID)
+			}
+		} else {
+			args.apply(tableID)
+		}
+	}
+}
+
+func iterateEventTablesForSingleTableDDL(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if isPartitionTable(event.TableInfo) {
 		apply(getAllPartitionIDs(event.TableInfo)...)
 	} else {
@@ -1718,7 +1743,8 @@ func iterateEventTablesForSingleTableDDL(event *PersistedDDLEvent, apply func(ta
 	}
 }
 
-func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForTruncateTable(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if isPartitionTable(event.TableInfo) {
 		apply(event.PrevPartitions...)
 		apply(getAllPartitionIDs(event.TableInfo)...)
@@ -1727,22 +1753,26 @@ func iterateEventTablesForTruncateTable(event *PersistedDDLEvent, apply func(tab
 	}
 }
 
-func iterateEventTablesForAddPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForAddPartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	apply(getAllPartitionIDs(event.TableInfo)...)
 }
 
-func iterateEventTablesForDropPartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForDropPartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	apply(event.PrevPartitions...)
 }
 
-func iterateEventTablesForTruncatePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForTruncatePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
 	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
 
-func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForExchangeTablePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
 	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
 	if len(droppedIDs) != 1 {
@@ -1753,7 +1783,8 @@ func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply
 	apply(targetPartitionID, event.TableID)
 }
 
-func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForRenameTables(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
 		if info.ID == InvalidTableID {
 			continue
@@ -1766,7 +1797,8 @@ func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tabl
 	}
 }
 
-func iterateEventTablesForCreateTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForCreateTables(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
 		if isPartitionTable(info) {
 			apply(getAllPartitionIDs(info)...)
@@ -1776,14 +1808,16 @@ func iterateEventTablesForCreateTables(event *PersistedDDLEvent, apply func(tabl
 	}
 }
 
-func iterateEventTablesForReorganizePartition(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForReorganizePartition(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	physicalIDs := getAllPartitionIDs(event.TableInfo)
 	apply(event.PrevPartitions...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
 }
 
-func iterateEventTablesForAlterTablePartitioning(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForAlterTablePartitioning(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	if len(event.PrevPartitions) > 0 {
 		apply(event.PrevPartitions...)
 	} else {
@@ -1792,7 +1826,8 @@ func iterateEventTablesForAlterTablePartitioning(event *PersistedDDLEvent, apply
 	apply(getAllPartitionIDs(event.TableInfo)...)
 }
 
-func iterateEventTablesForRemovePartitioning(event *PersistedDDLEvent, apply func(tableId ...int64)) {
+func iterateEventTablesForRemovePartitioning(args iterateEventTablesFuncArgs) {
+	event, apply := args.event, args.apply
 	apply(event.PrevPartitions...)
 	apply(event.TableID)
 }
@@ -1867,6 +1902,12 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 
 func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	return nil, false
+}
+
+func extractTableInfoFuncForDropSchema(_ *PersistedDDLEvent, _ int64) (*common.TableInfo, bool) {
+	// Drop-schema events are only added to the DDL history of physical tables in
+	// the dropped schema, so reaching this extractor means this table was deleted.
+	return nil, true
 }
 
 func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
