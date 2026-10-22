@@ -41,9 +41,9 @@ import (
 type SchemaStore interface {
 	common.SubModule
 
-	GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
+	GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
 
-	RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
+	RegisterTable(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
@@ -51,7 +51,7 @@ type SchemaStore interface {
 	// It is for already admitted table dispatchers: the table must have been
 	// registered through RegisterTable so schema store keeps its versioned table
 	// info cache.
-	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
 	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
@@ -212,17 +212,23 @@ func (s *keyspaceSchemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 
 // TODO: use notify instead of sleep
 // waitResolvedTs will wait until the schemaStore resolved ts is greater than or equal to ts.
-func (s *keyspaceSchemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
+func (s *keyspaceSchemaStore) waitResolvedTs(ctx context.Context, tableID int64, ts uint64, logInterval time.Duration) error {
 	start := time.Now()
 	lastLogTime := time.Now()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	defer func() {
 		metrics.SchemaStoreWaitResolvedTsDurationHist.Observe(time.Since(start).Seconds())
 	}()
 	for {
 		if s.resolvedTs.Load() >= ts {
-			return
+			return nil
 		}
-		time.Sleep(time.Millisecond * 10)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 		if time.Since(lastLogTime) > logInterval {
 			log.Info("wait resolved ts slow",
 				zap.Int64("tableID", tableID),
@@ -259,15 +265,13 @@ func (s *schemaStore) Name() string {
 	return appcontext.SchemaStore
 }
 
-func (s *schemaStore) getKeyspaceSchemaStore(keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
+func (s *schemaStore) getKeyspaceSchemaStore(ctx context.Context, keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
 	s.keyspaceLocker.RLock()
 	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	s.keyspaceLocker.RUnlock()
 	if ok {
 		return store, nil
 	}
-
-	ctx := context.Background()
 
 	if err := s.RegisterKeyspace(ctx, keyspaceMeta); err != nil {
 		return nil, err
@@ -347,24 +351,28 @@ func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) 
 	return err
 }
 
-func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
 
-	store.waitResolvedTs(0, snapTs, 10*time.Second)
+	if err := store.waitResolvedTs(ctx, 0, snapTs, 10*time.Second); err != nil {
+		return nil, err
+	}
 	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
 }
 
-func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+func (s *schemaStore) RegisterTable(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return err
 	}
 
+	if err := store.waitResolvedTs(ctx, tableID, startTs, 5*time.Second); err != nil {
+		return err
+	}
 	metrics.SchemaStoreResolvedRegisterTableGauge.Inc()
-	store.waitResolvedTs(tableID, startTs, 5*time.Second)
 	log.Info("register table",
 		zap.Any("keyspace", keyspaceMeta),
 		zap.Int64("tableID", tableID),
@@ -374,7 +382,7 @@ func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID in
 }
 
 func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return err
 	}
@@ -382,8 +390,8 @@ func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID 
 	return store.dataStorage.unregisterTable(tableID)
 }
 
-func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+func (s *schemaStore) GetTableInfo(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -393,12 +401,14 @@ func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int
 	defer func() {
 		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
-	store.waitResolvedTs(tableID, ts, 2*time.Second)
+	if err := store.waitResolvedTs(ctx, tableID, ts, 2*time.Second); err != nil {
+		return nil, err
+	}
 	return store.dataStorage.getTableInfo(tableID, ts)
 }
 
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return DDLEventState{}, err
 	}
@@ -415,7 +425,7 @@ func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, ta
 func (s *schemaStore) FetchTableDDLEvents(
 	keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64,
 ) ([]commonEvent.DDLEvent, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +450,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
 func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -497,7 +507,8 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	storeCtx, cancel := context.WithCancel(ctx)
+	// Background tasks outlive the registration call and stop when the store closes.
+	storeCtx, cancel := context.WithCancel(context.Background())
 	// The schema store initialization needs two guarantees:
 	// 1. the snapshot at gcSafePoint is still readable;
 	// 2. the DDL history after that snapshot is not GC'ed before the local
@@ -505,7 +516,7 @@ func (s *schemaStore) RegisterKeyspace(
 	// The keeper is created before the initial snapshot and stays alive for the
 	// whole schema store lifetime so both guarantees share the same GC barrier.
 	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
-	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
+	gcSafePoint, err := s.acquireInitialGCSafePoint(ctx, keyspaceMeta, gcKeeper)
 	if err != nil {
 		cancel()
 		return err
@@ -552,6 +563,9 @@ func (s *schemaStore) RegisterKeyspace(
 	store.ddlJobFetcher = fetcher
 
 	err = fetcher.run(upperBound.ResolvedTs)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		cancel()
 		if closeErr := store.dataStorage.close(); closeErr != nil {

@@ -99,6 +99,7 @@ type eventBroker struct {
 	redoMessageCh []chan *wrapEvent
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   <-chan struct{}
 	g      *errgroup.Group
@@ -144,6 +145,7 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
+		ctx:                     ctx,
 		tidbClusterID:           id,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
@@ -1382,7 +1384,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	err := c.schemaStore.RegisterTable(keyspaceMeta, span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(c.ctx, keyspaceMeta, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
@@ -1527,7 +1529,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			ID:   span.KeyspaceID,
 			Name: changefeedID.Keyspace(),
 		}
-		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
+		tableInfo, err = c.schemaStore.GetTableInfo(c.ctx, keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("changefeedID", changefeedID),

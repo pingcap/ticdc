@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"testing"
@@ -1438,7 +1439,7 @@ func TestFinishBootstrap(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 	dispatcherID2 := common.NewDispatcherID()
 	require.False(t, s.bootstrapped)
-	msg, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	msg, err := s.FinishBootstrap(context.Background(), map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1474,7 +1475,7 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
 
-	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
+	postBootstrapRequest, err := s.FinishBootstrap(context.Background(), map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
 	require.NoError(t, err)
 	require.Nil(t, postBootstrapRequest)
 }
@@ -1497,7 +1498,7 @@ func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
 	controller := NewController(cfID, 1, &mockThreadPool{},
 		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize, 0)
 
-	postBootstrapRequest, err := controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	postBootstrapRequest, err := controller.FinishBootstrap(context.Background(), map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
 		},
@@ -1600,7 +1601,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 				}
 			}
 
-			_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+			_, err := s.FinishBootstrap(context.Background(), map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 				"node1": resp,
 			}, false)
 			require.NoError(t, err)
@@ -1660,7 +1661,7 @@ func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *tes
 					}
 					responses := env.bootstrapResponses(nil, spanInfo)
 					responses[env.nodeID].RedoCheckpointTs = 12
-					postBootstrap, err := controller.FinishBootstrap(responses, true)
+					postBootstrap, err := controller.FinishBootstrap(context.Background(), responses, true)
 					require.NoError(t, err)
 					// Future table metadata must still be applied by its DDL, not the
 					// schema/name snapshot sent in the post-bootstrap request.
@@ -1710,7 +1711,7 @@ func TestFinishBootstrapReplacesTerminalSpanOfAddedTable(t *testing.T) {
 			terminal := env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, state)
 			live.CheckpointTs = 25
 			terminal.CheckpointTs = 25
-			_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, live, terminal), false)
+			_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, live, terminal), false)
 			require.NoError(t, err)
 			require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID2))
 			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
@@ -1739,7 +1740,7 @@ func TestFinishBootstrapAddedTableHistory(t *testing.T) {
 		appcontext.SetService(appcontext.SchemaStore, schemaStore)
 		spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
 		spanInfo.CheckpointTs = 112
-		_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo), false)
+		_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, spanInfo), false)
 		require.NoError(t, err)
 		require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 		require.Equal(t, uint64(112), env.controller.bootstrapAddedTables[common.DefaultMode][1].startTs)
@@ -1756,12 +1757,12 @@ func TestFinishBootstrapAddedTableHistory(t *testing.T) {
 			spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
 			spanInfo.CheckpointTs = 25
 			responses := env.bootstrapResponses(nil, spanInfo)
-			_, err := env.controller.FinishBootstrap(responses, false)
+			_, err := env.controller.FinishBootstrap(context.Background(), responses, false)
 			require.ErrorIs(t, err, cerrors.ErrChangefeedRetryable)
 			require.False(t, env.controller.bootstrapped)
 			require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
 			schemaStore.SetResolvedTs(25)
-			_, err = env.controller.FinishBootstrap(responses, false)
+			_, err = env.controller.FinishBootstrap(context.Background(), responses, false)
 			require.NoError(t, err)
 			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 		})
@@ -1858,7 +1859,7 @@ func TestFinishBootstrapReplaysAddedTableHistoryThroughCheckpoint(t *testing.T) 
 				otherSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
 				otherSpanInfo := env.bootstrapSpan(env.sourceDispatcherID2, &otherSpan, heartbeatpb.ComponentState_Working)
 				otherSpanInfo.CheckpointTs = 200
-				_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo, otherSpanInfo), false)
+				_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, spanInfo, otherSpanInfo), false)
 				require.NoError(t, err)
 				require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 				require.Empty(t, env.controller.spanController.GetTasksByTableID(otherSpan.TableID))
@@ -1905,7 +1906,7 @@ func TestFinishBootstrapRestoresOperatorsForAddedTable(t *testing.T) {
 				responses[env.nodeID].Spans = []*heartbeatpb.BootstrapTableSpan{spanInfo}
 			}
 			responses[env.nodeID].Operators = []*heartbeatpb.ScheduleDispatcherRequest{req}
-			_, err := env.controller.FinishBootstrap(responses, false)
+			_, err := env.controller.FinishBootstrap(context.Background(), responses, false)
 			require.NoError(t, err)
 			require.NotNil(t, env.controller.operatorController.GetOperator(env.sourceDispatcherID1))
 			require.Len(t, env.controller.spanController.GetTasksByTableID(1), 1)
@@ -1946,7 +1947,7 @@ func TestFinishBootstrapDoesNotAdoptDroppedTableWithoutOperator(t *testing.T) {
 			appcontext.SetService(appcontext.SchemaStore, schemaStore)
 			spanInfo := env.bootstrapSpan(env.sourceDispatcherID1, env.mergedSpan, heartbeatpb.ComponentState_Working)
 			spanInfo.CheckpointTs = 25
-			_, err := env.controller.FinishBootstrap(env.bootstrapResponses(nil, spanInfo), false)
+			_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(nil, spanInfo), false)
 			require.NoError(t, err)
 			require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 			require.Empty(t, env.controller.spanController.GetTasksByTableID(1))
@@ -1977,7 +1978,7 @@ func TestFinishBootstrapRepairsCoverageAfterRestoredStandaloneRemove(t *testing.
 		env.standaloneRemoveRequest(env.sourceDispatcherID1, env.sourceSpan1),
 	}
 
-	_, err := env.controller.FinishBootstrap(responses, false)
+	_, err := env.controller.FinishBootstrap(context.Background(), responses, false)
 	require.NoError(t, err)
 	require.Equal(t, 2, env.controller.spanController.GetReplicatingSize())
 	require.Zero(t, env.controller.spanController.GetAbsentSize())
@@ -2045,7 +2046,7 @@ func TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove(t
 		env.standaloneRemoveRequest(env.sourceDispatcherID1, env.sourceSpan1),
 	}
 
-	_, err := env.controller.FinishBootstrap(responses, false)
+	_, err := env.controller.FinishBootstrap(context.Background(), responses, false)
 	require.NoError(t, err)
 	require.Nil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 	require.Zero(t, env.controller.spanController.GetReplicatingSize())
@@ -2080,7 +2081,7 @@ func TestFinishBootstrapDoesNotRepairDroppedTableAfterRestoredStandaloneRemove(t
 func TestFinishBootstrapRestoresInFlightMergeWithoutDuplicateCoverage(t *testing.T) {
 	env := newMergeBootstrapTestEnv(t)
 
-	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 		[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
 		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_WaitingMerge),
 		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_WaitingMerge),
@@ -2117,7 +2118,7 @@ func TestFinishBootstrapKeepsOverlapCoveredAfterMergeJournalCleanup(t *testing.T
 	// 2. The merged dispatcher is committed and visible as Initializing.
 	// 3. The persisted merge operator is already gone, so bootstrap only has overlapping coverage.
 	// Expectation: FinishBootstrap succeeds without adding absent spans for fake holes.
-	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 		nil,
 		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_WaitingMerge),
 		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_WaitingMerge),
@@ -2155,7 +2156,7 @@ func TestFinishBootstrapRemovesUnexpectedOverlappingWorkingSpan(t *testing.T) {
 	keptDispatcherID := common.NewDispatcherID()
 	rejectedDispatcherID := common.NewDispatcherID()
 
-	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 		nil,
 		env.bootstrapSpan(keptDispatcherID, keptSpan, heartbeatpb.ComponentState_Working),
 		env.bootstrapSpan(rejectedDispatcherID, rejectedSpan, heartbeatpb.ComponentState_Working),
@@ -2251,7 +2252,7 @@ func TestFinishBootstrapHandlesMissingMergeSource(t *testing.T) {
 				spans = append(spans, env.bootstrapSpan(env.mergedDispatcherID, env.mergedSpan, tc.targetStatus))
 			}
 
-			_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+			_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 				[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
 				spans...,
 			), false)
@@ -2328,7 +2329,7 @@ func TestFinishBootstrapRejectsInvalidMergeJournalGeometry(t *testing.T) {
 	gapEnd := appendNew(env.sourceSpan1.EndKey, 'b')
 	env.sourceSpan2.StartKey = gapEnd
 
-	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 		[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
 		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_WaitingMerge),
 		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_WaitingMerge),
@@ -2514,7 +2515,7 @@ func TestFinishBootstrapSkipsMergeOperatorForDroppedTable(t *testing.T) {
 	schemaStore.SetTables(nil)
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
-	_, err := env.controller.FinishBootstrap(env.bootstrapResponses(
+	_, err := env.controller.FinishBootstrap(context.Background(), env.bootstrapResponses(
 		[]*heartbeatpb.MergeDispatcherRequest{env.mergeRequest()},
 		env.bootstrapSpan(env.sourceDispatcherID1, env.sourceSpan1, heartbeatpb.ComponentState_WaitingMerge),
 		env.bootstrapSpan(env.sourceDispatcherID2, env.sourceSpan2, heartbeatpb.ComponentState_WaitingMerge),
@@ -2592,7 +2593,7 @@ func TestFinishBootstrapSkipsMergeJournalConflictingWithWorkingOperator(t *testi
 				},
 			}
 
-			_, err := env.controller.FinishBootstrap(responses, false)
+			_, err := env.controller.FinishBootstrap(context.Background(), responses, false)
 			require.NoError(t, err)
 			require.True(t, env.controller.bootstrapped)
 
@@ -2673,7 +2674,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	}
 	require.False(t, s.bootstrapped)
 
-	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	_, err := s.FinishBootstrap(context.Background(), map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans:        reportedSpans,
