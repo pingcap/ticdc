@@ -35,7 +35,6 @@ type SharedInfo struct {
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
 	lowLatencyMode       bool
-	timezone             string
 	bdrMode              bool
 	outputRawChangeEvent bool
 
@@ -88,7 +87,6 @@ type SharedInfo struct {
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
 	lowLatencyMode bool,
-	timezone string,
 	bdrMode bool,
 	outputRawChangeEvent bool,
 	integrityConfig *eventpb.IntegrityConfig,
@@ -106,7 +104,6 @@ func NewSharedInfo(
 	sharedInfo := &SharedInfo{
 		changefeedID:             changefeedID,
 		lowLatencyMode:           lowLatencyMode,
-		timezone:                 timezone,
 		bdrMode:                  bdrMode,
 		outputRawChangeEvent:     outputRawChangeEvent,
 		integrityConfig:          integrityConfig,
@@ -185,10 +182,6 @@ func (d *BasicDispatcher) SetSeq(seq uint64) {
 
 func (d *BasicDispatcher) GetBDRMode() bool {
 	return d.sharedInfo.bdrMode
-}
-
-func (d *BasicDispatcher) GetTimezone() string {
-	return d.sharedInfo.timezone
 }
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {

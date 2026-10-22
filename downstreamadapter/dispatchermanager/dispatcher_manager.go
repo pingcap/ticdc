@@ -327,7 +327,6 @@ func NewDispatcherManager(
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.IsLowLatencyMode(),
-		manager.config.TimeZone,
 		manager.config.BDRMode,
 		outputRawChangeEvent,
 		integrityCfg,

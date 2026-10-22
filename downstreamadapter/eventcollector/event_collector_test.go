@@ -85,10 +85,6 @@ func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
 }
 
-func (m *mockEventDispatcher) GetTimezone() string {
-	return "system"
-}
-
 func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 	return nil
 }
