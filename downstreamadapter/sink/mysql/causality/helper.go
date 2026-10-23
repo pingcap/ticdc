@@ -147,7 +147,10 @@ func genKeyList(
 			// Match TiDB's index encoding: truncate by characters (or bytes
 			// for binary/ASCII columns), then apply the collation's weights.
 			datum := row.GetDatum(offsetIdx, &info.FieldType)
-			tablecodec.TruncateIndexValue(&datum, indexColumn, info)
+			// Consumer and redo schemas leave Length at zero when omitted.
+			if indexColumn.Length > 0 {
+				tablecodec.TruncateIndexValue(&datum, indexColumn, info)
+			}
 			key = append(key, collator.ImmutableKey(datum.GetString())...)
 		} else {
 			key = append(key, common.ColumnValueString(value)...)

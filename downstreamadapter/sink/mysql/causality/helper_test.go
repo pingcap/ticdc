@@ -17,8 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -379,6 +383,124 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 						require.Equal(t, int32(0), node.removedDependencies)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestConflictKeysReconstructedSchemas(t *testing.T) {
+	testCases := []struct {
+		name       string
+		idType     byte
+		uniqueType byte
+		values     [2][2]any
+	}{
+		{name: "string primary key", idType: mysql.TypeVarchar, values: [2][2]any{{"alice", nil}, {"bob", nil}}},
+		{name: "string unique key", idType: mysql.TypeLong, uniqueType: mysql.TypeVarchar, values: [2][2]any{{int64(1), "alice"}, {int64(2), "bob"}}},
+		{name: "integer index namespaces", idType: mysql.TypeLong, uniqueType: mysql.TypeLong, values: [2][2]any{{int64(1), int64(2)}, {int64(2), int64(3)}}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &timodel.TableInfo{ID: 100, Name: ast.NewCIStr("t"), PKIsHandle: tc.idType != mysql.TypeVarchar}
+			for i, tp := range []byte{tc.idType, tc.uniqueType} {
+				if tp == 0 {
+					continue
+				}
+				ft := types.NewFieldType(tp)
+				ft.AddFlag(mysql.NotNullFlag)
+				name := "id"
+				if i == 0 {
+					ft.AddFlag(mysql.PriKeyFlag)
+				} else {
+					name = "u"
+					ft.AddFlag(mysql.UniqueKeyFlag)
+				}
+				if tp == mysql.TypeVarchar {
+					ft.SetCharset("utf8mb4")
+					ft.SetCollate("utf8mb4_bin")
+				}
+				info.Columns = append(info.Columns, &timodel.ColumnInfo{
+					ID: int64(i + 1), Name: ast.NewCIStr(name), Offset: i, State: timodel.StatePublic, FieldType: *ft,
+				})
+				if i > 0 || !info.PKIsHandle {
+					info.Indices = append(info.Indices, &timodel.IndexInfo{
+						ID: int64(i + 1), Name: ast.NewCIStr(name), Primary: i == 0, Unique: true, State: timodel.StatePublic,
+						Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr(name), Offset: i, Length: types.UnspecifiedLength}},
+					})
+				}
+			}
+			info.IsCommonHandle = !info.PKIsHandle
+			tableInfo := common.WrapTableInfo("test", info)
+			rowValues := [][2]any{tc.values[0], tc.values[1], tc.values[0]}
+			if tc.uniqueType != 0 {
+				rowValues = append(rowValues, [2]any{tc.values[1][0], tc.values[0][1]})
+			}
+			rows := make([]commonEvent.RowChange, 0, len(rowValues))
+			for _, values := range rowValues {
+				chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+				for i := range info.Columns {
+					datum := types.NewDatum(values[i])
+					chk.AppendDatum(i, &datum)
+				}
+				rows = append(rows, commonEvent.RowChange{Row: chk.GetRow(0), RowType: common.RowTypeInsert})
+			}
+
+			for _, source := range []string{"open", "redo"} {
+				t.Run(source, func(t *testing.T) {
+					var events []*commonEvent.DMLEvent
+					if source == "open" {
+						cfg := codeccommon.NewConfig(config.ProtocolOpen)
+						encoder, err := open.NewBatchEncoder(cfg, nil)
+						require.NoError(t, err)
+						decoder, err := open.NewDecoder(t.Context(), 0, cfg, nil)
+						require.NoError(t, err)
+						for i, row := range rows {
+							require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", &commonEvent.RowEvent{
+								TableInfo: tableInfo, CommitTs: uint64(100 + i), Event: row,
+								ColumnSelector: columnselector.NewDefaultColumnSelector(), Callback: func() {},
+							}))
+						}
+						for _, message := range encoder.Build() {
+							decoder.AddKeyValue(message.Key, message.Value)
+							for {
+								typ, ok := decoder.HasNext()
+								if !ok {
+									break
+								}
+								require.Equal(t, codeccommon.MessageTypeRow, typ)
+								events = append(events, decoder.NextDMLMessage().ToDMLEvent())
+							}
+						}
+					} else {
+						for i, row := range rows {
+							redo := (&commonEvent.RedoRowEvent{
+								TableInfo: tableInfo, PhysicalTableID: info.ID, CommitTs: uint64(100 + i), Event: row,
+							}).ToRedoLog().RedoRow
+							events = append(events, redo.ToDMLEvent())
+						}
+					}
+					require.Len(t, events, len(rows))
+					for _, event := range events {
+						event.DispatcherID = common.DispatcherID{Low: 1, High: 2}
+						t.Cleanup(event.PostFlush)
+					}
+					first, second := ConflictKeys(events[0]), ConflictKeys(events[1])
+					require.NotEmpty(t, first)
+					for key := range first {
+						require.NotContains(t, second, key, "independent reconstructed rows must not conflict")
+					}
+					require.Equal(t, first, ConflictKeys(events[2]), "repeated rows must retain their dependencies")
+					if tc.uniqueType != 0 {
+						uniqueKeys := ConflictKeys(events[3])
+						sharedKeys := 0
+						for key := range first {
+							if _, ok := uniqueKeys[key]; ok {
+								sharedKeys++
+							}
+						}
+						require.Equal(t, 1, sharedKeys, "different primary keys with the same UK must share its dependency")
+					}
+				})
 			}
 		})
 	}
