@@ -163,9 +163,16 @@ type subscribersWithIdleTime struct {
 	idleTime    int64
 }
 
-type subscriptionStat struct {
-	subID          logpuller.SubscriptionID
+// subscriptionConfig contains immutable options of an upstream subscription.
+// Dispatchers can share a subscription only when this config matches.
+type subscriptionConfig struct {
+	bdrMode        bool
 	lowLatencyMode bool
+}
+
+type subscriptionStat struct {
+	subID  logpuller.SubscriptionID
+	config subscriptionConfig
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
@@ -523,13 +530,17 @@ func (e *eventStore) RegisterDispatcher(
 		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
 		notifier(resolvedTs, latestCommitTs)
 	}
+	requiredConfig := subscriptionConfig{
+		bdrMode:        bdrMode,
+		lowLatencyMode: lowLatencyMode,
+	}
 
 	if enableDataSharing {
 		e.dispatcherMeta.Lock()
 		var bestMatch *subscriptionStat
 		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 			for _, subStat := range subStats {
-				if subStat.lowLatencyMode != lowLatencyMode {
+				if subStat.config != requiredConfig {
 					continue
 				}
 				// Check if this subStat's span contains the dispatcherSpan
@@ -604,11 +615,11 @@ func (e *eventStore) RegisterDispatcher(
 	// cannot find an existing subscription with the same span, create a new subscription
 	chIndex := common.HashTableSpan(dispatcherSpan, len(e.chs))
 	subStat := &subscriptionStat{
-		subID:          e.subClient.AllocSubscriptionID(),
-		lowLatencyMode: lowLatencyMode,
-		tableSpan:      dispatcherSpan,
-		dbIndex:        chIndex,
-		eventCh:        e.chs[chIndex],
+		subID:     e.subClient.AllocSubscriptionID(),
+		config:    requiredConfig,
+		tableSpan: dispatcherSpan,
+		dbIndex:   chIndex,
+		eventCh:   e.chs[chIndex],
 	}
 	subStat.subscribers.Store(&subscribersWithIdleTime{
 		subscribers: map[common.DispatcherID]*Subscriber{dispatcherID: {notifyFunc: wrappedNotifier}},
@@ -681,11 +692,11 @@ func (e *eventStore) RegisterDispatcher(
 
 	serverConfig := config.GetGlobalServerConfig()
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
-	if lowLatencyMode {
+	if subStat.config.lowLatencyMode {
 		resolvedTsAdvanceInterval = 0
 	}
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
+	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, subStat.config.bdrMode)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
