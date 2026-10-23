@@ -72,6 +72,44 @@ func (s *RecordFile) Path() string {
 	return s.path
 }
 
+// Size returns the current byte offset at which the next record will be written.
+func (s *RecordFile) Size() (int64, error) {
+	if s == nil || s.cleaned {
+		return 0, errors.ErrSpillFileOp.GenWithStackByArgs("spill file has been cleaned up")
+	}
+	info, err := os.Stat(s.path)
+	if err != nil {
+		return 0, errors.WrapError(errors.ErrSpillFileOp, err, "stat spill file")
+	}
+	return info.Size(), nil
+}
+
+// Truncate discards records appended after a previously saved byte offset.
+func (s *RecordFile) Truncate(size int64) error {
+	if s == nil || s.cleaned {
+		return errors.ErrSpillFileOp.GenWithStackByArgs("spill file has been cleaned up")
+	}
+	currentSize, err := s.Size()
+	if err != nil {
+		return err
+	}
+	if size < 0 || size > currentSize {
+		return errors.ErrSpillFileOp.GenWithStackByArgs("invalid spill truncate offset")
+	}
+	if s.closed {
+		file, err := os.OpenFile(s.path, os.O_RDWR, 0)
+		if err != nil {
+			return errors.WrapError(errors.ErrSpillFileOp, err, "reopen spill file")
+		}
+		s.file = file
+		s.closed = false
+	}
+	if err := s.file.Truncate(size); err != nil {
+		return errors.WrapError(errors.ErrSpillFileOp, err, "truncate spill file")
+	}
+	return nil
+}
+
 // Append writes one record and returns its handle.
 func (s *RecordFile) Append(data []byte) (Handle, error) {
 	return s.AppendChunks(data)

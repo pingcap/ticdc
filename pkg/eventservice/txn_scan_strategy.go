@@ -535,7 +535,7 @@ func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {
 }
 
 func (p *dmlProcessor) hasLargeTxnState(startTs uint64, commitTs uint64) bool {
-	if p.dispatcherStat == nil {
+	if p.dispatcherStat == nil || p.cleanupLargeTxnAfterScan {
 		return false
 	}
 	state := p.dispatcherStat.getLargeTxnState()
@@ -560,7 +560,8 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 		insertRow, err := state.nextInsert(p.ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return p.dispatcherStat.cleanupLargeTxnState()
+				p.cleanupLargeTxnAfterScan = true
+				return nil
 			}
 			return err
 		}
