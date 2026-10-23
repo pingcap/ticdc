@@ -93,6 +93,11 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 			if !index.Primary && !index.Unique {
 				continue
 			}
+			// Reconstructed schemas may retain a PRIMARY IndexInfo even
+			// when its integer handle was already encoded above.
+			if index.Primary && tableInfo.PKIsHandle() {
+				continue
+			}
 			if key := genKeyList(&rowData, index.ID, index.Columns, dispatcherID, tableInfo); len(key) > 0 {
 				keys = append(keys, key)
 			}

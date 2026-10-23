@@ -203,6 +203,8 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 		stored       bool
 		unsupported  bool
 		null         bool
+		primaryIndex bool
+		nonClustered bool
 		wantConflict bool
 	}{
 		{name: "accent", collation: "utf8mb4_general_ci", values: [2]string{"e", "é"}, wantConflict: true},
@@ -223,6 +225,8 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 		{name: "stored generated", collation: "utf8mb4_bin", values: [2]string{"a", "b"}, generated: true, stored: true, wantConflict: true},
 		{name: "different stored values", collation: "utf8mb4_bin", values: [2]string{"a", "bb"}, generated: true, stored: true},
 		{name: "unsupported collation", collation: "latin1_swedish_ci", values: [2]string{"A", "a"}, unsupported: true, wantConflict: true},
+		{name: "integer handle with primary index metadata", collation: "utf8mb4_bin", values: [2]string{"a", "b"}, primaryIndex: true},
+		{name: "nonclustered primary index", collation: "utf8mb4_bin", values: [2]string{"a", "b"}, primaryIndex: true, nonClustered: true},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -262,11 +266,17 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 			// A non-unique index before the UK must neither affect its identity
 			// nor introduce dependencies for values that do not conflict.
 			info := &timodel.TableInfo{
-				ID: 100, Name: ast.NewCIStr("t"), PKIsHandle: true, Columns: columns,
+				ID: 100, Name: ast.NewCIStr("t"), PKIsHandle: !tc.nonClustered, Columns: columns,
 				Indices: []*timodel.IndexInfo{
 					{ID: 1, Name: ast.NewCIStr("idx"), State: timodel.StatePublic, Columns: []*timodel.IndexColumn{idxCol}},
 					indexInfo,
 				},
+			}
+			if tc.primaryIndex {
+				info.Indices = append(info.Indices, &timodel.IndexInfo{
+					ID: 3, Name: ast.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic,
+					Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0, Length: types.UnspecifiedLength}},
+				})
 			}
 			tableInfo := common.WrapTableInfo("test", info)
 			dispatcherID := common.DispatcherID{Low: 1, High: 2}
@@ -327,6 +337,12 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				makeEvent(common.RowTypeInsert, 2, tc.values[1], tc.suffixes[1]),
 				makeEvent(common.RowTypeDelete, 2, tc.values[1], tc.suffixes[1]),
 				makeEvent(common.RowTypeInsert, 3, tc.values[0], tc.suffixes[0]),
+			}
+			if tc.primaryIndex {
+				row, ok := events[1].GetNextRow()
+				require.True(t, ok)
+				events[1].Rewind()
+				require.Len(t, genRowKeys(row, tableInfo, dispatcherID), 2, "generate exactly one PK and one UK dependency")
 			}
 			hasConflict := func(keysA, keysB map[uint64]struct{}) bool {
 				for key := range keysA {
