@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -576,21 +577,30 @@ func addTableInfoToBatch(
 // persistSchemaSnapshot write database/table/partition info to disks.
 // Notes: The GC may happens during the snapshotMeta is using, so the caller must be careful.
 func persistSchemaSnapshot(
+	ctx context.Context,
 	db *pebble.DB,
 	tiStore kv.Storage,
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		meta := getSnapshotMeta(tiStore, snapTs)
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, nil, ctxErr
+			}
 			// The snapshot is already GC'ed and retrying the same ts cannot recover.
 			if isGCLifeTimeError(err) {
 				return nil, nil, nil, err
 			}
-			time.Sleep(100 * time.Millisecond)
+			if err := waitSchemaSnapshotRetry(ctx); err != nil {
+				return nil, nil, nil, err
+			}
 			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
 		}
@@ -605,6 +615,9 @@ func persistSchemaSnapshot(
 		}
 		var tableInfoEntryMarshalBuf []byte
 		for _, dbInfo := range dbInfos {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
 			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
 			}
@@ -617,6 +630,10 @@ func persistSchemaSnapshot(
 				}
 				var callbackErr error
 				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
+					if err := ctx.Err(); err != nil {
+						callbackErr = err
+						return err
+					}
 					tableID, tableName, partitionIDs, marshalBuf, err := addTableInfoToBatch(
 						batch, snapTs, dbInfo, tableInfo, tableInfoEntryMarshalBuf)
 					tableInfoEntryMarshalBuf = marshalBuf
@@ -645,6 +662,10 @@ func persistSchemaSnapshot(
 					_ = batch.Close()
 					return nil, nil, nil, callbackErr
 				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					_ = batch.Close()
+					return nil, nil, nil, ctxErr
+				}
 				if err == nil {
 					if err := batch.Commit(pebble.NoSync); err != nil {
 						_ = batch.Close()
@@ -666,16 +687,32 @@ func persistSchemaSnapshot(
 					return nil, nil, nil, err
 				}
 
-				time.Sleep(100 * time.Millisecond)
+				if err := waitSchemaSnapshotRetry(ctx); err != nil {
+					return nil, nil, nil, err
+				}
 				log.Warn("get tables failed", zap.Error(err))
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		writeGcTs(db, snapTs)
 
 		log.Info("finish write schema snapshot",
 			zap.Any("duration", time.Since(start).Seconds()))
 		return databaseMap, tableMap, partitionMap, nil
+	}
+}
+
+func waitSchemaSnapshotRetry(ctx context.Context) error {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
