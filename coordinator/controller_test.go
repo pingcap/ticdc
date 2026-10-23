@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -84,6 +85,34 @@ func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
 	))
 	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
 	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+}
+
+func TestUpdateAllChangefeedCheckpointMetrics(t *testing.T) {
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+
+	cfID := common.NewChangeFeedIDWithName("bootstrap-metrics", common.DefaultKeyspaceName)
+	checkpointTs := oracle.ComposeTS(1000, 0)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, checkpointTs, false)
+	changefeedDB := changefeed.NewChangefeedDB(1)
+	changefeedDB.AddAbsentChangefeed(cf)
+	controller := &Controller{changefeedDB: changefeedDB}
+
+	controller.updateAllChangefeedCheckpointMetrics(time.UnixMilli(2000))
+
+	require.Equal(t, float64(1000), testutil.ToFloat64(
+		metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+	))
+	require.Equal(t, float64(1), testutil.ToFloat64(
+		metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+			cfID.Keyspace(), cfID.Name(), metrics.FormatKeyspaceID(common.DefaultKeyspaceID),
+		),
+	))
 }
 
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
@@ -455,6 +484,9 @@ func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
 }
 
 func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T) {
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+
 	testCases := []struct {
 		name          string
 		progress      config.Progress
@@ -520,6 +552,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 				initialized:  atomic.NewBool(false),
 				backend:      backend,
 				changefeedDB: db,
+				pdClock:      pdutil.NewClockWithValue4Test(time.UnixMilli(2000)),
 				operatorController: operator.NewOperatorController(
 					self,
 					db,
@@ -574,6 +607,9 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 }
 
 func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *testing.T) {
+	metrics.ResetOwnerChangefeedMetrics()
+	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	mc := messaging.NewMockMessageCenter()
@@ -608,6 +644,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 		initialized:  atomic.NewBool(false),
 		backend:      backend,
 		changefeedDB: db,
+		pdClock:      pdutil.NewClockWithValue4Test(time.UnixMilli(2000)),
 		operatorController: operator.NewOperatorController(
 			self,
 			db,
