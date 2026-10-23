@@ -744,7 +744,9 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 					Code:    string(errors.ErrorCode(err)),
 					Message: err.Error(),
 				}
-				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+				if !e.heartbeatRequestQueue.Enqueue(ctx, &HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message}) {
+					return
+				}
 
 				// resend message until the event dispatcher manager is closed
 				// the first error is matter most, so we just need to resend it continue and ignore the other errors.
@@ -755,7 +757,9 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 					case <-ctx.Done():
 						return
 					case <-ticker.C:
-						e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+						if !e.heartbeatRequestQueue.Enqueue(ctx, &HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message}) {
+							return
+						}
 					}
 				}
 			}
@@ -765,7 +769,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
-	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
+	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) bool {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
 		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
@@ -778,8 +782,11 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.BlockStatuses = chunk
 			message.Mode = mode
-			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+			if !e.blockStatusRequestQueue.Enqueue(ctx, &BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message}) {
+				return false
+			}
 		}
+		return true
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
@@ -824,10 +831,14 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 
 		e.metricBlockStatusesChanLen.Set(float64(e.sharedInfo.BlockStatusLen()))
 		if len(blockStatusMessage) != 0 {
-			enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+			if !enqueueBlockStatus(blockStatusMessage, common.DefaultMode) {
+				return
+			}
 		}
 		if len(redoBlockStatusMessage) != 0 {
-			enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
+			if !enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode) {
+				return
+			}
 		}
 	}
 }
@@ -912,7 +923,9 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
-			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+			if !e.heartbeatRequestQueue.Enqueue(ctx, &HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message}) {
+				return
+			}
 		}
 	}
 }

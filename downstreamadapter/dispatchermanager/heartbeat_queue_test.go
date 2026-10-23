@@ -16,6 +16,7 @@ package dispatchermanager
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -23,6 +24,62 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHeartbeatRequestQueueEnqueueCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := &HeartbeatRequestQueue{queue: make(chan *HeartBeatRequestWithTargetID, 1)}
+		first, second := &HeartBeatRequestWithTargetID{}, &HeartBeatRequestWithTargetID{}
+		require.True(t, queue.Enqueue(t.Context(), first))
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan bool, 1)
+		go func() { result <- queue.Enqueue(ctx, second) }()
+		synctest.Wait()
+		require.Empty(t, result, "a full queue must preserve backpressure")
+		cancel()
+		synctest.Wait()
+		require.False(t, <-result)
+		require.Same(t, first, queue.Dequeue(t.Context()))
+		require.False(t, queue.Enqueue(ctx, second), "an already canceled producer must not enqueue")
+		require.Empty(t, queue.queue)
+		require.True(t, queue.Enqueue(t.Context(), second), "other producers can still use the queue")
+		require.Same(t, second, queue.Dequeue(t.Context()))
+	})
+}
+
+func TestBlockStatusRequestQueueEnqueueCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := NewBlockStatusRequestQueue()
+		queue.queue = make(chan *BlockStatusRequestWithTargetID, 1)
+		targetID, dispatcherID := node.NewID(), common.NewDispatcherID()
+		first := newDoneBlockStatusRequest(targetID, dispatcherID, 100)
+		second := newDoneBlockStatusRequest(targetID, dispatcherID, 101)
+		require.True(t, queue.Enqueue(t.Context(), first))
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan bool, 1)
+		go func() { result <- queue.Enqueue(ctx, second) }()
+		synctest.Wait()
+		require.Empty(t, result, "a full queue must preserve backpressure")
+		require.Len(t, queue.requestStatusKeys, 2)
+		cancel()
+		synctest.Wait()
+		require.False(t, <-result)
+		require.Len(t, queue.requestStatusKeys, 1)
+		require.Len(t, queue.queuedStatuses, 1)
+		require.Empty(t, queue.inFlightStatuses)
+		require.Same(t, first, queue.Dequeue(t.Context()))
+		queue.OnSendComplete(first)
+		require.False(t, queue.Enqueue(ctx, second))
+		require.Empty(t, queue.requestStatusKeys)
+		require.Empty(t, queue.queuedStatuses)
+		require.True(t, queue.Enqueue(t.Context(), second), "canceled statuses must remain retryable")
+		require.Same(t, second, queue.Dequeue(t.Context()))
+		queue.OnSendComplete(second)
+		require.Empty(t, queue.requestStatusKeys)
+		require.Empty(t, queue.inFlightStatuses)
+	})
+}
 
 func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightDone(t *testing.T) {
 	queue := NewBlockStatusRequestQueue()
@@ -32,8 +89,8 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightDone(t *testing.T) 
 	first := newDoneBlockStatusRequest(targetID, dispatcherID, 100)
 	second := newDoneBlockStatusRequest(targetID, dispatcherID, 100)
 
-	queue.Enqueue(first)
-	queue.Enqueue(second)
+	queue.Enqueue(t.Context(), first)
+	queue.Enqueue(t.Context(), second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -45,7 +102,7 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightDone(t *testing.T) 
 	require.Nil(t, queue.Dequeue(shortCtx))
 
 	third := newDoneBlockStatusRequest(targetID, dispatcherID, 100)
-	queue.Enqueue(third)
+	queue.Enqueue(t.Context(), third)
 
 	shortCtx2, shortCancel2 := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer shortCancel2()
@@ -54,7 +111,7 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightDone(t *testing.T) 
 	queue.OnSendComplete(dequeued)
 
 	fourth := newDoneBlockStatusRequest(targetID, dispatcherID, 100)
-	queue.Enqueue(fourth)
+	queue.Enqueue(t.Context(), fourth)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel2()
@@ -101,8 +158,8 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightWaiting(t *testing.
 		},
 	}
 
-	queue.Enqueue(first)
-	queue.Enqueue(second)
+	queue.Enqueue(t.Context(), first)
+	queue.Enqueue(t.Context(), second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -130,7 +187,7 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightWaiting(t *testing.
 			Mode: common.DefaultMode,
 		},
 	}
-	queue.Enqueue(third)
+	queue.Enqueue(t.Context(), third)
 
 	shortCtx2, shortCancel2 := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer shortCancel2()
@@ -155,7 +212,7 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightWaiting(t *testing.
 			Mode: common.DefaultMode,
 		},
 	}
-	queue.Enqueue(fourth)
+	queue.Enqueue(t.Context(), fourth)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel2()
@@ -174,9 +231,9 @@ func TestBlockStatusRequestQueueKeepsDistinctDoneKeys(t *testing.T) {
 	redoDone.Request.BlockStatuses[0].Mode = common.RedoMode
 	redoDone.Request.Mode = common.RedoMode
 
-	queue.Enqueue(defaultDone)
-	queue.Enqueue(syncPointDone)
-	queue.Enqueue(redoDone)
+	queue.Enqueue(t.Context(), defaultDone)
+	queue.Enqueue(t.Context(), syncPointDone)
+	queue.Enqueue(t.Context(), redoDone)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -217,8 +274,8 @@ func TestBlockStatusRequestQueueKeepsWaitingAndDoneDistinct(t *testing.T) {
 	}
 	done := newDoneBlockStatusRequest(targetID, dispatcherID, 300)
 
-	queue.Enqueue(waiting)
-	queue.Enqueue(done)
+	queue.Enqueue(t.Context(), waiting)
+	queue.Enqueue(t.Context(), done)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

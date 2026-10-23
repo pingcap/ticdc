@@ -15,6 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -263,6 +264,68 @@ func TestDispatcherManagerHeartbeatWaitsForRunning(t *testing.T) {
 	manager := &DispatcherManager{config: &config.ChangefeedConfig{PerformanceMode: config.PerformanceModeLowLatency}}
 	// The task must stay scheduled without reading partially initialized fields.
 	require.False(t, (&HeartBeatTask{manager: manager}).Execute().IsZero())
+}
+
+func TestDispatcherManagerHeartbeatSurvivesInitialization(t *testing.T) {
+	manager := createTestManager(t)
+	manager.config.PerformanceMode = config.PerformanceModeLowLatency
+	task := &HeartBeatTask{manager: manager}
+	var tasks sync.WaitGroup
+	t.Cleanup(tasks.Wait)
+	for range 10000 {
+		manager.lifecycleMu.Lock()
+		manager.state = dispatcherManagerInitializing
+		manager.lifecycleMu.Unlock()
+		started := make(chan struct{})
+		next := make(chan time.Time, 1)
+		tasks.Go(func() {
+			close(started)
+			next <- task.Execute()
+		})
+		<-started
+		manager.lifecycleMu.Lock()
+		manager.state = dispatcherManagerRunning
+		manager.lifecycleMu.Unlock()
+		require.False(t, (<-next).IsZero(), "initialization must not retire the heartbeat task")
+	}
+}
+
+func TestDispatcherManagerCloseUnblocksFullHeartbeatQueue(t *testing.T) {
+	manager := createTestManager(t)
+	manager.ctx, manager.cancel = context.WithCancel(t.Context())
+	queue := &HeartbeatRequestQueue{queue: make(chan *HeartBeatRequestWithTargetID, 1)}
+	queue.queue <- &HeartBeatRequestWithTargetID{}
+	manager.heartbeatRequestQueue = queue
+	collector := &HeartBeatCollector{}
+	collector.isClosed.Store(true)
+	appcontext.SetService(appcontext.HeartbeatCollector, collector)
+	done := make(chan struct{})
+	var next time.Time
+	go func() {
+		next = (&HeartBeatTask{manager: manager}).Execute()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		manager.cancel()
+		select {
+		case <-queue.queue:
+		default:
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("heartbeat task did not return")
+		}
+	})
+	// Aggregation publishes the watermark after the task has joined manager.wg.
+	require.Eventually(t, func() bool {
+		return manager.latestWatermark.Get().CheckpointTs == math.MaxUint64
+	}, time.Second, time.Millisecond)
+	require.False(t, manager.TryClose(false))
+	require.Eventually(t, manager.isClosed, time.Second, time.Millisecond)
+	<-done
+	require.Zero(t, next)
+	require.True(t, manager.TryClose(false))
 }
 
 func TestDispatcherManagerCloseWaitsForRunningTask(t *testing.T) {

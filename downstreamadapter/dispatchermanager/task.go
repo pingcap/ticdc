@@ -55,7 +55,8 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 func (t *HeartBeatTask) Execute() time.Time {
 	if !t.manager.tryAddRunningTask() {
 		// Initial dispatchers can schedule this task before construction returns.
-		if t.manager.isInitializing() {
+		// Initialization may finish between admission and this check.
+		if !t.manager.isClosingOrClosed() {
 			return time.Now().Add(heartbeatInterval(t.manager))
 		}
 		return time.Time{}
@@ -66,7 +67,9 @@ func (t *HeartBeatTask) Execute() time.Time {
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
-	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
+	if !t.manager.heartbeatRequestQueue.Enqueue(t.manager.ctx, &HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message}) {
+		return time.Time{}
+	}
 	return time.Now().Add(executeInterval)
 }
 
