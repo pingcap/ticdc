@@ -47,7 +47,7 @@ func TestBuildEventLogContextRowsIncluded(t *testing.T) {
 		},
 	}
 	info := &codecCommon.MessageLogInfo{Rows: rows}
-	ctx := BuildEventLogContext("ks", "cf", info)
+	ctx := BuildEventLogContext(info)
 	expected := formatDMLInfo(rows)
 	require.Contains(t, ctx, "dmlInfo="+expected)
 	require.NotContains(t, ctx, "dmlInfoTruncated")
@@ -61,14 +61,14 @@ func TestBuildEventLogContextLargeData(t *testing.T) {
 			{Type: "insert", Table: largeValue},
 		},
 	}
-	ctx := BuildEventLogContext("ks", "cf", info)
+	ctx := BuildEventLogContext(info)
 	require.Contains(t, ctx, largeValue)
 	require.NotContains(t, ctx, "...(truncated)")
 }
 
 func TestBuildEventLogContextBlockEvents(t *testing.T) {
 	t.Run("ddl", func(t *testing.T) {
-		ctx := BuildEventLogContext("ks", "cf", &codecCommon.MessageLogInfo{
+		ctx := BuildEventLogContext(&codecCommon.MessageLogInfo{
 			DDL: &codecCommon.DDLLogInfo{
 				Query:    "CREATE TABLE t(id INT PRIMARY KEY)",
 				StartTs:  1,
@@ -83,7 +83,7 @@ func TestBuildEventLogContextBlockEvents(t *testing.T) {
 	})
 
 	t.Run("checkpoint", func(t *testing.T) {
-		ctx := BuildEventLogContext("ks", "cf", &codecCommon.MessageLogInfo{
+		ctx := BuildEventLogContext(&codecCommon.MessageLogInfo{
 			Checkpoint: &codecCommon.CheckpointLogInfo{CommitTs: 3},
 		})
 

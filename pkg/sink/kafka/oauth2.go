@@ -15,13 +15,51 @@
 package kafka
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	stderrors "errors"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
+
+func newOAuthTokenSource(ctx context.Context, cfg oauth2Config) (oauth2.TokenSource, error) {
+	endpointParams := url.Values{}
+	if cfg.grantType != "" {
+		endpointParams.Set("grant_type", cfg.grantType)
+	}
+	if cfg.audience != "" {
+		endpointParams.Set("audience", cfg.audience)
+	}
+
+	tokenURL, err := url.Parse(cfg.tokenURL)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, util.MaskSensitiveDataInURLError(err))
+	}
+	if cfg.caPath != "" {
+		httpClient, err := oauthHTTPClient(cfg.caPath)
+		if err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+	}
+
+	config := clientcredentials.Config{
+		ClientID:       cfg.clientID,
+		ClientSecret:   cfg.clientSecret,
+		TokenURL:       tokenURL.String(),
+		EndpointParams: endpointParams,
+		Scopes:         cfg.scopes,
+	}
+	return &redactedOAuthTokenSource{TokenSource: config.TokenSource(ctx)}, nil
+}
 
 // OAuth2 servers can echo credentials in error bodies, descriptions and URLs.
 // Keep only the status and recognized protocol error codes for diagnostics.
@@ -34,8 +72,7 @@ func (s *redactedOAuthTokenSource) Token() (*oauth2.Token, error) {
 	if err == nil {
 		return token, nil
 	}
-	var retrieveErr *oauth2.RetrieveError
-	if errors.As(err, &retrieveErr) {
+	if retrieveErr, ok := stderrors.AsType[*oauth2.RetrieveError](err); ok {
 		status := retrieveErr.Response.StatusCode
 		var errorCode string
 		// Only retain the token endpoint error codes defined by RFC 6749 section 5.2.
@@ -56,4 +93,33 @@ func (s *redactedOAuthTokenSource) Token() (*oauth2.Token, error) {
 		err = util.MaskSensitiveDataInURLError(err)
 	}
 	return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+}
+
+func oauthHTTPClient(caPath string) (*http.Client, error) {
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	if !rootCAs.AppendCertsFromPEM(caPEM) {
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"OAuth2 CA file %q does not contain a valid certificate", caPath)
+	}
+
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			"cannot configure OAuth2 CA file %q with HTTP transport type %T",
+			caPath, http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.RootCAs = rootCAs
+	return &http.Client{Transport: transport}, nil
 }

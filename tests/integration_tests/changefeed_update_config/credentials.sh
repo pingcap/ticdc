@@ -121,7 +121,7 @@ function check_credential_updates() {
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	if [ "$SINK_TYPE" = kafka ]; then
 		start_kafka_auth_server "$password"
-		sink_uri='kafka://127.0.0.1:19092/credentials?protocol=open-protocol&partition-num=1&required-acks=1&kafka-client=sarama'
+		sink_uri='kafka://127.0.0.1:19092/credentials?protocol=open-protocol&partition-num=1&required-acks=1&kafka-client=franz'
 		cat >"$WORK_DIR/credential-create.toml" <<EOF
 [sink.kafka-config]
 sasl-user = "alice"
@@ -245,7 +245,7 @@ EOF
 function check_oauth_error_redaction() {
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
 	credential_request GET "" oauth-before.json 200
-	for driver in sarama; do
+	for driver in franz sarama; do
 		local token_calls
 		token_calls=$(curl -fsS http://127.0.0.1:18089/token-count)
 		jq -n --arg uri "kafka://127.0.0.1:19092/credentials?protocol=open-protocol&partition-num=1&required-acks=1&kafka-client=$driver" \
