@@ -94,6 +94,7 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 type decoder struct {
 	msg     canalJSONMessageInterface
 	decoder *bufferedJSONDecoder
+	row     *jsonRow
 
 	config *common.Config
 
@@ -102,6 +103,17 @@ type decoder struct {
 	tableInfoMu    sync.RWMutex
 	tableInfoCache map[tableKey]*commonType.TableInfo
 	ddlCommitTs    map[tableNameKey][]uint64
+}
+
+// Parse routing and control metadata first. Column maps are decoded only when
+// the captured DMLMessage is converted, which can run in a consumer worker.
+type jsonRow struct {
+	*JSONMessage
+	Extensions *tidbExtension  `json:"_tidb"`
+	SQLType    json.RawMessage `json:"sqlType"` // Shadow the unused SQLType map.
+	MySQLType  json.RawMessage `json:"mysqlType"`
+	Data       json.RawMessage `json:"data"`
+	Old        json.RawMessage `json:"old"`
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -159,20 +171,17 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeUnknown, false
 	}
 
-	var msg canalJSONMessageInterface = &JSONMessage{}
-	if d.config.EnableTiDBExtension {
-		msg = &canalJSONMessageWithTiDBExtension{
-			JSONMessage: &JSONMessage{},
-			Extensions:  &tidbExtension{},
-		}
-	}
-
-	if err := d.decoder.Decode(msg); err != nil {
+	row := &jsonRow{JSONMessage: &JSONMessage{}, Extensions: &tidbExtension{}}
+	if err := d.decoder.Decode(row); err != nil {
 		log.Panic("canal-json decode failed",
 			zap.ByteString("data", d.decoder.Bytes()),
 			zap.Error(err))
 	}
-	d.msg = msg
+	var msg canalJSONMessageInterface = row.JSONMessage
+	if d.config.EnableTiDBExtension {
+		msg = &canalJSONMessageWithTiDBExtension{JSONMessage: row.JSONMessage, Extensions: row.Extensions}
+	}
+	d.msg, d.row = msg, row
 	return d.msg.messageType(), true
 }
 
@@ -318,6 +327,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	msg := d.msg
+	row := d.row
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
@@ -336,8 +346,27 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+		if row != nil {
+			for _, field := range []jsonColumnField{
+				{data: row.MySQLType, target: &row.JSONMessage.MySQLType},
+				{data: row.Data, target: &row.JSONMessage.Data},
+				{data: row.Old, target: &row.JSONMessage.Old},
+			} {
+				if len(field.data) != 0 {
+					if err := json.Unmarshal(field.data, field.target); err != nil {
+						log.Panic("canal-json decode failed", zap.Error(errors.WrapError(errors.ErrCodecDecode, err)))
+					}
+				}
+			}
+			row.SQLType, row.MySQLType, row.Data, row.Old = nil, nil, nil, nil
+		}
 		return d.decodeDMLMessage(msg)
 	})
+}
+
+type jsonColumnField struct {
+	data   json.RawMessage
+	target any
 }
 
 func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
@@ -368,31 +397,8 @@ func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *comm
 	})
 	result.Length++
 
-	columns := tableInfo.GetColumns()
-	switch msg.eventType() {
-	case canal.EventType_DELETE:
-		data := formatAllColumnsValue(msg.getData(), columns)
-		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonType.RowTypeDelete)
-	case canal.EventType_INSERT:
-		data := formatAllColumnsValue(msg.getData(), columns)
-		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonType.RowTypeInsert)
-	case canal.EventType_UPDATE:
-		previous := formatAllColumnsValue(msg.getOld(), columns)
-		data := formatAllColumnsValue(msg.getData(), columns)
-		for k, v := range data {
-			if _, ok := previous[k]; !ok {
-				previous[k] = v
-			}
-		}
-		common.AppendRow2Chunk(previous, columns, result.Rows)
-		common.AppendRow2Chunk(data, columns, result.Rows)
-		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
-		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
-	default:
-		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
-	}
+	result.RowTypes = appendCanalJSONRows(msg, tableInfo.GetColumns(), result.Rows)
+
 	return result
 }
 
@@ -434,16 +440,33 @@ func (d *decoder) NextResolvedEvent() uint64 {
 	return withExtensionEvent.Extensions.WatermarkTs
 }
 
-func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
-	result := make(map[string]any, len(data))
-	for _, col := range columns {
-		raw, ok := data[col.Name.O]
-		if !ok {
-			continue
-		}
-		result[col.Name.O] = formatValue(raw, col.FieldType)
+func appendCanalJSONRows(msg canalJSONMessageInterface, columns []*timodel.ColumnInfo, rows *chunk.Chunk) []commonType.RowType {
+	var rowTypes []commonType.RowType
+	eventType := msg.eventType()
+	switch eventType {
+	case canal.EventType_DELETE:
+		rowTypes = []commonType.RowType{commonType.RowTypeDelete}
+	case canal.EventType_INSERT:
+		rowTypes = []commonType.RowType{commonType.RowTypeInsert}
+	case canal.EventType_UPDATE:
+		rowTypes = []commonType.RowType{commonType.RowTypeUpdate, commonType.RowTypeUpdate}
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
-	return result
+	data, old := msg.getData(), msg.getOld()
+	for idx, col := range columns {
+		value := formatValue(data[col.Name.O], col.FieldType)
+		if eventType == canal.EventType_UPDATE {
+			previous := value
+			// Missing old columns inherit the new value; an explicit null stays null.
+			if raw, ok := old[col.Name.O]; ok {
+				previous = formatValue(raw, col.FieldType)
+			}
+			common.AppendColumn2Chunk(idx, previous, col.FieldType, rows)
+		}
+		common.AppendColumn2Chunk(idx, value, col.FieldType, rows)
+	}
+	return rowTypes
 }
 
 func formatValue(value any, ft types.FieldType) any {

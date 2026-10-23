@@ -59,11 +59,21 @@ type Decoder struct {
 	cachedMessages *list.List
 	// CachedDMLMessages are messages just released from the cachedMessages.
 	CachedDMLMessages []*common.DMLMessage
+	// PendingDMLMessage identifies the input just cached by NextDMLMessage.
+	// The same object is returned by GetCachedMessages once its schema is known.
+	// It cannot be materialized until it is returned by GetCachedMessages.
+	PendingDMLMessage *common.DMLMessage
+}
+
+type cachedDMLMessage struct {
+	message *message
+	decoded *common.DMLMessage
 }
 
 // NewDecoder returns a new Decoder
 func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB,
+	provider TableInfoProvider,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -91,7 +101,7 @@ func NewDecoder(
 		storage:      externalStorage,
 		upstreamTiDB: db,
 
-		memo:           newMemoryTableInfoProvider(),
+		memo:           provider,
 		cachedMessages: list.New(),
 	}, errors.Trace(err)
 }
@@ -155,6 +165,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 	msg := d.msg
 	d.msg = nil
+	d.PendingDMLMessage = nil
 
 	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
@@ -163,7 +174,9 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 			zap.String("schema", msg.Schema),
 			zap.String("table", msg.Table),
 			zap.Uint64("version", msg.SchemaVersion))
-		d.cachedMessages.PushBack(msg)
+		pending := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), nil)
+		d.cachedMessages.PushBack(&cachedDMLMessage{message: msg, decoded: pending})
+		d.PendingDMLMessage = pending
 		return nil
 	}
 
@@ -299,27 +312,43 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
 		log.Panic("msg is not set when parse the DDL event")
 	}
+	if d.msg.Type == MessageTypeBootstrap {
+		schema := d.msg.TableSchema
+		if info := d.memo.Read(schema.Schema, schema.Table, schema.Version); info != nil {
+			ddl := &commonEvent.DDLEvent{
+				TableInfo:          info,
+				MultipleTableInfos: []*commonType.TableInfo{info, nil},
+				SchemaName:         schema.Schema,
+				TableName:          schema.Table,
+				FinishedTs:         d.msg.CommitTs,
+			}
+			d.msg = nil
+			return ddl
+		}
+	}
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
 	d.memo.Write(ddl.TableInfo)
 	d.memo.Write(ddl.MultipleTableInfos[1])
+	return ddl
+}
 
+// GetCachedMessages also checks the shared schema cache, so metadata received
+// by another protocol cursor can release this cursor's pending messages.
+func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	for ele := d.cachedMessages.Front(); ele != nil; {
-		msg := ele.Value.(*message)
+		cached := ele.Value.(*cachedDMLMessage)
+		msg := cached.message
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
+			*cached.decoded = *d.newDMLMessage(msg, tableInfo)
+			d.CachedDMLMessages = append(d.CachedDMLMessages, cached.decoded)
 			d.cachedMessages.Remove(ele)
 		}
 		ele = next
 	}
-	return ddl
-}
-
-// GetCachedMessages returns the cached messages.
-func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	result := d.CachedDMLMessages
 	d.CachedDMLMessages = nil
 	return result
@@ -339,17 +368,45 @@ type TableInfoProvider interface {
 	Read(schema, table string, version uint64) *commonType.TableInfo
 }
 
-type memoryTableInfoProvider struct {
+// TableInfoCache shares immutable schema versions between protocol cursors.
+// Its owner serializes schema reads, updates and watermark-based reclamation.
+type TableInfoCache struct {
 	memo map[tableSchemaKey]*commonType.TableInfo
 }
 
-func newMemoryTableInfoProvider() *memoryTableInfoProvider {
-	return &memoryTableInfoProvider{
+// NewTableInfoCache creates an empty schema cache.
+func NewTableInfoCache() *TableInfoCache {
+	return &TableInfoCache{
 		memo: make(map[tableSchemaKey]*commonType.TableInfo),
 	}
 }
 
-func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
+// ReleaseBefore keeps the schema active at the watermark and every newer
+// version. Captured DML conversion closures retain their immutable TableInfo.
+func (m *TableInfoCache) ReleaseBefore(watermark uint64) {
+	latest := make(map[tableSchemaKey]uint64)
+	for key := range m.memo {
+		if key.version > watermark {
+			continue
+		}
+		table := tableSchemaKey{
+			schema: key.schema,
+			table:  key.table,
+		}
+		latest[table] = max(latest[table], key.version)
+	}
+	for key := range m.memo {
+		table := tableSchemaKey{
+			schema: key.schema,
+			table:  key.table,
+		}
+		if key.version < latest[table] {
+			delete(m.memo, key)
+		}
+	}
+}
+
+func (m *TableInfoCache) Write(info *commonType.TableInfo) {
 	if info == nil || info.TableName.Schema == "" || info.TableName.Table == "" {
 		return
 	}
@@ -377,7 +434,7 @@ func (m *memoryTableInfoProvider) Write(info *commonType.TableInfo) {
 
 // Read returns the table info with the exact (schema, table, version)
 // Note: It's a blocking call, it will wait until the table info is stored
-func (m *memoryTableInfoProvider) Read(schema, table string, version uint64) *commonType.TableInfo {
+func (m *TableInfoCache) Read(schema, table string, version uint64) *commonType.TableInfo {
 	key := tableSchemaKey{
 		schema:  schema,
 		table:   table,

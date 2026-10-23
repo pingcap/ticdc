@@ -61,196 +61,43 @@ func TestGetBlockedTablesForRecoverSchema(t *testing.T) {
 }
 
 func TestGetDDLActionType(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	// disable the clustered index to allow drop and add primary key
-	helper.Tk().MustExec("set @@tidb_enable_clustered_index=0;")
-
-	createDBSQL := `create database abc`
-	ddl := helper.DDL2Event(createDBSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createDBSQL))
-
-	createSchemaSQL := `create schema aaa`
-	ddl = helper.DDL2Event(createSchemaSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createSchemaSQL))
-
-	dropDBSQL := `drop database abc`
-	ddl = helper.DDL2Event(dropDBSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropDBSQL))
-
-	dropSchemaSQL := `drop schema aaa`
-	ddl = helper.DDL2Event(dropSchemaSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropSchemaSQL))
-
-	flashbackDatabaseSQL := `flashback database abc`
-	require.Equal(t, timodel.ActionRecoverSchema, GetDDLActionType(flashbackDatabaseSQL))
-
-	helper.Tk().MustExec("use test")
-
-	createTableSQL := `create table t (a int primary key)`
-	ddl = helper.DDL2Event(createTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createTableSQL))
-
-	addColumnSQL := `alter table t add column b int`
-	ddl = helper.DDL2Event(addColumnSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addColumnSQL))
-
-	modifyColumnSQL := `alter table t modify column b bigint`
-	ddl = helper.DDL2Event(modifyColumnSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifyColumnSQL))
-
-	renameColumnSQL := `alter table t change column b c int`
-	ddl = helper.DDL2Event(renameColumnSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(renameColumnSQL))
-
-	dropPrimaryKeySQL := `alter table t drop primary key`
-	ddl = helper.DDL2Event(dropPrimaryKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropPrimaryKeySQL))
-
-	addPrimaryKeySQL := `alter table t add primary key(a)`
-	ddl = helper.DDL2Event(addPrimaryKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addPrimaryKeySQL))
-
-	addIndexSQL := `alter table t add index idx(c)`
-	ddl = helper.DDL2Event(addIndexSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addIndexSQL))
-
-	renameIndexSQL := `alter table t rename index idx to idx2`
-	ddl = helper.DDL2Event(renameIndexSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(renameIndexSQL))
-
-	dropIndexSQL := `alter table t drop index idx2`
-	ddl = helper.DDL2Event(dropIndexSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropIndexSQL))
-
-	addColumnSQL = `alter table t add column b int`
-	ddl = helper.DDL2Event(addColumnSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addColumnSQL))
-
-	addKeySQL := `alter table t add key idx(b)`
-	ddl = helper.DDL2Event(addKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addKeySQL))
-
-	dropKeySQL := `alter table t drop index idx`
-	ddl = helper.DDL2Event(dropKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropKeySQL))
-
-	addUniqueIndexSQL := `alter table t add unique index idx(b)`
-	ddl = helper.DDL2Event(addUniqueIndexSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addUniqueIndexSQL))
-
-	dropUniqueIndexSQL := `alter table t drop index idx`
-	ddl = helper.DDL2Event(dropUniqueIndexSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropUniqueIndexSQL))
-
-	addUniqueKeySQL := `alter table t add unique key idx(b)`
-	ddl = helper.DDL2Event(addUniqueKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addUniqueKeySQL))
-
-	dropUniqueKeySQL := `alter table t drop index idx`
-	ddl = helper.DDL2Event(dropUniqueKeySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropUniqueKeySQL))
-
-	//addFulltextIndexSQL := `alter table t add fulltext index idx(b)`
-	//ddl = helper.DDL2Event(addFulltextIndexSQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addFulltextIndexSQL))
-	//
-	//dropFulltextIndexSQL := `alter table t drop index idx`
-	//ddl = helper.DDL2Event(dropFulltextIndexSQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropFulltextIndexSQL))
-
-	//addFulltextKeySQL := `alter table t add fulltext key idx(b)`
-	//ddl = helper.DDL2Event(addFulltextKeySQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addFulltextKeySQL))
-	//
-	//dropFulltextKeySQL := `alter table t drop index idx`
-	//ddl = helper.DDL2Event(dropFulltextKeySQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropFulltextKeySQL))
-
-	//createTable2SQL := `create table t2 (a int primary key)`
-	//ddl = helper.DDL2Event(createTable2SQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createTable2SQL))
-	//
-	//addForeignKeySQL := `alter table t2 add FOREIGN KEY fk (a) references t2(a)`
-	//ddl = helper.DDL2Event(addForeignKeySQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addForeignKeySQL))
-	//
-	//dropForeignKeySQL := `alter table t2 drop FOREIGN KEY fk`
-	//ddl = helper.DDL2Event(dropForeignKeySQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropForeignKeySQL))
-
-	setDefaultValueSQL := `alter table t alter column c set default 5`
-	ddl = helper.DDL2Event(setDefaultValueSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(setDefaultValueSQL))
-
-	dropColumnSQL := `alter table t drop column c`
-	ddl = helper.DDL2Event(dropColumnSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropColumnSQL))
-
-	truncateTableSQL := `truncate table t`
-	ddl = helper.DDL2Event(truncateTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(truncateTableSQL))
-
-	truncateTableSQL = `truncate t`
-	ddl = helper.DDL2Event(truncateTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(truncateTableSQL))
-
-	renameTableSQL := `rename table t to t2`
-	ddl = helper.DDL2Event(renameTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(renameTableSQL))
-
-	dropTableSQL := `drop table t2`
-	ddl = helper.DDL2Event(dropTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropTableSQL))
-
-	// partition table related test
-	createPartitionTableSQL := `create table t (a int primary key)
-    	partition by range(a) (
-    	partition p0 values less than (10),
-    	partition p1 values less than (20))`
-	ddl = helper.DDL2Event(createPartitionTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createPartitionTableSQL))
-
-	addTablePartitionSQL := `alter table t add partition (partition p2 values less than (30))`
-	ddl = helper.DDL2Event(addTablePartitionSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addTablePartitionSQL))
-
-	reorganizePartitionSQL := `alter table t reorganize partition p0, p1 into (partition p0 values less than (20))`
-	ddl = helper.DDL2Event(reorganizePartitionSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(reorganizePartitionSQL))
-
-	truncatePartitionTableSQL := `alter table t truncate partition p2`
-	ddl = helper.DDL2Event(truncatePartitionTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(truncatePartitionTableSQL))
-
-	createTableSQL = `create table t1 (a int primary key)`
-	ddl = helper.DDL2Event(createTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createTableSQL))
-
-	exchangePartitionSQL := `alter table t exchange partition p0 with table t1`
-	ddl = helper.DDL2Event(exchangePartitionSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(exchangePartitionSQL))
-
-	dropTablePartitionSQL := `alter table t drop partition p0`
-	ddl = helper.DDL2Event(dropTablePartitionSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropTablePartitionSQL))
-
-	partitionBySQL := `alter table t1 partition by hash(a) partitions 4`
-	ddl = helper.DDL2Event(partitionBySQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(partitionBySQL))
-
-	removePartitioningSQL := `alter table t1 remove partitioning`
-	ddl = helper.DDL2Event(removePartitioningSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(removePartitioningSQL))
-
-	//// modify table charset
-	//modifyTableCharsetSQL := `alter table t1 character set utf8mb4`
-	//ddl = helper.DDL2Event(modifyTableCharsetSQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifyTableCharsetSQL))
-	//
-	//// modify schema charset
-	//modifySchemaCharsetSQL := `alter database test character set utf8mb4`
-	//ddl = helper.DDL2Event(modifySchemaCharsetSQL)
-	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifySchemaCharsetSQL))
+	for query, expected := range map[string]timodel.ActionType{
+		"create database abc":                        timodel.ActionCreateSchema,
+		"create schema aaa":                          timodel.ActionCreateSchema,
+		"drop database abc":                          timodel.ActionDropSchema,
+		"drop schema aaa":                            timodel.ActionDropSchema,
+		"flashback database abc":                     timodel.ActionRecoverSchema,
+		"create table t (a int primary key)":         timodel.ActionCreateTable,
+		"alter table t add column b int":             timodel.ActionAddColumn,
+		"alter table t modify column b bigint":       timodel.ActionModifyColumn,
+		"alter table t change column b c int":        timodel.ActionModifyColumn,
+		"alter table t drop primary key":             timodel.ActionDropPrimaryKey,
+		"alter table t add primary key(a)":           timodel.ActionAddPrimaryKey,
+		"alter table t add index idx(c)":             timodel.ActionAddIndex,
+		"alter table t rename index idx to idx2":     timodel.ActionRenameIndex,
+		"alter table t drop index idx2":              timodel.ActionDropIndex,
+		"alter table t add key idx(b)":               timodel.ActionAddIndex,
+		"alter table t drop index idx":               timodel.ActionDropIndex,
+		"alter table t add unique index idx(b)":      timodel.ActionAddIndex,
+		"alter table t add unique key idx(b)":        timodel.ActionAddIndex,
+		"alter table t alter column c set default 5": timodel.ActionSetDefaultValue,
+		"alter table t drop column c":                timodel.ActionDropColumn,
+		"truncate table t":                           timodel.ActionTruncateTable,
+		"truncate t":                                 timodel.ActionTruncateTable,
+		"rename table t to t2":                       timodel.ActionRenameTable,
+		"drop table t2":                              timodel.ActionDropTable,
+		"create table t (a int primary key) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20))": timodel.ActionCreateTable,
+		"alter table t add partition (partition p2 values less than (30))":                                                                  timodel.ActionAddTablePartition,
+		"alter table t reorganize partition p0, p1 into (partition p0 values less than (20))":                                               timodel.ActionReorganizePartition,
+		"alter table t truncate partition p2":                                                                                               timodel.ActionTruncateTablePartition,
+		"create table t1 (a int primary key)":                                                                                               timodel.ActionCreateTable,
+		"alter table t exchange partition p0 with table t1":                                                                                 timodel.ActionExchangeTablePartition,
+		"alter table t drop partition p0":                                                                                                   timodel.ActionDropTablePartition,
+		"alter table t1 partition by hash(a) partitions 4":                                                                                  timodel.ActionAlterTablePartitioning,
+		"alter table t1 remove partitioning":                                                                                                timodel.ActionRemovePartitioning,
+	} {
+		t.Run(query, func(t *testing.T) {
+			require.Equal(t, expected, GetDDLActionType(query))
+		})
+	}
 }
