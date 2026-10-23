@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -54,7 +55,7 @@ type sink struct {
 	metricsCollector kafka.MetricsCollector
 
 	comp       components
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -167,7 +168,7 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
+	statistics := statistics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer

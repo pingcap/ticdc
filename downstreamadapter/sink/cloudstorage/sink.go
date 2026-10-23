@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -66,7 +67,7 @@ type sink struct {
 	lastSendCheckpointTsTime time.Time
 
 	cron       *cron.Cron
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -137,7 +138,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	statistics := statistics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
 	defer func() {
 		if err != nil {
 			statistics.Close()
