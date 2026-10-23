@@ -342,19 +342,16 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	}
 	for i, index := range r.Row.IndexColumns {
 		indexInfo := &model.IndexInfo{
-			ID:    int64(i + 1),
-			Name:  ast.NewCIStr(fmt.Sprintf("index_%d", i)),
-			State: model.StatePublic,
-		}
-		firstCol := tidbTableInfo.Columns[index[0]]
-		if mysql.HasPriKeyFlag(firstCol.GetFlag()) || mysql.HasUniKeyFlag(firstCol.GetFlag()) {
-			indexInfo.Unique = true
+			ID:     int64(i + 1),
+			Name:   ast.NewCIStr(fmt.Sprintf("index_%d", i)),
+			State:  model.StatePublic,
+			Unique: true,
 		}
 		isPrimary := true
 		for j, id := range index {
 			col := tidbTableInfo.Columns[id]
 			// When only all columns in the index are primary key, then the index is primary key.
-			if col == nil || !mysql.HasPriKeyFlag(firstCol.GetFlag()) {
+			if col == nil || !mysql.HasPriKeyFlag(col.GetFlag()) {
 				isPrimary = false
 			}
 			length := types.UnspecifiedLength

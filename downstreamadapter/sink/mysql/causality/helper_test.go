@@ -357,6 +357,29 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				return false
 			}
 			require.Equal(t, tc.wantConflict, hasConflict(ConflictKeys(events[1]), ConflictKeys(events[3])))
+			redoKeys := func(event *commonEvent.DMLEvent) map[uint64]struct{} {
+				row, ok := event.GetNextRow()
+				require.True(t, ok)
+				event.Rewind()
+				redo := (&commonEvent.RedoRowEvent{
+					TableInfo: tableInfo, PhysicalTableID: info.ID, StartTs: event.StartTs, CommitTs: event.CommitTs, Event: row,
+				}).ToRedoLog()
+				data, err := redo.MarshalMsg(nil)
+				require.NoError(t, err)
+				var decoded commonEvent.RedoLog
+				remaining, err := decoded.UnmarshalMsg(data)
+				require.NoError(t, err)
+				require.Empty(t, remaining)
+				replayed := decoded.RedoRow.ToDMLEvent()
+				replayed.DispatcherID = dispatcherID
+				t.Cleanup(replayed.PostFlush)
+				return ConflictKeys(replayed)
+			}
+			redoEventKeys := make([]map[uint64]struct{}, len(events))
+			for i, event := range events {
+				redoEventKeys[i] = redoKeys(event)
+			}
+			require.Equal(t, tc.wantConflict, hasConflict(redoEventKeys[1], redoEventKeys[3]), "redo must preserve unique index dependencies")
 
 			if !tc.null {
 				before := makeEvent(common.RowTypeInsert, 4, tc.values[0], tc.suffixes[0])
@@ -368,6 +391,9 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				// including when they do not conflict with one another.
 				require.True(t, hasConflict(updateKeys, ConflictKeys(events[1])))
 				require.True(t, hasConflict(updateKeys, ConflictKeys(events[3])))
+				redoUpdateKeys := redoKeys(before)
+				require.True(t, hasConflict(redoUpdateKeys, redoEventKeys[1]))
+				require.True(t, hasConflict(redoUpdateKeys, redoEventKeys[3]))
 			}
 
 			if tc.wantConflict {
@@ -381,6 +407,7 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 					if i > 0 {
 						require.Positive(t, node.totalDependencies)
 						require.Equal(t, int32(0), node.removedDependencies)
+						require.True(t, hasConflict(redoEventKeys[i-1], redoEventKeys[i]), "redo transactions must depend on their predecessors")
 					}
 				}
 			}

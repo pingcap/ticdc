@@ -114,6 +114,32 @@ func newFlag(flag uint) uint64 {
 	return uint64(result)
 }
 
+func TestSplitUpdatePreservesIndexPrefixLength(t *testing.T) {
+	update := &commonEvent.RedoDMLEvent{
+		Row: &commonEvent.DMLEventInRedoLog{
+			Table:              &common.TableName{Schema: "test", Table: "t", TableID: 42},
+			Columns:            []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeVarchar}},
+			PreColumns:         []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeVarchar}},
+			IndexColumns:       [][]int{{0}},
+			IndexColumnLengths: [][]int{{4}},
+		},
+		Columns:    []commonEvent.RedoColumnValue{{Value: []byte("same-b"), Flag: newFlag(pmysql.PriKeyFlag)}},
+		PreColumns: []commonEvent.RedoColumnValue{{Value: []byte("same-a"), Flag: newFlag(pmysql.PriKeyFlag)}},
+	}
+	deleted, inserted, err := splitUpdateEvent(update)
+	require.NoError(t, err)
+	for _, row := range []*commonEvent.RedoDMLEvent{deleted, inserted} {
+		data, err := row.MarshalMsg(nil)
+		require.NoError(t, err)
+		var decoded commonEvent.RedoDMLEvent
+		_, err = decoded.UnmarshalMsg(data)
+		require.NoError(t, err)
+		event := decoded.ToDMLEvent()
+		require.Equal(t, 4, event.TableInfo.GetIndices()[0].Columns[0].Length)
+		event.PostFlush()
+	}
+}
+
 func TestApplyRowSpill(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	ap.needRecoveryInfo = false
