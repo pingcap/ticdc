@@ -844,6 +844,146 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	require.NotContains(t, orchestrator.closedMaintainerEpochs, cfID)
 }
 
+func TestHandleBootstrapRequestCanCreateDispatcherAfterHandover(t *testing.T) {
+	for _, tc := range []struct {
+		state    string
+		oldEpoch uint64
+		newEpoch uint64
+	}{
+		{"running", 2, 3},
+		{"closing", 2, 3},
+		{"closed", 2, 3},
+		{"closed", 0, 0},
+	} {
+		t.Run(fmt.Sprintf("%s epoch %d to %d", tc.state, tc.oldEpoch, tc.newEpoch), func(t *testing.T) {
+			mc := messaging.NewMockMessageCenter()
+			setupBootstrapTestServices(t, mc, true)
+
+			cfID := common.NewChangeFeedIDWithName("cf", "default")
+			configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
+			require.NoError(t, err)
+			orchestrator := newTestDispatcherOrchestrator()
+			orchestrator.mc = mc
+			req := &heartbeatpb.MaintainerBootstrapRequest{
+				ChangefeedID:    cfID.ToPB(),
+				Config:          configBytes,
+				StartTs:         100,
+				MaintainerEpoch: tc.oldEpoch,
+			}
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), req))
+			requireMessage(t, mc.GetMessageChannel(), "initial bootstrap response was not sent")
+			manager := orchestrator.dispatcherManagers[cfID]
+			require.NotNil(t, manager)
+			cleanupDispatcherManager(t, manager)
+			if tc.state != "running" {
+				require.NoError(t, orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+					ChangefeedID:    cfID.ToPB(),
+					MaintainerEpoch: tc.oldEpoch,
+				}))
+				msg := requireMessage(t, mc.GetMessageChannel(), "close response was not sent")
+				require.False(t, msg.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
+
+				// The old maintainer dies before retrying close. Local cleanup finishes,
+				// but no further close request removes the manager from the orchestrator.
+				if tc.state == "closed" {
+					require.Eventually(t, func() bool {
+						return manager.TryClose(false)
+					}, time.Second, 10*time.Millisecond)
+				}
+				require.Same(t, manager, orchestrator.dispatcherManagers[cfID])
+			}
+
+			req.MaintainerEpoch = tc.newEpoch
+			var response *heartbeatpb.MaintainerBootstrapResponse
+			bootstrap := func() bool {
+				require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), req))
+				select {
+				case msg := <-mc.GetMessageChannel():
+					response = msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+					return true
+				default:
+					require.Same(t, manager, orchestrator.dispatcherManagers[cfID])
+					require.Equal(t, node.ID("old-maintainer"), manager.GetMaintainerID())
+					return false
+				}
+			}
+			if !bootstrap() {
+				require.Eventually(t, bootstrap, time.Second, 10*time.Millisecond)
+			}
+			recovered := orchestrator.dispatcherManagers[cfID]
+			require.NotNil(t, recovered)
+			if recovered != manager {
+				cleanupDispatcherManager(t, recovered)
+			}
+			if tc.state == "running" {
+				require.Same(t, manager, recovered)
+			} else {
+				require.NotSame(t, manager, recovered)
+			}
+			require.Nil(t, response.Err)
+			require.Equal(t, tc.newEpoch, response.MaintainerEpoch)
+			require.Equal(t, node.ID("new-maintainer"), recovered.GetMaintainerID())
+
+			// A successful handover must leave a manager capable of creating dispatchers.
+			err = recovered.NewTableTriggerEventDispatcher(common.NewDispatcherID().ToPB(), 100, false)
+			require.NoError(t, err, "bootstrap succeeded but the dispatcher manager write path is still closed")
+		})
+	}
+}
+
+func TestHandleBootstrapRequestRejectsStaleEpochAfterManagerClose(t *testing.T) {
+	for _, tc := range []struct {
+		oldEpoch     uint64
+		requestEpoch uint64
+		removed      bool
+	}{
+		{2, 0, false},
+		{2, 1, false},
+		{2, 2, false},
+		{0, 0, true},
+	} {
+		t.Run(fmt.Sprintf("epoch %d to %d removed %t", tc.oldEpoch, tc.requestEpoch, tc.removed), func(t *testing.T) {
+			mc := messaging.NewMockMessageCenter()
+			setupBootstrapTestServices(t, mc, false)
+			cfID := common.NewChangeFeedIDWithName("cf", "default")
+			configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
+			require.NoError(t, err)
+			orchestrator := newTestDispatcherOrchestrator()
+			orchestrator.mc = mc
+			req := &heartbeatpb.MaintainerBootstrapRequest{
+				ChangefeedID:    cfID.ToPB(),
+				Config:          configBytes,
+				StartTs:         100,
+				MaintainerEpoch: tc.oldEpoch,
+			}
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), req))
+			requireMessage(t, mc.GetMessageChannel(), "initial bootstrap response was not sent")
+			manager := orchestrator.dispatcherManagers[cfID]
+			cleanupDispatcherManager(t, manager)
+			require.NoError(t, orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+				ChangefeedID:    cfID.ToPB(),
+				MaintainerEpoch: tc.oldEpoch,
+				Removed:         tc.removed,
+			}))
+			msg := requireMessage(t, mc.GetMessageChannel(), "close response was not sent")
+			require.False(t, msg.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
+			require.Contains(t, orchestrator.closedMaintainerEpochs, cfID)
+			require.Equal(t, tc.oldEpoch, orchestrator.closedMaintainerEpochs[cfID])
+			require.Eventually(t, func() bool {
+				return manager.TryClose(false)
+			}, time.Second, 10*time.Millisecond)
+
+			req.MaintainerEpoch = tc.requestEpoch
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), req))
+			require.Empty(t, mc.GetMessageChannel(), "a closed maintainer epoch must not bootstrap again")
+			if remaining, exists := orchestrator.dispatcherManagers[cfID]; exists {
+				require.Same(t, manager, remaining)
+				require.True(t, remaining.IsClosing())
+			}
+		})
+	}
+}
+
 func TestHandlePostBootstrapWritePathClosedReleasesMaintainerFence(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	setupBootstrapTestServices(t, mc, true)
