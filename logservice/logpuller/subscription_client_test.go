@@ -570,7 +570,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false, ScanPriorityLow)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -660,7 +660,9 @@ func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 		func(ts uint64) { resolvedTsCh <- ts },
 		0,
 		true,
+		ScanPriorityHigh,
 	)
+	require.Equal(t, ScanPriorityHigh, concreteClient.spanRegistry.Get(subID).baseScanPriority)
 
 	var subscribeRequest *cdcpb.ChangeDataRequest
 	select {

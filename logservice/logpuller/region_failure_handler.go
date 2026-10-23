@@ -288,7 +288,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 	}
 	retryRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
-		if priority == scanPriorityLow {
+		if priority == ScanPriorityLow {
 			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
 				priority,
 				errInfo.resolvedTs(),

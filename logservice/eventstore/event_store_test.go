@@ -82,6 +82,7 @@ func (s *mockSubscriptionClient) Subscribe(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	bdrMode bool,
+	scanPriority logpuller.ScanPriorityLevel,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -73,7 +73,9 @@ type subscribedSpan struct {
 	initializationTracker spanInitializationTracker
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
-	priorityPolicy        scanPriorityPolicy
+	// baseScanPriority is the minimum priority for every Region in this subscription.
+	baseScanPriority ScanPriorityLevel
+	priorityPolicy   scanPriorityPolicy
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
