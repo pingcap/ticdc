@@ -96,6 +96,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	testSink := newDispatcherManagerTestSink(t, common.BlackHoleSinkType)
 	manager := &DispatcherManager{
+		ctx:                     t.Context(),
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
@@ -105,7 +106,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		sinkQuota:               util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota),
 		latestWatermark:         NewWatermark(0),
 		latestRedoWatermark:     NewWatermark(0),
-		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
 		config: &config.ChangefeedConfig{
 			BDRMode: true,
@@ -117,6 +117,10 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricBlockStatusesChanLen: metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
+
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerRunning
+	manager.lifecycleMu.Unlock()
 
 	// Create shared info for the test manager
 	defaultAtomicity := config.DefaultAtomicityLevel()
@@ -499,13 +503,29 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestTryCloseWaitsForFinalCleanup(t *testing.T) {
+	manager := &DispatcherManager{}
+	// Closing includes the final task and metrics cleanup.
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosing
+	manager.lifecycleMu.Unlock()
+	require.False(t, manager.TryClose(false))
+
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosed
+	manager.lifecycleMu.Unlock()
+	require.True(t, manager.TryClose(false))
+}
+
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
 		sink:         newDispatcherManagerTestSink(t, common.BlackHoleSinkType),
 	}
-	manager.closed.Store(true)
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosed
+	manager.lifecycleMu.Unlock()
 
 	// Preserve the historical close contract: once the manager is already closed,
 	// late remove requests should not delay TryClose success.
@@ -667,7 +687,7 @@ func TestNewDispatcherManagerReturnsFenceErrorWhenInitializingRegistrationReject
 	require.True(t, hookCalled.Load())
 	require.NotNil(t, initializingManager)
 	require.True(t, IsWritePathClosedError(err))
-	require.True(t, initializingManager.writePathClosed.Load())
+	require.True(t, initializingManager.isClosingOrClosed())
 	require.Eventually(t, func() bool {
 		return initializingManager.TryClose(false)
 	}, time.Second, 10*time.Millisecond)
@@ -732,7 +752,9 @@ func TestLocalFenceWithRedoEnabledBeforeRedoSinkInitialized(t *testing.T) {
 
 func TestNewTableTriggerDispatchersReturnFenceErrorWhenWritePathClosed(t *testing.T) {
 	manager := createTestManager(t)
-	manager.writePathClosed.Store(true)
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosing
+	manager.lifecycleMu.Unlock()
 
 	dispatcherID := common.NewDispatcherID()
 	require.NotPanics(t, func() {
@@ -770,7 +792,9 @@ func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClos
 	)
 	manager.SetTableTriggerEventDispatcher(tableTriggerDispatcher)
 	manager.dispatcherMap.Set(dispatcherID, tableTriggerDispatcher)
-	manager.writePathClosed.Store(true)
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosing
+	manager.lifecycleMu.Unlock()
 
 	err := manager.InitalizeTableTriggerEventDispatcher(nil)
 	require.True(t, IsWritePathClosedError(err))
@@ -784,7 +808,9 @@ func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClos
 
 func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 	manager := createTestManager(t)
-	manager.writePathClosed.Store(true)
+	manager.lifecycleMu.Lock()
+	manager.state = dispatcherManagerClosing
+	manager.lifecycleMu.Unlock()
 	dispatcherID := common.NewDispatcherID()
 	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: manager.changefeedID.ToPB(),
@@ -1359,4 +1385,12 @@ func TestAbortMergeRestoresSourceDispatchersRegistration(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2.GetComponentStatus())
 	require.True(t, ec.HasDispatcher(dispatcher1.GetId()))
 	require.True(t, ec.HasDispatcher(dispatcher2.GetId()))
+
+	// An already running merge must not restore registrations after shutdown starts.
+	ec.RemoveDispatcher(dispatcher1)
+	ec.RemoveDispatcher(dispatcher2)
+	require.Equal(t, dispatcherManagerRunning, manager.startClosing())
+	abortMerge(task, manager.dispatcherMap, manager.sink.SinkType(), "manager_closing")
+	require.False(t, ec.HasDispatcher(dispatcher1.GetId()))
+	require.False(t, ec.HasDispatcher(dispatcher2.GetId()))
 }

@@ -53,15 +53,23 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 }
 
 func (t *HeartBeatTask) Execute() time.Time {
-	if t.manager.closed.Load() {
+	if !t.manager.tryAddRunningTask() {
+		// Initial dispatchers can schedule this task before construction returns.
+		// Initialization may finish between admission and this check.
+		if !t.manager.isClosingOrClosed() {
+			return time.Now().Add(heartbeatInterval(t.manager))
+		}
 		return time.Time{}
 	}
+	defer t.manager.wg.Done()
 	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
 	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
-	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
+	if !t.manager.heartbeatRequestQueue.Enqueue(t.manager.ctx, &HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message}) {
+		return time.Time{}
+	}
 	return time.Now().Add(executeInterval)
 }
 
@@ -135,9 +143,10 @@ func newMergeCheckTask(manager *DispatcherManager, mergedDispatcher dispatcher.D
 }
 
 func (t *MergeCheckTask) Execute() time.Time {
-	if t.manager.closed.Load() {
+	if !t.manager.tryAddRunningTask() {
 		return time.Time{}
 	}
+	defer t.manager.wg.Done()
 
 	sinkType := getSinkType(t.mergedDispatcher, t.manager)
 	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
@@ -202,6 +211,12 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 	// Stop retrying and cleanup best-effort.
 	t.Cancel()
 
+	t.manager.lifecycleMu.Lock()
+	defer t.manager.lifecycleMu.Unlock()
+	if t.manager.state >= dispatcherManagerClosing {
+		return
+	}
+
 	eventCollector := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
 	memoryQuota := t.manager.sinkQuota
 	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
@@ -246,6 +261,10 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	closedCount := 0
 	count := 0
 	for closedCount < len(t.dispatcherIDs) {
+		if t.manager.isClosingOrClosed() {
+			t.Cancel()
+			return
+		}
 		if needAbort, abortReason := shouldAbortMerge(t, dispatcherMap); needAbort {
 			abortMerge(t, dispatcherMap, sinkType, abortReason)
 			return
@@ -294,6 +313,12 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
 	startTs, skipSyncpointAtStartTs, skipDMLAsStartTs := resolveMergedDispatcherStartTs(t, minCheckpointTs, pendingStates)
+	t.manager.lifecycleMu.Lock()
+	if t.manager.state >= dispatcherManagerClosing {
+		t.manager.lifecycleMu.Unlock()
+		t.Cancel()
+		return
+	}
 	t.mergedDispatcher.SetStartTs(startTs)
 	t.mergedDispatcher.SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs)
 	t.mergedDispatcher.SetSkipDMLAsStartTs(skipDMLAsStartTs)
@@ -301,6 +326,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, startTs)
+	t.manager.lifecycleMu.Unlock()
 	log.Info("merge dispatcher commit",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
@@ -503,10 +529,10 @@ type RemoveDispatcherTask struct {
 }
 
 func (t *RemoveDispatcherTask) Execute() time.Time {
-	// Check if manager is closed
-	if t.manager.closed.Load() {
+	if !t.manager.tryAddRunningTask() {
 		return time.Time{}
 	}
+	defer t.manager.wg.Done()
 	// If the dispatcher is removing, we don't need to remove it again
 	if t.dispatcherItem.GetRemovingStatus() {
 		return time.Time{}

@@ -211,6 +211,10 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.tryAddRunningTask() {
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 
 	// `dynstream` guarantees per-path serialization: for a given changefeed (Path),
 	// SchedulerDispatcherRequestHandler.Handle will not be executed concurrently. This matters for reasoning:
@@ -551,6 +555,10 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	heartbeatResponse := resps[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.tryAddRunningTask() {
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 	if !isHeartBeatResponseAllowed(dispatcherManager, heartbeatResponse) {
 		return false
 	}
@@ -653,6 +661,10 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 		// TODO: Support batch
 		panic("invalid message count")
 	}
+	if !dispatcherManager.tryAddRunningTask() {
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
 		dispatcherManager.addCheckpointTs(checkpointTsMessage.CheckpointTs)
@@ -718,6 +730,11 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	}
 	msg := messages[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
+	if !dispatcherManager.tryAddRunningTask() {
+		dispatcherManager.MaintainerFenceMu.Unlock()
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 	if !isRedoResolvedTsForwardMessageAllowed(dispatcherManager, msg) {
 		dispatcherManager.MaintainerFenceMu.Unlock()
 		return false
@@ -812,6 +829,10 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 	msg := messages[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.tryAddRunningTask() {
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 	if !isRedoMetaMessageAllowed(dispatcherManager, msg) {
 		return false
 	}
@@ -926,6 +947,10 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	mergeDispatcherRequest := reqs[0]
 	dispatcherManager.MaintainerFenceMu.Lock()
 	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.tryAddRunningTask() {
+		return false
+	}
+	defer dispatcherManager.wg.Done()
 	if !isMaintainerControlMessageAllowed(
 		dispatcherManager,
 		"drop stale merge dispatcher request",

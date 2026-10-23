@@ -39,8 +39,17 @@ func NewHeartbeatRequestQueue() *HeartbeatRequestQueue {
 	}
 }
 
-func (q *HeartbeatRequestQueue) Enqueue(request *HeartBeatRequestWithTargetID) {
-	q.queue <- request
+// Enqueue preserves backpressure until the request is queued or ctx is canceled.
+func (q *HeartbeatRequestQueue) Enqueue(ctx context.Context, request *HeartBeatRequestWithTargetID) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case q.queue <- request:
+		return true
+	}
 }
 
 func (q *HeartbeatRequestQueue) Dequeue(ctx context.Context) *HeartBeatRequestWithTargetID {
@@ -87,19 +96,35 @@ func NewBlockStatusRequestQueue() *BlockStatusRequestQueue {
 	}
 }
 
-func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetID) {
+// Enqueue returns false on cancellation. Deduplicated requests count as handled.
+func (q *BlockStatusRequestQueue) Enqueue(ctx context.Context, request *BlockStatusRequestWithTargetID) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	if request == nil || request.Request == nil {
-		return
+		return true
 	}
 	// Filter duplicate WAITING/DONE statuses before they consume queue slots.
 	// NONE statuses bypass this path because they carry schedule side effects and
 	// are not expected to resend continuously.
 	if !q.trackPendingStatuses(request) {
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
-		return
+		return true
 	}
-	q.queue <- request
+	select {
+	case <-ctx.Done():
+		// The request never entered the queue; allow its statuses to be retried.
+		q.mu.Lock()
+		for _, key := range q.requestStatusKeys[request] {
+			delete(q.queuedStatuses, key)
+		}
+		delete(q.requestStatusKeys, request)
+		q.mu.Unlock()
+		return false
+	case q.queue <- request:
+	}
 	metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
+	return true
 }
 
 func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusRequestWithTargetID {

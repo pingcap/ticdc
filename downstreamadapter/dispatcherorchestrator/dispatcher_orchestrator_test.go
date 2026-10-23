@@ -17,20 +17,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1107,6 +1113,207 @@ func TestHandleCloseRequestRecordsEpochZeroTombstoneForRemovedChangefeed(t *test
 	})
 	require.NoError(t, err)
 	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
+func TestHandleBootstrapRequestRebuildsClosedManager(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		close    bool
+		oldEpoch uint64
+		newEpoch uint64
+	}{
+		{name: "closed strict manager", close: true, oldEpoch: 1, newEpoch: 2},
+		{name: "live manager handover", oldEpoch: 1, newEpoch: 2},
+		{name: "closed compatibility manager", close: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := messaging.NewMockMessageCenter()
+			setupBootstrapTestServices(t, mc, true)
+			cfID := common.NewChangeFeedIDWithName("lifecycle-cf", "default")
+			cfConfig := newBootstrapResponseTestChangefeedConfig(cfID)
+			configBytes, err := json.Marshal(cfConfig)
+			require.NoError(t, err)
+			manager, err := dispatchermanager.NewDispatcherManager(
+				0, cfID, cfConfig, nil, nil, 100, node.ID("old-maintainer"), tc.oldEpoch, false, nil,
+			)
+			require.NoError(t, err)
+			cleanupDispatcherManager(t, manager)
+			orchestrator := &DispatcherOrchestrator{
+				mc:                     mc,
+				dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+				closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+			}
+			gauge := metrics.DispatcherManagerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name())
+			gauge.Set(1)
+			t.Cleanup(func() { metrics.DispatcherManagerGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()) })
+			if tc.close {
+				require.NoError(t, orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+					ChangefeedID: cfID.ToPB(), MaintainerEpoch: tc.oldEpoch,
+				}))
+				closeMsg := requireMessage(t, mc.GetMessageChannel(), "close response missing")
+				require.False(t, closeMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
+				require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
+				require.Same(t, manager, orchestrator.dispatcherManagers[cfID])
+			}
+			req := &heartbeatpb.MaintainerBootstrapRequest{
+				ChangefeedID: cfID.ToPB(), Config: configBytes, StartTs: 100, MaintainerEpoch: tc.newEpoch,
+			}
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), req))
+			bootstrapMsg := requireMessage(t, mc.GetMessageChannel(), "bootstrap response missing")
+			response := bootstrapMsg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+			require.Nil(t, response.Err)
+			require.Equal(t, tc.newEpoch, response.MaintainerEpoch)
+			active := orchestrator.dispatcherManagers[cfID]
+			if tc.close {
+				require.NotSame(t, manager, active)
+				cleanupDispatcherManager(t, active)
+			} else {
+				require.Same(t, manager, active)
+			}
+			require.Equal(t, node.ID("new-maintainer"), active.GetMaintainerID())
+			require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), req))
+			requireMessage(t, mc.GetMessageChannel(), "repeated bootstrap response missing")
+			require.Same(t, active, orchestrator.dispatcherManagers[cfID])
+			if tc.oldEpoch != 0 {
+				staleBootstrap := &heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: tc.oldEpoch}
+				require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), staleBootstrap))
+				requireNoMessage(t, mc.GetMessageChannel(), "stale bootstrap must not be acknowledged")
+				require.NoError(t, orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+					ChangefeedID: cfID.ToPB(), MaintainerEpoch: tc.oldEpoch,
+				}))
+				staleClose := requireMessage(t, mc.GetMessageChannel(), "stale close response missing")
+				require.True(t, staleClose.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
+				require.Same(t, active, orchestrator.dispatcherManagers[cfID])
+				require.True(t, active.IsRunning())
+				require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+			}
+
+			// Exercise the collector registration and heartbeat path on the active instance.
+			dispatcherID := common.NewDispatcherID()
+			scheduleMsg := messaging.NewSingleTargetMessage(node.ID("receiver"), messaging.HeartbeatCollectorTopic,
+				newBootstrapResponseTestScheduleRequest(cfID, dispatcherID, tc.newEpoch))
+			scheduleMsg.From = node.ID("new-maintainer")
+			collector := appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector)
+			require.NoError(t, collector.RecvMessages(t.Context(), scheduleMsg))
+			require.Eventually(t, func() bool {
+				_, ok := active.GetDispatcherMap().Get(dispatcherID)
+				return ok
+			}, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool {
+				select {
+				case msg := <-mc.GetMessageChannel():
+					if msg.Type != messaging.TypeHeartBeatRequest {
+						return false
+					}
+					heartbeat := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+					return msg.To == node.ID("new-maintainer") && heartbeat.Watermark != nil && common.NewChangefeedIDFromPB(heartbeat.ChangefeedID) == cfID
+				default:
+					return false
+				}
+			}, 3*time.Second, time.Millisecond)
+		})
+	}
+}
+
+func TestHandleBootstrapRequestWaitsForClosingManager(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		oldEpoch uint64
+		newEpoch uint64
+		removed  bool
+	}{
+		{name: "strict close", oldEpoch: 1, newEpoch: 2},
+		{name: "compatibility close"},
+		{name: "compatibility remove", removed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mc := messaging.NewMockMessageCenter()
+			setupBootstrapTestServices(t, mc, true)
+			cfID := common.NewChangeFeedIDWithName("closing-cf", "default")
+			cfConfig := newBootstrapResponseTestChangefeedConfig(cfID)
+			configBytes, err := json.Marshal(cfConfig)
+			require.NoError(t, err)
+			manager, err := dispatchermanager.NewDispatcherManager(
+				0, cfID, cfConfig, nil, nil, 100, node.ID("old-maintainer"), tc.oldEpoch, false, nil,
+			)
+			require.NoError(t, err)
+			cleanupDispatcherManager(t, manager)
+			orchestrator := &DispatcherOrchestrator{
+				mc:                     mc,
+				dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+				closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+			}
+			gauge := metrics.DispatcherManagerGauge.WithLabelValues(cfID.Keyspace(), cfID.Name())
+			gauge.Set(1)
+			t.Cleanup(func() { metrics.DispatcherManagerGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()) })
+
+			// Block a dispatcher's close so bootstrap sees an actual closing manager.
+			started, release := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(unblock)
+			mockSink := mock.NewMockSink(ctrl)
+			mockSink.EXPECT().SinkType().Return(common.BlackHoleSinkType).AnyTimes()
+			mockSink.EXPECT().IsNormal().DoAndReturn(func() bool {
+				close(started)
+				<-release
+				return true
+			})
+			sharedInfo := dispatcher.NewSharedInfo(cfID, false, "system", false, false, false,
+				nil, nil, nil, nil, false, routing.Router{}, 0, 0, nil, 0, nil)
+			t.Cleanup(sharedInfo.Close)
+			dispatcherID := common.NewDispatcherID()
+			d := dispatcher.NewEventDispatcher(dispatcherID, &heartbeatpb.TableSpan{TableID: 1}, 100, 0,
+				dispatcher.NewSchemaIDToDispatchers(), false, false, 0, mockSink, sharedInfo, false, nil)
+			require.NoError(t, dispatcher.GetDispatcherStatusDynamicStream().AddPath(dispatcherID, d))
+			manager.GetDispatcherMap().Set(dispatcherID, d)
+			require.NoError(t, orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+				ChangefeedID: cfID.ToPB(), MaintainerEpoch: tc.oldEpoch, Removed: tc.removed,
+			}))
+			closeMsg := requireMessage(t, mc.GetMessageChannel(), "close response missing")
+			require.False(t, closeMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse).Success)
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				require.FailNow(t, "dispatcher close did not start")
+			}
+			if tc.oldEpoch != 0 || tc.removed {
+				require.Contains(t, orchestrator.closedMaintainerEpochs, cfID)
+				require.Equal(t, tc.oldEpoch, orchestrator.closedMaintainerEpochs[cfID])
+			} else {
+				require.NotContains(t, orchestrator.closedMaintainerEpochs, cfID)
+			}
+			oldBootstrap := &heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: tc.oldEpoch}
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), oldBootstrap))
+			requireNoMessage(t, mc.GetMessageChannel(), "old bootstrap must not revive a closing manager")
+			req := &heartbeatpb.MaintainerBootstrapRequest{
+				ChangefeedID: cfID.ToPB(), Config: configBytes, StartTs: 100, MaintainerEpoch: tc.newEpoch,
+			}
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), req))
+			requireNoMessage(t, mc.GetMessageChannel(), "bootstrap must wait for close completion")
+			require.Equal(t, node.ID("old-maintainer"), manager.GetMaintainerID())
+			require.Equal(t, tc.oldEpoch, manager.GetMaintainerEpoch())
+			require.Same(t, manager, orchestrator.dispatcherManagers[cfID])
+			require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+
+			unblock()
+			require.Eventually(t, func() bool { return manager.TryClose(false) }, time.Second, time.Millisecond)
+			require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("new-maintainer"), req))
+			if tc.removed {
+				requireNoMessage(t, mc.GetMessageChannel(), "removed compatibility manager must remain fenced")
+				require.Same(t, manager, orchestrator.dispatcherManagers[cfID])
+			} else {
+				responseMsg := requireMessage(t, mc.GetMessageChannel(), "retry bootstrap response missing")
+				require.Nil(t, responseMsg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse).Err)
+				active := orchestrator.dispatcherManagers[cfID]
+				cleanupDispatcherManager(t, active)
+				require.NotSame(t, manager, active)
+				require.Equal(t, node.ID("new-maintainer"), active.GetMaintainerID())
+				require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+			}
+		})
+	}
 }
 
 func newBootstrapResponseTestChangefeedConfig(cfID common.ChangeFeedID) *config.ChangefeedConfig {
