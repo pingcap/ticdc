@@ -197,7 +197,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	closedEpoch, closed := m.closedMaintainerEpochs[cfId]
 	m.mutex.Unlock()
 
-	if exists && manager.IsClosing() {
+	if exists && manager.IsClosingOrClosed() {
 		manager.MaintainerFenceMu.Lock()
 		if !manager.CanUpdateMaintainer(from, maintainerEpoch) || !manager.TryClose(false) {
 			manager.MaintainerFenceMu.Unlock()

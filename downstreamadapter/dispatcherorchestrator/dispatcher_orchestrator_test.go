@@ -978,7 +978,7 @@ func TestHandleBootstrapRequestRejectsStaleEpochAfterManagerClose(t *testing.T) 
 			require.Empty(t, mc.GetMessageChannel(), "a closed maintainer epoch must not bootstrap again")
 			if remaining, exists := orchestrator.dispatcherManagers[cfID]; exists {
 				require.Same(t, manager, remaining)
-				require.True(t, remaining.IsClosing())
+				require.True(t, remaining.IsClosingOrClosed())
 			}
 		})
 	}
