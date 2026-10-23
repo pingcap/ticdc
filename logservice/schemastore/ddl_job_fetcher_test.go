@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,6 +28,52 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
+
+type priorityRecordingSubscriptionClient struct {
+	nextID     logpuller.SubscriptionID
+	priorities []logpuller.ScanPriorityLevel
+}
+
+func (s *priorityRecordingSubscriptionClient) Name() string {
+	return "priorityRecordingSubscriptionClient"
+}
+func (s *priorityRecordingSubscriptionClient) Run(context.Context) error   { return nil }
+func (s *priorityRecordingSubscriptionClient) Close(context.Context) error { return nil }
+
+func (s *priorityRecordingSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID {
+	s.nextID++
+	return s.nextID
+}
+
+func (s *priorityRecordingSubscriptionClient) Subscribe(
+	_ logpuller.SubscriptionID,
+	_ heartbeatpb.TableSpan,
+	_ uint64,
+	_ func([]common.RawKVEntry, func()) bool,
+	_ func(uint64),
+	_ int64,
+	_ bool,
+	scanPriority logpuller.ScanPriorityLevel,
+) {
+	s.priorities = append(s.priorities, scanPriority)
+}
+
+func (s *priorityRecordingSubscriptionClient) Unsubscribe(logpuller.SubscriptionID) {}
+
+func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
+	subClient := &priorityRecordingSubscriptionClient{}
+	fetcher := newDDLJobFetcher(
+		context.Background(), subClient, nil, keyspaceID,
+		func(DDLJobWithCommitTs) {}, func(uint64) {},
+	)
+
+	require.NoError(t, fetcher.run(1))
+	require.Equal(t, []logpuller.ScanPriorityLevel{logpuller.ScanPriorityHigh}, subClient.priorities)
+}
 
 func TestAdvanceSchemaStoreResolvedTs(t *testing.T) {
 	tsCh := make(chan uint64, 100)
