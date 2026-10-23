@@ -31,7 +31,6 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -180,12 +179,14 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		return errors.Trace(err)
 	}
 	defer func() {
-		var errs error
+		var closeErr error
 		for _, r := range fileReaders {
-			errs = multierr.Append(errs, r.Close())
+			if err := r.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
 		}
-		if errs != nil {
-			log.Error("close row reader failed", zap.Error(errs))
+		if closeErr != nil {
+			log.Error("close row reader failed", zap.Error(closeErr))
 		}
 	}()
 

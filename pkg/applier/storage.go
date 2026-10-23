@@ -22,7 +22,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -196,7 +195,10 @@ func (t *tempTxnInsertEventStorage) close() error {
 		t.writingFile = nil
 	}
 	if t.readingFile != nil {
-		err = multierr.Append(err, errors.WrapError(errors.ErrRedoFileOp, t.readingFile.Close()))
+		closeErr := errors.WrapError(errors.ErrRedoFileOp, t.readingFile.Close())
+		if err == nil {
+			err = closeErr
+		}
 		t.readingFile = nil
 	}
 	return err
