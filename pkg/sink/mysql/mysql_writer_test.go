@@ -26,13 +26,13 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
 	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
@@ -63,7 +63,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
@@ -86,7 +86,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 

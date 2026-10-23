@@ -11,19 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package statistics
 
 import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
-	ExecBatchHistogram.Reset()
-	t.Cleanup(ExecBatchHistogram.Reset)
+	execBatchHistogram.Reset()
+	t.Cleanup(execBatchHistogram.Reset)
 
 	statistics := NewStatistics(
 		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
@@ -34,9 +35,19 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 		return 2, 10, nil
 	}))
 
-	require.Equal(t, 1, testutil.CollectAndCount(ExecBatchHistogram))
-	requireMetricHasLabel(t, ExecBatchHistogram, "keyspace_id", "123")
+	require.Equal(t, 1, testutil.CollectAndCount(execBatchHistogram))
+	registry := prometheus.NewPedanticRegistry()
+	registry.MustRegister(execBatchHistogram)
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	require.Len(t, metricFamilies, 1)
+	require.Len(t, metricFamilies[0].Metric, 1)
+	labels := make(map[string]string)
+	for _, label := range metricFamilies[0].Metric[0].Label {
+		labels[label.GetName()] = label.GetValue()
+	}
+	require.Equal(t, "123", labels["keyspace_id"])
 
 	statistics.Close()
-	require.Equal(t, 0, testutil.CollectAndCount(ExecBatchHistogram))
+	require.Equal(t, 0, testutil.CollectAndCount(execBatchHistogram))
 }

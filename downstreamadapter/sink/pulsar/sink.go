@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	sinkstatistics "github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -52,7 +53,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *metrics.Statistics
+	statistics *sinkstatistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -134,7 +135,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *metrics.Statistics
+		statistics  *sinkstatistics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -152,7 +153,7 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
+	statistics = sinkstatistics.NewStatistics(changefeedID, keyspaceID, "pulsar")
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
