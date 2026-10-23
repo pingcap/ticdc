@@ -408,7 +408,10 @@ func TestPauseChangefeed(t *testing.T) {
 	info := &config.ChangeFeedInfo{State: config.StateNormal}
 	status := &config.ChangeFeedStatus{Progress: config.ProgressStopping}
 
-	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
+	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(2)
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(nil, int64(0), context.DeadlineExceeded).Times(1)
+	require.ErrorIs(t, backend.PauseChangefeed(context.Background(), changefeedID), context.DeadlineExceeded)
+
 	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
 
