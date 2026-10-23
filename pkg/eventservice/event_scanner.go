@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -834,6 +835,19 @@ func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
 	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
+<<<<<<< HEAD
+=======
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
+	filterContext := filter.DMLFilterContext{}
+	if enableIgnoreUpdateOnlyColumns {
+		filterContext.EnableIgnoreUpdateOnlyColumns = true
+	}
+>>>>>>> 9797cc44b (redo: fix file upload lifecycle and replay correctness (#6595))
 	return &dmlProcessor{
 		ctx:                  context.Background(),
 		mounter:              mounter,
