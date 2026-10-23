@@ -315,8 +315,12 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		// }
 		// if flag.IsBinary(){
 		// }
-		// if flag.IsGeneratedColumn() {
-		// }
+		if flag.IsGeneratedColumn() {
+			// Redo only includes stored columns and does not retain the expression.
+			// A non-empty marker keeps generated columns out of downstream DML.
+			colInfo.GeneratedExprString = "pass_generated_check"
+			colInfo.GeneratedStored = true
+		}
 		if flag.IsPrimaryKey() {
 			colInfo.AddFlag(mysql.PriKeyFlag)
 		}
