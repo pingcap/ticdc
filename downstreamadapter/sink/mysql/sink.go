@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
@@ -56,7 +57,7 @@ type Sink struct {
 	dmlDB          *sql.DB
 	controlDB      *sql.DB
 	controlAsyncDB *sql.DB
-	statistics     *metrics.Statistics
+	statistics     *statistics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -195,7 +196,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := statistics.New(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -369,6 +370,7 @@ func (s *Sink) SetWriteGate(gate *writelease.Gate) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.conflictDetector.Add(event)
 }
 

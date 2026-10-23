@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,6 +32,7 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDispatcherMetrics(registry)
 	initMessagingMetrics(registry)
 	initSinkMetrics(registry)
+	statistics.InitMetrics(registry)
 	initEventStoreMetrics(registry)
 	initSchemaStoreMetrics(registry)
 	initEventServiceMetrics(registry)

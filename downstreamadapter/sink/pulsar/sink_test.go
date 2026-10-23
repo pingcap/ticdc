@@ -25,7 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -49,7 +49,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink, false)
 	require.NoError(t, err)
 
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "sink")
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	pulsarSink := &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  newMockDMLProducer(),
@@ -79,7 +79,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 		runDone <- pulsarSink.Run(ctx)
 	}()
 
-	var count atomic.Int64
+	var count, dmlFlushCount atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -121,19 +121,35 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count.Add(1) },
+		func() {
+			count.Add(1)
+			dmlFlushCount.Add(1)
+		},
 	}
 	dmlEvent.CommitTs = 2
+	producer := pulsarSink.dmlProducer.(*mockProducer)
+	producer.ackCh = make(chan func(), 2)
 
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	pulsarSink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return len(producer.ackCh) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, dmlFlushCount.Load())
+
+	(<-producer.ackCh)()
+	require.Zero(t, dmlFlushCount.Load())
+
+	(<-producer.ackCh)()
+	require.Eventually(t, func() bool {
+		return dmlFlushCount.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
 
 	ddlEvent2.PostFlush()
 
-	require.Len(t, pulsarSink.dmlProducer.(*mockProducer).GetAllEvents(), 2)
+	require.Len(t, producer.GetAllEvents(), 2)
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))

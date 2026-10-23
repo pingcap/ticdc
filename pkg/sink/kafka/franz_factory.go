@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
@@ -32,9 +33,10 @@ type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	client       *kgo.Client
 	closed       atomic.Bool
+	statistics   *statistics.Statistics
 }
 
-func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
+func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stat *statistics.Statistics) (Factory, error) {
 	adminOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
@@ -89,6 +91,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	return &franzFactory{
 		changefeedID: changefeedID,
 		client:       client,
+		statistics:   stat,
 	}, nil
 }
 
@@ -111,6 +114,7 @@ func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
 		client:       f.client,
 		changefeedID: f.changefeedID,
 		resultCh:     make(chan asyncProduceResult, 1),
+		statistics:   f.statistics,
 	}, nil
 }
 

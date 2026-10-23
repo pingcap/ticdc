@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
@@ -297,6 +298,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
+			statistics.New(common.NewChangefeedID4Test("test", "async-creation-fails"), common.DefaultKeyspaceID),
 		)
 
 		require.Nil(t, kafkaSink)
@@ -326,6 +328,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
+			statistics.New(common.NewChangefeedID4Test("test", "sync-creation-fails"), common.DefaultKeyspaceID),
 		)
 
 		require.Nil(t, kafkaSink)
@@ -358,6 +361,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
+			statistics.New(common.NewChangefeedID4Test("test", "successful-construction"), common.DefaultKeyspaceID),
 		)
 
 		require.NoError(t, err)
@@ -675,7 +679,7 @@ func newKafkaSinkForTest(
 		eventRouter:    router,
 		topicManager:   topicManager,
 		factory:        factory,
-	})
+	}, statistics.New(changefeedID, common.DefaultKeyspaceID))
 	require.NoError(t, err)
 	t.Cleanup(kafkaSink.Close)
 
