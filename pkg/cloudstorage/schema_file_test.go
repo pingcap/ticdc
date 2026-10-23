@@ -504,6 +504,12 @@ func TestSchemaFileGenFilePath(t *testing.T) {
 
 	tablePath = schemaFile.Path(true, 12345)
 	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
+
+	encoded := schemaFile.Marshal()
+	schemaFile.DispatcherID = "12345"
+	require.Equal(t, "schema1/table1/meta/schema_12345_100_3752767265.json", schemaFile.Path(false, 0))
+	require.Equal(t, "12345/meta/schema_12345_100_3752767265.json", schemaFile.Path(true, 12345))
+	require.Equal(t, encoded, schemaFile.Marshal())
 }
 
 func TestParseSchemaFile(t *testing.T) {

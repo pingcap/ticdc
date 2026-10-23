@@ -163,6 +163,93 @@ func TestWriterRun(t *testing.T) {
 	wg.Wait()
 }
 
+func TestWriterSplitSpanSchemaVersions(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		versions [2]uint64
+	}{
+		{name: "sameStartTs", versions: [2]uint64{200, 200}},
+		{name: "newerStartTsFirst", versions: [2]uint64{200, 100}},
+		{name: "olderStartTsFirst", versions: [2]uint64{100, 200}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			parentDir := t.TempDir()
+			d := testWriter(ctx, t, parentDir)
+			d.config.FlushInterval = time.Hour
+			done := make(chan error, 1)
+			go func() { done <- d.run(ctx) }()
+			defer func() {
+				cancel()
+				require.ErrorIs(t, <-done, context.Canceled)
+				d.statistics.Close()
+			}()
+
+			fieldType := types.NewFieldType(mysql.TypeLong)
+			fieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+			tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+				ID:         100,
+				Name:       ast.NewCIStr("table1"),
+				UpdateTS:   50,
+				PKIsHandle: true,
+				Columns: []*model.ColumnInfo{
+					{ID: 1, Name: ast.NewCIStr("id"), FieldType: *fieldType, State: model.StatePublic},
+				},
+			})
+			var callbackCount atomic.Int64
+			for i, version := range tc.versions {
+				dispatcherID := commonType.NewDispatcherID()
+				commitTs := uint64(250 + i*50)
+				event := commonEvent.NewDMLEvent(dispatcherID, 100, commitTs-1, commitTs, tableInfo)
+				event.TableInfoVersion = version
+				event.Rows = chunk.MutRowFromValues(int64(i + 1)).ToRow().Chunk()
+				event.RowTypes = []commonType.RowType{commonType.RowTypeInsert}
+				event.Length = 1
+				event.AddPostFlushFunc(func() { callbackCount.Add(1) })
+				table := cloudstorage.VersionedTableName{
+					TableNameWithPhysicTableID: tableInfo.TableName,
+					TableInfoVersion:           version,
+					DispatcherID:               dispatcherID,
+				}
+				tableTask := newDMLTask(table, event, nil)
+				require.Len(t, tableTask.rowEvents, 1)
+				data := fmt.Sprintf(`{"id":%d}`, i+1)
+				msg := common.NewMsg(nil, []byte(data))
+				msg.SetRowsCount(1)
+				msg.Callback = tableTask.rowEvents[0].Callback
+				tableTask.encodedMsgs = []*common.Message{msg}
+				require.NoError(t, d.enqueueTask(ctx, tableTask))
+				marker := newFlushTask(dispatcherID, commitTs)
+				require.NoError(t, d.enqueueTask(ctx, marker))
+				waitCtx, waitCancel := context.WithTimeout(ctx, testEventuallyTimeout)
+				err := marker.wait(waitCtx)
+				waitCancel()
+				require.NoError(t, err)
+
+				require.Equal(t, int64(i+1), callbackCount.Load())
+				dataDir := path.Join(parentDir, "test/table1", fmt.Sprint(version))
+				dataFileName := fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String())
+				content, err := os.ReadFile(path.Join(dataDir, dataFileName))
+				require.NoError(t, err, "acknowledged DML must be persisted regardless of dispatcher startTs")
+				require.Equal(t, data, string(content))
+				indexFileName := fmt.Sprintf("CDC_%s.index", dispatcherID.String())
+				content, err = os.ReadFile(path.Join(dataDir, "meta", indexFileName))
+				require.NoError(t, err)
+				require.Equal(t, dataFileName+"\n", string(content))
+			}
+
+			schemaFiles, err := os.ReadDir(path.Join(parentDir, "test/table1/meta"))
+			require.NoError(t, err)
+			require.Len(t, schemaFiles, 2)
+		})
+	}
+}
+
 func TestWriterFlushMarker(t *testing.T) {
 	t.Parallel()
 
