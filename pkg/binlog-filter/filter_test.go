@@ -265,10 +265,15 @@ func TestToEventType(t *testing.T) {
 		{"drop database", DropDatabase, nil},
 		{"alter database", AlterDatabase, nil},
 		{"alter schema", AlterDatabase, nil},
+		{"recover database", RecoverDatabase, nil},
 		{"create index", CreateIndex, nil},
 		{"add table partition", AddTablePartition, nil},
 		{"drop taBle partition", DropTablePartition, nil},
 		{"truncate tablE parTition", TruncateTablePartition, nil},
+		{"add foreign key", AddForeignKey, nil},
+		{"drop Foreign Key", DropForeignKey, nil},
+		{"add fulltext index", AddFullTextIndex, nil},
+		{"create hybrid index", CreateHybridIndex, nil},
 		{"rebase auto id", RebaseAutoID, nil},
 		{"xxx", NullEvent, errors.NotValidf("event type %s", "xxx")},
 		{"I don't know", NullEvent, errors.NotValidf("event type %s", "I don't know")},
@@ -285,48 +290,69 @@ func TestToEventType(t *testing.T) {
 	}
 }
 
+func TestFilterUnclassifiableEventType(t *testing.T) {
+	filter, err := NewBinlogEvent(false, []*BinlogEventRule{{
+		SchemaPattern: "test_1_*",
+		TablePattern:  "abc*",
+		Events:        []EventType{AllDDL},
+		SQLPattern:    []string{"^DROP\\s+TABLE"},
+		Action:        Ignore,
+	}})
+	require.NoError(t, err)
+
+	// An event type that cannot be classified is handled as an unknown event, so
+	// the event type rules do not match it and filtering does not fail.
+	action, err := filter.Filter("test_1_a", "abc1", EventType("unknown event type"), "")
+	require.NoError(t, err)
+	require.Equal(t, Do, action)
+
+	// The sql pattern rules still match an unknown event.
+	action, err = filter.Filter("test_1_a", "abc1", EventType("unknown event type"), "drop table abc1")
+	require.NoError(t, err)
+	require.Equal(t, Ignore, action)
+}
+
 func TestClassifyEvent(t *testing.T) {
 	cases := []struct {
 		event    EventType
 		evenType EventType
-		err      error
 	}{
-		{NullEvent, NullEvent, nil},
+		{NullEvent, NullEvent},
 		// dml
-		{InsertEvent, dml, nil},
-		{UpdateEvent, dml, nil},
-		{DeleteEvent, dml, nil},
+		{InsertEvent, dml},
+		{UpdateEvent, dml},
+		{DeleteEvent, dml},
 		// ddl
-		{CreateDatabase, ddl, nil},
-		{CreateSchema, ddl, nil},
-		{DropDatabase, incompatibleDDL, nil},
-		{DropSchema, incompatibleDDL, nil},
-		{AlterSchema, ddl, nil},
-		{CreateTable, ddl, nil},
-		{DropTable, incompatibleDDL, nil},
-		{TruncateTable, incompatibleDDL, nil},
-		{RenameTable, incompatibleDDL, nil},
-		{CreateIndex, ddl, nil},
-		{DropIndex, incompatibleDDL, nil},
-		{CreateView, ddl, nil},
-		{DropView, ddl, nil},
-		{AlterTable, ddl, nil},
-		{AddTablePartition, ddl, nil},
-		{DropTablePartition, incompatibleDDL, nil},
-		{RebaseAutoID, incompatibleDDL, nil},
-		{TruncateTablePartition, incompatibleDDL, nil},
-		{"create", NullEvent, errors.NotValidf("event type %s", "create")},
-		{EventType("xxx"), NullEvent, errors.NotValidf("event type %s", "xxx")},
-		{EventType("I don't know"), NullEvent, errors.NotValidf("event type %s", "I don't know")},
+		{CreateDatabase, ddl},
+		{CreateSchema, ddl},
+		{DropDatabase, incompatibleDDL},
+		{DropSchema, incompatibleDDL},
+		{RecoverDatabase, incompatibleDDL},
+		{AlterSchema, ddl},
+		{CreateTable, ddl},
+		{DropTable, incompatibleDDL},
+		{TruncateTable, incompatibleDDL},
+		{RenameTable, incompatibleDDL},
+		{CreateIndex, ddl},
+		{DropIndex, incompatibleDDL},
+		{CreateView, ddl},
+		{DropView, ddl},
+		{AlterTable, ddl},
+		{AddTablePartition, ddl},
+		{AddForeignKey, incompatibleDDL},
+		{DropForeignKey, incompatibleDDL},
+		{AddFullTextIndex, ddl},
+		{CreateHybridIndex, ddl},
+		{DropTablePartition, incompatibleDDL},
+		{RebaseAutoID, incompatibleDDL},
+		{TruncateTablePartition, incompatibleDDL},
+		// an event type that the filter does not know is classified as NullEvent
+		{EventType("create"), NullEvent},
+		{EventType("xxx"), NullEvent},
+		{EventType("I don't know"), NullEvent},
 	}
 
 	for _, cs := range cases {
-		et, err := ClassifyEvent(cs.event)
-		require.Equal(t, cs.evenType, et)
-		if err != nil {
-			require.ErrorContains(t, err, cs.err.Error())
-		} else {
-			require.NoError(t, err)
-		}
+		require.Equal(t, cs.evenType, ClassifyEvent(cs.event))
 	}
 }

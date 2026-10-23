@@ -127,6 +127,14 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 		log.Info("replica set removed from origin node",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 
+		// Preserve the origin dispatcher's final checkpoint before rebinding the span
+		// to the destination node. The maintainer handles operator status before it
+		// updates the span status. Once enterAddDest changes the binding, the generic
+		// status handler rejects this origin status because its node no longer matches,
+		// causing the destination dispatcher to start from the previous (potentially
+		// stale) complete-status checkpoint.
+		m.replicaSet.UpdateStatus(status)
+
 		// reset last send message time
 		m.sendThrottler.reset()
 

@@ -27,6 +27,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -267,6 +271,104 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
+func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushedCommitTs := make([]uint64, 0)
+	flushedRowTypeCounts := make([]int, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		flushedCommitTs = append(flushedCommitTs, event.GetCommitTs())
+		flushedRowTypeCounts = append(flushedRowTypeCounts, len(event.RowTypes))
+		event.PostFlush()
+	}).Times(2)
+
+	p := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   0,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	for _, message := range []*codeccommon.DMLMessage{
+		newDMLMessageForWriterTest(20),
+		newDMLMessageForWriterTest(10),
+		newDMLMessageForWriterTest(20),
+	} {
+		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), p))
+	}
+
+	p.watermark = 20
+	needCommit, err := w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
+	require.Equal(t, []uint64{10, 20}, flushedCommitTs)
+	require.Equal(t, []int{1, 2}, flushedRowTypeCounts)
+}
+
+func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Times(0)
+
+	decoder := &deferredDMLDecoder{
+		row: &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			CommitTs:        10,
+			RowTypes:        []common.RowType{common.RowTypeInsert},
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		},
+	}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+		decoder:     util.NewDMLMessageDecoder(decoder),
+	}
+	w := &writer{
+		progresses: []*partitionProgress{progress},
+		mysqlSink:  s,
+		protocol:   config.ProtocolCanalJSON,
+	}
+
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
+
+	require.False(t, needCommit)
+	require.Nil(t, progress.eventsGroup[1])
+}
+
+func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+		watermark:   20,
+	}
+	w := &writer{
+		progresses: []*partitionProgress{
+			progress,
+			{partition: 1, watermark: 5},
+		},
+		protocol: config.ProtocolCanalJSON,
+	}
+
+	message := newDMLMessageForWriterTest(10)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress))
+
+	require.NotNil(t, progress.eventsGroup[1])
+	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(10), resolved[0].GetCommitTs())
+}
+
 func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w := &writer{
 		progresses: []*partitionProgress{
@@ -294,20 +396,19 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTable(t *testing.T) {
 	w.onDDL(ddl)
 	require.True(t, w.partitionTableAccessor.IsPartitionTable("target", "dst"))
 
-	newDMLMessage := func(commitTs uint64) *codeccommon.DMLMessage {
-		return codeccommon.NewDMLMessage(1, "target", "dst", commitTs, common.RowTypeUpdate, nil)
-	}
-
 	progress := w.progresses[0]
-	w.appendMessage2Group(newDMLMessage(200), progress)
-	w.appendMessage2Group(newDMLMessage(100), progress)
+	first := newDMLMessageForWriterTest(200)
+	second := newDMLMessageForWriterTest(100)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress))
 
-	resolved := progress.eventsGroup[1].ResolveInto(150, nil)
+	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
+	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].GetCommitTs())
 }
 
-func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
+func TestWriteMessageSpillsDMLImmediately(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
@@ -328,7 +429,7 @@ func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 	progress := &partitionProgress{
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 	w := &writer{
 		progresses: []*partitionProgress{progress},
@@ -336,21 +437,28 @@ func TestWriteMessageDefersDMLAssemblyUntilFlush(t *testing.T) {
 		protocol:   config.ProtocolCanalJSON,
 	}
 
-	needCommit := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	needCommit, err := w.WriteMessage(ctx, fakePulsarMessage{key: "k", payload: []byte(`{"fake":"row"}`)})
+	require.NoError(t, err)
 	require.False(t, needCommit)
 	require.Equal(t, 1, decoder.addKeyValueCount)
 	require.Equal(t, 1, decoder.hasNextCount)
 	require.Equal(t, 1, decoder.nextDMLMessageCount)
 	require.Zero(t, decoder.toDMLEventCount)
-	require.Len(t, progress.eventsGroup[1].ResolveInto(99, nil), 0)
+	resolved, err := progress.eventsGroup[1].ResolveInto(99, nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 0)
 
 	progress.watermark = 100
-	require.True(t, w.Write(ctx, codeccommon.MessageTypeResolved))
-	require.Equal(t, 1, decoder.addKeyValueCount)
-	require.Equal(t, 1, decoder.hasNextCount)
-	require.Equal(t, 1, decoder.nextDMLMessageCount)
+	needCommit, err = w.Write(ctx, codeccommon.MessageTypeResolved)
+	require.NoError(t, err)
+	require.True(t, needCommit)
+	require.Equal(t, 2, decoder.addKeyValueCount)
+	require.Equal(t, 3, decoder.hasNextCount)
+	require.Equal(t, 2, decoder.nextDMLMessageCount)
 	require.Equal(t, 1, decoder.toDMLEventCount)
-	require.Empty(t, progress.eventsGroup[1].ResolveInto(100, nil))
+	resolved, err = progress.eventsGroup[1].ResolveInto(100, nil)
+	require.NoError(t, err)
+	require.Empty(t, resolved)
 	require.Equal(t, []byte(`{"fake":"row"}`), decoder.lastValue)
 }
 
@@ -362,16 +470,18 @@ type deferredDMLDecoder struct {
 	nextDMLMessageCount int
 	toDMLEventCount     int
 	lastValue           []byte
+	pending             bool
 }
 
 func (d *deferredDMLDecoder) AddKeyValue(_, value []byte) {
 	d.addKeyValueCount++
 	d.lastValue = append(d.lastValue[:0], value...)
+	d.pending = true
 }
 
 func (d *deferredDMLDecoder) HasNext() (codeccommon.MessageType, bool) {
 	d.hasNextCount++
-	return codeccommon.MessageTypeRow, true
+	return codeccommon.MessageTypeRow, d.pending
 }
 
 func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
@@ -380,7 +490,8 @@ func (d *deferredDMLDecoder) NextResolvedEvent() uint64 {
 
 func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 	d.nextDMLMessageCount++
-	return codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+	d.pending = false
+	return codeccommon.NewDMLMessage(1, "test", "t", d.row.CommitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
 		d.toDMLEventCount++
 		return d.row
 	})
@@ -388,6 +499,31 @@ func (d *deferredDMLDecoder) NextDMLMessage() *codeccommon.DMLMessage {
 
 func (d *deferredDMLDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
+}
+
+func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: 1,
+			StartTs:         commitTs - 1,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
+			},
+		}
+	})
+}
+
+func attachDMLMessageDataForWriterTest(message *codeccommon.DMLMessage) *codeccommon.DMLMessage {
+	messageData := codeccommon.NewDMLMessageData(nil, nil,
+		func([]byte) ([]*codeccommon.DMLMessage, error) {
+			return []*codeccommon.DMLMessage{message}, nil
+		},
+	)
+	messageData.AttachDMLMessage(message)
+	return message
 }
 
 type fakePulsarMessage struct {
@@ -409,6 +545,10 @@ func (m fakePulsarMessage) Properties() map[string]string {
 
 func (m fakePulsarMessage) Payload() []byte {
 	return m.payload
+}
+
+func (m fakePulsarMessage) IsNullValue() bool {
+	return false
 }
 
 func (m fakePulsarMessage) ID() pulsar.MessageID {
@@ -461,4 +601,69 @@ func (m fakePulsarMessage) Index() *uint64 {
 
 func (m fakePulsarMessage) BrokerPublishTime() *time.Time {
 	return nil
+}
+
+func newReplayTableForTest(t *testing.T) *common.TableInfo {
+	t.Helper()
+	field := types.NewFieldType(mysql.TypeLonglong)
+	field.AddFlag(mysql.NotNullFlag | mysql.PriKeyFlag)
+	table := &timodel.TableInfo{
+		ID: 1, Name: ast.NewCIStr("table_3"),
+		Columns: []*timodel.ColumnInfo{{
+			ID: 1, Name: ast.NewCIStr("id"), Offset: 0, State: timodel.StatePublic, FieldType: *field,
+		}},
+		Indices: []*timodel.IndexInfo{{
+			Name: ast.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic,
+			Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}},
+		}},
+	}
+	return common.NewTableInfo4Decoder("test", table)
+}
+
+func newReplayEventForTest(table *common.TableInfo, ts uint64, ids ...int64) *commonEvent.DMLEvent {
+	e := commonEvent.NewDMLEvent(common.DispatcherID{}, table.TableName.TableID, ts-1, ts, table)
+	e.Rows = chunk.NewChunkWithCapacity(table.GetFieldSlice(), len(ids))
+	for _, id := range ids {
+		e.Rows.AppendInt64(0, id)
+		e.RowTypes = append(e.RowTypes, common.RowTypeInsert)
+	}
+	e.Length = int32(len(ids))
+	return e
+}
+
+func TestFlushDMLBatchDropsReplayedRows(t *testing.T) {
+	// A dispatcher merge replays the same mutations with the same commit-ts, and the
+	// consumer merges both copies into one event. Keeping both copies makes the sink
+	// reject the batch with duplicate insert rows of the same key, so the replayed rows
+	// have to be dropped before the events are handed to the sink.
+	table := newReplayTableForTest(t)
+	s := sinkmock.NewMockSink(gomock.NewController(t))
+	flushedRows := make([][]int64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).Do(func(e *commonEvent.DMLEvent) {
+		rows := make([]int64, 0, e.Len())
+		for row, ok := e.GetNextRow(); ok; row, ok = e.GetNextRow() {
+			rows = append(rows, row.Row.GetInt64(0))
+		}
+		flushedRows = append(flushedRows, rows)
+		e.PostFlush()
+	}).Times(2)
+
+	progress := &partitionProgress{partition: 0, eventsGroup: map[int64]*util.EventsGroup{}, watermark: 100}
+	w := &writer{progresses: []*partitionProgress{progress}, mysqlSink: s, protocol: config.ProtocolCanalJSON}
+
+	replayed := newReplayEventForTest(table, 100, 1714, 1715, 1714, 1715)
+	replayedCallbacks := 0
+	replayed.AddPostFlushFunc(func() { replayedCallbacks++ })
+	// A second event of another commit-ts keeps the batch on the cross-event merge path
+	// of the sink, which is the path that rejects duplicate insert rows.
+	other := newReplayEventForTest(table, 101, 42)
+	require.NoError(t, w.flushDMLBatch(t.Context(), []*commonEvent.DMLEvent{replayed, other}))
+	require.Equal(t, [][]int64{{1714, 1715}, {42}}, flushedRows)
+	// The retained copy owns the callbacks of the replayed event, so its decoder chunk and
+	// flush barrier are still released.
+	require.Equal(t, 1, replayedCallbacks)
+
+	// A copy buffered before the watermark advanced is dropped by the replay boundary.
+	require.NoError(t, w.flushDMLBatch(t.Context(), []*commonEvent.DMLEvent{newReplayEventForTest(table, 100, 1714, 1715)}))
+	require.Equal(t, [][]int64{{1714, 1715}, {42}}, flushedRows)
 }

@@ -72,17 +72,18 @@ func NewBalanceScheduler(
 
 func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
+	nextCheckTime := now.Add(s.checkBalanceInterval)
 	if hasDrainingOrStoppingNode(s.liveness) {
 		// Pause regular balance scheduling while any node is observed draining or
 		// stopping. Each observation extends the block window by one balance
 		// interval so regular rebalance does not race with evacuation progress.
 		s.drainBalanceBlockedUntil = now.Add(s.drainCooldown())
-		return now.Add(s.checkBalanceInterval)
+		return nextCheckTime
 	}
 	if now.Before(s.drainBalanceBlockedUntil) {
 		// If drain disappears before the previously extended block window expires,
 		// keep skipping regular rebalance until that window elapses.
-		return now.Add(s.checkBalanceInterval)
+		return nextCheckTime
 	}
 	if !s.forceBalance && time.Since(s.lastRebalanceTime) < s.checkBalanceInterval {
 		return s.lastRebalanceTime.Add(s.checkBalanceInterval)
@@ -90,7 +91,7 @@ func (s *balanceScheduler) Execute() time.Time {
 
 	if s.operatorController.OperatorSize() > 0 || s.changefeedDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
-		return now.Add(s.checkBalanceInterval)
+		return nextCheckTime
 	}
 
 	// check the balance status
@@ -99,7 +100,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), activeNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip
-		return now.Add(s.checkBalanceInterval)
+		return nextCheckTime
 	}
 	// balance changefeeds among the active nodes
 	movedSize := pkgScheduler.Balance(s.batchSize, s.random, activeNodes, s.changefeedDB.GetReplicating(),
@@ -109,7 +110,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	s.forceBalance = movedSize >= s.batchSize
 	s.lastRebalanceTime = time.Now()
 
-	return now.Add(s.checkBalanceInterval)
+	return nextCheckTime
 }
 
 func (s *balanceScheduler) drainCooldown() time.Duration {

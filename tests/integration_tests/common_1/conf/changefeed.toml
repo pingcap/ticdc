@@ -1,0 +1,7 @@
+[filter]
+rules = [
+    "common_1.*",
+    "common.*",
+    "recover_schema_test.included1",
+    "recover_schema_test.included2",
+]

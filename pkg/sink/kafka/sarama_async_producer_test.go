@@ -61,17 +61,18 @@ func gatherMetric(
 	return nil
 }
 
-func newTestStatistics(t *testing.T, changefeed string) (*saramaAsyncProducer, *prometheus.Registry) {
+func newTestStatistics(t *testing.T, changefeed string) (*statistics.Statistics, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	statistics.InitMetrics(reg)
 	stat := statistics.New(common.NewChangefeedID4Test("test-keyspace", changefeed), 123)
 	t.Cleanup(stat.Close)
-	return &saramaAsyncProducer{statistics: stat}, reg
+	return stat, reg
 }
 
 func TestHandleSuccessRecordsRowsAndRunsCallback(t *testing.T) {
-	p, reg := newTestStatistics(t, "handle-success")
+	stat, reg := newTestStatistics(t, "handle-success")
+	p := &saramaAsyncProducer{statistics: stat}
 
 	callbackCalled := make(chan struct{})
 	p.handleSuccess(&messageMetadata{rowCount: 3, callback: func() { close(callbackCalled) }})
@@ -86,12 +87,14 @@ func TestHandleSuccessRecordsRowsAndRunsCallback(t *testing.T) {
 }
 
 func TestHandleSuccessNilMetaIsNoop(t *testing.T) {
-	p, _ := newTestStatistics(t, "handle-success-nil")
+	stat, _ := newTestStatistics(t, "handle-success-nil")
+	p := &saramaAsyncProducer{statistics: stat}
 	require.NotPanics(t, func() { p.handleSuccess(nil) })
 }
 
 func TestHandleFailureRecordsErrorAndReturnsIt(t *testing.T) {
-	p, reg := newTestStatistics(t, "handle-failure")
+	stat, reg := newTestStatistics(t, "handle-failure")
+	p := &saramaAsyncProducer{statistics: stat}
 
 	sentinel := errors.New("broker boom")
 	require.ErrorIs(t, p.handleFailure(5, sentinel), sentinel)

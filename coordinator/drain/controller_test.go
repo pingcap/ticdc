@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,99 @@ func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	require.True(t, st.lastDrainCmdSentAt.IsZero())
 	require.True(t, st.lastStopCmdSentAt.IsZero())
 	c.mu.Unlock()
+}
+
+func TestDrainControllerEventBrokerDispatcherCount(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("n1")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_DRAINING, NodeEpoch: 42})
+	// Broker counts must not prevent progressing to STOPPING and closing admission.
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	c.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{Applied: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42})
+	_, observed := c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	req := c.NewEventBrokerDispatcherCountRequest(target)
+	require.NotNil(t, req)
+	// The periodic task can retry without waiting for a lost reply to time out.
+	require.Equal(t, req, c.NewEventBrokerDispatcherCountRequest(target))
+	response := &logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: req.TargetNodeId,
+		Report:       &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 2, RegistrationsStopped: true},
+	}
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed := c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
+
+	// An unknown reply must not erase an already reported positive count.
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+
+	response.Report.DispatcherCount = 0
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	// Late positive and unknown reports cannot undo an admission-closed zero.
+	response.Report.DispatcherCount = 3
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+
+	// Restarting creates a new capture ID. Delayed reports for the old capture
+	// must not change the replacement capture's count.
+	c.RemoveNode(target)
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+	target = node.ID("n2")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 43})
+	response.Report.DispatcherCount = 0
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	response.TargetNodeId = target.String()
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+}
+
+func TestDrainControllerRejectsUnusableBrokerReports(t *testing.T) {
+	for _, name := range []string{"missing", "admission open", "different capture", "not stopping"} {
+		t.Run(name, func(t *testing.T) {
+			c := NewController(messaging.NewMockMessageCenter())
+			target := node.ID("n1")
+			state := heartbeatpb.NodeLiveness_STOPPING
+			if name == "not stopping" {
+				state = heartbeatpb.NodeLiveness_DRAINING
+			}
+			c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: state, NodeEpoch: 42})
+			response := &logservicepb.EventBrokerDispatcherCountResponse{
+				TargetNodeId: target.String(),
+				Report:       &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true},
+			}
+			switch name {
+			case "missing":
+				response.Report = nil
+			case "admission open":
+				response.Report.RegistrationsStopped = false
+			case "different capture":
+				response.TargetNodeId = "another-capture"
+			}
+			c.ObserveEventBrokerDispatcherCountResponse(response)
+			_, observed := c.GetEventBrokerDispatcherCount(target)
+			require.False(t, observed)
+		})
+	}
 }
 
 func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {

@@ -171,6 +171,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 }
 
 func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
+	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
 	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
 		return d.assembleDMLEvent(msg, tableInfo)
 	})
@@ -200,8 +201,6 @@ func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo
 	}
 
 	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
-
-	tableIDAllocator.AddBlockTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
@@ -255,6 +254,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(
 		TableID:       m.TableID,
 		Type:          m.Type,
 		CommitTs:      m.CommitTs,
+		StartTs:       m.StartTs,
 		SchemaVersion: m.SchemaVersion,
 	}
 
@@ -323,6 +323,11 @@ func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	result := d.CachedDMLMessages
 	d.CachedDMLMessages = nil
 	return result
+}
+
+// GetTableIDs identifies every table and partition whose events belong to the logical table.
+func (d *Decoder) GetTableIDs(schema, table string) []int64 {
+	return tableIDAllocator.GetBlockedTables(schema, table)
 }
 
 // TableInfoProvider is used to store and read table info
@@ -476,11 +481,11 @@ func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo) *ti
 		}
 	}
 	return &timodel.IndexInfo{
-		ID:      1,
 		Name:    ast.NewCIStr(indexSchema.Name),
 		Columns: indexColumns,
 		Unique:  indexSchema.Unique,
 		Primary: indexSchema.Primary,
+		State:   timodel.StatePublic,
 	}
 }
 
@@ -495,13 +500,16 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 		nextMockID := int64(1)
 		for _, col := range m.Columns {
 			tiCol := newTiColumnInfo(col, nextMockID, m.Indexes)
+			tiCol.Offset = len(tidbTableInfo.Columns)
 			nextMockID += 1
 			tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		}
-		for _, idx := range m.Indexes {
+		for i, idx := range m.Indexes {
 			index := newTiIndexInfo(idx, tidbTableInfo.Columns)
+			index.ID = int64(i) + 1
 			tidbTableInfo.Indices = append(tidbTableInfo.Indices, index)
 		}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
 	}
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
@@ -595,8 +603,16 @@ func parseValue(
 	return val
 }
 
+func startTsFromMessage(msg *message) uint64 {
+	if msg.StartTs != 0 {
+		return msg.StartTs
+	}
+	return msg.CommitTs
+}
+
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
+		StartTs:         startTsFromMessage(msg),
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
@@ -642,16 +658,30 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 			Version:   msg.Checksum.Version,
 		}}
 
-		err := common.VerifyChecksum(result, db)
+		err := common.VerifyChecksum(result, db, timestampLocations(msg.Data, columns), timestampLocations(msg.Old, columns))
 		if err != nil || msg.Checksum.Corrupted {
-			log.Warn("consumer detect checksum corrupted",
-				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-			return nil
-
+			log.Panic("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table),
+				zap.Uint64("commitTs", msg.CommitTs), zap.Bool("corrupted", msg.Checksum.Corrupted),
+				zap.Error(err))
 		}
 	}
 
 	return result
+}
+
+func timestampLocations(data map[string]any, columns []*timodel.ColumnInfo) map[string]string {
+	var locations map[string]string
+	for _, col := range columns {
+		if col.GetType() != mysql.TypeTimestamp || data[col.Name.O] == nil {
+			continue
+		}
+		if locations == nil {
+			locations = make(map[string]string)
+		}
+		locations[col.Name.O] = data[col.Name.O].(map[string]any)["location"].(string)
+	}
+	return locations
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {

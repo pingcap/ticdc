@@ -207,6 +207,46 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 	return nil
 }
 
+// FinishInit acknowledges initialization without overwriting status
+// or metadata concurrently changed by pause, resume, removal, or another owner.
+func (b *EtcdBackend) FinishInit(
+	ctx context.Context, id common.ChangeFeedID, epoch uint64,
+) (*config.ChangeFeedInfo, error) {
+	key := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
+	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, key)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	info := &config.ChangeFeedInfo{}
+	if err := info.Unmarshal(resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	if info.ChangefeedID != id || info.Epoch != epoch {
+		return nil, nil
+	}
+	if info.BootstrapPending == nil || !*info.BootstrapPending {
+		return info, nil
+	}
+	info.BootstrapPending = nil
+	value, err := info.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	txn, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+		[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", resp.Kvs[0].ModRevision)},
+		[]clientv3.Op{clientv3.OpPut(key, value)}, nil)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if !txn.Succeeded {
+		return nil, cerror.ErrMetaOpFailed.GenWithStackByArgs("acknowledge changefeed bootstrap")
+	}
+	return info, nil
+}
+
 // BumpChangefeedEpoch atomically persists a strictly newer ownership epoch.
 // It can optionally update status in the same transaction so state changes and
 // the new owner fence are observed together after coordinator failover.
@@ -417,6 +457,10 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 			// Another goroutine (or a previous retry) already persisted the desired progress.
 			return nil
 		}
+		if progress == config.ProgressNone && status.Progress == config.ProgressRemoving {
+			// ProgressRemoving is a durable removal intent and must not be cleared.
+			return nil
+		}
 
 		status.Progress = progress
 		jobValue, err := status.Marshal()
@@ -500,7 +544,7 @@ func logEtcdOps(ops []clientv3.Op, committed bool) {
 		if op.IsDelete() {
 			logFn("[etcd] delete key", zap.ByteString("key", op.KeyBytes()))
 		} else {
-			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()), zap.ByteString("value", op.ValueBytes()))
+			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()))
 		}
 	}
 	logFn("[etcd] ============State Commit=============", zap.Bool("committed", committed))

@@ -40,6 +40,7 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	timodel.ActionCreateSchema:                  bf.CreateDatabase,
 	timodel.ActionDropSchema:                    bf.DropDatabase,
 	timodel.ActionModifySchemaCharsetAndCollate: bf.ModifySchemaCharsetAndCollate,
+	timodel.ActionRecoverSchema:                 bf.RecoverDatabase,
 
 	// table related DDLs
 	timodel.ActionCreateTable:                  bf.CreateTable,
@@ -98,96 +99,4 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 
 	ActionAddFullTextIndex:  bf.AddFullTextIndex,
 	ActionCreateHybridIndex: bf.CreateHybridIndex,
-}
-
-// singleTableDDLs should only affect one table.
-var singleTableDDLs = map[timodel.ActionType]struct{}{
-	// table related DDLs
-	timodel.ActionTruncateTable:                {},
-	timodel.ActionRenameTable:                  {},
-	timodel.ActionModifyTableComment:           {},
-	timodel.ActionModifyTableCharsetAndCollate: {},
-
-	// view related DDLs
-	timodel.ActionCreateView: {},
-	timodel.ActionDropView:   {},
-
-	// column related DDLs
-	timodel.ActionAddColumn:       {},
-	timodel.ActionDropColumn:      {},
-	timodel.ActionModifyColumn:    {},
-	timodel.ActionSetDefaultValue: {},
-
-	// index related DDLs
-	timodel.ActionRebaseAutoID:         {},
-	timodel.ActionAddPrimaryKey:        {},
-	timodel.ActionDropPrimaryKey:       {},
-	timodel.ActionAddIndex:             {},
-	timodel.ActionDropIndex:            {},
-	timodel.ActionRenameIndex:          {},
-	timodel.ActionAlterIndexVisibility: {},
-
-	// TTL related DDLs
-	timodel.ActionAlterTTLInfo:   {},
-	timodel.ActionAlterTTLRemove: {},
-
-	timodel.ActionAddColumns:        {},
-	timodel.ActionDropColumns:       {},
-	timodel.ActionMultiSchemaChange: {},
-
-	// Not supported yet
-	// timodel.ActionShardRowID,
-	// timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
-	// timodel.ActionLockTable, timodel.ActionUnlockTable,
-	// timodel.ActionSetTiFlashReplica,
-	// timodel.ActionModifyTableAutoIdCache, timodel.ActionRebaseAutoRandomBase,
-	// timodel.ActionAddCheckConstraint, timodel.ActionDropCheckConstraint, timodel.ActionAlterCheckConstraint,
-	// timodel.ActionDropIndexes,
-	// timodel.ActionAlterTableAttributes,
-	// timodel.ActionAlterCacheTable, timodel.ActionAlterNoCacheTable,
-	// timodel.ActionRepairTable,
-	// timodel.ActionCreatePlacementPolicy, timodel.ActionAlterPlacementPolicy,
-	// timodel.ActionDropPlacementPolicy,
-	// timodel.ActionRecoverSchema,
-}
-
-// multiTableDDLs affect multiple tables.
-var multiTableDDLs = map[timodel.ActionType]struct{}{
-	timodel.ActionRenameTables: {},
-	// partition related DDLs
-	timodel.ActionAddTablePartition:      {},
-	timodel.ActionDropTablePartition:     {},
-	timodel.ActionTruncateTablePartition: {},
-	timodel.ActionExchangeTablePartition: {},
-	timodel.ActionReorganizePartition:    {},
-	timodel.ActionAlterTablePartitioning: {},
-	timodel.ActionRemovePartitioning:     {},
-}
-
-// globalTableDDLs must be sent to table trigger dispatcher.
-var globalTableDDLs = map[timodel.ActionType]struct{}{
-	timodel.ActionCreateSchema:                  {},
-	timodel.ActionDropSchema:                    {},
-	timodel.ActionModifySchemaCharsetAndCollate: {},
-	timodel.ActionCreateTable:                   {},
-	timodel.ActionDropTable:                     {},
-	timodel.ActionCreateTables:                  {},
-	timodel.ActionRecoverTable:                  {},
-}
-
-func ShouldBlock(action timodel.ActionType) bool {
-	if _, ok := singleTableDDLs[action]; ok {
-		return false
-	}
-	if _, ok := multiTableDDLs[action]; ok {
-		return true
-	}
-	switch action {
-	case timodel.ActionCreateSchema, timodel.ActionCreateTables,
-		timodel.ActionCreateTable, timodel.ActionRecoverTable:
-		// not block since there are no affected dispatchers.
-		return false
-	default:
-		return true
-	}
 }

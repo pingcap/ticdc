@@ -34,7 +34,7 @@ import (
 type SharedInfo struct {
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
-	timezone             string
+	lowLatencyMode       bool
 	bdrMode              bool
 	enableActiveActive   bool
 	outputRawChangeEvent bool
@@ -87,7 +87,7 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
-	timezone string,
+	lowLatencyMode bool,
 	bdrMode bool,
 	enableActiveActive bool,
 	outputRawChangeEvent bool,
@@ -105,7 +105,7 @@ func NewSharedInfo(
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
 		changefeedID:             changefeedID,
-		timezone:                 timezone,
+		lowLatencyMode:           lowLatencyMode,
 		bdrMode:                  bdrMode,
 		enableActiveActive:       enableActiveActive,
 		outputRawChangeEvent:     outputRawChangeEvent,
@@ -145,6 +145,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) IsLowLatencyMode() bool {
+	return d.sharedInfo.lowLatencyMode
 }
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -187,10 +191,6 @@ func (d *BasicDispatcher) EnableActiveActive() bool {
 	return d.sharedInfo.EnableActiveActive()
 }
 
-func (d *BasicDispatcher) GetTimezone() string {
-	return d.sharedInfo.timezone
-}
-
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
 }
@@ -212,7 +212,7 @@ func (d *BasicDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 }
 
 func (d *BasicDispatcher) GetStartTs() uint64 {
-	return d.startTs
+	return atomic.LoadUint64(&d.startTs)
 }
 
 func (d *BasicDispatcher) SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs bool) {

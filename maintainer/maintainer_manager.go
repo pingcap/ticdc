@@ -25,7 +25,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultManagerHeartbeatInterval = 200 * time.Millisecond
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -43,10 +48,13 @@ type Manager struct {
 
 	// msgCh is used to cache messages from coordinator.
 	msgCh chan *messaging.TargetMessage
+	// heartbeatCh coalesces prompt reports from low-latency maintainers.
+	heartbeatCh chan struct{}
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
 	node *managerNodeState
 	// maintainers holds changefeed-scoped state and lifecycle operations.
 	maintainers *managerMaintainerSet
+	writeGate   *writelease.Gate
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
@@ -60,32 +68,72 @@ func NewMaintainerManager(
 	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	heartbeatCh := make(chan struct{}, 1)
+	writeGate, ok := appcontext.TryGetService[*writelease.Gate](appcontext.CaptureWriteGate)
+	if !ok {
+		writeGate = writelease.NewGate()
+	}
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
+		heartbeatCh: heartbeatCh,
 		node:        newManagerNodeState(nodeLiveness),
-		maintainers: newManagerMaintainerSet(conf, nodeInfo),
+		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
+		writeGate:   writeGate,
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
-	mc.RegisterHandler(messaging.MaintainerTopic,
-		func(ctx context.Context, msg *messaging.TargetMessage) error {
-			req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
-			return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
-		})
+	mc.RegisterHandler(messaging.MaintainerTopic, m.recvMaintainerMessage)
 	return m
+}
+
+func logInvalidMaintainerMessage(msg *messaging.TargetMessage, reason string) {
+	log.Warn("ignore invalid maintainer message",
+		zap.String("from", msg.From.String()),
+		zap.String("type", msg.Type.String()),
+		zap.String("reason", reason))
+}
+
+func (m *Manager) recvMaintainerMessage(ctx context.Context, msg *messaging.TargetMessage) error {
+	if len(msg.Message) == 0 {
+		logInvalidMaintainerMessage(msg, "missing payload")
+		return nil
+	}
+	req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+	if req == nil || req.ChangefeedID == nil {
+		logInvalidMaintainerMessage(msg, "missing changefeed ID")
+		return nil
+	}
+	return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 }
 
 // recvMessages is the message handler for maintainer manager.
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+	if len(msg.Message) == 0 {
+		logInvalidMaintainerMessage(msg, "missing payload")
+		return nil
+	}
 	switch msg.Type {
 	// Coordinator related messages.
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
 		messaging.TypeCoordinatorBootstrapRequest,
 		messaging.TypeSetNodeLivenessRequest,
-		messaging.TypeSetDispatcherDrainTargetRequest:
+		messaging.TypeSetDispatcherDrainTargetRequest,
+		messaging.TypeNodeHeartbeatResponse:
+		switch msg.Type {
+		case messaging.TypeAddMaintainerRequest:
+			if msg.Message[0].(*heartbeatpb.AddMaintainerRequest).Id == nil {
+				logInvalidMaintainerMessage(msg, "missing changefeed ID")
+				return nil
+			}
+		case messaging.TypeRemoveMaintainerRequest:
+			if msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).Id == nil {
+				logInvalidMaintainerMessage(msg, "missing changefeed ID")
+				return nil
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -95,22 +143,46 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	// Receive bootstrap response message from the dispatcher manager.
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+		if req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+		if req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	// Receive heartbeat message from dispatchers.
 	case messaging.TypeHeartBeatRequest:
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+		if req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
-		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+		req, ok := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+		if !ok || req == nil || req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
+		if req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeRedoResolvedTsProgressMessage:
 		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
+		if req.ChangefeedID == nil {
+			logInvalidMaintainerMessage(msg, "missing changefeed ID")
+			return nil
+		}
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
 		log.Warn("unknown message type, ignore it",
@@ -125,18 +197,23 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Millisecond * 200)
+	ticker := time.NewTicker(defaultManagerHeartbeatInterval)
 	defer ticker.Stop()
+	nodeHeartbeatTicker := time.NewTicker(writelease.NodeHeartbeatInterval)
+	defer nodeHeartbeatTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
+		case <-m.heartbeatCh:
+			m.sendHeartbeat()
 		case <-ticker.C:
-			m.sendNodeHeartbeat(false)
 			m.sendHeartbeat()
 			m.cleanupRemovedMaintainers()
+		case <-nodeHeartbeatTicker.C:
+			m.sendNodeHeartbeat(false)
 		}
 	}
 }
@@ -174,6 +251,13 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 			zap.Int64("version", req.Version))
 		return
 	}
+	if m.coordinatorID != msg.From || m.coordinatorVersion != req.Version {
+		m.writeGate.InvalidateP2P()
+		m.node.resetWriteLeaseRequests()
+	}
+	m.writeGate.SetP2PRequired(
+		req.GetWriteLeaseProtocolVersion() == heartbeatpb.CurrentWriteLeaseProtocolVersion,
+	)
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version
 
@@ -217,6 +301,8 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 		m.onSetNodeLivenessRequest(msg)
 	case messaging.TypeSetDispatcherDrainTargetRequest:
 		m.onSetDispatcherDrainTargetRequest(msg)
+	case messaging.TypeNodeHeartbeatResponse:
+		m.onNodeHeartbeatResponse(msg)
 	default:
 	}
 }

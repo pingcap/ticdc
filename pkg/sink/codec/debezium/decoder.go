@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -202,9 +204,16 @@ func (d *decoder) assembleDMLEventFromPayload(
 ) *commonEvent.DMLEvent {
 	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
 	commitTs := getCommitTsFromPayload(valuePayload)
+	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
+	if !hasStartTs {
+		// Keep old messages consumable when start_ts is absent. Invalid values
+		// are logged by getStartTsFromPayload and also fall back so a malformed
+		// message does not stop production consumption.
+		startTs = commitTs
+	}
 	event := &commonEvent.DMLEvent{
 		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
-		StartTs:         commitTs,
+		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
 		PhysicalTableID: tableInfo.TableName.TableID,
@@ -214,14 +223,18 @@ func (d *decoder) assembleDMLEventFromPayload(
 		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
+	binaryHandlingMode := d.config.DebeziumBinaryHandlingMode
+	if d.config.Protocol == config.ProtocolDebeziumAvro {
+		binaryHandlingMode = common.BinaryHandlingModeBase64
+	}
 	before, ok1 := valuePayload["before"].(map[string]any)
 	if ok1 {
-		data := assembleColumnData(before, columns, d.config.TimeZone)
+		data := assembleColumnData(before, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	after, ok2 := valuePayload["after"].(map[string]any)
 	if ok2 {
-		data := assembleColumnData(after, columns, d.config.TimeZone)
+		data := assembleColumnData(after, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
@@ -248,6 +261,33 @@ func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
 	}
 	return uint64(commitTs)
+}
+
+// getStartTsFromPayload returns the start_ts carried in the source block.
+// It returns false when the field is absent or invalid. Invalid values are
+// logged before returning so callers can fall back without stopping consumption.
+func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
+	source := valuePayload["source"].(map[string]any)
+	rawStartTs, exists := source["start_ts"]
+	if !exists {
+		return 0, false
+	}
+	startTs, ok := rawStartTs.(json.Number)
+	if !ok {
+		log.Error("decode value failed",
+			zap.String("reason", "start_ts is not an integer"),
+			zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	ts, err := startTs.Int64()
+	if err == nil && ts <= 0 {
+		err = errors.Errorf("start_ts must be positive: %d", ts)
+	}
+	if err != nil {
+		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	return uint64(ts), true
 }
 
 func (d *decoder) getSchemaName() string {
@@ -317,6 +357,7 @@ func queryTableInfoFromPayload(
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, &timodel.ColumnInfo{
 			ID:        int64(idx),
+			Offset:    idx,
 			State:     timodel.StatePublic,
 			Name:      ast.NewCIStr(colName),
 			FieldType: *fieldType,
@@ -328,24 +369,26 @@ func queryTableInfoFromPayload(
 		Columns: indexColumns,
 		Unique:  true,
 		Primary: true,
+		State:   timodel.StatePublic,
 	})
+	commonType.SetHandleKeyFlags(tidbTableInfo)
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 	return result
 }
 
-func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]any {
+func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) map[string]any {
 	result := make(map[string]any, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = decodeColumn(val, col, timeZone)
+		result[col.Name.O] = decodeColumn(val, col, timeZone, binaryHandlingMode)
 	}
 	return result
 }
 
-func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location) any {
+func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) any {
 	if value == nil {
 		return value
 	}
@@ -355,8 +398,16 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			value, err = base64.StdEncoding.DecodeString(value.(string))
+			switch binaryHandlingMode {
+			case common.BinaryHandlingModeBase64URLSafe:
+				value, err = base64.URLEncoding.DecodeString(value.(string))
+			case common.BinaryHandlingModeHex:
+				value, err = hex.DecodeString(value.(string))
+			default:
+				value, err = base64.StdEncoding.DecodeString(value.(string))
+			}
 			if err != nil {
+				err = errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
 				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
 			}
 			return value

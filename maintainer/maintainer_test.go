@@ -33,12 +33,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -738,6 +742,45 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMaintainerCheckpointUpdateNotification(t *testing.T) {
+	m := &Maintainer{
+		checkpointUpdateCh: make(chan struct{}, 1),
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.notifyCheckpointUpdate()
+	require.Empty(t, m.checkpointUpdateCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.notifyCheckpointUpdate()
+	m.notifyCheckpointUpdate()
+	require.Len(t, m.checkpointUpdateCh, 1)
+}
+
+func TestMaintainerStatusChangedNotification(t *testing.T) {
+	heartbeatCh := make(chan struct{}, 1)
+	m := &Maintainer{
+		statusChanged:      atomic.NewBool(false),
+		managerHeartbeatCh: heartbeatCh,
+		info:               &config.ChangeFeedInfo{Config: config.GetDefaultReplicaConfig()},
+	}
+	m.markStatusChanged()
+	require.True(t, m.statusChanged.Load())
+	require.Empty(t, heartbeatCh)
+
+	m.info.Config.PerformanceMode = util.AddressOf(config.PerformanceModeLowLatency)
+	m.markStatusChanged()
+	m.markStatusChanged()
+	require.Len(t, heartbeatCh, 1)
+}
+
+func TestMaintainerSetWatermarkReportsChanges(t *testing.T) {
+	m := &Maintainer{}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
+	require.False(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 1}))
+	require.True(t, m.setWatermark(heartbeatpb.Watermark{CheckpointTs: 2, ResolvedTs: 3}))
+}
+
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
 	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest(t)
 	m.initialized.Store(true)
@@ -873,4 +916,51 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
 	return m, selfNode.ID
+}
+
+func TestUpdateMetricsSyncPoint(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test-syncpoint-metrics", common.DefaultKeyspaceName)
+	newGauge := func(name string) prometheus.Gauge {
+		return prometheus.NewGauge(prometheus.GaugeOpts{Name: name})
+	}
+	barrier := &Barrier{}
+	m := &Maintainer{
+		changefeedID:         cfID,
+		controller:           &Controller{barrier: barrier},
+		pdClock:              pdutil.NewClock4Test(),
+		checkpointTsGauge:    newGauge("test_syncpoint_checkpoint_ts"),
+		checkpointTsLagGauge: newGauge("test_syncpoint_checkpoint_ts_lag"),
+		resolvedTsGauge:      newGauge("test_syncpoint_resolved_ts"),
+		resolvedTsLagGauge:   newGauge("test_syncpoint_resolved_ts_lag"),
+	}
+	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
+
+	// The vecs are global, so compare against the series count left by other tests.
+	tsSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsGauge) }
+	lagSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsLagGauge) }
+	baseTs, baseLag := tsSeries(), lagSeries()
+
+	// no syncpoint written by this maintainer yet: no series
+	m.updateMetrics()
+	require.Nil(t, m.syncPointTsGauge)
+	require.Nil(t, m.syncPointTsLagGauge)
+	require.Equal(t, baseTs, tsSeries())
+	require.Equal(t, baseLag, lagSeries())
+
+	physical := time.Now().Add(-time.Minute)
+	barrier.updateLastSyncPointTs(oracle.GoTimeToTS(physical))
+	m.updateMetrics()
+	require.Equal(t, baseTs+1, tsSeries())
+	require.Equal(t, baseLag+1, lagSeries())
+	require.Equal(t, float64(physical.UnixMilli()), promtestutil.ToFloat64(m.syncPointTsGauge))
+	lag := promtestutil.ToFloat64(m.syncPointTsLagGauge)
+	require.GreaterOrEqual(t, lag, 59.0)
+	require.Less(t, lag, 70.0)
+
+	// cleanup must delete the same labels updateMetrics created, otherwise the series leaks
+	m.cleanupMetrics()
+	require.Equal(t, baseTs, tsSeries())
+	require.Equal(t, baseLag, lagSeries())
+	require.False(t, metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
+	require.False(t, metrics.MaintainerSyncPointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
 }

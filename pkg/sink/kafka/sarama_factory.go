@@ -34,15 +34,10 @@ type saramaFactory struct {
 	statistics     *statistics.Statistics
 }
 
-// NewSaramaFactory constructs a Factory with sarama implementation.
-// stat is passed to the DML producer for sink statistics. It may be nil only
-// for paths that never send DML messages, such as Verify.
-func NewSaramaFactory(
-	ctx context.Context,
-	o *options,
-	changefeedID common.ChangeFeedID,
-	stat *statistics.Statistics,
-) (Factory, error) {
+func (*saramaFactory) Close() {}
+
+// newSaramaFactory constructs a Factory with sarama implementation.
+func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stat *statistics.Statistics) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start)
@@ -64,7 +59,7 @@ func NewSaramaFactory(
 		admin.Close()
 	}()
 
-	if err = adjustOptions(changefeedID, admin, o, o.Topic); err != nil {
+	if err = adjustOptions(ctx, changefeedID, admin, o, o.Topic); err != nil {
 		return nil, err
 	}
 	log.Info("kafka sink configuration resolved",
@@ -89,7 +84,7 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (ClusterAdminClient, error) {
+func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (AdminClient, error) {
 	start := time.Now()
 	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start)
@@ -125,7 +120,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient(ctx context.Context) (AdminClient, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
@@ -189,9 +184,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}, nil
 }
 
-func (f *saramaFactory) MetricsCollector(
-	adminClient ClusterAdminClient,
-) MetricsCollector {
+func (f *saramaFactory) MetricsCollector(adminClient AdminClient) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: f.changefeedID,
 		adminClient:  adminClient,

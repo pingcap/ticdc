@@ -50,6 +50,7 @@ const (
 	requestLatencyInMsMetricNamePrefix = "request-latency-in-ms-for-broker-"
 	requestsInFlightMetricNamePrefix   = "requests-in-flight-for-broker-"
 	responseRateMetricNamePrefix       = "response-rate-for-broker-"
+	throttleTimeMetricNamePrefix       = "throttle-time-in-ms-for-broker-"
 
 	p99 = "p99"
 	avg = "avg"
@@ -58,7 +59,7 @@ const (
 type saramaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
 	// adminClient is used to get broker infos from broker.
-	adminClient ClusterAdminClient
+	adminClient AdminClient
 	brokers     map[int32]struct{}
 	registry    metrics.Registry
 }
@@ -92,7 +93,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	brokers := m.adminClient.GetAllBrokers()
+	brokers := m.adminClient.GetAllBrokers(ctx)
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}
 	}
@@ -124,6 +125,7 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
+
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
 		outgoingByteRateMetric := m.registry.Get(
@@ -168,6 +170,18 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
+
+		throttleTimeMetric := m.registry.Get(getBrokerMetricName(
+			throttleTimeMetricNamePrefix, brokerID))
+		if histogram, ok := throttleTimeMetric.(metrics.Histogram); ok {
+			snapshot := histogram.Snapshot()
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, avg).
+				Set(snapshot.Mean() / 1000)
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, p99).
+				Set(snapshot.Percentile(0.99) / 1000)
+		}
 	}
 }
 
@@ -204,6 +218,10 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
 		responseRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 
 	}
 }

@@ -74,6 +74,100 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	})
 }
 
+func TestManagerIgnoresInvalidMessages(t *testing.T) {
+	manager := &Manager{}
+	tests := []struct {
+		name    string
+		handler messaging.MessageHandler
+		msgType messaging.IOType
+		message []messaging.IOTypeT
+	}{
+		{
+			name:    "missing maintainer manager payload",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCoordinatorBootstrapRequest,
+		},
+		{
+			name:    "missing maintainer payload",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+		},
+		{
+			name:    "add maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeAddMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.AddMaintainerRequest{}},
+		},
+		{
+			name:    "remove maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRemoveMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.RemoveMaintainerRequest{}},
+		},
+		{
+			name:    "bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerBootstrapResponse{}},
+		},
+		{
+			name:    "post bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerPostBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerPostBootstrapResponse{}},
+		},
+		{
+			name:    "heartbeat request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeHeartBeatRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.HeartBeatRequest{}},
+		},
+		{
+			name:    "nil block status request",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{(*heartbeatpb.BlockStatusRequest)(nil)},
+		},
+		{
+			name:    "block status request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{}},
+		},
+		{
+			name:    "checkpoint message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCheckpointTsMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.CheckpointTsMessage{}},
+		},
+		{
+			name:    "redo progress message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRedoResolvedTsProgressMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.RedoResolvedTsProgressMessage{}},
+		},
+		{
+			name:    "close response without changefeed ID",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerCloseResponse{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &messaging.TargetMessage{
+				From:    "node1",
+				Type:    tt.msgType,
+				Message: tt.message,
+			}
+			require.NotPanics(t, func() {
+				require.NoError(t, tt.handler(context.Background(), msg))
+			})
+		})
+	}
+}
+
 func newAddMaintainerRequestForEpoch(
 	t *testing.T,
 	cfID common.ChangeFeedID,
@@ -103,7 +197,7 @@ func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
 
 	testutil.SetUpTestServices(t)
 	selfNode := node.NewInfo("", "")
-	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode)
+	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode, nil)
 	t.Cleanup(maintainers.closeAll)
 	return maintainers
 }
@@ -366,13 +460,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		require.Eventually(t, func() bool {
 			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.True(t, ok)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetSchedulingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 4,
 		maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID))
 
@@ -408,22 +502,24 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		},
 	})
 
-	time.Sleep(5 * time.Second)
+	// The checks below wait for the scheduling to settle, so give the
+	// schedulers a moment instead of a fixed 5s wait.
+	time.Sleep(500 * time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID) == 1
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	log.Info("Pass case 2: Add new nodes")
 
@@ -439,13 +535,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	log.Info("Pass case 3: Remove 2 nodes")
 
@@ -453,7 +549,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	maintainer.controller.operatorController.RemoveTasksByTableIDs(2, 3)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	// Dropping tables removes their spans but does not necessarily trigger an immediate
 	// rebalance of the remaining spans. Here we only assert that the remaining two spans
 	// stay on the two alive nodes (and do not leak back to removed nodes). Balancing is
@@ -461,7 +557,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID)+
 			maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 2
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID))
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID))
 	log.Info("Pass case 4: Remove 2 tables")
@@ -477,7 +573,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	}, 3)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	// Adding tables should only schedule new spans to currently alive nodes.
 	// We don't assert an exact 2/2 distribution here because the exact table-to-node
 	// mapping depends on prior scheduling decisions (e.g., which specific tables were
@@ -485,7 +581,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID)+
 			maintainer.controller.spanController.GetTaskSizeByNodeID(node2.ID) == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node3.ID))
 	require.Equal(t, 0, maintainer.controller.spanController.GetTaskSizeByNodeID(node4.ID))
 
@@ -495,18 +591,18 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	err = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB(), Cascade: true}))
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		return maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	_, ok = manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
 			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok == false
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.False(t, ok)
 	log.Info("Pass case 6: Remove maintainer")
@@ -610,16 +706,16 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		require.Eventually(t, func() bool {
 			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.True(t, ok)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(selfNode.ID) == 4
-	}, 20*time.Second, 200*time.Millisecond)
+	}, 20*time.Second, 50*time.Millisecond)
 
 	require.Len(t, remotedIds, 2)
 	foundSize := 0
@@ -671,13 +767,13 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	meta := &keyspacepb.KeyspaceMeta{
-		Id:   0,
-		Name: "default",
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 0},
+		Name:     "default",
 	}
 	if kerneltype.IsNextGen() {
 		meta = &keyspacepb.KeyspaceMeta{
-			Id:   1,
-			Name: "ks1",
+			Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+			Name:     "ks1",
 		}
 	}
 	keyspaceManager := keyspace.NewMockManager(ctrl)
@@ -720,7 +816,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		require.Eventually(t, func() bool {
 			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return !ok
-		}, 20*time.Second, 200*time.Millisecond)
+		}, 20*time.Second, 50*time.Millisecond)
 	}
 	require.False(t, ok)
 	cancel()

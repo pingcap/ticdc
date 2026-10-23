@@ -18,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -194,6 +197,45 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigClonePreservesKafkaOAuthCA(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+	}
+
+	cloned := cfg.Clone()
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cloned.Sink.KafkaConfig.SASLOAuthCA))
+	require.NotSame(t, cfg.Sink.KafkaConfig.SASLOAuthCA, cloned.Sink.KafkaConfig.SASLOAuthCA)
+	encoded, err := cfg.Marshal()
+	require.NoError(t, err)
+	require.Contains(t, encoded, `"sasl-oauth-ca":"/etc/ssl/oauth-ca.pem"`)
+
+	*cloned.Sink.KafkaConfig.SASLOAuthCA = "/etc/ssl/other-ca.pem"
+	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(cfg.Sink.KafkaConfig.SASLOAuthCA))
+}
+
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
 // TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
 // explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
@@ -227,6 +269,30 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
 }
 
+func TestConsistentConfigSpoolDiskQuota(t *testing.T) {
+	newConfig := func() *ConsistentConfig {
+		cfg := GetDefaultReplicaConfig().Consistent
+		cfg.Level = util.AddressOf(string(redo.ConsistentLevelEventual))
+		cfg.Storage = util.AddressOf("blackhole://")
+		return cfg
+	}
+
+	cfg := newConfig()
+	cfg.SpoolDiskQuota = nil
+	require.NoError(t, cfg.validateAndAdjust(false))
+	require.Equal(t, redo.DefaultSpoolDiskQuota, util.GetOrZero(cfg.SpoolDiskQuota))
+
+	for _, quota := range []int64{0, -1} {
+		cfg = newConfig()
+		cfg.SpoolDiskQuota = util.AddressOf(quota)
+		require.ErrorContains(t, cfg.validateAndAdjust(false), "consistent.spool-disk-quota")
+	}
+
+	cfg = newConfig()
+	cfg.SpoolDiskQuota = util.AddressOf(int64(1024))
+	require.NoError(t, cfg.validateAndAdjust(false))
+}
+
 func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	config.Consistent.Level = util.AddressOf("eventual")
@@ -235,6 +301,10 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.Error(t, config.ValidateAndAdjust(sinkURI))
+	config.Consistent.Storage = new("s3://bucket/%zz?secret-access-key=redo-secret-sentinel")
+	err = config.ValidateAndAdjust(sinkURI)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+	require.NotContains(t, err.Error(), "redo-secret-sentinel")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
@@ -246,4 +316,25 @@ func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.NoError(t, config.ValidateAndAdjust(sinkURI))
+}
+
+func TestReplicaConfig_AllowSameCluster(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	require.Nil(t, cfg.AllowSameCluster)
+
+	// `allow-same-cluster` is a top-level option of the changefeed config file.
+	metaData, err := toml.Decode("allow-same-cluster = true\n", cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.True(t, util.GetOrZero(cfg.AllowSameCluster))
+
+	// Clone must keep the option, the config is cloned when it is converted to the API model.
+	require.True(t, util.GetOrZero(cfg.Clone().AllowSameCluster))
+
+	// The same upstream/downstream check runs on the ChangefeedConfig derived from the persisted
+	// replica config, so the option must survive the conversion to skip the check.
+	info := &ChangeFeedInfo{Config: cfg}
+	require.True(t, info.ToChangefeedConfig().AllowSameCluster)
 }

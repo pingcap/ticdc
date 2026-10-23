@@ -75,18 +75,18 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			keyspace: "success",
 			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "success").Return(&keyspacepb.KeyspaceMeta{
-					Id:    1,
-					Name:  "kespace1",
-					State: keyspacepb.KeyspaceState_ENABLED,
+					Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+					Name:     "kespace1",
+					State:    keyspacepb.KeyspaceState_ENABLED,
 				}, nil)
 			},
 			expectedStatus:       http.StatusOK,
 			expectedAbort:        false,
 			expectedBodyContains: "",
 			expectedMeta: &keyspacepb.KeyspaceMeta{
-				Id:    1,
-				Name:  "kespace1",
-				State: keyspacepb.KeyspaceState_ENABLED,
+				Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 1},
+				Name:     "kespace1",
+				State:    keyspacepb.KeyspaceState_ENABLED,
 			},
 		},
 	}
@@ -125,6 +125,45 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			if tt.expectedMeta != nil {
 				require.EqualValues(t, tt.expectedMeta, GetKeyspaceFromContext(c))
 			}
+		})
+	}
+}
+
+func TestKeyspaceNameCheckerMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		keyspace       string
+		expectedStatus int
+		expectedAbort  bool
+	}{
+		{
+			name:           "missing keyspace",
+			expectedStatus: http.StatusBadRequest,
+			expectedAbort:  true,
+		},
+		{
+			name:           "specified keyspace",
+			keyspace:       "deleted-keyspace",
+			expectedStatus: http.StatusOK,
+			expectedAbort:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodGet,
+				fmt.Sprintf("/test?%s=%s", api.APIOpVarKeyspace, tt.keyspace),
+				nil,
+			)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = req
+
+			KeyspaceNameCheckerMiddleware()(c)
+
+			require.Equal(t, tt.expectedAbort, c.IsAborted())
+			require.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
 }

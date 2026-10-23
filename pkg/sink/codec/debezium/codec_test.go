@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,10 +24,70 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
+
+func TestBigintSchemaDefaultPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		value      string
+		unsigned   bool
+		stringMode bool
+		expected   string
+	}{
+		{value: "9007199254740993", expected: "9007199254740993"},
+		{value: "9223372036854775807", expected: "9223372036854775807"},
+		{value: "-9223372036854775808", expected: "-9223372036854775808"},
+		{value: "9007199254740993", unsigned: true, expected: "9007199254740993"},
+		{value: "18446744073709551615", unsigned: true, expected: "-1"},
+		{value: "18446744073709551615", unsigned: true, stringMode: true, expected: "18446744073709551615"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			col := &timodel.ColumnInfo{FieldType: *types.NewFieldType(mysql.TypeLonglong)}
+			if tc.unsigned {
+				col.AddFlag(mysql.UnsignedFlag)
+			}
+			require.NoError(t, col.SetDefaultValue(tc.value))
+			codec := &dbzCodec{config: common.NewConfig(config.ProtocolDebezium)}
+			var expected any = json.Number(tc.expected)
+			if tc.stringMode {
+				codec.config.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+				expected = tc.expected
+			}
+			buf := new(bytes.Buffer)
+			writer := util.BorrowJSONWriter(buf)
+			codec.writeDebeziumFieldSchema(writer, col)
+			util.ReturnJSONWriter(writer)
+
+			dec := json.NewDecoder(buf)
+			dec.UseNumber()
+			var schema map[string]any
+			require.NoError(t, dec.Decode(&schema))
+			require.Equal(t, expected, schema["default"])
+
+			// Missing row values use the column default and must preserve it too.
+			rows := chunk.NewChunkWithCapacity([]*types.FieldType{&col.FieldType}, 1)
+			rows.AppendNull(0)
+			row := rows.GetRow(0)
+			buf.Reset()
+			writer = util.BorrowJSONWriter(buf)
+			writer.WriteObject(func() {
+				require.NoError(t, codec.writeDebeziumFieldValue(writer, &row, 0, col))
+			})
+			util.ReturnJSONWriter(writer)
+			dec = json.NewDecoder(buf)
+			dec.UseNumber()
+			var payload map[string]any
+			require.NoError(t, dec.Decode(&payload))
+			require.Equal(t, expected, payload[col.Name.O])
+		})
+	}
+}
 
 func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 	codec := &dbzCodec{
@@ -1543,4 +1604,45 @@ func BenchmarkEncodeLargeBinary(b *testing.B) {
 		codec.EncodeKey(e, keyBuf)
 		codec.EncodeValue(e, buf)
 	}
+}
+
+func TestStartTsNotInDDLAndCheckpointEvents(t *testing.T) {
+	// Even with debezium-include-start-ts enabled, DDL and checkpoint
+	// (watermark) messages must not declare start_ts in their schemas:
+	// their payloads never carry the field (no per-row transaction), and a
+	// declared-but-absent non-optional field breaks schema-validating consumers.
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+	codec.config.DebeziumIncludeStartTs = true
+	codec.config.DebeziumDisableSchema = false
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int(10) primary key)`)
+	job := helper.DDL2Job(`RENAME TABLE test.table1 to test.table2`)
+	tableInfo := helper.GetTableInfo(job)
+
+	e := &commonEvent.DDLEvent{
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		SchemaName:      "test",
+		TableName:       "table2",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "table1",
+		Type:            byte(timodel.ActionRenameTable),
+		Query:           job.Query,
+	}
+	keyBuf := bytes.NewBuffer(nil)
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, codec.EncodeDDLEvent(e, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
+
+	keyBuf.Reset()
+	buf.Reset()
+	require.NoError(t, codec.EncodeCheckpointEvent(3, keyBuf, buf))
+	require.NotContains(t, buf.String(), "start_ts")
 }

@@ -20,7 +20,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -35,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -42,21 +42,25 @@ import (
 type partitionProgress struct {
 	partition       int32
 	watermark       uint64
-	watermarkOffset kafka.Offset
+	watermarkOffset int64
 
 	eventsGroup map[int64]*util.EventsGroup
-	decoder     common.Decoder
+	decoder     *util.DMLMessageDecoder
+}
+
+type tableIDProvider interface {
+	GetTableIDs(schema, table string) []int64
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
 		eventsGroup: make(map[int64]*util.EventsGroup),
-		decoder:     decoder,
+		decoder:     util.NewDMLMessageDecoder(decoder),
 	}
 }
 
-func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Offset) {
+func (p *partitionProgress) updateWatermark(newWatermark uint64, offset int64) {
 	if newWatermark >= p.watermark {
 		p.watermark = newWatermark
 		p.watermarkOffset = offset
@@ -87,6 +91,8 @@ type writer struct {
 	maxBatchSize           int
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
+	spillStore             *util.SpillStore
+	replayFilter           *util.ReplayFilter
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -99,6 +105,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlList:                make([]*event.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		spillStore:             util.NewSpillStore(),
+		replayFilter:           util.NewReplayFilter(),
 	}
 	var (
 		db  *sql.DB
@@ -120,7 +128,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	}
 
 	isAvroLike := o.protocol == config.ProtocolAvro || o.protocol == config.ProtocolDebeziumAvro
-	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.topic, false, isAvroLike)
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.caseSensitive, o.topic, false, isAvroLike)
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -143,50 +151,149 @@ func newWriter(ctx context.Context, o *option) *writer {
 	return w
 }
 
-func (w *writer) run(ctx context.Context) error {
-	return w.mysqlSink.Run(ctx)
+func (w *writer) cleanupEventsGroups() error {
+	var cleanupErr error
+	for _, progress := range w.progresses {
+		for _, group := range progress.eventsGroup {
+			_ = group.Cleanup()
+		}
+	}
+	if err := w.spillStore.Cleanup(); err != nil {
+		cleanupErr = err
+		log.Warn("cleanup spill store failed", zap.Error(err))
+	}
+	return cleanupErr
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		flushed atomic.Int64
-	)
-
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
-	resolvedEvents := make([]*event.DMLEvent, 0)
+	start := time.Now()
+	groups := make([]*util.EventsGroup, 0)
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			g, ok := progress.eventsGroup[tableID]
 			if !ok {
 				continue
 			}
-			messages := g.ResolveInto(commitTs, nil)
-			events := make([]*event.DMLEvent, 0, len(messages))
-			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-			}
-			resolvedEvents = append(resolvedEvents, events...)
+			groups = append(groups, g)
 		}
 	}
-
-	total := len(resolvedEvents)
-	if total == 0 {
-		return w.mysqlSink.WriteBlockEvent(ddl)
+	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
+		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
+	if err != nil {
+		return err
 	}
-	for _, e := range resolvedEvents {
+
+	if total != 0 {
+		log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Any("tables", tableIDs))
+	}
+	return w.mysqlSink.WriteBlockEvent(ddl)
+}
+
+func (w *writer) flushEventsFromGroups(
+	ctx context.Context, groups []*util.EventsGroup, resolveTs uint64, fields ...zap.Field,
+) (int, error) {
+	limit := w.spillStore.ResolveLimit()
+	batchEvents := make([]*event.DMLEvent, 0, limit.MaxMessages)
+	batchMessages := 0
+	var batchBytes int64
+	total := 0
+	prepared := make([]*util.ResolveBatch, 0, len(groups))
+	flush := func() error {
+		if err := w.flushDMLBatch(ctx, batchEvents, fields...); err != nil {
+			return err
+		}
+		for _, batch := range prepared {
+			if err := batch.Ack(); err != nil {
+				return err
+			}
+		}
+		total += len(batchEvents)
+		batchEvents = nil
+		prepared = prepared[:0]
+		batchMessages = 0
+		batchBytes = 0
+		return nil
+	}
+
+	for {
+		hasMoreGroups := false
+		for _, group := range groups {
+			if batchMessages >= limit.MaxMessages || batchBytes >= limit.MaxBytes {
+				if err := flush(); err != nil {
+					return 0, err
+				}
+			}
+			remaining := util.ResolveLimit{
+				MaxBytes:    limit.MaxBytes - batchBytes,
+				MaxMessages: limit.MaxMessages - batchMessages,
+			}
+			batch, hasMore, err := group.PrepareResolve(resolveTs, remaining)
+			if err != nil {
+				return 0, err
+			}
+			hasMoreGroups = hasMoreGroups || hasMore
+			if batch != nil {
+				prepared = append(prepared, batch)
+				batchEvents = append(batchEvents, util.DMLMessagesToEvents(batch.Messages)...)
+				batchMessages += len(batch.Messages)
+				batchBytes += batch.ResolvedBytes
+			}
+		}
+		if err := flush(); err != nil {
+			return 0, err
+		}
+		if !hasMoreGroups {
+			break
+		}
+	}
+	return total, nil
+}
+
+// getReplayFilter returns the replay filter, creating it lazily so writers built
+// without newWriter, such as in tests, still deduplicate.
+func (w *writer) getReplayFilter() *util.ReplayFilter {
+	if w.replayFilter == nil {
+		w.replayFilter = util.NewReplayFilter()
+	}
+	return w.replayFilter
+}
+
+func (w *writer) flushDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	// Replays use the same partition, and PrepareResolve keeps each table's
+	// equal commit-ts together. Deduplicate the restored batch before the sink
+	// merges row changes. Equality with the watermark remains open to replay.
+	filter := w.getReplayFilter()
+	retained, duplicates := filter.FilterBatch(events)
+	if err := w.flushFilteredDMLBatch(ctx, retained, fields...); err != nil {
+		return err
+	}
+	// Advance deduplication state and release duplicate chunks only after the
+	// retained rows are durable. The caller then acknowledges the spill batch.
+	filter.Commit(w.globalWatermark())
+	for _, e := range duplicates {
+		e.PostFlush()
+	}
+	return nil
+}
+
+func (w *writer) flushFilteredDMLBatch(ctx context.Context, events []*event.DMLEvent, fields ...zap.Field) error {
+	if len(events) == 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	var flushed atomic.Int64
+	for _, e := range events {
 		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
+			if flushed.Inc() == int64(len(events)) {
 				close(done)
 			}
 		})
 		w.mysqlSink.AddDMLEvent(e)
 	}
-
-	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
-	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -194,14 +301,10 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-				zap.Any("tables", tableIDs))
-			return w.mysqlSink.WriteBlockEvent(ddl)
+			return nil
 		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time",
-				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+			log.Warn("DML events cannot be flushed in time", append(fields,
+				zap.Int("total", len(events)), zap.Int64("flushed", flushed.Load()))...)
 		}
 	}
 }
@@ -225,6 +328,15 @@ func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 		}
 	default:
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
+	}
+	if w.partitionTableAccessor != nil &&
+		w.partitionTableAccessor.IsPartitionTable(ddl.GetSchemaName(), ddl.GetTableName()) {
+		provider, ok := w.progresses[0].decoder.Unwrap().(tableIDProvider)
+		if ok {
+			for _, tableID := range provider.GetTableIDs(ddl.GetSchemaName(), ddl.GetTableName()) {
+				tableIDs[tableID] = struct{}{}
+			}
+		}
 	}
 	return tableIDs
 }
@@ -257,76 +369,57 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 func (w *writer) globalWatermark() uint64 {
 	watermark := uint64(math.MaxUint64)
 	for _, progress := range w.progresses {
-		if progress.watermark < watermark {
-			watermark = progress.watermark
-		}
+		watermark = min(watermark, progress.watermark)
 	}
 	return watermark
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		flushed atomic.Int64
-	)
-
 	watermark := w.globalWatermark()
-	resolvedEvents := make([]*event.DMLEvent, 0)
+	start := time.Now()
+	groups := make([]*util.EventsGroup, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-			messages := group.ResolveInto(watermark, nil)
-			events := make([]*event.DMLEvent, 0, len(messages))
-			for _, message := range messages {
-				events = util.AppendOrMergeDMLEvent(events, message.ToDMLEvent())
-			}
-			resolvedEvents = append(resolvedEvents, events...)
+			groups = append(groups, group)
 		}
 	}
-	total := len(resolvedEvents)
-	if total == 0 {
-		return nil
+	total, err := w.flushEventsFromGroups(ctx, groups, watermark, zap.Uint64("watermark", watermark))
+	if err != nil {
+		return err
 	}
-	for _, e := range resolvedEvents {
-		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
-				close(done)
-			}
-		})
-		w.mysqlSink.AddDMLEvent(e)
-		log.Debug("flush DML event", zap.Int64("tableID", e.GetTableID()),
-			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
+	// A replay may have been buffered before the watermark advanced. Keep the
+	// previous boundary until ALL groups have drained, not just one batch.
+	w.getReplayFilter().Advance(watermark)
+	if total != 0 {
+		stats := w.spillStore.Stats()
+		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Int64("spillPayloadWriteBytes", stats.PayloadWriteBytes),
+			zap.Int64("spillPayloadReadBytes", stats.PayloadReadBytes),
+			zap.Int64("spillPayloadWriteCount", stats.PayloadWriteCount),
+			zap.Int64("spillPayloadReadCount", stats.PayloadReadCount),
+			zap.Int64("spillPayloadDecodeCount", stats.PayloadDecodeCount),
+			zap.Int64("spillIndexWriteCount", stats.IndexWriteCount),
+			zap.Int64("spillIndexReadCount", stats.IndexReadCount),
+			zap.Int64("spillAppliedEventCount", stats.AppliedEventCount),
+			zap.Int64("spillPendingBytes", stats.PendingBytes),
+			zap.Int("spillLivePayloads", stats.LivePayloads),
+			zap.Int("spillLiveSegments", stats.LiveSegments))
 	}
-
-	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
-	start := time.Now()
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-			return nil
-		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
-		}
-	}
+	return nil
 }
 
 // WriteMessage is to decode kafka message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool {
+func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, error) {
 	var (
-		partition = message.TopicPartition.Partition
-		offset    = message.TopicPartition.Offset
+		partition = message.Partition
+		offset    = message.Offset
 	)
 
 	progress := w.progresses[partition]
+	progress.decoder.SetSourcePosition(offset)
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := progress.decoder.HasNext()
@@ -335,6 +428,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	}
 
 	needFlush := false
+	wasDraining := w.spillStore.ShouldDrain()
 	switch messageType {
 	case common.MessageTypeResolved:
 		newWatermark := progress.decoder.NextResolvedEvent()
@@ -349,25 +443,28 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
-		if dec, ok := progress.decoder.(*simple.Decoder); ok {
+		if dec, ok := progress.decoder.Unwrap().(*simple.Decoder); ok {
 			cachedMessages := dec.GetCachedMessages()
 			for _, dmlMessage := range cachedMessages {
 				log.Info("simple protocol cached event resolved, append to the group",
 					zap.Int64("tableID", dmlMessage.TableID), zap.Uint64("commitTs", dmlMessage.GetCommitTs()),
 					zap.Int32("partition", partition), zap.Any("offset", offset))
-				w.appendMessage2Group(dmlMessage, progress, offset)
+				progress.decoder.AttachCachedDMLMessage(dmlMessage)
+				if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
+					return false, err
+				}
 			}
 		}
 
 		w.onDDL(ddl)
 		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
 		if partition != 0 {
-			return false
+			return false, nil
 		}
 
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
-			return false
+			return false, nil
 		}
 		w.appendDDL(ddl)
 		log.Info("DDL event received",
@@ -379,24 +476,8 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		needFlush = true
 	case common.MessageTypeRow:
 		var counter int
-		dmlMessage := progress.decoder.NextDMLMessage()
-		if dmlMessage == nil {
-			if w.protocol != config.ProtocolSimple {
-				log.Panic("DML message is nil, it's not expected",
-					zap.Int32("partition", partition), zap.Any("offset", offset))
-			}
-			log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
-			break
-		}
-
-		w.appendMessage2Group(dmlMessage, progress, offset)
-		counter++
-		for {
-			_, hasNext = progress.decoder.HasNext()
-			if !hasNext {
-				break
-			}
-			dmlMessage = progress.decoder.NextDMLMessage()
+		for hasNext {
+			dmlMessage := progress.decoder.NextDMLMessage()
 			if dmlMessage == nil {
 				if w.protocol != config.ProtocolSimple {
 					log.Panic("DML message is nil, it's not expected",
@@ -405,8 +486,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				log.Debug("DML message is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
 				break
 			}
-			w.appendMessage2Group(dmlMessage, progress, offset)
+			if err := w.appendMessage2Group(dmlMessage, progress, offset); err != nil {
+				return false, err
+			}
 			counter++
+			_, hasNext = progress.decoder.HasNext()
+		}
+		if counter == 0 {
+			break
 		}
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
 		if len(message.Key)+len(message.Value) > w.maxMessageBytes && counter > 1 {
@@ -427,11 +514,16 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	if needFlush {
 		return w.Write(ctx, messageType)
 	}
-	return false
+	if !wasDraining && w.spillStore.ShouldDrain() {
+		if err := w.flushDMLEventsByWatermark(ctx); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // Write will synchronously write data downstream
-func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
+func (w *writer) Write(ctx context.Context, messageType common.MessageType) (bool, error) {
 	// DDL events can be received out of commit-ts order (e.g. due to protocol-level broadcasting and
 	// buffering differences between DDL kinds). We must execute DDLs in commit-ts order; otherwise a
 	// "future" DDL that is not yet eligible (commitTs > watermark) can block executing earlier DDLs
@@ -479,8 +571,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			break
 		}
 		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
-			log.Panic("write DDL event failed", zap.Error(err),
-				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
+			return false, err
 		}
 	}
 
@@ -488,7 +579,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
 		err := w.flushDMLEventsByWatermark(ctx)
 		if err != nil {
-			log.Panic("flush dml events by the watermark failed", zap.Error(err))
+			return false, err
 		}
 	}
 
@@ -498,9 +589,9 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		log.Info("some DDL events will be flushed in the future",
 			zap.Uint64("watermark", watermark),
 			zap.Int("length", len(w.ddlList)))
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 func (w *writer) onDDL(ddl *event.DDLEvent) {
@@ -565,7 +656,7 @@ func (w *writer) addPartitionTable(schema, table string) {
 	w.partitionTableAccessor.Add(schema, table)
 }
 
-func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kafka.Offset) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int64, originalRowType commonType.RowType) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -575,6 +666,12 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 		if !ok {
 			row.Rewind()
 			break
+		}
+
+		// Avro updates without a before image expand into a keyed delete and
+		// an insert. Only the complete after image can reproduce column routing.
+		if w.protocol == config.ProtocolAvro && originalRowType == commonType.RowTypeUpdate && change.RowType == commonType.RowTypeDelete {
+			continue
 		}
 
 		target, _, err := partitioner.GeneratePartitionIndexAndKey(&change, partitionNum, row.TableInfo, row.GetCommitTs())
@@ -592,15 +689,19 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kaf
 	}
 }
 
-func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset kafka.Offset) *common.DMLMessage {
+func (w *writer) messageWithPartitionCheck(message *common.DMLMessage, partition int32, offset int64) *common.DMLMessage {
 	return common.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
 		row := message.ToDMLEvent()
-		w.checkPartition(row, partition, offset)
+		w.checkPartition(row, partition, offset, message.RowType)
 		return row
 	})
 }
 
-func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *partitionProgress, offset kafka.Offset) {
+func (w *writer) appendMessage2Group(
+	message *common.DMLMessage,
+	progress *partitionProgress,
+	offset int64,
+) error {
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
 	var (
@@ -609,77 +710,61 @@ func (w *writer) appendMessage2Group(message *common.DMLMessage, progress *parti
 		table    = message.Table
 		commitTs = message.GetCommitTs()
 	)
+	globalWatermark := w.globalWatermark()
+	if commitTs < globalWatermark {
+		log.Warn("DML event fallback row, since less than the global watermark, ignore it",
+			zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
+			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
+			zap.Uint64("globalWatermark", globalWatermark),
+			zap.Uint64("partitionWatermark", progress.watermark),
+			zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.String("schema", schema), zap.String("table", table),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		return nil
+	}
+
 	group := progress.eventsGroup[tableID]
 	if group == nil {
-		group = util.NewEventsGroup(progress.partition, tableID)
+		group = util.NewEventsGroup(progress.partition, tableID, w.spillStore)
+		group.SetPostRestore(func(message *common.DMLMessage, sourcePosition int64) *common.DMLMessage {
+			return w.messageWithPartitionCheck(message, progress.partition, sourcePosition)
+		})
 		progress.eventsGroup[tableID] = group
 	}
+	if messageData, _ := message.SpillData(); messageData != nil {
+		messageData.SourcePosition = offset
+	}
+	if err := group.AppendMessage(message); err != nil {
+		return err
+	}
 	if commitTs < progress.watermark {
-		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
+		log.Warn("DML event fallback row, since less than the partition watermark, append it and sort before flush",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
 			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
 			zap.Uint64("watermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table))
-		return
+			zap.Uint64("globalWatermark", globalWatermark),
+			zap.String("schema", schema), zap.String("table", table),
+			zap.Stringer("eventType", message.RowType),
+			zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+		return nil
 	}
 	if commitTs >= group.HighWatermark {
-		message = w.messageWithPartitionCheck(message, progress.partition, offset)
-		group.AppendMessage(message, false)
 		log.Debug("DML event append to the group",
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", message.RowType))
-		return
+		return nil
 	}
-	if w.enableTableAcrossNodes {
-		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
-			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType))
-		group.AppendMessage(w.messageWithPartitionCheck(message, progress.partition, offset), true)
-		return
-	}
-	switch w.protocol {
-	case config.ProtocolSimple:
-		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
-		// also consider the table partition.
-		// open protocol set the partition table id if the table is partitioned.
-		// for normal table, the table id is generated by the fake table id generator by using schema and table name.
-		// so one event group for one normal table or one table partition, replayed messages can be ignored.
-		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType),
-			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol))
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro,
-		config.ProtocolDebezium, config.ProtocolDebeziumAvro:
-		// for partition table, these protocols cannot assign physical table id to each dml message,
-		// we cannot distinguish whether it's a real fallback event or not, still append it.
-		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but the table is a partition table, still append it",
-				zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-				zap.Stringer("eventType", message.RowType), zap.Any("protocol", w.protocol))
-			group.AppendMessage(w.messageWithPartitionCheck(message, progress.partition, offset), true)
-			return
-		}
-		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
-			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", message.RowType),
-			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol))
-	default:
-		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
-	}
+	log.Warn("DML event commit ts fallback, append it and sort before flush",
+		zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Stringer("eventType", message.RowType),
+		zap.Any("protocol", w.protocol), zap.Bool("enableTableAcrossNodes", w.enableTableAcrossNodes))
+	return nil
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {

@@ -142,6 +142,8 @@ func (c ChangefeedCommonInfo) MarshalJSON() ([]byte, error) {
 
 // ChangefeedConfig use by create changefeed api
 type ChangefeedConfig struct {
+	// Pause creates the changefeed in the stopped state. It defaults to false.
+	Pause         *bool          `json:"pause,omitempty"`
 	Keyspace      string         `json:"keyspace"`
 	ID            string         `json:"changefeed_id"`
 	StartTs       uint64         `json:"start_ts"`
@@ -210,6 +212,7 @@ func (d *JSONDuration) UnmarshalText(text []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
+	PerformanceMode          *string `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
 	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
 	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
@@ -220,6 +223,9 @@ type ReplicaConfig struct {
 	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
 	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
 	BDRMode                  *bool   `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops.
+	AllowSameCluster *bool `json:"allow_same_cluster,omitempty" toml:"allow-same-cluster,omitempty"`
 	// EnableActiveActive enables active-active replication mode on top of BDR.
 	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
 	EnableActiveActive *bool `json:"enable_active_active,omitempty" toml:"enable-active-active,omitempty"`
@@ -257,6 +263,9 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.PerformanceMode != nil {
+		res.PerformanceMode = c.PerformanceMode
+	}
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
 	}
@@ -288,6 +297,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.BDRMode != nil {
 		res.BDRMode = c.BDRMode
+	}
+	if c.AllowSameCluster != nil {
+		res.AllowSameCluster = c.AllowSameCluster
 	}
 	if c.EnableActiveActive != nil {
 		res.EnableActiveActive = c.EnableActiveActive
@@ -348,6 +360,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = c.Consistent.FlushConcurrency
 		}
+		if c.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = c.Consistent.SpoolDiskQuota
+		}
 
 		if c.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &config.ConsistentMemoryUsage{
@@ -357,7 +372,13 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.Sink != nil {
 		var dispatchRules []*config.DispatchRule
+		if c.Sink.DispatchRules != nil {
+			dispatchRules = make([]*config.DispatchRule, 0, len(c.Sink.DispatchRules))
+		}
 		for _, rule := range c.Sink.DispatchRules {
+			if rule == nil {
+				continue
+			}
 			dispatchRules = append(dispatchRules, &config.DispatchRule{
 				Matcher:        rule.Matcher,
 				DispatcherRule: "",
@@ -413,9 +434,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			}
 			if c.Sink.PulsarConfig.OAuth2 != nil {
 				pulsarConfig.OAuth2 = &config.OAuth2{
-					OAuth2IssuerURL:  c.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL,
+					OAuth2IssuerURL:  util.GetOrZero(c.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL),
 					OAuth2Audience:   c.Sink.PulsarConfig.OAuth2.OAuth2Audience,
-					OAuth2PrivateKey: c.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey,
+					OAuth2PrivateKey: util.GetOrZero(c.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey),
 					OAuth2ClientID:   c.Sink.PulsarConfig.OAuth2.OAuth2ClientID,
 					OAuth2Scope:      c.Sink.PulsarConfig.OAuth2.OAuth2Scope,
 				}
@@ -433,6 +454,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 					AvroEnableWatermark:            oldConfig.AvroEnableWatermark,
 					AvroDecimalHandlingMode:        oldConfig.AvroDecimalHandlingMode,
 					AvroBigintUnsignedHandlingMode: oldConfig.AvroBigintUnsignedHandlingMode,
+					AvroIncludeBeforeValue:         oldConfig.AvroIncludeBeforeValue,
 					EncodingFormat:                 oldConfig.EncodingFormat,
 				}
 			}
@@ -443,7 +465,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				largeMessageHandle = &config.LargeMessageHandleConfig{
 					LargeMessageHandleOption:      oldConfig.LargeMessageHandleOption,
 					LargeMessageHandleCompression: oldConfig.LargeMessageHandleCompression,
-					ClaimCheckStorageURI:          oldConfig.ClaimCheckStorageURI,
+					ClaimCheckStorageURI:          util.GetOrZero(oldConfig.ClaimCheckStorageURI),
 					ClaimCheckRawValue:            oldConfig.ClaimCheckRawValue,
 				}
 			}
@@ -453,9 +475,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				glueSchemaRegistryConfig = &config.GlueSchemaRegistryConfig{
 					RegistryName:    c.Sink.KafkaConfig.GlueSchemaRegistryConfig.RegistryName,
 					Region:          c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Region,
-					AccessKey:       c.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey,
-					SecretAccessKey: c.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey,
-					Token:           c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
+					AccessKey:       util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey),
+					SecretAccessKey: util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey),
+					Token:           util.GetOrZero(c.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
 
@@ -485,6 +507,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				SASLOAuthClientID:            c.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        c.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            c.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  c.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              c.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           c.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            c.Sink.KafkaConfig.SASLOAuthAudience,
@@ -514,6 +537,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				WriteTimeout:                 c.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  c.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      c.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              c.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               c.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         c.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: c.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -537,14 +561,37 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		}
 		var debeziumConfig *config.DebeziumConfig
 		if c.Sink.DebeziumConfig != nil {
+			// Fall back to the default when OutputOldValue is omitted.
+			outputOldValue := config.DefaultDebeziumOutputOldValue
+			if c.Sink.DebeziumConfig.OutputOldValue != nil {
+				outputOldValue = *c.Sink.DebeziumConfig.OutputOldValue
+			}
 			debeziumConfig = &config.DebeziumConfig{
-				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
+				OutputOldValue: outputOldValue,
+			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
+			}
+			if c.Sink.DebeziumConfig.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.DecimalHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BigintUnsignedHandlingMode)
+			}
+			if c.Sink.DebeziumConfig.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *config.OpenProtocolConfig
 		if c.Sink.OpenProtocolConfig != nil {
 			openProtocolConfig = &config.OpenProtocolConfig{
 				OutputOldValue: c.Sink.OpenProtocolConfig.OutputOldValue,
+			}
+		}
+		var simpleConfig *config.SimpleConfig
+		if c.Sink.SimpleConfig != nil && c.Sink.SimpleConfig.IncludeStartTs != nil {
+			simpleConfig = &config.SimpleConfig{
+				IncludeStartTs: util.AddressOf(*c.Sink.SimpleConfig.IncludeStartTs),
 			}
 		}
 
@@ -569,6 +616,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			Simple:                           simpleConfig,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -681,6 +729,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
+		PerformanceMode:          cloned.PerformanceMode,
 		MemoryQuota:              cloned.MemoryQuota,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
 		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
@@ -691,6 +740,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:          cloned.EnableSyncPoint,
 		EnableTableMonitor:       cloned.EnableTableMonitor,
 		BDRMode:                  cloned.BDRMode,
+		AllowSameCluster:         cloned.AllowSameCluster,
 		EnableActiveActive:       cloned.EnableActiveActive,
 	}
 
@@ -722,7 +772,14 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	}
 	if cloned.Sink != nil {
 		var dispatchRules []*DispatchRule
+		// Clone omits empty slices; use the original to preserve an explicit clear.
+		if c.Sink.DispatchRules != nil {
+			dispatchRules = make([]*DispatchRule, 0, len(c.Sink.DispatchRules))
+		}
 		for _, rule := range cloned.Sink.DispatchRules {
+			if rule == nil {
+				continue
+			}
 			dispatchRules = append(dispatchRules, &DispatchRule{
 				Matcher:       rule.Matcher,
 				PartitionRule: rule.PartitionRule,
@@ -764,6 +821,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 					AvroEnableWatermark:            oldConfig.AvroEnableWatermark,
 					AvroDecimalHandlingMode:        oldConfig.AvroDecimalHandlingMode,
 					AvroBigintUnsignedHandlingMode: oldConfig.AvroBigintUnsignedHandlingMode,
+					AvroIncludeBeforeValue:         oldConfig.AvroIncludeBeforeValue,
 					EncodingFormat:                 oldConfig.EncodingFormat,
 				}
 			}
@@ -774,7 +832,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				largeMessageHandle = &LargeMessageHandleConfig{
 					LargeMessageHandleOption:      oldConfig.LargeMessageHandleOption,
 					LargeMessageHandleCompression: oldConfig.LargeMessageHandleCompression,
-					ClaimCheckStorageURI:          oldConfig.ClaimCheckStorageURI,
+					ClaimCheckStorageURI:          new(oldConfig.ClaimCheckStorageURI),
 					ClaimCheckRawValue:            oldConfig.ClaimCheckRawValue,
 				}
 			}
@@ -784,9 +842,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				glueSchemaRegistryConfig = &GlueSchemaRegistryConfig{
 					RegistryName:    cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.RegistryName,
 					Region:          cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Region,
-					AccessKey:       cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey,
-					SecretAccessKey: cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey,
-					Token:           cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token,
+					AccessKey:       new(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.AccessKey),
+					SecretAccessKey: new(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.SecretAccessKey),
+					Token:           new(cloned.Sink.KafkaConfig.GlueSchemaRegistryConfig.Token),
 				}
 			}
 
@@ -816,6 +874,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				SASLOAuthClientID:            cloned.Sink.KafkaConfig.SASLOAuthClientID,
 				SASLOAuthClientSecret:        cloned.Sink.KafkaConfig.SASLOAuthClientSecret,
 				SASLOAuthTokenURL:            cloned.Sink.KafkaConfig.SASLOAuthTokenURL,
+				SASLOAuthCA:                  cloned.Sink.KafkaConfig.SASLOAuthCA,
 				SASLOAuthScopes:              cloned.Sink.KafkaConfig.SASLOAuthScopes,
 				SASLOAuthGrantType:           cloned.Sink.KafkaConfig.SASLOAuthGrantType,
 				SASLOAuthAudience:            cloned.Sink.KafkaConfig.SASLOAuthAudience,
@@ -845,6 +904,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				WriteTimeout:                 cloned.Sink.MySQLConfig.WriteTimeout,
 				ReadTimeout:                  cloned.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      cloned.Sink.MySQLConfig.Timeout,
+				AsyncDDLTimeout:              cloned.Sink.MySQLConfig.AsyncDDLTimeout,
 				EnableBatchDML:               cloned.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         cloned.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: cloned.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -874,9 +934,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			}
 			if cloned.Sink.PulsarConfig.OAuth2 != nil {
 				pulsarConfig.OAuth2 = &PulsarOAuth2{
-					OAuth2IssuerURL:  cloned.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL,
+					OAuth2IssuerURL:  new(cloned.Sink.PulsarConfig.OAuth2.OAuth2IssuerURL),
 					OAuth2Audience:   cloned.Sink.PulsarConfig.OAuth2.OAuth2Audience,
-					OAuth2PrivateKey: cloned.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey,
+					OAuth2PrivateKey: new(cloned.Sink.PulsarConfig.OAuth2.OAuth2PrivateKey),
 					OAuth2ClientID:   cloned.Sink.PulsarConfig.OAuth2.OAuth2ClientID,
 					OAuth2Scope:      cloned.Sink.PulsarConfig.OAuth2.OAuth2Scope,
 				}
@@ -901,13 +961,31 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		var debeziumConfig *DebeziumConfig
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
-				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+				OutputOldValue: util.AddressOf(cloned.Sink.Debezium.OutputOldValue),
+			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
+			}
+			if cloned.Sink.Debezium.DecimalHandlingMode != nil {
+				debeziumConfig.DecimalHandlingMode = util.AddressOf(*cloned.Sink.Debezium.DecimalHandlingMode)
+			}
+			if cloned.Sink.Debezium.BigintUnsignedHandlingMode != nil {
+				debeziumConfig.BigintUnsignedHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BigintUnsignedHandlingMode)
+			}
+			if cloned.Sink.Debezium.BinaryHandlingMode != nil {
+				debeziumConfig.BinaryHandlingMode = util.AddressOf(*cloned.Sink.Debezium.BinaryHandlingMode)
 			}
 		}
 		var openProtocolConfig *OpenProtocolConfig
 		if cloned.Sink.OpenProtocol != nil {
 			openProtocolConfig = &OpenProtocolConfig{
 				OutputOldValue: cloned.Sink.OpenProtocol.OutputOldValue,
+			}
+		}
+		var simpleConfig *SimpleConfig
+		if cloned.Sink.Simple != nil && cloned.Sink.Simple.IncludeStartTs != nil {
+			simpleConfig = &SimpleConfig{
+				IncludeStartTs: util.AddressOf(*cloned.Sink.Simple.IncludeStartTs),
 			}
 		}
 		res.Sink = &SinkConfig{
@@ -931,6 +1009,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			SimpleConfig:                     simpleConfig,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -997,6 +1076,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 		if cloned.Consistent.FlushConcurrency != nil {
 			res.Consistent.FlushConcurrency = cloned.Consistent.FlushConcurrency
+		}
+		if cloned.Consistent.SpoolDiskQuota != nil {
+			res.Consistent.SpoolDiskQuota = cloned.Consistent.SpoolDiskQuota
 		}
 		if cloned.Consistent.MemoryUsage != nil {
 			res.Consistent.MemoryUsage = &ConsistentMemoryUsage{
@@ -1170,18 +1252,19 @@ type Table struct {
 
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
+// Nil dispatchers preserve stored routes on update; an empty list clears them.
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
+	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule       `json:"dispatchers,omitzero" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector     `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string               `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int                  `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string               `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`
@@ -1200,6 +1283,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
+	SimpleConfig                     *SimpleConfig       `json:"simple,omitempty" toml:"simple,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1218,10 +1302,10 @@ type CSVConfig struct {
 // LargeMessageHandleConfig denotes the large message handling config
 // This is the same as config.LargeMessageHandleConfig
 type LargeMessageHandleConfig struct {
-	LargeMessageHandleOption      string `json:"large_message_handle_option" toml:"large-message-handle-option"`
-	LargeMessageHandleCompression string `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
-	ClaimCheckStorageURI          string `json:"claim_check_storage_uri" toml:"claim-check-storage-uri"`
-	ClaimCheckRawValue            bool   `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
+	LargeMessageHandleOption      string  `json:"large_message_handle_option" toml:"large-message-handle-option"`
+	LargeMessageHandleCompression string  `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
+	ClaimCheckStorageURI          *string `json:"claim_check_storage_uri,omitempty" toml:"claim-check-storage-uri,omitempty"`
+	ClaimCheckRawValue            bool    `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
 }
 
 // DispatchRule represents partition rule for a table
@@ -1269,6 +1353,8 @@ type ConsistentConfig struct {
 	UseFileBackend        *bool                  `json:"use_file_backend,omitempty" toml:"use-file-backend,omitempty"`
 	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
 	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
+	SpoolDiskQuota        *int64                 `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
+	SpoolBaseDir          *string                `json:"spool_base_dir,omitempty" toml:"spool-base-dir,omitempty"`
 	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
 	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
@@ -1391,6 +1477,110 @@ func (info *ChangeFeedInfo) Clone() (*ChangeFeedInfo, error) {
 	return cloned, err
 }
 
+// CloneWithMaskedSensitiveData returns a clone safe for user-visible output.
+func (info *ChangeFeedInfo) CloneWithMaskedSensitiveData() (*ChangeFeedInfo, error) {
+	cloned, err := info.Clone()
+	if err != nil {
+		return nil, err
+	}
+
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	cloned.Config.maskSensitiveData()
+	return cloned, nil
+}
+
+// omitSensitiveData keeps credentials out of API responses. Omitted fields are
+// retained from stored configuration when applying an update, so display masks
+// never enter read-modify-update requests as replacement credentials.
+func (c *ReplicaConfig) omitSensitiveData() {
+	if c == nil {
+		return
+	}
+	omitURI := func(field **string) {
+		if *field != nil && util.ContainsSensitiveDataInURI(**field) {
+			*field = nil
+		}
+	}
+	if c.Consistent != nil {
+		omitURI(&c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+	omitURI(&c.Sink.SchemaRegistry)
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		kafka.SASLPassword = nil
+		kafka.SASLGssAPIPassword = nil
+		kafka.SASLOAuthClientSecret = nil
+		kafka.Key = nil
+		omitURI(&kafka.SASLOAuthTokenURL)
+		if large := kafka.LargeMessageHandle; large != nil {
+			omitURI(&large.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			glue.AccessKey = nil
+			glue.SecretAccessKey = nil
+			glue.Token = nil
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		pulsar.AuthenticationToken = nil
+		pulsar.BasicPassword = nil
+		if pulsar.OAuth2 != nil {
+			pulsar.OAuth2.OAuth2PrivateKey = nil
+			omitURI(&pulsar.OAuth2.OAuth2IssuerURL)
+		}
+	}
+}
+
+// maskSensitiveData masks configured API fields without populating omitted fields.
+func (c *ReplicaConfig) maskSensitiveData() {
+	if c == nil {
+		return
+	}
+	if c.Consistent != nil && c.Consistent.Storage != nil {
+		*c.Consistent.Storage = util.MaskSensitiveDataInURI(*c.Consistent.Storage)
+	}
+	if c.Sink == nil {
+		return
+	}
+
+	if c.Sink.SchemaRegistry != nil {
+		*c.Sink.SchemaRegistry = util.MaskSensitiveDataInURI(*c.Sink.SchemaRegistry)
+	}
+	var sensitiveFields []*string
+	if kafka := c.Sink.KafkaConfig; kafka != nil {
+		sensitiveFields = append(sensitiveFields,
+			kafka.SASLPassword,
+			kafka.SASLGssAPIPassword,
+			kafka.SASLOAuthClientSecret,
+			kafka.Key)
+		if kafka.SASLOAuthTokenURL != nil {
+			*kafka.SASLOAuthTokenURL = util.MaskSensitiveDataInURI(*kafka.SASLOAuthTokenURL)
+		}
+		if large := kafka.LargeMessageHandle; large != nil && large.ClaimCheckStorageURI != nil {
+			*large.ClaimCheckStorageURI = util.MaskSensitiveDataInURI(*large.ClaimCheckStorageURI)
+		}
+		if glue := kafka.GlueSchemaRegistryConfig; glue != nil {
+			sensitiveFields = append(sensitiveFields, glue.AccessKey, glue.SecretAccessKey, glue.Token)
+		}
+	}
+	if pulsar := c.Sink.PulsarConfig; pulsar != nil {
+		sensitiveFields = append(sensitiveFields, pulsar.AuthenticationToken, pulsar.BasicPassword)
+		if pulsar.OAuth2 != nil {
+			sensitiveFields = append(sensitiveFields, pulsar.OAuth2.OAuth2PrivateKey)
+			if pulsar.OAuth2.OAuth2IssuerURL != nil {
+				*pulsar.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(*pulsar.OAuth2.OAuth2IssuerURL)
+			}
+		}
+	}
+	for _, field := range sensitiveFields {
+		if field != nil && *field != "" {
+			*field = config.MaskedSensitiveValue
+		}
+	}
+}
+
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
@@ -1441,6 +1631,7 @@ type CodecConfig struct {
 	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty" toml:"avro-enable-watermark,omitempty"`
 	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty" toml:"avro-decimal-handling-mode,omitempty"`
 	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty" toml:"avro-bigint-unsigned-handling-mode,omitempty"`
+	AvroIncludeBeforeValue         *bool   `json:"avro_include_before_value,omitempty" toml:"avro-include-before-value,omitempty"`
 	EncodingFormat                 *string `json:"encoding_format,omitempty" toml:"encoding-format,omitempty"`
 }
 
@@ -1469,11 +1660,11 @@ type PulsarConfig struct {
 
 // PulsarOAuth2 is the configuration for OAuth2
 type PulsarOAuth2 struct {
-	OAuth2IssuerURL  string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
-	OAuth2Audience   string `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
-	OAuth2PrivateKey string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
-	OAuth2ClientID   string `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
-	OAuth2Scope      string `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
+	OAuth2IssuerURL  *string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
+	OAuth2Audience   string  `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
+	OAuth2PrivateKey *string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
+	OAuth2ClientID   string  `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
+	OAuth2Scope      string  `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
 }
 
 // KafkaConfig represents a kafka sink configuration
@@ -1503,6 +1694,7 @@ type KafkaConfig struct {
 	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty" toml:"sasl-oauth-client-id,omitempty"`
 	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty" toml:"sasl-oauth-client-secret,omitempty"`
 	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty" toml:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthCA                  *string                   `json:"sasl_oauth_ca,omitempty" toml:"sasl-oauth-ca,omitempty"`
 	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
 	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
 	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
@@ -1531,6 +1723,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
 	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
 	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	AsyncDDLTimeout              *string `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
 	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
@@ -1567,10 +1760,10 @@ type GlueSchemaRegistryConfig struct {
 	// Region of the schema registry
 	Region string `json:"region" toml:"region"`
 	// AccessKey of the schema registry
-	AccessKey string `json:"access_key,omitempty" toml:"access-key,omitempty"`
+	AccessKey *string `json:"access_key,omitempty" toml:"access-key,omitempty"`
 	// SecretAccessKey of the schema registry
-	SecretAccessKey string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
-	Token           string `json:"token,omitempty" toml:"token,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
+	Token           *string `json:"token,omitempty" toml:"token,omitempty"`
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding
@@ -1580,7 +1773,16 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
+	OutputOldValue             *bool   `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
+	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
+	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
+	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 
 type DispatcherCount struct {

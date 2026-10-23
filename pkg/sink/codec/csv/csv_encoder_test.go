@@ -149,7 +149,7 @@ func TestCSVTxnEventEncoderWithColumnSelector(t *testing.T) {
 		ColumnSelectors: []*config.ColumnSelector{
 			{Matcher: []string{"test.table1"}, Columns: []string{"col1"}},
 		},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	cfg := &common.Config{
@@ -191,7 +191,7 @@ func TestCSVTxnEventEncoderWithColumnSelectorForUpdateAndDelete(t *testing.T) {
 		ColumnSelectors: []*config.ColumnSelector{
 			{Matcher: []string{"test.table1"}, Columns: []string{"id", "visible"}},
 		},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	cfg := &common.Config{

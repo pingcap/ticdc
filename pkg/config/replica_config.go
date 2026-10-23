@@ -32,6 +32,9 @@ import (
 )
 
 const (
+	PerformanceModeThroughput = "throughput"
+	PerformanceModeLowLatency = "low-latency"
+
 	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
 	minSyncPointInterval = time.Second * 30
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
@@ -46,6 +49,7 @@ const (
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
+	PerformanceMode:    util.AddressOf(PerformanceModeThroughput),
 	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
 	CaseSensitive:      util.AddressOf(false),
 	CheckGCSafePoint:   util.AddressOf(true),
@@ -69,7 +73,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		},
 		EncoderConcurrency:               util.AddressOf(DefaultEncoderGroupConcurrency),
 		Terminator:                       util.AddressOf(CRLF),
-		DateSeparator:                    util.AddressOf(DateSeparatorDay.String()),
+		DateSeparator:                    util.AddressOf(DateSeparatorDay),
 		EnablePartitionSeparator:         util.AddressOf(true),
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
@@ -82,7 +86,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		SendAllBootstrapAtStart:          util.AddressOf(DefaultSendAllBootstrapAtStart),
 		DebeziumDisableSchema:            util.AddressOf(false),
 		OpenProtocol:                     &OpenProtocolConfig{OutputOldValue: true},
-		Debezium:                         &DebeziumConfig{OutputOldValue: true},
+		Debezium:                         &DebeziumConfig{OutputOldValue: DefaultDebeziumOutputOldValue},
 	},
 	Consistent: &ConsistentConfig{
 		Level:                 util.AddressOf("none"),
@@ -94,6 +98,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Storage:               util.AddressOf(""),
 		UseFileBackend:        util.AddressOf(false),
 		Compression:           util.AddressOf(""),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},
@@ -145,10 +150,19 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
+	// Pause is a CLI create-only option, forwarded to the API creation request.
+	// It does not control the state of an existing changefeed.
+	Pause            *bool   `toml:"pause" json:"pause,omitempty"`
+	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
 	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
 	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops. Set it to true
+	// only when the changefeed cannot capture its own writes, for example when the downstream
+	// tables are not matched by the changefeed's filter.
+	AllowSameCluster *bool `toml:"allow-same-cluster" json:"allow-same-cluster,omitempty"`
 	// EnableRedoIOCheck controls whether consistency storage validation should
 	// perform an I/O accessibility check. This field is internal only.
 	EnableRedoIOCheck *bool `toml:"-" json:"-"`
@@ -282,6 +296,14 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	performanceMode := util.GetOrZero(c.PerformanceMode)
+	if performanceMode == "" {
+		c.PerformanceMode = util.AddressOf(PerformanceModeThroughput)
+	} else if performanceMode != PerformanceModeThroughput && performanceMode != PerformanceModeLowLatency {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("unknown performance mode: %s", performanceMode))
+	}
+
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck
@@ -415,6 +437,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	}
 
 	return nil
+}
+
+func (c *ReplicaConfig) IsLowLatencyMode() bool {
+	return c != nil && util.GetOrZero(c.PerformanceMode) == PerformanceModeLowLatency
 }
 
 // FixScheduler adjusts scheduler to default value

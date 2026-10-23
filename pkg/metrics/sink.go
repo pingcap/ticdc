@@ -18,26 +18,8 @@ import "github.com/prometheus/client_golang/prometheus"
 // LargeRowSizeLowBound is set to 2K, only track data event with size not smaller than it.
 const LargeRowSizeLowBound = 2 * 1024
 
-var ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "active_active_conflict_skip_rows_total",
-		Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
-	}, []string{getKeyspaceLabel(), "changefeed"})
-
 // ---------- Metrics for txn sink and backends. ---------- //
 var (
-	// ConflictDetectDuration records the duration of detecting conflict.
-	ConflictDetectDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_conflict_detect_duration",
-			Help:      "Bucketed histogram of conflict detect time (s) for single DML statement.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
 	// QueueDuration = ConflictDetectDuration + (queue time in txn workers).
 	QueueDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -46,50 +28,7 @@ var (
 			Name:      "txn_queue_duration",
 			Help:      "Bucketed histogram of queue time (s) for single DML statement.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	WorkerBatchFlushDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_batch_flush_duration",
-			Help:      "Flush duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerFlushDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_flush_duration",
-			Help:      "Flush duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerTotalDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_total_duration",
-			Help:      "total duration (s) for txn worker.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed", "id"})
-
-	WorkerHandledRows = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_handled_rows",
-			Help:      "Busy ratio (X ms in 1s) for all workers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "id"})
-	WorkerEventRowCount = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_worker_event_row_count",
-			Help:      "Row count number for a single DML event handled by txn sink worker.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 12), // 1~2048
-		}, []string{getKeyspaceLabel(), "changefeed", "id"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	SinkDMLBatchCommit = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -98,7 +37,7 @@ var (
 			Name:      "txn_sink_dml_batch_commit",
 			Help:      "Duration of committing a DML batch",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18), // 10ms~1310s
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	SinkDMLBatchCallback = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -107,7 +46,7 @@ var (
 			Name:      "txn_sink_dml_batch_callback",
 			Help:      "Duration of execuing a batch of callbacks",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18), // 10ms~1300s
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	PrepareStatementErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -115,7 +54,7 @@ var (
 			Subsystem: "sink",
 			Name:      "txn_prepare_statement_errors",
 			Help:      "Prepare statement errors",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 // ---------- Metrics for kafka sink and backends. ---------- //
@@ -128,7 +67,7 @@ var (
 			Name:      "mq_worker_send_message_duration",
 			Help:      "Send Message duration(s) for MQ worker.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 	// WorkerBatchSize record the size of each batched messages.
 	WorkerBatchSize = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -137,7 +76,7 @@ var (
 			Name:      "mq_worker_batch_size",
 			Help:      "Batch size for MQ worker.",
 			Buckets:   prometheus.ExponentialBuckets(4, 2, 10), // 4 ~ 2048
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 	// WorkerBatchDuration record the time duration cost on batch messages.
 	WorkerBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -146,7 +85,7 @@ var (
 			Name:      "mq_worker_batch_duration",
 			Help:      "Batch duration for MQ worker.",
 			Buckets:   prometheus.ExponentialBuckets(0.004, 2, 10), // 4ms ~ 2s
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	CheckpointTsMessageDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -155,7 +94,7 @@ var (
 			Name:      "mq_checkpoint_ts_message_duration",
 			Help:      "Duration of sending checkpoint ts message.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	CheckpointTsMessageCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -163,21 +102,13 @@ var (
 			Subsystem: "sink",
 			Name:      "mq_checkpoint_ts_message_count",
 			Help:      "Number of checkpoint ts messages sent.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 // InitMetrics registers all metrics in this file.
 func initSinkMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
-
 	// txn sink metrics
-	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(QueueDuration)
-	registry.MustRegister(WorkerFlushDuration)
-	registry.MustRegister(WorkerBatchFlushDuration)
-	registry.MustRegister(WorkerTotalDuration)
-	registry.MustRegister(WorkerHandledRows)
-	registry.MustRegister(WorkerEventRowCount)
 	registry.MustRegister(SinkDMLBatchCommit)
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)

@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -187,6 +188,7 @@ type FilePathGenerator struct {
 	// This can differ from TableInfoVersion when reusing an existing schema file
 	// with the same checksum.
 	versionMap map[VersionedTableName]uint64
+	writeGate  *writelease.Gate
 }
 
 // NewFilePathGenerator creates a FilePathGenerator for one changefeed storage
@@ -207,6 +209,11 @@ func NewFilePathGenerator(
 		fileIndex:    make(map[VersionedTableName]*indexWithDate),
 		versionMap:   make(map[VersionedTableName]uint64),
 	}
+}
+
+// SetWriteGate installs capture-wide admission for schema-file publication.
+func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
+	f.writeGate = gate
 }
 
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
@@ -306,8 +313,14 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Uint32("checksum", checksum))
 	}
 	encodedSchemaFile := schemaFile.Marshal()
+	if err := writelease.WaitForWrite(ctx, f.writeGate); err != nil {
+		return 0, false, err
+	}
+	if err := f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile); err != nil {
+		return 0, false, err
+	}
 	f.versionMap[table] = table.TableInfoVersion
-	return table.TableInfoVersion, false, f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile)
+	return table.TableInfoVersion, false, nil
 }
 
 // SetClock sets the clock used by GenerateDateStr. It is used by tests.
@@ -323,11 +336,11 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 	currTime := f.pdClock.CurrentTime()
 	// Note: `dateStr` is formatted using local TZ.
 	switch f.config.DateSeparator {
-	case config.DateSeparatorYear.String():
+	case config.DateSeparatorYear:
 		dateStr = currTime.Format("2006")
-	case config.DateSeparatorMonth.String():
+	case config.DateSeparatorMonth:
 		dateStr = currTime.Format("2006-01")
-	case config.DateSeparatorDay.String():
+	case config.DateSeparatorDay:
 		dateStr = currTime.Format("2006-01-02")
 	default:
 	}
@@ -519,7 +532,7 @@ func RemoveExpiredFiles(
 	cfg *Config,
 	checkpointTs uint64,
 ) error {
-	if cfg.DateSeparator != config.DateSeparatorDay.String() {
+	if cfg.DateSeparator != config.DateSeparatorDay {
 		return nil
 	}
 	if dateSeparatorDayRegexp == nil {

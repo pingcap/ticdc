@@ -24,6 +24,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
+	"github.com/pingcap/ticdc/cmd/util"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -32,6 +33,7 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
@@ -110,6 +112,232 @@ func newFlag(flag uint) uint64 {
 		result.SetIsPrimaryKey()
 	}
 	return uint64(result)
+}
+
+func TestApplyRowSpill(t *testing.T) {
+	ap := NewRedoApplier(&RedoApplierConfig{})
+	ap.needRecoveryInfo = false
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	newRow := func(startTs, commitTs uint64, value int64) *commonEvent.RedoDMLEvent {
+		return &commonEvent.RedoDMLEvent{
+			Row: &commonEvent.DMLEventInRedoLog{
+				StartTs: startTs, CommitTs: commitTs,
+				Table:        &common.TableName{Schema: "test", Table: "t", TableID: 42},
+				Columns:      []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeLonglong}},
+				IndexColumns: [][]int{{0}},
+			},
+			Columns: []commonEvent.RedoColumnValue{{Value: value, Flag: newFlag(pmysql.PriKeyFlag)}},
+		}
+	}
+	rows := []*commonEvent.RedoDMLEvent{
+		newRow(105, 110, 1),
+		newRow(115, 120, 2),
+		newRow(115, 120, 3),
+		newRow(125, 130, 4),
+	}
+	// Keep delete and update ordering within the second transaction.
+	rows[1].Row.PreColumns, rows[1].Row.Columns = rows[1].Row.Columns, nil
+	rows[1].PreColumns, rows[1].Columns = rows[1].Columns, nil
+	rows[2].Row.PreColumns = rows[2].Row.Columns
+	rows[2].PreColumns = []commonEvent.RedoColumnValue{{Value: int64(2), Flag: newFlag(pmysql.PriKeyFlag)}}
+	for _, row := range rows {
+		require.NoError(t, ap.applyRow(row, 100))
+	}
+	require.Equal(t, int64(len(rows)), ap.spillStore.Stats().PayloadWriteCount)
+	require.Zero(t, ap.spillStore.Stats().PayloadDecodeCount, "enqueue must keep DML materialization lazy")
+	// Mutating the input after enqueue must not affect disk-backed replay.
+	rows[0].Columns[0].Value = int64(99)
+
+	group := ap.eventsGroup[42]
+	limit := util.ResolveLimit{MaxMessages: 1, MaxBytes: 1}
+	batch, hasMore, err := group.PrepareResolve(120, limit)
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Len(t, batch.Messages, 1)
+	events := util.DMLMessagesToEvents(batch.Messages)
+	require.Len(t, events, 1)
+	row, ok := events[0].GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, int64(1), row.Row.GetInt64(0))
+	events[0].PostFlush()
+	require.Zero(t, ap.spillStore.Stats().AppliedEventCount, "spill data must survive until acknowledgement")
+	require.NoError(t, batch.Ack())
+
+	batch, hasMore, err = group.PrepareResolve(120, limit)
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, batch.Messages, 2, "one transaction must remain intact despite batch limits")
+	events = util.DMLMessagesToEvents(batch.Messages)
+	require.Len(t, events, 1)
+	require.Equal(t, uint64(120), events[0].CommitTs)
+	require.Equal(t, uint64(115), events[0].StartTs)
+	require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeUpdate, common.RowTypeUpdate}, events[0].RowTypes)
+	require.Equal(t, int32(2), events[0].Length)
+	events[0].PostFlush()
+	require.NoError(t, batch.Ack())
+
+	batch, _, err = group.PrepareResolve(130, limit)
+	require.NoError(t, err)
+	require.Len(t, batch.Messages, 1, "rows after the DDL barrier must remain pending")
+	require.NoError(t, batch.Ack())
+	require.Equal(t, int64(len(rows)), ap.spillStore.Stats().AppliedEventCount)
+	require.Zero(t, ap.spillStore.PendingBytes())
+}
+
+func TestApplySkippedDropCleansSpill(t *testing.T) {
+	ap := NewRedoApplier(&RedoApplierConfig{})
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	ap.tableDDLTs[42] = ddlTs{ts: 100}
+	ap.tableDDLTs[common.DDLSpanTableID] = ddlTs{ts: 120}
+	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs: 105, CommitTs: 110,
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
+		},
+	}, 100))
+	require.Positive(t, ap.spillStore.PendingBytes())
+	require.NoError(t, ap.applyDDL(t.Context(), &commonEvent.RedoDDLEvent{
+		Type: byte(timodel.ActionDropTable),
+		DDL: &commonEvent.DDLEventInRedoLog{
+			CommitTs: 120, Query: "DROP TABLE test.t",
+			NeedDroppedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
+			},
+		},
+	}, 100))
+	require.Empty(t, ap.eventsGroup)
+	require.Zero(t, ap.spillStore.PendingBytes())
+	require.Zero(t, ap.spillStore.Stats().PayloadDecodeCount, "discarded rows must not be materialized")
+}
+
+func TestConsumeLogsCleansSpillOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	ap := NewRedoApplier(&RedoApplierConfig{Dir: dir})
+	ap.needRecoveryInfo = false
+	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
+	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs: 105, CommitTs: 110,
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
+		},
+	}, 100))
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	ap.rd = NewMockReader(100, 130, nil, nil)
+	ap.updateSplitter = newUpdateEventSplitter(ap.rd, dir)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, ap.consumeLogs(ctx), context.Canceled)
+	files, err = os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, files, "cancelled replay must remove spill payloads and the index")
+}
+
+func TestApplyReplicationKeyLossRecovery(t *testing.T) {
+	for _, completed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("completed=%t", completed), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			defer db.Close()
+			changefeedID := common.NewChangefeedID4Test("default", "test")
+			mysqlCfg := pkgMysql.New()
+			// Recovery queries remain enabled in the applier. Metadata writes are
+			// exercised explicitly below; only reapplying the unfinished ALTER
+			// omits their repetition, to keep that control case focused on replay.
+			mysqlCfg.EnableDDLTs = completed
+			mysqlCfg.IsTiDB = false
+			stat := statistics.New(changefeedID, common.DefaultKeyspaceID)
+			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
+			defer metadataWriter.Close()
+			ddl := &commonEvent.DDLEvent{
+				Type: byte(timodel.ActionDropColumn), SchemaName: "test", TableName: "t",
+				Query: "ALTER TABLE test.t DROP COLUMN id", FinishedTs: 120,
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{42, common.DDLSpanTableID},
+				},
+				NeedDroppedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
+				},
+			}
+			// Persist the actual key-loss payload: before execution both records
+			// are unfinished, and after execution both must survive as finished.
+			insertSQL := "INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES " +
+				"('default', 'default/test', '120', 42, %d, 0), ('default', 'default/test', '120', 0, %d, 0) " +
+				"ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);"
+			mock.ExpectBegin()
+			mock.ExpectExec(fmt.Sprintf(insertSQL, 0, 0)).WillReturnResult(sqlmock.NewResult(0, 2))
+			mock.ExpectCommit()
+			require.NoError(t, metadataWriter.SendDDLTsPre(ddl))
+			if completed {
+				mock.ExpectBegin()
+				mock.ExpectExec(fmt.Sprintf(insertSQL, 1, 1)).WillReturnResult(sqlmock.NewResult(0, 2))
+				// No DELETE is allowed: it would discard the table's recovery bound.
+				mock.ExpectCommit()
+				require.NoError(t, metadataWriter.SendDDLTs(ddl))
+			}
+			for _, tableID := range []int64{42, common.DDLSpanTableID} {
+				query := fmt.Sprintf("SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 "+
+					"WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'default/test', %d), ('default', 'default/test', -1))", tableID)
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+					AddRow(tableID, 120, completed, false))
+			}
+			if !completed {
+				mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+					WillReturnRows(sqlmock.NewRows([]string{"ts"}).AddRow("2026-01-01 00:00:00"))
+				mock.ExpectBegin()
+				mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(ddl.Query).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectCommit()
+			}
+
+			var keyFlag common.ColumnFlagType
+			keyFlag.SetIsHandleKey()
+			keyFlag.SetIsUniqueKey()
+			rows := make(chan *commonEvent.RedoDMLEvent, 1)
+			rows <- &commonEvent.RedoDMLEvent{
+				Row: &commonEvent.DMLEventInRedoLog{
+					StartTs: 105, CommitTs: 110,
+					Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
+					Columns: []*commonEvent.RedoColumn{
+						{Name: "id", Type: pmysql.TypeLonglong}, {Name: "v", Type: pmysql.TypeLong},
+					},
+					IndexColumns: [][]int{{0}},
+				},
+				Columns: []commonEvent.RedoColumnValue{{Value: int64(1), Flag: uint64(keyFlag)}, {Value: int64(10)}},
+			}
+			close(rows)
+			ddls := make(chan *commonEvent.RedoDDLEvent, 1)
+			ddls <- &commonEvent.RedoDDLEvent{
+				Type: ddl.Type, TableName: common.TableName{Schema: "test", Table: "t", TableID: 42},
+				DDL: &commonEvent.DDLEventInRedoLog{
+					CommitTs: ddl.FinishedTs, Query: ddl.Query,
+					Columns:       []*commonEvent.ColumnInfo{{Name: "v", Type: pmysql.TypeLong}},
+					BlockedTables: ddl.BlockedTables, NeedDroppedTables: ddl.NeedDroppedTables,
+				},
+			}
+			close(ddls)
+			ap := NewRedoApplier(&RedoApplierConfig{Dir: t.TempDir()})
+			ap.rd = NewMockReader(100, 130, rows, ddls)
+			ap.updateSplitter = newUpdateEventSplitter(ap.rd, ap.cfg.Dir)
+			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false, false, time.Second, common.DefaultKeyspaceID)
+			defer ap.mysqlSink.Close()
+			require.True(t, ap.needRecoveryInfo)
+			require.ErrorIs(t, ap.consumeLogs(ctx), errApplyFinished)
+			require.Zero(t, ap.appliedLogCount, "old-schema INSERT must not be replayed")
+			if completed {
+				require.Zero(t, ap.appliedDDLCount, "completed key-loss ALTER must not be replayed")
+			} else {
+				require.Equal(t, uint64(1), ap.appliedDDLCount, "unfinished ALTER must still be replayed")
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestApply(t *testing.T) {

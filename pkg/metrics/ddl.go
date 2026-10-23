@@ -27,7 +27,7 @@ var (
 			Name:      "handle_duration",
 			Help:      "Bucketed histogram of handling time (s) of a ddl.",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 
 	// ExecDDLBlockingGauge records the count of blocking DDL.
 	ExecDDLBlockingGauge = prometheus.NewGaugeVec(
@@ -36,7 +36,7 @@ var (
 			Subsystem: "ddl",
 			Name:      "exec_blocking",
 			Help:      "Total count of blocking ddl.",
-		}, []string{getKeyspaceLabel(), "changefeed", "mode"})
+		}, []string{GetKeyspaceLabel(), "changefeed", "mode"})
 )
 
 func initDDLMetrics(registry *prometheus.Registry) {

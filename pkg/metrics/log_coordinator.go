@@ -22,14 +22,14 @@ var (
 			Subsystem: "owner",
 			Name:      "resolved_ts",
 			Help:      "resolved ts of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 	ChangefeedResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of changefeeds in seconds",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+			Help:      "maximum per-node resolved ts lag at report time in seconds",
+		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 func initLogCoordinatorMetrics(registry *prometheus.Registry) {

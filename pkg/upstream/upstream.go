@@ -131,7 +131,7 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		if err != nil {
 			return err
 		}
-		return disablePDRouterClient(tiStore)
+		return DisablePDRouterClient(tiStore)
 	}, retry.WithMaxTries(defaultMaxRetry),
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
@@ -144,7 +144,9 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 	return tiStore, nil
 }
 
-func disablePDRouterClient(storage tidbkv.Storage) error {
+// DisablePDRouterClient disables the streaming PD router used by a TiKV storage.
+// To be compatible with old PD which doesn't support the `QueryRegion` API.
+func DisablePDRouterClient(storage tidbkv.Storage) error {
 	provider, ok := storage.(pdClientProvider)
 	if !ok {
 		return nil
@@ -179,6 +181,7 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err 
 	if !up.isDefaultUpstream {
 		up.PDClient, err = pd.NewClientWithContext(
 			ctx, "cdc-upstream", up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
+			pdopt.WithEnableRouterClient(false), // Compatible with old PD which doesn't support the `QueryRegion` API.
 			// the default `timeout` is 3s, maybe too small if the pd is busy,
 			// set to 10s to avoid frequent timeout.
 			pdopt.WithCustomTimeoutOption(10*time.Second),

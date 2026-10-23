@@ -68,16 +68,28 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		q.totalPendingLength.Add(1)
 	}
 
-	if path.appendEvent(event, q.handler) {
-		addSignal()
+	accepted, appended := path.appendEvent(event, q.handler)
+	if !accepted {
+		q.handler.OnDrop(event.event)
+		return
 	}
+	if !appended {
+		return
+	}
+	addSignal()
 }
 
-func (q *eventQueue[A, P, T, D, H]) releasePath(path *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[A, P, T, D, H]) releasePath(
+	path *pathInfo[A, P, T, D, H],
+	notifyDrop bool,
+) {
 	for {
-		_, ok := path.pendingQueue.PopFront()
+		event, ok := path.pendingQueue.PopFront()
 		if !ok {
 			break
+		}
+		if notifyDrop {
+			q.handler.OnDrop(event.event)
 		}
 	}
 
@@ -119,7 +131,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		if path.removed.Load() {
 			// A removed path can still receive stale in-flight signals/events.
 			// Clear the path queue and reconcile memory before dropping the signal.
-			q.releasePath(path)
+			q.releasePath(path, true)
 			q.totalPendingLength.Add(-int64(signal.eventCount))
 			q.signalQueue.PopFront()
 			continue

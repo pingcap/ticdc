@@ -20,10 +20,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/tikv/client-go/v2/oracle"
@@ -190,10 +189,11 @@ func (t AdminJobType) IsStopState() bool {
 }
 
 type ChangefeedConfig struct {
-	ChangefeedID common.ChangeFeedID `json:"changefeed_id"`
-	StartTS      uint64              `json:"start_ts"`
-	TargetTS     uint64              `json:"target_ts"`
-	SinkURI      string              `json:"sink_uri"`
+	ChangefeedID    common.ChangeFeedID `json:"changefeed_id"`
+	PerformanceMode string              `json:"performance_mode"`
+	StartTS         uint64              `json:"start_ts"`
+	TargetTS        uint64              `json:"target_ts"`
+	SinkURI         string              `json:"sink_uri"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -213,12 +213,17 @@ type ChangefeedConfig struct {
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch                         uint64        `json:"epoch"`
 	BDRMode                       bool          `json:"bdr_mode" default:"false"`
+	AllowSameCluster              bool          `json:"allow_same_cluster" default:"false"`
 	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
 	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
 	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
+}
+
+func (cfg *ChangefeedConfig) IsLowLatencyMode() bool {
+	return cfg != nil && cfg.PerformanceMode == PerformanceModeLowLatency
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -234,7 +239,10 @@ func (cfg *ChangefeedConfig) String() string {
 		log.Error("failed to unmarshal changefeed config", zap.Error(err))
 		return ""
 	}
-	cloned.SinkConfig.MaskSensitiveData()
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	if cloned.SinkConfig != nil {
+		cloned.SinkConfig.MaskSensitiveData()
+	}
 	res, err := json.Marshal(cloned)
 	if err != nil {
 		log.Error("failed to marshal changefeed config", zap.Error(err))
@@ -245,6 +253,10 @@ func (cfg *ChangefeedConfig) String() string {
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
+	// BootstrapPending preserves fresh-start semantics until the first maintainer
+	// bootstrap succeeds. Nil means an existing changefeed with no pending bootstrap.
+	BootstrapPending *bool `json:"bootstrap-pending,omitempty"`
+
 	ChangefeedID common.ChangeFeedID `json:"id"`
 	UpstreamID   uint64              `json:"upstream-id"`
 	SinkURI      string              `json:"sink-uri"`
@@ -276,14 +288,25 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
 		ChangefeedID:                  info.ChangefeedID,
+		PerformanceMode:               util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                       info.StartTs,
 		TargetTS:                      info.TargetTs,
 		SinkURI:                       info.SinkURI,
 		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:                    info.Config.Sink,
+		SinkConfig:                    sinkConfig,
 		Filter:                        info.Config.Filter,
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
@@ -294,6 +317,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		AllowSameCluster:              util.GetOrZero(info.Config.AllowSameCluster),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
 		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
 		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
@@ -323,7 +347,7 @@ func (info *ChangeFeedInfo) isFailedByGC() bool {
 		log.Panic("changefeed info is not consistent",
 			zap.Any("state", info.State), zap.Any("error", info.Error))
 	}
-	return cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
+	return errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -341,16 +365,36 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
 	return str
+}
+
+// MaskChangefeedInfo returns masked metadata for display without modifying data.
+func MaskChangefeedInfo(data []byte) (string, error) {
+	info := new(ChangeFeedInfo)
+	if err := info.Unmarshal(data); err != nil {
+		return "", err
+	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
+	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
+	if info.Config != nil {
+		info.Config.MaskSensitiveData()
+	}
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the
@@ -398,15 +442,14 @@ func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, e
 	}
 
 	data, err := json.Marshal(dataToMarshal)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
 	if err != nil {
-		return errors.Annotatef(
-			cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		return errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
 	return nil
 }
@@ -478,8 +521,8 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 	if err != nil {
 		log.Warn(
 			"failed to parse the sink uri",
-			zap.Error(err),
-			zap.Any("sinkUri", info.SinkURI),
+			zap.Error(util.MaskSensitiveDataInURLError(err)),
+			zap.String("sinkURI", util.MaskSensitiveDataInURIForError(info.SinkURI)),
 		)
 		return
 	}
@@ -602,7 +645,7 @@ func (info *ChangeFeedInfo) fixState() {
 		// This corresponds to the case of failure or error.
 		case AdminNone, AdminResume:
 			if info.Error != nil {
-				if cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
+				if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
 					state = StateFailed
 				} else {
 					state = StateWarning
@@ -629,7 +672,7 @@ func (info *ChangeFeedInfo) fixState() {
 func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
-		log.Warn("parse sink URI failed", zap.Error(err))
+		log.Warn("parse sink URI failed", zap.Error(util.MaskSensitiveDataInURLError(err)))
 		// SAFETY: It is safe to ignore this unresolvable sink URI here,
 		// as it is almost impossible for this to happen.
 		// If we ignore it when fixing it after it happens,
@@ -645,11 +688,8 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 	query := uri.Query()
 	protocolStr := query.Get(ProtocolKey)
 	if protocolStr != "" || info.Config.Sink.Protocol != nil {
-		maskedSinkURI, _ := util.MaskSinkURI(info.SinkURI)
 		log.Warn("sink URI or sink config contains protocol, but scheme is not mq",
-			zap.String("sinkURI", maskedSinkURI),
-			zap.String("protocol", protocolStr),
-			zap.Any("sinkConfig", info.Config.Sink))
+			zap.String("protocol", protocolStr))
 		// always set protocol of mysql sink to ""
 		query.Del(ProtocolKey)
 		info.updateSinkURIAndConfigProtocol(uri, "", query)
@@ -659,7 +699,7 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
-		log.Warn("parse sink URI failed", zap.Error(err))
+		log.Warn("parse sink URI failed", zap.Error(util.MaskSensitiveDataInURLError(err)))
 		return
 	}
 
@@ -697,9 +737,7 @@ func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 
 func (info *ChangeFeedInfo) updateSinkURIAndConfigProtocol(uri *url.URL, newProtocol string, newQuery url.Values) {
 	newRawQuery := newQuery.Encode()
-	maskedURI, _ := util.MaskSinkURI(uri.String())
 	log.Info("handle incompatible protocol from sink URI",
-		zap.String("oldURI", maskedURI),
 		zap.String("newProtocol", newProtocol))
 
 	uri.RawQuery = newRawQuery
@@ -752,14 +790,14 @@ type ChangeFeedStatus struct {
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
 func (status *ChangeFeedStatus) Marshal() (string, error) {
 	data, err := json.Marshal(status)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal into *ChangeFeedStatus from json marshal byte slice
 func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
-		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 }
 
 // GetMaintainerAddr returns the address of the changefeed's maintainer

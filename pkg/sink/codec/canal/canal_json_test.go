@@ -15,6 +15,7 @@ package canal
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -22,10 +23,11 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -517,7 +519,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 			Columns: []string{"a"},
 		},
 	}
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, false)
 	require.NoError(t, err)
 
 	rowEvent := &commonEvent.RowEvent{
@@ -1410,9 +1412,37 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	expected := "dIAAAAAAAAB0X3KAAAAAAAAAAQ=="
-	if kerneltype.IsNextGen() {
-		expected = "dIAAAAAAAAAHX3KAAAAAAAAAAQ=="
-	}
+	expectedRowKey := tablecodec.EncodeRowKeyWithHandle(tableInfo.TableName.TableID, kv.IntHandle(1))
+	expected := base64.StdEncoding.EncodeToString(expectedRowKey)
 	require.Equal(t, expected, tidb_ext.Rowkey)
+}
+
+// TestTableInfoFromMessageLocatesRowByPrimaryKey checks the contract between the
+// decoder and the MySQL sink: the sink builds the WHERE clause of an UPDATE from
+// the table info handle key, so a composite primary key must resolve to all of
+// its columns. Before the handle flags and column offsets were fixed, the
+// alphabetically first column (s_data here, because the decoder sorts columns by
+// name) was used instead, which made every UPDATE scan the whole table.
+func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
+	tableIDAllocator.Clean()
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
+	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{
+			Schema:  "test",
+			Table:   "stock",
+			PKNames: []string{"s_i_id", "s_w_id"},
+			MySQLType: map[string]string{
+				"s_data":     "varchar(50)",
+				"s_i_id":     "int",
+				"s_quantity": "int",
+				"s_w_id":     "int",
+			},
+		},
+		Extensions: &tidbExtension{CommitTs: 100},
+	})
+
+	common.RequireRowLocatorByPrimaryKey(t, tableInfo, "s_i_id", "s_w_id")
 }

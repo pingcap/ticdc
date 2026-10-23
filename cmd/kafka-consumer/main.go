@@ -38,7 +38,7 @@ var (
 )
 
 func main() {
-	debug.SetMemoryLimit(14 * 1024 * 1024 * 1024)
+	debug.SetMemoryLimit(8 * 1024 * 1024 * 1024)
 	var (
 		upstreamURIStr  string
 		configFile      string

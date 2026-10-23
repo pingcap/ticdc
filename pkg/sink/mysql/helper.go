@@ -43,9 +43,9 @@ import (
 const checkRunningAddIndexSQL = `
 SELECT *
 FROM information_schema.ddl_jobs
-WHERE DB_NAME = "%s"
-    AND TABLE_NAME = "%s"
-    AND JOB_TYPE LIKE "add index%%"
+WHERE DB_NAME = ?
+    AND TABLE_NAME = ?
+    AND JOB_TYPE LIKE "add index%"
     AND (STATE = "running" OR STATE = "queueing")
 LIMIT 1;
 `
@@ -53,14 +53,14 @@ LIMIT 1;
 // Ref: https://github.com/pingcap/tidb/issues/55725
 const checkRunningAddIndexSQLForOldVersion = `
 ADMIN SHOW DDL JOBS 1
-WHERE DB_NAME = "%s" 
-    AND TABLE_NAME = "%s"
-    AND JOB_TYPE LIKE "add index%%"
+WHERE DB_NAME = ?
+    AND TABLE_NAME = ?
+    AND JOB_TYPE LIKE "add index%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
 const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
-	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
+	WHERE CREATE_TIME >= ? AND QUERY = ?;`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
@@ -410,10 +410,12 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	if len(event.GetTargetSchemaName()) == 0 {
 		return false
 	}
-	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
+	switch event.GetDDLType() {
+	case timodel.ActionCreateSchema, timodel.ActionDropSchema, timodel.ActionRecoverSchema:
 		return false
+	default:
+		return true
 	}
-	return true
 }
 
 func getTiDBVersion(db *sql.DB) version.ServerInfo {
@@ -522,11 +524,10 @@ func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
 // getDDLStateFromTiDB retrieves the ddl job status of the ddl query from downstream tidb based on the ddl query and the approximate ddl create time.
 func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime string) (timodel.JobState, error) {
 	// ddlCreateTime and createTime are both based on UTC timezone of downstream
-	showJobs := fmt.Sprintf(checkRunningSQL, createTime, ddl)
 	var jobsResults [][]string
 	err := retry.Do(ctx, func() error {
 		//nolint:rowserrcheck
-		jobsRows, err := db.QueryContext(ctx, showJobs)
+		jobsRows, err := db.QueryContext(ctx, checkRunningSQL, createTime, ddl)
 		if err != nil {
 			log.Warn("failed to query from downstream to get ddl state", zap.Error(err))
 			return err

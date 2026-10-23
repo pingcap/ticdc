@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/statistics"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -51,17 +52,19 @@ type Sink struct {
 	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
-	// dmlDB and controlDB are the DB pools this sink is responsible for closing.
+	// dmlDB, controlDB, and controlAsyncDB are the DB pools this sink is responsible for closing.
 	// Compatibility callers built through NewMySQLSink use one shared pool.
-	dmlDB      *sql.DB
-	controlDB  *sql.DB
-	statistics *statistics.Statistics
+	dmlDB          *sql.DB
+	controlDB      *sql.DB
+	controlAsyncDB *sql.DB
+	statistics     *statistics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
 	cfg        *mysql.Config
+	writeGate  *writelease.Gate
 	maxTxnRows int
 	bdrMode    bool
 	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
@@ -82,12 +85,15 @@ func Verify(
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
+	_, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
 	_ = dmlDB.Close()
 	_ = controlDB.Close()
+	if controlAsyncDB != nil {
+		_ = controlAsyncDB.Close()
+	}
 	return nil
 }
 
@@ -98,7 +104,7 @@ func New(
 	sinkURI *url.URL,
 	keyspaceID uint32,
 ) (*Sink, error) {
-	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
+	cfg, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +120,10 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
+	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, keyspaceID), nil
 }
 
+// NewMySQLSink used for test
 func NewMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
@@ -127,7 +134,11 @@ func NewMySQLSink(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = db
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -145,7 +156,26 @@ func newMySQLSinkWithControlDB(
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = controlDB
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
+}
+
+func newMySQLSinkWithControlAsyncDB(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	controlAsyncDB *sql.DB,
+	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
+	keyspaceID uint32,
+) *Sink {
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, enableActiveActive, progressInterval, keyspaceID)
 }
 
 func newMySQLSinkWithDBs(
@@ -154,11 +184,18 @@ func newMySQLSinkWithDBs(
 	cfg *mysql.Config,
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
+	controlAsyncDB *sql.DB,
 	bdrMode bool,
 	enableActiveActive bool,
 	progressInterval time.Duration,
 	keyspaceID uint32,
 ) *Sink {
+	if !cfg.IsTiDB {
+		controlAsyncDB = nil
+	} else if controlAsyncDB == nil {
+		controlAsyncDB = controlDB
+	}
+
 	stat := statistics.New(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
@@ -179,11 +216,12 @@ func newMySQLSinkWithDBs(
 	}
 
 	result := &Sink{
-		changefeedID: changefeedID,
-		dmlDB:        dmlDB,
-		controlDB:    controlDB,
-		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
-		statistics:   stat,
+		changefeedID:   changefeedID,
+		dmlDB:          dmlDB,
+		controlDB:      controlDB,
+		controlAsyncDB: controlAsyncDB,
+		dmlWriter:      make([]*mysql.Writer, cfg.WorkerCount),
+		statistics:     stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
 			causality.TxnCacheOption{
 				Count:         cfg.WorkerCount,
@@ -202,6 +240,7 @@ func newMySQLSinkWithDBs(
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
+	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
 	if enableActiveActive {
 		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)
 	}
@@ -228,18 +267,18 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
-	workerBatchFlushDuration := metrics.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-	workerEventRowCount := metrics.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerBatchFlushDuration := mysql.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerFlushDuration := mysql.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := mysql.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := mysql.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerEventRowCount := mysql.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
-		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
-		metrics.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		mysql.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -318,6 +357,16 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 		// ProgressTableWriter needs table name snapshots to build progress rows.
 		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
 	}
+}
+
+// SetWriteGate delegates admission to the transport writers, where each
+// downstream write is checked immediately before it is executed.
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	for _, writer := range s.dmlWriter {
+		writer.SetWriteGate(gate)
+	}
+	s.ddlWriter.SetWriteGate(gate)
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -455,10 +504,14 @@ func (s *Sink) Close() {
 	if s.controlDB != s.dmlDB {
 		s.closeDBPool("control", s.controlDB)
 	}
+	if s.controlAsyncDB != nil && s.controlAsyncDB != s.dmlDB && s.controlAsyncDB != s.controlDB {
+		s.closeDBPool("control async", s.controlAsyncDB)
+	}
 	if s.activeActiveSyncStatsCollector != nil {
 		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
+	mysql.DeleteDMLEventRowsAffectedMetrics(s.changefeedID)
 
 	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 }
@@ -499,6 +552,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 
 	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
 	defer cleanupWriter.Close()
+	cleanupWriter.SetWriteGate(s.writeGate)
 	return cleanupWriter.RemoveDDLTsItem()
 }
 

@@ -22,7 +22,7 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR --tikv-config $CUR/conf/tikv_config.toml
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-multi-rocks-test-$RANDOM"
 	case $SINK_TYPE in
@@ -54,8 +54,11 @@ function run() {
 	run_sql "drop table multi_rocks.a5;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "create table multi_rocks.finish_mark (id int primary key); " ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists multi_rocks.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

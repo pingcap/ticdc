@@ -491,6 +491,38 @@ func TestSetChangefeedProgressRetriesOnCASConflict(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSetChangefeedProgressPreservesRemoving(t *testing.T) {
+	// Verify a completed pause cannot clear ProgressRemoving.
+	// false: progress is already ProgressRemoving when pause tries to clear it.
+	// true: progress changes from ProgressStopping to ProgressRemoving while pause tries to clear it.
+	for _, conflict := range []bool{false, true} {
+		name := "already removing"
+		if conflict {
+			name = "remove wins while clearing progress"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+			etcdClient := etcd.NewMockClient(ctrl)
+			cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+			cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+			backend := NewEtcdBackend(cdcClient)
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+			if conflict {
+				cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+					Return(&config.ChangeFeedStatus{Progress: config.ProgressStopping}, int64(1), nil)
+				etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(&clientv3.TxnResponse{Succeeded: false}, nil)
+			}
+			cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), cfID).
+				Return(&config.ChangeFeedStatus{Progress: config.ProgressRemoving}, int64(2), nil)
+
+			require.NoError(t, backend.SetChangefeedProgress(context.Background(), cfID, config.ProgressNone))
+		})
+	}
+}
+
 func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -533,4 +565,67 @@ func (f *FuncMarcher) Matches(x any) bool {
 
 func (f *FuncMarcher) String() string {
 	return "func"
+}
+
+// TestFinishInit checks that acknowledgements are fenced and
+// modify only metadata, leaving checkpoint and removal progress untouched.
+func TestFinishInit(t *testing.T) {
+	for _, scenario := range []string{"success", "conflict", "failure", "old-epoch", "recreated", "removed", "already-done"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := etcd.NewMockClient(ctrl)
+			cdc := etcd.NewMockCDCEtcdClient(ctrl)
+			cdc.EXPECT().GetEtcdClient().Return(client).AnyTimes()
+			cdc.EXPECT().GetClusterID().Return("default").AnyTimes()
+			backend := NewEtcdBackend(cdc)
+			id := common.NewChangeFeedIDWithName("paused", common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{ChangefeedID: id, Epoch: 2, State: config.StateNormal, BootstrapPending: new(true)}
+			if scenario == "old-epoch" {
+				info.Epoch = 3
+			}
+			if scenario == "recreated" {
+				info.ChangefeedID = common.NewChangeFeedIDWithName("paused", common.DefaultKeyspaceName)
+			}
+			if scenario == "already-done" {
+				info.BootstrapPending = nil
+			}
+			value, err := info.Marshal()
+			require.NoError(t, err)
+			response := &clientv3.GetResponse{Kvs: []*mvccpb.KeyValue{{Value: []byte(value), ModRevision: 10}}}
+			if scenario == "removed" {
+				response.Kvs = nil
+			}
+			key := etcd.GetEtcdKeyChangeFeedInfo("default", id.DisplayName)
+			client.EXPECT().Get(gomock.Any(), key).Return(response, nil)
+			if scenario == "success" || scenario == "conflict" || scenario == "failure" {
+				client.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, compares []clientv3.Cmp, ops, _ []clientv3.Op) (*clientv3.TxnResponse, error) {
+						require.Equal(t, []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", int64(10))}, compares)
+						require.Len(t, ops, 1)
+						require.Equal(t, key, string(ops[0].KeyBytes()))
+						saved := &config.ChangeFeedInfo{}
+						require.NoError(t, saved.Unmarshal(ops[0].ValueBytes()))
+						require.Nil(t, saved.BootstrapPending)
+						require.Equal(t, info.Epoch, saved.Epoch)
+						require.Equal(t, info.State, saved.State)
+						if scenario == "failure" {
+							return nil, errors.New("etcd unavailable")
+						}
+						return &clientv3.TxnResponse{Succeeded: scenario == "success"}, nil
+					})
+			}
+			result, err := backend.FinishInit(context.Background(), id, 2)
+			if scenario == "conflict" || scenario == "failure" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if scenario == "success" || scenario == "already-done" {
+				require.NotNil(t, result)
+				require.Nil(t, result.BootstrapPending)
+			} else {
+				require.Nil(t, result)
+			}
+		})
+	}
 }

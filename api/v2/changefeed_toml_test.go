@@ -88,10 +88,22 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 		SinkURI: "blackhole://",
 		StartTs: 449999999999999999,
 		Config: &ReplicaConfig{
-			MemoryQuota:       util.AddressOf(uint64(1024)),
-			CaseSensitive:     util.AddressOf(true),
-			ForceReplicate:    util.AddressOf(true),
-			CheckGCSafePoint:  util.AddressOf(false),
+			PerformanceMode:  util.AddressOf(config.PerformanceModeLowLatency),
+			MemoryQuota:      util.AddressOf(uint64(1024)),
+			CaseSensitive:    util.AddressOf(true),
+			ForceReplicate:   util.AddressOf(true),
+			CheckGCSafePoint: util.AddressOf(false),
+			Sink: &SinkConfig{
+				DebeziumConfig: &DebeziumConfig{
+					IncludeStartTs:             util.AddressOf(true),
+					DecimalHandlingMode:        util.AddressOf("string"),
+					BigintUnsignedHandlingMode: util.AddressOf("string"),
+					BinaryHandlingMode:         util.AddressOf("hex"),
+				},
+				SimpleConfig: &SimpleConfig{
+					IncludeStartTs: util.AddressOf(true),
+				},
+			},
 			SyncPointInterval: &JSONDuration{duration: 10 * time.Minute},
 			Integrity: &IntegrityConfig{
 				IntegrityCheckLevel:   util.AddressOf("correctness"),
@@ -113,6 +125,12 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	// Top-level kebab-case keys and runtime field omissions.
 	require.Contains(t, out, `sink-uri = "blackhole://"`)
 	require.Contains(t, out, "start-ts")
+	require.Contains(t, out, "[config.sink.debezium]")
+	require.Contains(t, out, "[config.sink.simple]")
+	// Assert include-start-ts under each protocol table so a Debezium-only
+	// serialization cannot satisfy the Simple round-trip.
+	require.Regexp(t, `(?s)\[config\.sink\.debezium\][^\[]*include-start-ts = true`, out)
+	require.Regexp(t, `(?s)\[config\.sink\.simple\][^\[]*include-start-ts = true`, out)
 	require.NotContains(t, out, "gid") // GID is omitted from TOML (toml:"-")
 
 	// The [config] section must decode into the internal ReplicaConfig used by
@@ -123,12 +141,64 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	_, err := toml.Decode(out, &wrapper)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1024), util.GetOrZero(wrapper.Config.MemoryQuota))
+	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(wrapper.Config.PerformanceMode))
 	require.True(t, util.GetOrZero(wrapper.Config.CaseSensitive))
 	require.True(t, util.GetOrZero(wrapper.Config.ForceReplicate))
 	require.NotNil(t, wrapper.Config.SyncPointInterval)
 	require.Equal(t, 10*time.Minute, *wrapper.Config.SyncPointInterval)
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Debezium.IncludeStartTs))
+	require.Equal(t, "string", util.GetOrZero(wrapper.Config.Sink.Debezium.DecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(wrapper.Config.Sink.Debezium.BigintUnsignedHandlingMode))
+	require.Equal(t, "hex", util.GetOrZero(wrapper.Config.Sink.Debezium.BinaryHandlingMode))
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Simple.IncludeStartTs))
+}
+
+func TestCodecConfigTOMLRoundTripToInternal(t *testing.T) {
+	t.Parallel()
+
+	cfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			KafkaConfig: &KafkaConfig{
+				CodecConfig: &CodecConfig{
+					EnableTiDBExtension:            util.AddressOf(true),
+					MaxBatchSize:                   util.AddressOf(32),
+					AvroEnableWatermark:            util.AddressOf(true),
+					AvroDecimalHandlingMode:        util.AddressOf("string"),
+					AvroBigintUnsignedHandlingMode: util.AddressOf("string"),
+					AvroIncludeBeforeValue:         util.AddressOf(true),
+					EncodingFormat:                 util.AddressOf("avro"),
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, toml.NewEncoder(&buf).Encode(cfg))
+	out := buf.String()
+	require.Contains(t, out, "enable-tidb-extension = true")
+	require.Contains(t, out, "max-batch-size = 32")
+	require.Contains(t, out, "avro-enable-watermark = true")
+	require.Contains(t, out, `avro-decimal-handling-mode = "string"`)
+	require.Contains(t, out, `avro-bigint-unsigned-handling-mode = "string"`)
+	require.Contains(t, out, "avro-include-before-value = true")
+	require.Contains(t, out, `encoding-format = "avro"`)
+
+	var internalCfg config.ReplicaConfig
+	meta, err := toml.Decode(out, &internalCfg)
+	require.NoError(t, err)
+	require.Empty(t, meta.Undecoded())
+	require.NotNil(t, internalCfg.Sink.KafkaConfig)
+	require.NotNil(t, internalCfg.Sink.KafkaConfig.CodecConfig)
+	codecCfg := internalCfg.Sink.KafkaConfig.CodecConfig
+	require.True(t, util.GetOrZero(codecCfg.EnableTiDBExtension))
+	require.Equal(t, 32, util.GetOrZero(codecCfg.MaxBatchSize))
+	require.True(t, util.GetOrZero(codecCfg.AvroEnableWatermark))
+	require.Equal(t, "string", util.GetOrZero(codecCfg.AvroDecimalHandlingMode))
+	require.Equal(t, "string", util.GetOrZero(codecCfg.AvroBigintUnsignedHandlingMode))
+	require.True(t, util.GetOrZero(codecCfg.AvroIncludeBeforeValue))
+	require.Equal(t, "avro", util.GetOrZero(codecCfg.EncodingFormat))
 }
 
 // TestDefaultConfigTOMLRoundTripToInternal encodes the full default replica

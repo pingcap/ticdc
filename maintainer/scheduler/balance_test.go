@@ -24,6 +24,40 @@ import (
 
 const testDefaultBalanceMoveBatchSize = 1024
 
+func TestBalanceSchedulerUsesCheckBalanceInterval(t *testing.T) {
+	cfID, _, oc, sc, drainState, _ := newDrainSchedulerTestHarness(t)
+	checkBalanceInterval := time.Minute
+	testCases := []struct {
+		name string
+		mode int64
+	}{
+		{name: "default", mode: common.DefaultMode},
+		{name: "redo", mode: common.RedoMode},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewBalanceScheduler(
+				cfID,
+				nil,
+				oc,
+				sc,
+				checkBalanceInterval,
+				tc.mode,
+				drainState,
+				testDefaultBalanceMoveBatchSize,
+			)
+
+			beforeExecute := time.Now()
+			nextCheckTime := s.Execute()
+			afterExecute := time.Now()
+
+			require.False(t, nextCheckTime.Before(beforeExecute.Add(checkBalanceInterval)))
+			require.False(t, nextCheckTime.After(afterExecute.Add(checkBalanceInterval)))
+		})
+	}
+}
+
 func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")

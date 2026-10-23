@@ -1,0 +1,124 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package kafka
+
+import (
+	"context"
+	"sync/atomic"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/statistics"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"go.uber.org/zap"
+)
+
+type asyncProducer struct {
+	client       *kgo.Client
+	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
+
+	closed   atomic.Bool
+	resultCh chan asyncProduceResult
+}
+
+type asyncProduceResult struct {
+	rowCount int
+	callback func()
+	logInfo  *codecCommon.MessageLogInfo
+	err      error
+}
+
+func (p *asyncProducer) Close() {
+	if !p.closed.CompareAndSwap(false, true) {
+		return
+	}
+
+	log.Info("kafka async producer closed",
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()))
+}
+
+func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) (err error) {
+	defer func() {
+		if err != nil && p.statistics != nil {
+			p.statistics.RecordDMLResult(message.GetRowsCount(), err)
+		}
+	}()
+	if p.closed.Load() {
+		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
+	}
+
+	record := &kgo.Record{
+		Topic:     topic,
+		Partition: partition,
+		Key:       message.Key,
+		Value:     message.Value,
+	}
+
+	rowCount := message.GetRowsCount()
+	callback := message.Callback
+	logInfo := message.LogInfo
+	promise := func(_ *kgo.Record, err error) {
+		result := asyncProduceResult{
+			rowCount: rowCount,
+			callback: callback,
+			logInfo:  logInfo,
+			err:      err,
+		}
+		select {
+		case p.resultCh <- result:
+		case <-ctx.Done():
+		case <-p.client.Context().Done():
+		}
+	}
+
+	// Produce can buffer a record without checking ctx, so reject prior cancellation.
+	// If it waits for buffer space, canceling ctx makes it return; propagate the cause below.
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
+	p.client.Produce(ctx, record, promise)
+	return context.Cause(ctx)
+}
+
+func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-p.client.Context().Done():
+			return context.Cause(p.client.Context())
+		case result := <-p.resultCh:
+			if p.statistics != nil {
+				p.statistics.RecordDMLResult(result.rowCount, result.err)
+			}
+			if result.err != nil {
+				log.Error("kafka message send failed",
+					zap.String("keyspace", p.changefeedID.Keyspace()),
+					zap.String("changefeed", p.changefeedID.Name()),
+					zap.String("eventContext", BuildEventLogContext(result.logInfo)),
+					zap.Error(result.err))
+				return errors.WrapError(errors.ErrKafkaSendMessage, result.err)
+			}
+			if result.callback != nil {
+				result.callback()
+			}
+		}
+	}
+}

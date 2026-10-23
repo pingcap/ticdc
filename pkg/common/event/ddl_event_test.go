@@ -168,6 +168,9 @@ func TestDDLEventRollingUpgradeLegacyMarshalNewUnmarshal(t *testing.T) {
 	require.Equal(t, legacy.BDRMode, newEvent.BDRMode)
 	require.Equal(t, legacy.Err, newEvent.Err)
 	require.True(t, newEvent.NotSync)
+	// Legacy events carry no table state; the collector falls back to its
+	// pre-state-change behavior for them.
+	require.Nil(t, newEvent.TableStateChange)
 }
 
 func TestDDLEventRollingUpgradeNewMarshalLegacyUnmarshal(t *testing.T) {
@@ -212,6 +215,35 @@ func TestDDLEventRollingUpgradeNewMarshalLegacyUnmarshal(t *testing.T) {
 	_, hasNewKey := rawMap["not_sync"]
 	require.True(t, hasLegacyKey, fmt.Sprintf("legacy key should exist in payload: %s", string(restData)))
 	require.True(t, hasNewKey, fmt.Sprintf("new key should exist in payload: %s", string(restData)))
+	// A legacy receiver ignores the new table state field.
+	_, hasStateChange := rawMap["table_state_change"]
+	require.False(t, hasStateChange, fmt.Sprintf("table state should be absent here: %s", string(restData)))
+}
+
+func TestDDLEventTableStateChangeJSONCompatibility(t *testing.T) {
+	ddlEvent := DDLEvent{
+		Version: DDLEventVersion1,
+		TableStateChange: &TableStateChange{
+			PhysicalTableID: 101,
+			Kind:            TableStateUpdated,
+		},
+	}
+	data, err := ddlEvent.Marshal()
+	require.NoError(t, err)
+
+	payload, _, err := ValidateAndExtractPayload(data, TypeDDLEvent)
+	require.NoError(t, err)
+	restData := extractDDLEventV1RestData(t, payload)
+
+	rawMap := make(map[string]any)
+	require.NoError(t, json.Unmarshal(restData, &rawMap))
+	_, hasStateChange := rawMap["table_state_change"]
+	require.True(t, hasStateChange, fmt.Sprintf("table state should exist in payload: %s", string(restData)))
+
+	// A legacy receiver ignores the unknown field.
+	var legacy legacyDDLEventJSON
+	require.NoError(t, json.Unmarshal(restData, &legacy))
+	require.Equal(t, DDLEventVersion1, legacy.Version)
 }
 
 func TestDDLEvent(t *testing.T) {
@@ -235,6 +267,10 @@ func TestDDLEvent(t *testing.T) {
 		// NotSync must survive Marshal/Unmarshal because it controls whether dispatchers
 		// should forward this DDL to downstream sinks.
 		NotSync: true,
+		TableStateChange: &TableStateChange{
+			PhysicalTableID: ddlJob.TableID,
+			Kind:            TableStateUpdated,
+		},
 		BlockedTableNames: []SchemaTableName{
 			{SchemaName: ddlJob.SchemaName, TableName: ddlJob.TableName},
 		},
@@ -271,6 +307,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
 	require.Equal(t, ddlEvent.BlockedTableNames, reverseEvent.BlockedTableNames)
 	require.Equal(t, ddlEvent.NotSync, reverseEvent.NotSync)
+	require.Equal(t, ddlEvent.TableStateChange, reverseEvent.TableStateChange)
 
 	// Test unsupported version in Marshal
 	mockDDLVersion1 := 99

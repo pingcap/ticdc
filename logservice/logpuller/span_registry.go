@@ -15,10 +15,12 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
@@ -73,7 +75,9 @@ type subscribedSpan struct {
 	initializationTracker spanInitializationTracker
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
-	priorityPolicy        scanPriorityPolicy
+	// baseScanPriority is the minimum priority for every Region in this subscription.
+	baseScanPriority cdcpb.ScanPriority
+	priorityPolicy   scanPriorityPolicy
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -187,7 +191,21 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	res := span.rangeLock.IterAll(span.tryResolveLock)
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Any("ranges", res))
+		zap.Int("lockedRegionCount", res.LockedRegionCount),
+		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+		zap.Any("fastestRegion", res.FastestRegion),
+		zap.Any("slowestRegion", res.SlowestRegion))
+}
+
+// formatUnlockedRanges formats unlocked ranges for logging. The span keys may
+// contain row handles, so they are redacted according to the log redaction mode.
+func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
+	res := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		res = append(res, fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, resolvedTs: %d",
+			r.Span.TableID, util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+	}
+	return res
 }
 
 func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
@@ -252,24 +270,26 @@ type spanAndTargetTs struct {
 	targetTs uint64
 }
 
+// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no
+// need to resolve.
+func getResolvedTargetTs(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
+	resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+	if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+		return 0
+	}
+	resolvedTs := subSpan.resolvedTs.Load()
+	resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+	if currentTime.Sub(resolvedTime) < resolveLockFence {
+		return 0
+	}
+	return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
+}
+
 func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
 	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
 	defer resolveLockTicker.Stop()
 	maxCacheSize := 1024
 	spanAndTsCache := make([]spanAndTargetTs, 0, maxCacheSize)
-	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
 
 	for {
 		select {
@@ -341,7 +361,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()

@@ -14,13 +14,40 @@
 package config
 
 import (
+	"encoding/json"
 	"net/url"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDateSeparatorSerialization(t *testing.T) {
+	t.Parallel()
+
+	var jsonConfig SinkConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"date-separator":"DAY"}`), &jsonConfig))
+	require.Equal(t, DateSeparatorDay, util.GetOrZero(jsonConfig.DateSeparator))
+
+	encoded, err := json.Marshal(jsonConfig)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"date-separator":"day","integrity":null}`, string(encoded))
+
+	var tomlConfig SinkConfig
+	_, err = toml.Decode(`date-separator = "Month"`, &tomlConfig)
+	require.NoError(t, err)
+	require.Equal(t, DateSeparatorMonth, util.GetOrZero(tomlConfig.DateSeparator))
+
+	err = json.Unmarshal([]byte(`{"date-separator":"week"}`), &SinkConfig{})
+	require.Error(t, err)
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err), "%+v", err)
+
+	_, err = toml.Decode(`date-separator = "week"`, &SinkConfig{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
+}
 
 func TestValidateTxnAtomicity(t *testing.T) {
 	t.Parallel()
@@ -102,12 +129,22 @@ func TestValidateTxnAtomicity(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		cfg := SinkConfig{}
+		cfg := SinkConfig{
+			DispatchRules: []*DispatchRule{
+				nil,
+				{Matcher: []string{"src.orders"}, DispatcherRule: "table"},
+				nil,
+				{Matcher: []string{"src.customers"}, DispatcherRule: "table"},
+			},
+		}
 		parsedSinkURI, err := url.Parse(tc.sinkURI)
 		require.Nil(t, err)
 		if tc.expectedErr == "" {
 			require.Nil(t, cfg.validateAndAdjust(parsedSinkURI))
 			require.Equal(t, tc.shouldSplitTxn, util.GetOrZero(cfg.TxnAtomicity).ShouldSplitTxn())
+			require.Len(t, cfg.DispatchRules, 2)
+			require.Equal(t, []string{"src.orders"}, cfg.DispatchRules[0].Matcher)
+			require.Equal(t, []string{"src.customers"}, cfg.DispatchRules[1].Matcher)
 		} else {
 			require.Regexp(t, tc.expectedErr, cfg.validateAndAdjust(parsedSinkURI))
 		}
@@ -543,9 +580,16 @@ func TestValidateAndAdjustStorageConfig(t *testing.T) {
 	sinkURI, err := url.Parse("s3://bucket?protocol=csv")
 	require.NoError(t, err)
 	s := GetDefaultReplicaConfig()
+	s.Sink.DispatchRules = []*DispatchRule{
+		nil,
+		{Matcher: []string{"src.*"}, DispatcherRule: "table"},
+		nil,
+	}
 	err = s.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	require.Equal(t, DefaultFileIndexWidth, util.GetOrZero(s.Sink.FileIndexWidth))
+	require.Len(t, s.Sink.DispatchRules, 1)
+	require.Equal(t, "table", s.Sink.DispatchRules[0].PartitionRule)
 
 	err = s.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
