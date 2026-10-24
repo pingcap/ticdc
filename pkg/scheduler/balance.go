@@ -124,16 +124,19 @@ func Balance[T replica.ReplicationID, R replica.Replication[T]](
 		}
 		victim, _ := maxPriorityQueue.PeekTop()
 		task := victim.Tasks[0]
-		if move(task, target.Node) {
-			// update the task size priority queue
-			target.Load++
-			victim.Load--
-			clear(victim.Tasks[:1])
-			victim.Tasks = victim.Tasks[1:]
-			movedSize++
-			if movedSize >= batchSize || movedSize >= totalMoveSize {
-				break
-			}
+		if !move(task, target.Node) {
+			// A rejected move leaves both queues unchanged, so retrying would pick
+			// the same pair forever. End the round; the next one reshuffles tasks.
+			break
+		}
+		// update the task size priority queue
+		target.Load++
+		victim.Load--
+		clear(victim.Tasks[:1])
+		victim.Tasks = victim.Tasks[1:]
+		movedSize++
+		if movedSize >= batchSize || movedSize >= totalMoveSize {
+			break
 		}
 
 		minPriorityQueue.AddOrUpdate(target)
