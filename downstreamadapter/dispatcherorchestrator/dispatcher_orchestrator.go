@@ -101,7 +101,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) error {
 	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() && !m.fenced.Load() }) {
-		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
+		log.Debug("dispatcher orchestrator already closed, drop message", zap.Int("messageCount", len(msg.Message)))
 		return nil
 	}
 	defer m.msgGuardWaitGroup.Done()
@@ -110,7 +110,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	if !ok {
 		log.Warn("unknown message type, drop message",
 			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.Int("messageCount", len(msg.Message)))
 		return nil
 	}
 
@@ -175,7 +175,7 @@ func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.Int("messageCount", len(msg.Message)))
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -88,7 +89,7 @@ func NewConfluentSchemaManager(
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Test connection to Schema Registry failed", zap.Error(err))
+		log.Error("Test connection to Schema Registry failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
@@ -99,7 +100,7 @@ func NewConfluentSchemaManager(
 
 	text, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Error("Reading response from Schema Registry failed", zap.Error(err))
+		log.Error("Reading response from Schema Registry failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
@@ -126,23 +127,22 @@ func (m *confluentSchemaManager) Register(
 	schemaDefinition string,
 ) (SchemaID, error) {
 	id := SchemaID{}
-	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
+	log.Info("registering schema", zap.String("schemaName", schemaName))
 
 	reqBody := registerRequest{
 		Schema: schemaDefinition,
 	}
 	payload, err := json.Marshal(&reqBody)
 	if err != nil {
-		log.Error("Could not marshal request to the Registry", zap.Error(err))
+		log.Error("Could not marshal request to the Registry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
-	log.Info("Registering schema", zap.ByteString("payload", payload))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Failed to NewRequestWithContext", zap.Error(err))
+		log.Error("Failed to NewRequestWithContext", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
@@ -159,7 +159,7 @@ func (m *confluentSchemaManager) Register(
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Error("Failed to read response from Registry", zap.Error(err))
+		log.Error("Failed to read response from Registry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
@@ -170,8 +170,8 @@ func (m *confluentSchemaManager) Register(
 		log.Error(
 			"Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.ByteString("requestBody", payload),
-			zap.ByteString("responseBody", body),
+			zap.Int("requestSize", len(payload)),
+			zap.Int("responseSize", len(body)),
 		)
 		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
@@ -181,7 +181,7 @@ func (m *confluentSchemaManager) Register(
 	var jsonResp registerResponse
 	err = json.Unmarshal(body, &jsonResp)
 	if err != nil {
-		log.Error("Failed to parse result from Registry", zap.Error(err))
+		log.Error("Failed to parse result from Registry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
@@ -192,9 +192,7 @@ func (m *confluentSchemaManager) Register(
 		)
 	}
 
-	log.Info("Registered schema successfully",
-		zap.Int("schemaID", jsonResp.SchemaID),
-		zap.ByteString("body", body))
+	log.Info("Registered schema successfully", zap.Int("schemaID", jsonResp.SchemaID))
 
 	id.confluentSchemaID = jsonResp.SchemaID
 	return id, nil
@@ -217,7 +215,7 @@ func (m *confluentSchemaManager) Lookup(
 	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Error constructing request for Registry lookup", zap.Error(err))
+		log.Error("Error constructing request for Registry lookup", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
@@ -234,14 +232,14 @@ func (m *confluentSchemaManager) Lookup(
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Error("Failed to parse result from Registry", zap.Error(err))
+		log.Error("Failed to parse result from Registry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
 		log.Error("Failed to query schema from the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.ByteString("responseBody", body))
+			zap.Int("responseSize", len(body)))
 		return "", errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
 		)
@@ -259,7 +257,7 @@ func (m *confluentSchemaManager) Lookup(
 	var jsonResp lookupResponse
 	err = json.Unmarshal(body, &jsonResp)
 	if err != nil {
-		log.Error("Failed to parse result from Registry", zap.Error(err))
+		log.Error("Failed to parse result from Registry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
@@ -296,7 +294,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 
 			id, err := m.Register(ctx, schemaSubject, schemaDefinition)
 			if err != nil {
-				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
+				log.Error("GetCachedOrRegister: Could not register schema", zap.String("errorType", fmt.Sprintf("%T", err)))
 				return nil, errors.Trace(err)
 			}
 
@@ -327,7 +325,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
 			zap.Uint64("schemaVersion", entry.schemaVersion),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID),
-			zap.String("schema", entry.schemaDefinition))
+			zap.Int("schemaSize", len(entry.schemaDefinition)))
 	}
 
 	return entry.header, nil
@@ -341,7 +339,7 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 	req, err := http.NewRequestWithContext(ctx, "DELETE", uri, nil)
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
-		log.Error("Could not construct request for clearRegistry", zap.Error(err))
+		log.Error("Could not construct request for clearRegistry", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
@@ -419,7 +417,7 @@ func httpRetry(
 	}
 
 	if err != nil {
-		log.Error("Failed to parse response", zap.Error(err))
+		log.Error("Failed to parse response", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	for {
@@ -429,7 +427,7 @@ func httpRetry(
 		resp, err = httpCli.Do(r)
 		if err != nil {
 			err = util.MaskSensitiveDataInURLError(err)
-			log.Warn("HTTP request failed", zap.Error(err))
+			log.Warn("HTTP request failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 			goto checkCtx
 		}
 

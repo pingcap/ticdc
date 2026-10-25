@@ -253,7 +253,7 @@ func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 		table = job.BinlogInfo.TableInfo.Name.O
 	}
 	key := toTableInfosKey(job.SchemaName, table)
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
+	log.Info("apply job", zap.String("jobKey", key), zap.Int64("jobID", job.ID))
 	return s.tableInfos[key]
 }
 
@@ -721,14 +721,14 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 
 func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (*DMLEvent, *common.RawKVEntry) {
 	if len(dml) != 2 {
-		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
+		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Int("dmlCount", len(dml)))
 	}
 
 	lowerInsert := strings.ToLower(dml[0])
 	lowerUpdate := strings.ToLower(dml[1])
 
 	if !strings.Contains(lowerInsert, "insert") || !strings.Contains(lowerUpdate, "update") {
-		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
+		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Int("dmlCount", len(dml)))
 	}
 
 	key := toTableInfosKey(schema, table)
@@ -763,11 +763,11 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 // DML2DeleteEvent use a insert event to generate the delete event for this event
 func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, deleteDml string) *DMLEvent {
 	if !strings.Contains(strings.ToLower(dml), "insert") {
-		log.Fatal("event for DML2DeleteEvent must be insert", zap.Any("dml", dml))
+		log.Fatal("event for DML2DeleteEvent must be insert", zap.Int("querySize", len(dml)))
 	}
 
 	if !strings.Contains(strings.ToLower(deleteDml), "delete") {
-		log.Fatal("the 'deleteDml' parameter for DML2DeleteEvent must be a DELETE statement", zap.Any("deleteDml", deleteDml))
+		log.Fatal("the 'deleteDml' parameter for DML2DeleteEvent must be a DELETE statement", zap.Int("querySize", len(deleteDml)))
 	}
 
 	key := toTableInfosKey(schema, table)
@@ -801,7 +801,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 // execute delete dml to clear the data record
 func (s *EventTestHelper) ExecuteDeleteDml(schema, table string, dml string) {
 	if !strings.Contains(strings.ToLower(dml), "delete") {
-		log.Fatal("dml for ExecuteDeleteDml must be a DELETE statement", zap.Any("deleteDml", dml))
+		log.Fatal("dml for ExecuteDeleteDml must be a DELETE statement", zap.Int("querySize", len(dml)))
 	}
 
 	key := toTableInfosKey(schema, table)

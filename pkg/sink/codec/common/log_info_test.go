@@ -50,9 +50,6 @@ func TestBuildMessageLogInfo(t *testing.T) {
 	require.Equal(t, "t", rowInfo.Table)
 	require.Equal(t, dml.StartTs, rowInfo.StartTs)
 	require.Equal(t, dml.GetCommitTs(), rowInfo.CommitTs)
-	require.Len(t, rowInfo.PrimaryKeys, 1)
-	require.Equal(t, "id", rowInfo.PrimaryKeys[0].Name)
-	require.Equal(t, int64(1), rowInfo.PrimaryKeys[0].Value)
 }
 
 func TestAttachMessageLogInfo(t *testing.T) {
@@ -84,8 +81,6 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	require.Len(t, message.LogInfo.Rows, 1)
 	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
 	require.Equal(t, dml.StartTs, message.LogInfo.Rows[0].StartTs)
-	require.Len(t, message.LogInfo.Rows[0].PrimaryKeys, 1)
-	require.Equal(t, int64(1), message.LogInfo.Rows[0].PrimaryKeys[0].Value)
 }
 
 func TestSetDDLMessageLogInfo(t *testing.T) {
@@ -100,7 +95,6 @@ func TestSetDDLMessageLogInfo(t *testing.T) {
 
 	require.NotNil(t, message.LogInfo)
 	require.NotNil(t, message.LogInfo.DDL)
-	require.Equal(t, ddlEvent.Query, message.LogInfo.DDL.Query)
 	require.Equal(t, ddlEvent.GetCommitTs(), message.LogInfo.DDL.CommitTs)
 	require.Nil(t, message.LogInfo.Rows)
 	require.Nil(t, message.LogInfo.Checkpoint)

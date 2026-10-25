@@ -68,23 +68,15 @@ type MessageLogInfo struct {
 
 // RowLogInfo represents the information of a single row in a sink message.
 type RowLogInfo struct {
-	Type        string
-	Database    string
-	Table       string
-	StartTs     uint64
-	CommitTs    uint64
-	PrimaryKeys []ColumnLogInfo
-}
-
-// ColumnLogInfo records the name and value of a column for logging purposes.
-type ColumnLogInfo struct {
-	Name  string
-	Value interface{}
+	Type     string
+	Database string
+	Table    string
+	StartTs  uint64
+	CommitTs uint64
 }
 
 // DDLLogInfo stores diagnostic information for DDL messages.
 type DDLLogInfo struct {
-	Query    string
 	StartTs  uint64
 	CommitTs uint64
 }

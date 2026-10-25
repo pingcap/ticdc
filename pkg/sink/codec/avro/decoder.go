@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"math/big"
 	"strconv"
@@ -103,7 +104,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeRow, true
 	}
 	if len(d.value) < 1 {
-		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", util.RedactAny(d.value)))
+		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", util.RedactSensitiveValue(d.value)))
 	}
 	switch d.value[0] {
 	case schemamanager.ConfluentMagicByte:
@@ -164,7 +165,7 @@ func (d *decoder) decodeDMLPayload() (
 	ctx := context.Background()
 	keyMap, keySchema, err = d.decodeKey(ctx)
 	if err != nil {
-		log.Panic("decode key failed", zap.Error(err))
+		log.Panic("decode key failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	isDeleteValue := d.isDeleteValue()
@@ -195,7 +196,7 @@ func (d *decoder) decodeDMLPayload() (
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 		}
 		schemaName, tableName := schemaAndTableName(valueSchema)
 		d.valueSchemas[[2]string{schemaName, tableName}] = valueSchema
@@ -217,7 +218,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 ) *commonEvent.DMLEvent {
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete, hasValue)
 	if err != nil {
-		log.Panic("assemble event failed", zap.Error(err))
+		log.Panic("assemble event failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	if deleteCommitTs != 0 {
 		event.StartTs = deleteCommitTs
@@ -254,8 +255,8 @@ func (d *decoder) assembleDMLEventFromDecoded(
 				zap.Any("type", col.GetType()),
 				zap.Any("charset", col.GetCharset()),
 				zap.Any("flag", col.GetFlag()),
-				zap.String("value", util.RedactAny(valueMap[col.Name.O])),
-				zap.String("default", util.RedactAny(col.GetDefaultValue())))
+				zap.String("value", util.RedactSensitiveValue(valueMap[col.Name.O])),
+				zap.String("default", util.RedactSensitiveValue(col.GetDefaultValue())))
 		}
 	}
 	if found {
@@ -263,7 +264,7 @@ func (d *decoder) assembleDMLEventFromDecoded(
 			log.Panic("verify row checksum failed",
 				zap.String("schema", event.TableInfo.GetSchemaName()),
 				zap.String("table", event.TableInfo.GetTableName()),
-				zap.Uint64("commitTs", event.GetCommitTs()), zap.Error(err))
+				zap.Uint64("commitTs", event.GetCommitTs()), zap.String("errorType", fmt.Sprintf("%T", err)))
 		}
 	}
 
@@ -280,7 +281,7 @@ func (d *decoder) isDeleteValue() bool {
 func (d *decoder) decodeDeleteCommitTs() uint64 {
 	if len(d.value) != 9 {
 		log.Panic("avro invalid delete value, expected delete marker plus commit-ts",
-			zap.String("data", util.RedactAny(d.value)))
+			zap.String("data", util.RedactSensitiveValue(d.value)))
 	}
 	commitTs := binary.BigEndian.Uint64(d.value[1:])
 	d.value = nil
@@ -557,7 +558,7 @@ func extractExpectedChecksum(valueMap map[string]any) (uint64, bool) {
 	}
 	result, err := strconv.ParseUint(checksum, 10, 64)
 	if err != nil {
-		log.Panic("parse checksum into uint64 failed", zap.String("checksum", checksum), zap.Error(err))
+		log.Panic("parse checksum into uint64 failed", zap.String("checksum", checksum), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	return result, true
 }
@@ -669,14 +670,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		log.Panic("value is empty, cannot found the ddl event")
 	}
 	if d.value[0] != ddlByte {
-		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", util.RedactAny(d.value)))
+		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", util.RedactSensitiveValue(d.value)))
 	}
 
 	data := d.value[1:]
 	var baseDDLEvent ddlEvent
 	err := json.Unmarshal(data, &baseDDLEvent)
 	if err != nil {
-		log.Panic("unmarshal ddl event failed", zap.Any("value", util.RedactAny(d.value)), zap.Error(err))
+		log.Panic("unmarshal ddl event failed", zap.Any("value", util.RedactSensitiveValue(d.value)), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	d.value = nil
 

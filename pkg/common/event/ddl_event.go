@@ -197,8 +197,8 @@ func (d *DDLEvent) UnmarshalJSON(data []byte) error {
 }
 
 func (d *DDLEvent) String() string {
-	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, StartTs: %d, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
-		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.StartTs, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+	return fmt.Sprintf("DDLEvent{Type: %d, SchemaID: %d, StartTs: %d, FinishedTs: %d, Seq: %d, eventSize: %d}",
+		d.Type, d.SchemaID, d.StartTs, d.FinishedTs, d.Seq, d.eventSize)
 }
 
 func (d *DDLEvent) GetType() int {
@@ -295,7 +295,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 			log.Panic("split queries failed", zap.Error(err))
 		}
 		if len(queries) != len(d.MultipleTableInfos) {
-			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+			log.Panic("queries length should be equal to multipleTableInfos length", zap.Int("queryCount", len(queries)), zap.Int("tableCount", len(d.MultipleTableInfos)))
 		}
 
 		t := model.ActionCreateTable
@@ -333,11 +333,11 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 func extractRenameTargetExtraFromQuery(query string) (string, string) {
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
-		log.Panic("parse split rename query failed", zap.String("query", query), zap.Error(err))
+		log.Panic("parse split rename query failed", zap.Int("querySize", len(query)))
 	}
 	renameStmt, ok := stmt.(*ast.RenameTableStmt)
 	if !ok || len(renameStmt.TableToTables) == 0 {
-		log.Panic("unexpected split rename query", zap.String("query", query), zap.Any("stmt", stmt))
+		log.Panic("unexpected split rename query", zap.Int("querySize", len(query)))
 	}
 	oldTable := renameStmt.TableToTables[0].OldTable
 	return oldTable.Schema.O, oldTable.Name.O

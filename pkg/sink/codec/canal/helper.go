@@ -103,7 +103,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (o
 	case mysql.TypeBit:
 		uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("failed to convert bit to int", zap.String("data", util.RedactAny(d)), zap.Error(err))
+			log.Panic("failed to convert bit to int", zap.String("data", util.RedactSensitiveValue(d)), zap.String("errorType", fmt.Sprintf("%T", err)))
 		}
 		value = strconv.FormatUint(uintValue, 10)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,
@@ -112,7 +112,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (o
 		if isBinary {
 			decoded, err := bytesDecoder.Bytes(bytes)
 			if err != nil {
-				log.Panic("failed to decode bytes", zap.String("bytes", util.RedactAny(bytes)), zap.Error(err))
+				log.Panic("failed to decode bytes", zap.String("bytes", util.RedactSensitiveValue(bytes)), zap.String("errorType", fmt.Sprintf("%T", err)))
 			}
 			value = string(decoded)
 		} else {

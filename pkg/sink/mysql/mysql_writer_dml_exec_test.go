@@ -29,12 +29,12 @@ func TestSequenceExecuteRedactsArgs(t *testing.T) {
 
 	const rowValue = "sensitive-row-value"
 	for _, tt := range []struct {
-		name        string
-		mode        string
-		containsRow bool
+		name string
+		mode string
 	}{
-		{name: "redaction disabled", mode: errors.RedactLogDisable, containsRow: true},
-		{name: "redaction enabled", mode: errors.RedactLogEnable, containsRow: false},
+		{name: "redaction disabled", mode: errors.RedactLogDisable},
+		{name: "redaction marker", mode: errors.RedactLogMarker},
+		{name: "redaction enabled", mode: errors.RedactLogEnable},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			errors.RedactLogEnabled.Store(tt.mode)
@@ -59,13 +59,9 @@ func TestSequenceExecuteRedactsArgs(t *testing.T) {
 
 			err = writer.sequenceExecute(dmls, tx, time.Second)
 			require.Error(t, err)
-			if tt.containsRow {
-				require.Contains(t, err.Error(), rowValue)
-			} else {
-				require.NotContains(t, err.Error(), rowValue)
-				require.Contains(t, err.Error(), "args:(?)")
-				require.NotContains(t, dmls.String(), rowValue)
-			}
+			require.NotContains(t, err.Error(), rowValue)
+			require.Contains(t, err.Error(), "arg count:1")
+			require.NotContains(t, dmls.String(), rowValue)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
@@ -80,12 +76,12 @@ func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
 		query    = "BEGIN;INSERT INTO t VALUES (?);COMMIT;"
 	)
 	for _, tt := range []struct {
-		name        string
-		mode        string
-		containsRow bool
+		name string
+		mode string
 	}{
-		{name: "redaction disabled", mode: errors.RedactLogDisable, containsRow: true},
-		{name: "redaction enabled", mode: errors.RedactLogEnable, containsRow: false},
+		{name: "redaction disabled", mode: errors.RedactLogDisable},
+		{name: "redaction marker", mode: errors.RedactLogMarker},
+		{name: "redaction enabled", mode: errors.RedactLogEnable},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			errors.RedactLogEnabled.Store(tt.mode)
@@ -108,12 +104,8 @@ func TestMultiStmtExecuteRedactsArgs(t *testing.T) {
 
 			err = writer.multiStmtExecute(conn, dmls, time.Second)
 			require.Error(t, err)
-			if tt.containsRow {
-				require.Contains(t, err.Error(), rowValue)
-			} else {
-				require.NotContains(t, err.Error(), rowValue)
-				require.Contains(t, err.Error(), "args:(?)")
-			}
+			require.NotContains(t, err.Error(), rowValue)
+			require.Contains(t, err.Error(), "arg count:1")
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}

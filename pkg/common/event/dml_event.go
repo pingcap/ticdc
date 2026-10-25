@@ -16,7 +16,6 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -25,8 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -79,44 +76,8 @@ func NewBatchDMLEvent() *BatchDMLEvent {
 }
 
 func (b *BatchDMLEvent) String() string {
-	var rowsStr string
-	if b.Rows != nil && b.TableInfo != nil {
-		defer func() {
-			if r := recover(); r != nil {
-				rowsStr = "<error>"
-			}
-		}()
-
-		var sb strings.Builder
-		sb.WriteString("[")
-		numRows := b.Rows.NumRows()
-		fields := b.TableInfo.GetFieldSlice()
-		for i := 0; i < numRows; i++ {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			row := b.Rows.GetRow(i)
-			if str := safeRowToString(row, fields); str != "" {
-				sb.WriteString(str)
-			} else {
-				sb.WriteString("<error>")
-			}
-		}
-		sb.WriteString("]")
-		rowsStr = sb.String()
-	} else {
-		rowsStr = "<nil>"
-	}
-
-	var rawRowsStr string
-	if b.RawRows != nil {
-		rawRowsStr = util.RedactBytes(b.RawRows)
-	} else {
-		rawRowsStr = "<nil>"
-	}
-
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %s, RawRows: %s, Table: %v, Len: %d}",
-		b.Version, b.DMLEvents, rowsStr, rawRowsStr, b.TableInfo.TableName.String(), b.Len())
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEventCount: %d, RawRowsSize: %d, Len: %d}",
+		b.Version, len(b.DMLEvents), len(b.RawRows), b.Len())
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
@@ -462,87 +423,10 @@ func NewDMLEvent(
 	}
 }
 
-// Notes: This function has a performance issue, because it will decode the rows one by one.
-// Please only use it for debugging purposes.
+// String returns diagnostic metadata without row values.
 func (t *DMLEvent) String() string {
-	rowsStringBuilder := strings.Builder{}
-	if t.Rows == nil || t.TableInfo == nil {
-		return ""
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			// Log the panic for debugging purposes if needed
-			// You can add logging here if required
-		}
-	}()
-
-	rows := make([]RowChange, 0)
-	for {
-		row, ok := t.GetNextRow()
-		if !ok {
-			t.Rewind()
-			break
-		}
-		rows = append(rows, row)
-	}
-
-	if len(rows) == 0 {
-		return ""
-	}
-
-	for _, row := range rows {
-		switch row.RowType {
-		case common.RowTypeUpdate:
-			rowsStringBuilder.WriteString("Update: ")
-			if preRowStr := safeRowToString(row.PreRow, t.TableInfo.GetFieldSlice()); preRowStr != "" {
-				rowsStringBuilder.WriteString("PreRow: " + preRowStr + ",")
-			} else {
-				rowsStringBuilder.WriteString("PreRow: <error>,")
-			}
-			if rowStr := safeRowToString(row.Row, t.TableInfo.GetFieldSlice()); rowStr != "" {
-				rowsStringBuilder.WriteString("Row: " + rowStr + ";")
-			} else {
-				rowsStringBuilder.WriteString("Row: <error>;")
-			}
-		case common.RowTypeDelete:
-			rowsStringBuilder.WriteString("Delete: ")
-			if preRowStr := safeRowToString(row.PreRow, t.TableInfo.GetFieldSlice()); preRowStr != "" {
-				rowsStringBuilder.WriteString("PreRow: " + preRowStr + ";")
-			} else {
-				rowsStringBuilder.WriteString("PreRow: <error>;")
-			}
-		case common.RowTypeInsert:
-			rowsStringBuilder.WriteString("Insert: ")
-			if rowStr := safeRowToString(row.Row, t.TableInfo.GetFieldSlice()); rowStr != "" {
-				rowsStringBuilder.WriteString("Row: " + rowStr + ";")
-			} else {
-				rowsStringBuilder.WriteString("Row: <error>;")
-			}
-		default:
-		}
-	}
-
-	return fmt.Sprintf("DMLEvent{Version: %d, DispatcherID: %s, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Table: %v, Checksum: %v, Length: %d, Size: %d, Rows: %s}",
-		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsStringBuilder.String())
-}
-
-// safeRowToString safely converts a row to string, recovering from any panics.
-// The row values are redacted according to the current log redaction mode.
-func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
-	defer func() {
-		if r := recover(); r != nil {
-			// Log the panic for debugging purposes if needed
-			// You can add logging here if required
-		}
-	}()
-
-	if row.IsEmpty() {
-		return ""
-	}
-
-	// Apply log redaction to the row string representation
-	return util.RedactValue(row.ToString(fields))
+	return fmt.Sprintf("DMLEvent{Version: %d, Seq: %d, PhysicalTableID: %d, StartTs: %d, CommitTs: %d, Length: %d, Size: %d}",
+		t.Version, t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.Length, t.GetSize())
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
@@ -582,7 +466,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		return err
 	}
 	if count <= 0 {
-		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry", zap.String("raw", raw.String()))
+		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry")
 	}
 
 	var preRow, row chunk.Row
@@ -590,25 +474,25 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	case common.RowTypeInsert:
 		if count != 1 {
 			log.Panic("DMLEvent.AppendRow: insert row count should be 1",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count))
 		}
 		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	case common.RowTypeDelete:
 		if count != 1 {
 			log.Panic("DMLEvent.AppendRow: delete row count should be 1",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count))
 		}
 		preRow = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	case common.RowTypeUpdate:
 		if count != 2 {
 			log.Panic("DMLEvent.AppendRow: update row count should be 2",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count))
 		}
 		preRow = t.Rows.GetRow(t.Rows.NumRows() - 2)
 		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	default:
 		log.Panic("DMLEvent.AppendRow: invalid row type", zap.Uint8("rowType", uint8(rowType)),
-			zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+			zap.Uint64("commitTs", t.CommitTs))
 	}
 
 	if filter != nil {

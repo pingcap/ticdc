@@ -73,7 +73,7 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 	case mysql.TypeTiDBVectorFloat32:
 		chk.AppendVectorFloat32(idx, raw.(tiTypes.VectorFloat32))
 	default:
-		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("raw", raw))
+		log.Panic("unknown column type", zap.Any("type", ft.GetType()))
 	}
 }
 

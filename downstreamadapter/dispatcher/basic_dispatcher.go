@@ -367,7 +367,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// If NotSync is true, it means the DDL should not be sent to downstream.
 		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
-			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.String("ddl", ddl.GetDDLQuery()))
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Int("querySize", len(ddl.GetDDLQuery())))
 			d.PassBlockEventToSink(event)
 			return nil
 		}
@@ -606,7 +606,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
 				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
-				zap.Any("event", dispatcherEvent.Event))
+				zap.Int("eventType", dispatcherEvent.GetType()))
 		}
 
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -697,7 +697,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
-				zap.String("query", ddl.Query),
+				zap.Int("querySize", len(ddl.Query)),
 				zap.Any("tableSpan", d.GetTableSpan()),
 				zap.Int64("table", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
@@ -711,7 +711,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
 				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("cost", cost), zap.String("query", ddl.Query))
+					zap.Duration("cost", cost), zap.Int("querySize", len(ddl.Query)))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
@@ -736,7 +736,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
-				zap.Any("event", event))
+				zap.Int("eventType", event.GetType()))
 		default:
 			log.Panic("Unexpected event type",
 				zap.Int("eventType", event.GetType()),

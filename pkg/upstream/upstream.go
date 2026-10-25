@@ -240,7 +240,7 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err 
 		log.Warn("Fail to verify region label rule",
 			zap.Error(err),
 			zap.Uint64("upstreamID", up.ID),
-			zap.Strings("upstreamEndpoints", up.PdEndpoints))
+			zap.Int("upstreamEndpointCount", len(up.PdEndpoints)))
 	}
 
 	err = up.registerTopologyInfo(ctx, cfg)

@@ -98,7 +98,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 				zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 				zap.Int("length", length),
 				zap.Any("table", e.TableInfo.TableName),
-				zap.Any("key", key))
+				zap.Int("keySize", len(key)))
 			return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
 		}
 
@@ -122,7 +122,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 					"when create the claim-check location message",
 					zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 					zap.Int("length", length),
-					zap.Any("key", key))
+					zap.Int("keySize", len(key)))
 				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
 			}
 		}
@@ -139,7 +139,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 					zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName),
-					zap.Any("key", key))
+					zap.Int("keySize", len(key)))
 				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, d.config.MaxMessageBytes)
 			}
 		}

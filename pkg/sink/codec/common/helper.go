@@ -29,7 +29,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
@@ -98,7 +97,7 @@ func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	data := strings.Split(mysqlType[start+1:end], ",")
 	flen, err := strconv.ParseInt(data[0], 10, 64)
 	if err != nil {
-		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.String("mysqlType", mysqlType), zap.Error(err))
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.String("mysqlType", mysqlType), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	if len(data) != 2 {
@@ -107,7 +106,7 @@ func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 
 	decimal, err := strconv.ParseInt(data[1], 10, 64)
 	if err != nil {
-		log.Panic("parse decimal failed", zap.String("decimal", data[1]), zap.Error(err))
+		log.Panic("parse decimal failed", zap.String("decimal", data[1]), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	return int(flen), int(decimal)
 }
@@ -136,7 +135,7 @@ func ExtractDecimal(mysqlType string) int {
 	decimal := mysqlType[start+1 : end]
 	result, err := strconv.ParseInt(decimal, 10, 64)
 	if err != nil {
-		log.Panic("parse decimal failed", zap.String("decimal", decimal), zap.Error(err))
+		log.Panic("parse decimal failed", zap.String("decimal", decimal), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	return int(result)
 }
@@ -176,7 +175,7 @@ func (h *ColumnsHolder) Length() int {
 func MustQueryTimezone(ctx context.Context, db *sql.DB) string {
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		log.Panic("establish connection to the upstream tidb failed", zap.Error(err))
+		log.Panic("establish connection to the upstream tidb failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	defer conn.Close()
 
@@ -184,7 +183,7 @@ func MustQueryTimezone(ctx context.Context, db *sql.DB) string {
 	query := "SELECT @@global.time_zone"
 	err = conn.QueryRowContext(ctx, query).Scan(&timezone)
 	if err != nil {
-		log.Panic("query timezone failed", zap.Error(err))
+		log.Panic("query timezone failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	log.Info("query global timezone from the upstream tidb",
@@ -212,7 +211,7 @@ func queryRowChecksum(
 	if err != nil {
 		log.Panic("establish connection to the upstream tidb failed",
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	defer conn.Close()
 
@@ -283,9 +282,9 @@ func queryRowChecksumAux(
 		}
 
 		log.Error("set snapshot read failed",
-			zap.String("query", query),
+			zap.Int("querySize", len(query)),
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 		return result
 	}
 
@@ -314,9 +313,9 @@ func queryRowChecksumAux(
 	}
 	if err != nil {
 		log.Panic("scan row failed",
-			zap.String("query", util.RedactValue(query)),
+			zap.Int("querySize", len(query)),
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	return result
 }
@@ -402,7 +401,7 @@ func MustSnapshotQuery(
 	if err != nil {
 		log.Panic("establish connection to the upstream tidb failed",
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	defer conn.Close()
 
@@ -420,9 +419,9 @@ func MustSnapshotQuery(
 		}
 
 		log.Panic("set snapshot read failed",
-			zap.String("query", query),
+			zap.Int("querySize", len(query)),
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	// 2. query the whole row
@@ -443,18 +442,18 @@ func MustSnapshotQuery(
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		log.Panic("query row failed",
-			zap.String("query", util.RedactValue(query)),
+			zap.Int("querySize", len(query)),
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	defer rows.Close()
 
 	holder, err := newColumnHolder(rows)
 	if err != nil {
 		log.Panic("obtain the columns holder failed",
-			zap.String("query", util.RedactValue(query)),
+			zap.Int("querySize", len(query)),
 			zap.String("schema", schema), zap.String("table", table),
-			zap.Uint64("commitTs", commitTs), zap.Error(err))
+			zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 	// go-mysql-driver 1.8 converts integer/float values into int64/double even in text protocol.
 	// This doesn't increase allocation compared to []byte and conversion cost is negilible.
@@ -462,9 +461,9 @@ func MustSnapshotQuery(
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
 			log.Panic("scan row failed",
-				zap.String("query", util.RedactValue(query)),
+				zap.Int("querySize", len(query)),
 				zap.String("schema", schema), zap.String("table", table),
-				zap.Uint64("commitTs", commitTs), zap.Error(err))
+				zap.Uint64("commitTs", commitTs), zap.String("errorType", fmt.Sprintf("%T", err)))
 		}
 	}
 	return holder
@@ -474,7 +473,7 @@ func MustSnapshotQuery(
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
 	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
 	if err != nil {
-		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
+		log.Panic("invalid bit value found", zap.Int("valueSize", len(bytes)))
 		return math.MaxUint64
 	}
 	return val

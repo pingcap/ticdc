@@ -19,7 +19,6 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 type DMLOrder uint8
@@ -131,7 +130,7 @@ func encodeKeyTo(
 	usesEncryptionLayer bool,
 ) []byte {
 	if event == nil {
-		log.Panic("rawkv must not be nil", zap.Any("event", event))
+		log.Panic("rawkv must not be nil")
 	}
 	// unique ID
 	buf = binary.BigEndian.AppendUint64(buf, uniqueID)

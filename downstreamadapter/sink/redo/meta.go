@@ -237,7 +237,7 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 			log.Error("redo: unmarshal meta data failed",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
 				zap.String("changefeed", m.changeFeedID.Name()),
-				zap.Error(err), zap.ByteString("data", data))
+				zap.Error(err), zap.Int("dataSize", len(data)))
 			return err
 		}
 		metas = append(metas, &meta)

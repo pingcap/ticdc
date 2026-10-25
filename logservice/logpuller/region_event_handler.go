@@ -21,8 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -87,7 +85,7 @@ func (event *regionEvent) getSize() int {
 
 func (event regionEvent) mustFirstState() *regionFeedState {
 	if len(event.states) == 0 || event.states[0] == nil {
-		log.Panic("region event has empty states", zap.Any("event", event))
+		log.Panic("region event has empty states")
 	}
 	return event.states[0]
 }
@@ -148,7 +146,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				}
 			}
 		} else {
-			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
+			log.Panic("should not reach", zap.Int("eventCount", len(events)))
 		}
 	}
 	tryAdvanceResolvedTs := func() {
@@ -315,8 +313,8 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
-				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
+				zap.Int("startKeySize", len(span.span.StartKey)),
+				zap.Int("endKeySize", len(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -331,7 +329,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", util.RedactKey(entry.GetKey())))
+					zap.Int("keySize", len(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
@@ -349,7 +347,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
-					zap.String("key", util.RedactKey(entry.GetKey())))
+					zap.Int("keySize", len(entry.GetKey())))
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -368,7 +366,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMIT"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", util.RedactKey(entry.GetKey())))
+					zap.Int("keySize", len(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:

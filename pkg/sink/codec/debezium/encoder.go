@@ -16,6 +16,7 @@ package debezium
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pingcap/log"
@@ -127,7 +128,7 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 	err := d.codec.EncodeDDLEvent(e, &keyMap, &valueBuf)
 	if err != nil {
 		if errors.ErrDDLUnsupportType.Equal(err) {
-			log.Warn("encode ddl event failed, just ignored", zap.Error(err))
+			log.Warn("encode ddl event failed, just ignored", zap.String("errorType", fmt.Sprintf("%T", err)))
 			return nil, nil
 		}
 		return nil, errors.Trace(err)

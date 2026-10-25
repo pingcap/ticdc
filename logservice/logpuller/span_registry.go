@@ -197,13 +197,12 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 		zap.Any("slowestRegion", res.SlowestRegion))
 }
 
-// formatUnlockedRanges formats unlocked ranges for logging. The span keys may
-// contain row handles, so they are redacted according to the log redaction mode.
+// formatUnlockedRanges formats unlocked ranges without exposing span keys.
 func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
 	res := make([]string, 0, len(ranges))
 	for _, r := range ranges {
-		res = append(res, fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, resolvedTs: %d",
-			r.Span.TableID, util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+		res = append(res, fmt.Sprintf("tableID: %d, startKeySize: %d, endKeySize: %d, resolvedTs: %d",
+			r.Span.TableID, len(r.Span.StartKey), len(r.Span.EndKey), r.ResolvedTs))
 	}
 	return res
 }

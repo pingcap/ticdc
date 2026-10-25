@@ -14,6 +14,7 @@
 package util
 
 import (
+	"errors"
 	"net"
 	"net/url"
 	"strings"
@@ -144,13 +145,28 @@ func MaskSensitiveDataInURI(uri string) string {
 	return uriParsed.Redacted()
 }
 
-// MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.
-func MaskSensitiveDataInURIForError(uri string) string {
-	maskedURI := MaskSensitiveDataInURI(uri)
-	if maskedURI == "" && uri != "" {
+// SafeURIForLog keeps only the URI scheme and authority. Paths, query values,
+// fragments, opaque data, and userinfo can all carry credentials.
+func SafeURIForLog(uri string) string {
+	if uri == "" {
+		return ""
+	}
+	parsed, err := url.Parse(uri)
+	if err != nil {
 		return "<invalid uri>"
 	}
-	return maskedURI
+	if parsed.Scheme == "" {
+		return "<uri>"
+	}
+	if parsed.Host == "" {
+		return parsed.Scheme + "://"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+// MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.
+func MaskSensitiveDataInURIForError(uri string) string {
+	return SafeURIForLog(uri)
 }
 
 // MaskSensitiveDataInURLError masks the URL carried by net/url errors.
@@ -160,11 +176,11 @@ func MaskSensitiveDataInURLError(err error) error {
 	}
 	urlErr, ok := err.(*url.Error)
 	if !ok {
-		return err
+		return errors.New("URI operation failed")
 	}
 	return &url.Error{
 		Op:  urlErr.Op,
 		URL: MaskSensitiveDataInURIForError(urlErr.URL),
-		Err: urlErr.Err,
+		Err: errors.New("URI operation failed"),
 	}
 }

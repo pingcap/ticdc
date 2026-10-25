@@ -115,8 +115,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if o.upstreamTiDBDSN != "" {
 		db, err = openDB(ctx, o.upstreamTiDBDSN)
 		if err != nil {
-			log.Panic("cannot open the upstream TiDB, handle key only enabled",
-				zap.String("dsn", o.upstreamTiDBDSN))
+			log.Panic("cannot open the upstream TiDB, handle key only enabled")
 		}
 	}
 	for i := 0; i < int(o.partitionNum); i++ {
@@ -180,7 +179,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 		}
 	}
 	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
-		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
+		zap.Uint64("DDLCommitTs", commitTs), zap.String("ddlType", ddl.GetDDLType().String()))
 	if err != nil {
 		return err
 	}
@@ -355,7 +354,7 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 			log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
 				zap.Uint64("maxCommitTs", maxCommitTs),
-				zap.String("DDL", ddl.Query))
+				zap.Int("querySize", len(ddl.Query)))
 			return
 		}
 	}
@@ -470,7 +469,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("ddlType", ddl.GetDDLType().String()),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 
 		needFlush = true
@@ -613,7 +612,7 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		}
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+			log.Panic("parse ddl query failed", zap.String("ddlType", ddl.GetDDLType().String()))
 		}
 		if v, ok := stmt.(*ast.CreateTableStmt); ok {
 			if v.Partition != nil {
@@ -683,7 +682,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 			log.Panic("dml event dispatched to the wrong partition",
 				zap.Int32("partition", partition), zap.Int32("expected", target),
 				zap.Int("partitionNum", len(w.progresses)), zap.Any("offset", offset),
-				zap.Int64("tableID", row.GetTableID()), zap.Stringer("row", row),
+				zap.Int64("tableID", row.GetTableID()),
 			)
 		}
 	}
@@ -770,7 +769,7 @@ func (w *writer) appendMessage2Group(
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		log.Error("open db failed", zap.Error(err))
+		log.Error("open db failed")
 		return nil, errors.Trace(err)
 	}
 
@@ -781,9 +780,9 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
-		log.Error("ping db failed", zap.String("dsn", dsn), zap.Error(err))
+		log.Error("ping db failed")
 		return nil, errors.Trace(err)
 	}
-	log.Info("open db success", zap.String("dsn", dsn))
+	log.Info("open db success")
 	return db, nil
 }

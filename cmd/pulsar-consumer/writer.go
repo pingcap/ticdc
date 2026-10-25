@@ -179,7 +179,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		}
 	}
 	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
-		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
+		zap.Uint64("DDLCommitTs", commitTs), zap.String("ddlType", ddl.GetDDLType().String()))
 	if err != nil {
 		return err
 	}
@@ -351,7 +351,7 @@ func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
 			log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
 				zap.Uint64("maxCommitTs", maxCommitTs),
-				zap.String("DDL", ddl.Query))
+				zap.Int("querySize", len(ddl.Query)))
 			return
 		}
 	}
@@ -444,7 +444,7 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) (bool
 		w.appendDDL(ddl)
 		log.Info("DDL event received",
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("ddlType", ddl.GetDDLType().String()),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 		needFlush = true
 	case common.MessageTypeRow:
@@ -555,7 +555,7 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 		}
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+			log.Panic("parse ddl query failed", zap.String("ddlType", ddl.GetDDLType().String()))
 		}
 		if v, ok := stmt.(*ast.CreateTableStmt); ok {
 			if v.Partition != nil {

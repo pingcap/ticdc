@@ -51,12 +51,12 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB, timeZones, preTimeZ
 			}
 			if checksum != row.Checksum.Current {
 				log.Error("current checksum mismatch",
-					zap.Uint32("expected", row.Checksum.Current), zap.Uint32("actual", checksum), zap.Any("event", event))
+					zap.Uint32("expected", row.Checksum.Current), zap.Uint32("actual", checksum), zap.Uint64("commitTs", event.GetCommitTs()))
 				for _, col := range columns {
 					log.Info("data corrupted, print each column for debugging",
 						zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
 						zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
-						zap.Any("default", col.GetDefaultValue()))
+						zap.Bool("hasDefault", col.GetDefaultValue() != nil))
 				}
 				return fmt.Errorf("current checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Current)
 			}
@@ -69,12 +69,12 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB, timeZones, preTimeZ
 			if checksum != row.Checksum.Previous {
 				log.Error("previous checksum mismatch",
 					zap.Uint32("expected", row.Checksum.Previous),
-					zap.Uint32("actual", checksum), zap.Any("event", event))
+					zap.Uint32("actual", checksum), zap.Uint64("commitTs", event.GetCommitTs()))
 				for _, col := range columns {
 					log.Info("data corrupted, print each column for debugging",
 						zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
 						zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
-						zap.Any("default", col.GetDefaultValue()))
+						zap.Bool("hasDefault", col.GetDefaultValue() != nil))
 				}
 				return fmt.Errorf("previous checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Previous)
 			}
@@ -141,7 +141,7 @@ func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *model.ColumnInf
 		ts, err := util.ConvertTimezone(d.GetMysqlTime().String(), location)
 		if err != nil {
 			log.Panic("convert timestamp to timezone failed",
-				zap.String("location", location), zap.Error(err))
+				zap.String("location", location), zap.String("errorType", fmt.Sprintf("%T", err)))
 		}
 		buf = appendLengthValue(buf, []byte(ts))
 	case mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,

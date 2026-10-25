@@ -94,9 +94,13 @@ func RedactAny(value any) string {
 	return RedactValue(fmt.Sprintf("%v", value))
 }
 
-// RedactArgs redacts SQL arguments/parameters for logging.
-// Returns "?" for each arg in ON mode, wrapped values for MARKER mode, originals for OFF.
-// In MARKER mode, embedded markers in each argument are escaped using TiDB's redact.String().
+// RedactSensitiveValue hides content that may contain credentials, regardless
+// of the redact-info-log mode. Use it for untrusted message and row values.
+func RedactSensitiveValue(_ any) string {
+	return "xxxxx"
+}
+
+// RedactArgs hides SQL arguments for logging in every redact-info-log mode.
 func RedactArgs(args []interface{}) string {
 	if len(args) == 0 {
 		return "()"
@@ -111,7 +115,7 @@ func RedactArgs(args []interface{}) string {
 		if arg == nil {
 			b.WriteString("NULL")
 		} else {
-			b.WriteString(RedactAny(arg))
+			b.WriteString("?")
 		}
 	}
 	b.WriteString(")")
@@ -142,21 +146,16 @@ func RedactBytes(data []byte) string {
 	return RedactValue(string(data))
 }
 
-// RedactStrings redacts each string in the slice using the current redaction mode.
-// Returns a new slice with "?" for each element in ON mode, wrapped values for MARKER mode,
-// original values for OFF. This preserves the slice structure for callers that need to
-// process the redacted values further (e.g., dbutil.ReplacePlaceholder for logging).
-// In MARKER mode, embedded markers in each element are escaped using TiDB's redact.String().
-// Note: The Unicode markers ‹› (U+2039, U+203A) are distinct from SQL operators <> (U+003C, U+003E),
-// so MARKER mode values work correctly with SQL placeholder substitution.
+// RedactStrings hides SQL arguments while preserving the slice structure for
+// callers that substitute them into SQL templates for logging.
 func RedactStrings(args []string) []string {
 	if len(args) == 0 {
 		return args
 	}
 
 	result := make([]string, len(args))
-	for i, arg := range args {
-		result[i] = RedactValue(arg)
+	for i := range args {
+		result[i] = "?"
 	}
 	return result
 }

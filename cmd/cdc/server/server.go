@@ -134,7 +134,7 @@ func (o *options) run(cmd *cobra.Command) error {
 		return errors.Trace(err)
 	}
 	log.Info("TiCDC(new arch) server created",
-		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
+		zap.Int("pdEndpointCount", len(o.pdEndpoints)), zap.Stringer("config", o.serverConfig))
 
 	// shutdown is used to notify the server to shutdown (by closing the context) when receiving the signal, and exit the process.
 	shutdown := func() <-chan struct{} {
@@ -250,7 +250,7 @@ func (o *options) validate() error {
 	if len(o.pdEndpoints) == 0 {
 		return errors.ErrInvalidServerOption.GenWithStack("empty PD address")
 	}
-	log.Info("validate pd address", zap.Strings("pd", o.pdEndpoints), zap.Int("pdCount", len(o.pdEndpoints)))
+	log.Info("validate pd address", zap.Int("pdEndpointCount", len(o.pdEndpoints)), zap.Int("pdCount", len(o.pdEndpoints)))
 	for _, ep := range o.pdEndpoints {
 		// NOTICE: The configuration used here is the one that has been completed,
 		// as it may be configured by the configuration file.

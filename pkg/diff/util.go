@@ -119,9 +119,7 @@ func rowContainsCols(row map[string]*dbutil.ColumnData, cols []*model.ColumnInfo
 }
 
 // redactRowToString converts a database row to a string representation for logging.
-// Column names are preserved (not redacted), but column values are redacted according
-// to the current redaction mode. This allows debugging logs to show which columns
-// are involved while protecting the actual data values.
+// Column names are preserved, but column values are always hidden.
 // Format: "{ col1: <redacted_value>, col2: IsNull,  }"
 func redactRowToString(row map[string]*dbutil.ColumnData) string {
 	var s strings.Builder
@@ -130,7 +128,7 @@ func redactRowToString(row map[string]*dbutil.ColumnData) string {
 		if val.IsNull {
 			fmt.Fprintf(&s, "%s: IsNull, ", key)
 		} else {
-			fmt.Fprintf(&s, "%s: %s, ", key, util.RedactValue(string(val.Data)))
+			fmt.Fprintf(&s, "%s: %s, ", key, util.RedactSensitiveValue(val.Data))
 		}
 	}
 	s.WriteString(" }")

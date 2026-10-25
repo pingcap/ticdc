@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"go.uber.org/zap"
 )
 
 func compareKeys(firstKey, secondKey []byte) bool {
@@ -33,7 +32,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
 	key := genKeyList(row, tableInfo)
 	if len(key) == 0 {
-		log.Panic("the table has no primary key or not-null unique key", zap.Any("tableInfo", tableInfo))
+		log.Panic("the table has no primary key or not-null unique key")
 	}
 
 	hasher := fnv.New32a()

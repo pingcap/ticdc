@@ -488,7 +488,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 				zap.Int64("tableID", tableID),
 				zap.Uint64("ts", ts),
 				zap.String("type", model.ActionType(rawEvent.Type).String()),
-				zap.String("query", rawEvent.Query))
+				zap.Int("querySize", len(rawEvent.Query)))
 		}
 	}
 	log.Debug("fetchTableDDLEvents",
@@ -772,7 +772,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.Int("querySize", len(job.Query)))
 		p.mu.Unlock()
 		return nil
 	}
@@ -892,7 +892,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.String("schemaName", job.SchemaName),
 				zap.Int64("tableID", job.TableID),
 				zap.String("tableName", job.TableName),
-				zap.String("DDL", job.Query),
+				zap.Int("querySize", len(job.Query)),
 				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
 				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
@@ -905,7 +905,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.String("schemaName", job.SchemaName),
 				zap.Int64("tableID", job.TableID),
 				zap.String("tableName", job.TableName),
-				zap.String("DDL", job.Query),
+				zap.Int("querySize", len(job.Query)),
 				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
 				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS))
 			return true
@@ -939,7 +939,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:
 		log.Info("ignore ddl",
-			zap.String("DDL", job.Query),
+			zap.Int("querySize", len(job.Query)),
 			zap.Int64("jobID", job.ID),
 			zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 			zap.Any("type", job.Type))
@@ -951,7 +951,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
+		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.Int("querySize", len(rawEvent.Query)))
 	}
 	return handler
 }

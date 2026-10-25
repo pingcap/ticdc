@@ -248,21 +248,21 @@ func (pc *pdAPIClient) scanRegions(
 		resp, err := pc.httpClient.Get(ctx, u.String())
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
+				zap.Bool("endpointConfigured", endpoint != ""), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		defer resp.Body.Close()
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
+				zap.Bool("endpointConfigured", endpoint != ""), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		regions := &RegionsInfo{}
 		err = json.Unmarshal(data, regions)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
+				zap.Bool("endpointConfigured", endpoint != ""), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		return regions.Regions, nil
@@ -282,7 +282,7 @@ func (pc *pdAPIClient) scanRegions(
 			if len(r) == 0 {
 				// Because start key is less than end key, there must be some regions.
 				log.Error("fail to scan region, missing region",
-					zap.String("endpoint", endpoint))
+					zap.Bool("endpointConfigured", endpoint != ""))
 				return nil, errors.ErrInternalServerError.GenWithStack("fail to scan region, missing region")
 			}
 			if r[0].StartKey != startKeyHex {

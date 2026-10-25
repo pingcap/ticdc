@@ -571,7 +571,7 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 }
 
 func (m *TargetMessage) String() string {
-	return fmt.Sprintf("From: %s, To: %s, Type: %s, Message: %v", m.From, m.To, m.Type, m.Message)
+	return fmt.Sprintf("From: %s, To: %s, Type: %s, MessageCount: %d", m.From, m.To, m.Type, len(m.Message))
 }
 
 func (m *TargetMessage) GetGroup() uint64 {

@@ -309,7 +309,7 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 	defer s.mutex.Unlock()
 	if f, ok := s.m[changeFeedID]; ok {
 		if !isFilterConfigEqual(f.config, cfg) || f.timeZone != timeZone {
-			log.Info("filter config changed, need to rebuild filter", zap.Any("preConfig", f.config), zap.Any("newConfig", cfg), zap.String("preTimeZone", f.timeZone), zap.String("newTimeZone", timeZone))
+			log.Info("filter config changed, need to rebuild filter", zap.String("preTimeZone", f.timeZone), zap.String("newTimeZone", timeZone))
 		} else {
 			return f.Filter, nil
 		}

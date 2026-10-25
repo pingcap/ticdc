@@ -88,13 +88,13 @@ func findProxyFields() []zap.Field {
 	proxyCfg := httpproxy.FromEnvironment()
 	fields := make([]zap.Field, 0, 3)
 	if proxyCfg.HTTPProxy != "" {
-		fields = append(fields, zap.String("http_proxy", proxyCfg.HTTPProxy))
+		fields = append(fields, zap.Bool("http_proxy_configured", true))
 	}
 	if proxyCfg.HTTPSProxy != "" {
-		fields = append(fields, zap.String("https_proxy", proxyCfg.HTTPSProxy))
+		fields = append(fields, zap.Bool("https_proxy_configured", true))
 	}
 	if proxyCfg.NoProxy != "" {
-		fields = append(fields, zap.String("no_proxy", proxyCfg.NoProxy))
+		fields = append(fields, zap.Bool("no_proxy_configured", true))
 	}
 	return fields
 }

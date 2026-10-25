@@ -464,7 +464,7 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.Int("messageCount", len(msg.Message)))
 	}
 }
 

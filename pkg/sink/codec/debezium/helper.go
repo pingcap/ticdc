@@ -107,7 +107,7 @@ func parseColumns(sql string, columns []*timodel.ColumnInfo) []*timodel.ColumnIn
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(sql, mysql.DefaultCharset, mysql.DefaultCollationName)
 	if err != nil {
-		log.Error("format query parse one stmt failed", zap.Error(err))
+		log.Error("format query parse one stmt failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return cloned
 	}
 	if stmt == nil {
@@ -158,25 +158,25 @@ func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
 		if err == nil {
 			return v
 		}
-		log.Error("unexpected column value type string for int column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		log.Error("unexpected column value type string for int column", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Any("defaultValue", defaultVal))
 	case mysql.TypeEnum:
 		v, err := types.ParseEnumName(tp.GetElems(), val, tp.GetCollate())
 		if err == nil {
 			return v
 		}
-		log.Error("unexpected column value type string for enum column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		log.Error("unexpected column value type string for enum column", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Any("defaultValue", defaultVal))
 	case mysql.TypeSet:
 		v, err := types.ParseSetName(tp.GetElems(), val, tp.GetCollate())
 		if err == nil {
 			return v
 		}
-		log.Error("unexpected column value type string for set column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		log.Error("unexpected column value type string for set column", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Any("defaultValue", defaultVal))
 	case mysql.TypeDouble, mysql.TypeFloat:
 		v, err := strconv.ParseFloat(val, 64)
 		if err == nil {
 			return v
 		}
-		log.Error("unexpected column value type string for float column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		log.Error("unexpected column value type string for float column", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Any("defaultValue", defaultVal))
 	}
 	return defaultVal
 }

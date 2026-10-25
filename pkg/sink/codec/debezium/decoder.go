@@ -77,11 +77,11 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 	}
 	keyPayload, keySchema, err := decodeRawBytes(key)
 	if err != nil {
-		log.Panic("decode key failed", zap.Error(err), zap.ByteString("key", key))
+		log.Panic("decode key failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Int("keySize", len(key)))
 	}
 	valuePayload, valueSchema, err := decodeRawBytes(value)
 	if err != nil {
-		log.Panic("decode value failed", zap.Error(err), zap.ByteString("value", value))
+		log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Int("valueSize", len(value)))
 	}
 	d.keyPayload = keyPayload
 	d.keySchema = keySchema
@@ -258,7 +258,7 @@ func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
 	source := valuePayload["source"].(map[string]any)
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
 	if err != nil {
-		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		log.Error("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(source)))
 	}
 	return uint64(commitTs)
 }
@@ -276,7 +276,7 @@ func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
 	if !ok {
 		log.Error("decode value failed",
 			zap.String("reason", "start_ts is not an integer"),
-			zap.String("value", util.RedactAny(source)))
+			zap.String("value", util.RedactSensitiveValue(source)))
 		return 0, false
 	}
 	ts, err := startTs.Int64()
@@ -284,7 +284,7 @@ func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
 		err = errors.Errorf("start_ts must be positive: %d", ts)
 	}
 	if err != nil {
-		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		log.Error("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(source)))
 		return 0, false
 	}
 	return uint64(ts), true
@@ -408,7 +408,7 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 			}
 			if err != nil {
 				err = errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
-				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+				log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 			}
 			return value
 		}
@@ -416,24 +416,24 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 	case mysql.TypeDate, mysql.TypeNewDate:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		t := time.Unix(val*60*60*24, 0)
 		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeTimestamp:
 		t, err := types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		err = t.ConvertTimeZone(time.UTC, timeZone)
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		value = t
 	case mysql.TypeDatetime:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		var t time.Time
 		if colInfo.GetDecimal() <= 3 {
@@ -445,21 +445,21 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 	case mysql.TypeDuration:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		value = types.NewDuration(0, 0, 0, int(val), types.MaxFsp)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		if strVal, ok := value.(string); ok && mysql.HasUnsignedFlag(colInfo.GetFlag()) {
 			uintVal, err := strconv.ParseUint(strVal, 10, 64)
 			if err != nil {
-				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+				log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 			}
 			return uintVal
 		}
 		var intVal int64
 		intVal, err = value.(json.Number).Int64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
 			return uint64(intVal)
@@ -470,7 +470,7 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 		case string:
 			b, err := base64.StdEncoding.DecodeString(val)
 			if err != nil {
-				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+				log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 			}
 			v := binary.LittleEndian.Uint64(b)
 			value = types.NewBinaryLiteralFromUint(v, len(b))
@@ -485,52 +485,52 @@ func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Locatio
 			dec := new(types.MyDecimal)
 			err = dec.FromString([]byte(strVal))
 			if err != nil {
-				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+				log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 			}
 			return dec
 		}
 		var f64 float64
 		f64, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		value = types.NewDecFromFloatForTest(f64)
 	case mysql.TypeDouble:
 		value, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	case mysql.TypeFloat:
 		var f64 float64
 		f64, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 		value = float32(f64)
 	case mysql.TypeYear:
 		value, err = value.(json.Number).Int64()
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	case mysql.TypeEnum:
 		value, err = types.ParseEnumName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	case mysql.TypeSet:
 		value, err = types.ParseSetName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	case mysql.TypeJSON:
 		value, err = types.ParseBinaryJSONFromString(value.(string))
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	case mysql.TypeTiDBVectorFloat32:
 		value, err = types.ParseVectorFloat32(value.(string))
 		if err != nil {
-			log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			log.Panic("decode value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.String("value", util.RedactSensitiveValue(value)))
 		}
 	default:
 	}

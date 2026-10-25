@@ -194,8 +194,39 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
-	s, _ := c.Marshal()
+	if c == nil {
+		return "null"
+	}
+	masked := *c
+	if c.Encryption != nil {
+		encryption := *c.Encryption
+		masked.Encryption = &encryption
+		if c.Encryption.KMS != nil {
+			kms := *c.Encryption.KMS
+			encryption.KMS = &kms
+			if kms.AWS != nil {
+				aws := *kms.AWS
+				aws.AccessKey = maskConfiguredSecret(aws.AccessKey)
+				aws.SecretAccessKey = maskConfiguredSecret(aws.SecretAccessKey)
+				aws.SessionToken = maskConfiguredSecret(aws.SessionToken)
+				kms.AWS = &aws
+			}
+			if kms.GCP != nil {
+				gcp := *kms.GCP
+				gcp.CredentialsJSON = maskConfiguredSecret(gcp.CredentialsJSON)
+				kms.GCP = &gcp
+			}
+		}
+	}
+	s, _ := masked.Marshal()
 	return s
+}
+
+func maskConfiguredSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "xxxxx"
 }
 
 // Clone clones a replication

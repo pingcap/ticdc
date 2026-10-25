@@ -681,7 +681,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
-					zap.Any("resend", msgs),
+					zap.Int("resendCount", len(msgs)),
 					zap.Int64("mode", be.mode),
 				)
 			} else {
@@ -692,7 +692,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Bool("selected", be.selected.Load()),
 					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.Any("blocker", be.blockedDispatchers),
-					zap.Any("resend", msgs),
+					zap.Int("resendCount", len(msgs)),
 					zap.Int64("mode", be.mode),
 				)
 			}
@@ -734,7 +734,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 			if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal || len(be.blockedDispatchers.TableIDs) == 0 {
 				log.Panic("influence type should be normal when writer dispatcher not found",
 					zap.String("changefeed", be.cfID.Name()),
-					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
@@ -748,7 +747,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				log.Panic("replications for this block event should not be empty",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Int64("tableID", tableID),
-					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),

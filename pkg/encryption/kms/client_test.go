@@ -15,6 +15,8 @@ package kms
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	plog "github.com/pingcap/log"
@@ -24,6 +26,28 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestKMSClientFactoryErrorOmitsCredentials(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.DebugLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
+	cli, err := NewClient(&config.EncryptionConfig{}, WithAWSDecryptorFactory(
+		func(context.Context, awsClientConfig) (awsDecryptor, error) {
+			return nil, errors.New("secret-in-factory-error")
+		}))
+	require.NoError(t, err)
+	_, err = cli.DecryptMasterKey(context.Background(), nil, "key-id", "aws-kms", "us-west-2",
+		"https://user:password@kms.example.com/secret-in-path")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "secret-in-factory-error")
+	for _, entry := range observedLogs.All() {
+		context := fmt.Sprint(entry.ContextMap(), entry.Message)
+		require.NotContains(t, context, "secret-in-factory-error")
+		require.NotContains(t, context, "secret-in-path")
+		require.NotContains(t, context, "password")
+	}
+}
 
 type fakeDecryptor struct {
 	lastKeyID     string

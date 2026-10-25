@@ -177,7 +177,7 @@ func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	default:
 		if logger.IsDebugEnabled() {
-			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
+			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Int("eventType", event.GetType()), zap.String("type", commonEvent.TypeToString(event.GetType())))
 		}
 	}
 	return nil

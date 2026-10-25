@@ -16,6 +16,7 @@ package open
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -43,7 +44,7 @@ type messageKey struct {
 func (m *messageKey) Decode(data []byte) {
 	err := json.Unmarshal(data, m)
 	if err != nil {
-		log.Panic("decode message key failed", zap.Any("data", data), zap.Error(err))
+		log.Panic("decode message key failed", zap.Int("dataSize", len(data)), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 }
 
@@ -73,7 +74,7 @@ func (m *messageRow) decode(data []byte) {
 	decoder.UseNumber()
 	err := decoder.Decode(m)
 	if err != nil {
-		log.Panic("decode message row failed", zap.Any("data", data), zap.Error(err))
+		log.Panic("decode message row failed", zap.Int("dataSize", len(data)), zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 }
 

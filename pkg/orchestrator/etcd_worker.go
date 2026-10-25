@@ -339,7 +339,7 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 		case mvccpb.PUT:
 			worker.handleDeleteCounter(event.Kv.Value)
 		case mvccpb.DELETE:
-			log.Warn("deletion counter key deleted", zap.Reflect("event", event))
+			log.Warn("deletion counter key deleted", zap.Int("keySize", len(event.Kv.Key)))
 			worker.handleDeleteCounter(nil)
 		}
 		// We return here because the delete-counter is not used for business logic,
@@ -372,7 +372,7 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 					"owner resign or externally delete operation"+
 					"exit etcd worker and campaign again",
 					zap.String("ownerMetaKey", worker.ownerMetaKey),
-					zap.String("value", pkgutil.RedactValue(string(event.Kv.Value))),
+					zap.Int("valueSize", len(event.Kv.Value)),
 					zap.Error(err))
 				return err
 			}

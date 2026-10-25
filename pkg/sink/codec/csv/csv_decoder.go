@@ -198,12 +198,12 @@ func (b *decoder) HasNext() (common.MessageType, bool) {
 		if errors.Is(errors.Cause(err), io.EOF) {
 			return common.MessageTypeUnknown, false
 		}
-		log.Panic("read csv row failed", zap.Error(err))
+		log.Panic("read csv row failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	row := b.parser.LastRow()
 	if err = b.msg.decode(row.Row); err != nil {
-		log.Panic("decode csv row failed", zap.Error(err))
+		log.Panic("decode csv row failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 	}
 
 	return common.MessageTypeRow, true
@@ -238,7 +238,7 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 		func() *commonEvent.DMLEvent {
 			e, err := csvMsg2RowChangedEvent(b.codecConfig, &msg, b.tableInfo)
 			if err != nil {
-				log.Panic("convert message to event failed", zap.Error(err))
+				log.Panic("convert message to event failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 			}
 			return e
 		})

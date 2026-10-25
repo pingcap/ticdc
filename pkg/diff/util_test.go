@@ -91,8 +91,8 @@ func TestRowToString(t *testing.T) {
 	}
 
 	rowStr := redactRowToString(row)
-	require.Regexp(t, ".*id: 1.*", rowStr)
-	require.Regexp(t, ".*name: abc.*", rowStr)
+	require.Regexp(t, ".*id: xxxxx.*", rowStr)
+	require.Regexp(t, ".*name: xxxxx.*", rowStr)
 	require.Regexp(t, ".*info: IsNull.*", rowStr)
 }
 

@@ -74,7 +74,7 @@ func (t *tempTxnInsertEventStorage) initializeAddEvent(ts common.Ts) {
 func (t *tempTxnInsertEventStorage) addEvent(event *commonEvent.RedoDMLEvent) error {
 	// do some pre check
 	if !event.IsInsert() {
-		log.Panic("event is not insert event", zap.Any("event", event))
+		log.Panic("event is not insert event")
 	}
 	if t.reading && t.hasEvent() {
 		log.Panic("should read all events before write new event")

@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -81,11 +82,11 @@ func NewAvroDecoder(
 func (d *avroDecoder) AddKeyValue(key, value []byte) {
 	keyJSON, err := d.toDebeziumJSON(key)
 	if err != nil {
-		log.Panic("decode Debezium Avro key failed", zap.Error(err), zap.Int("keySize", len(key)))
+		log.Panic("decode Debezium Avro key failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Int("keySize", len(key)))
 	}
 	valueJSON, err := d.toDebeziumJSON(value)
 	if err != nil {
-		log.Panic("decode Debezium Avro value failed", zap.Error(err), zap.Int("valueSize", len(value)))
+		log.Panic("decode Debezium Avro value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Int("valueSize", len(value)))
 	}
 	d.inner.AddKeyValue(keyJSON, valueJSON)
 }

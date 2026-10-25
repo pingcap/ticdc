@@ -268,7 +268,7 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		}
 	case messaging.TypeDispatcherHeartbeat:
 		if len(msg.Message) != 1 {
-			log.Warn("invalid dispatcher heartbeat, ignore it", zap.Any("msg", msg))
+			log.Warn("invalid dispatcher heartbeat, ignore it", zap.Int("messageCount", len(msg.Message)))
 			return nil
 		}
 		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
@@ -282,13 +282,13 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		}
 	case messaging.TypeCongestionControl:
 		if len(msg.Message) != 1 {
-			log.Warn("invalid control message, ignore it", zap.Any("msg", msg))
+			log.Warn("invalid control message, ignore it", zap.Int("messageCount", len(msg.Message)))
 			return nil
 		}
 		m := msg.Message[0].(*event.CongestionControl)
 		s.handleCongestionControl(msg.From, m)
 	default:
-		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()), zap.Any("message", msg))
+		log.Warn("unknown message type, ignore it", zap.String("type", msg.Type.String()), zap.Int("messageCount", len(msg.Message)))
 	}
 	return nil
 }

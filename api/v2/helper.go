@@ -90,26 +90,26 @@ func (h *OpenAPIV2) getChangeFeed(ctx context.Context, keyspaceName, cfName stri
 
 	log.Info("Send request to coordinator to get changefeed info",
 		zap.String("host", host),
-		zap.String("uri", uri),
+		zap.Bool("hasURI", uri != ""),
 		zap.String("schema", req.URL.Scheme),
 	)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Error("failed to get changefeed", zap.Error(err), zap.String("uri", uri))
+		log.Error("failed to get changefeed", zap.Error(err), zap.Bool("hasURI", uri != ""))
 		return ChangeFeedInfo{}, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Error("failed to read changefeed response", zap.Error(err), zap.String("uri", uri))
+		log.Error("failed to read changefeed response", zap.Error(err), zap.Bool("hasURI", uri != ""))
 		return ChangeFeedInfo{}, err
 	}
 
 	var cfInfo ChangeFeedInfo
 	if err := json.Unmarshal(body, &cfInfo); err != nil {
-		log.Error("failed to unmarshal changefeed response", zap.Error(err), zap.String("uri", uri))
+		log.Error("failed to unmarshal changefeed response", zap.Error(err), zap.Bool("hasURI", uri != ""))
 		return ChangeFeedInfo{}, err
 	}
 

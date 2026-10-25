@@ -30,7 +30,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", query), zap.Error(err))
+		log.Panic("parse ddl query failed", zap.Int("querySize", len(query)))
 		return timodel.ActionNone
 	}
 	switch s := stmt.(type) {
@@ -149,7 +149,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionTruncateTable
 	}
 
-	log.Panic("unsupport ddl type", zap.String("query", query))
+	log.Panic("unsupport ddl type")
 	return timodel.ActionNone
 }
 
@@ -165,7 +165,7 @@ func GetBlockedTables(
 	if action == timodel.ActionRenameTable {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
+			log.Panic("parse statement failed", zap.Uint64("commitTs", ddl.GetCommitTs()))
 		}
 		// The query in job maybe "RENAME TABLE table1 to table2"
 		oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
@@ -182,7 +182,7 @@ func GetBlockedTables(
 	if action == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
+			log.Panic("parse statement failed", zap.Uint64("commitTs", ddl.GetCommitTs()))
 		}
 		sourceSchemaName := stmt.(*ast.AlterTableStmt).Table.Schema.O
 		if sourceSchemaName == "" {
@@ -236,7 +236,7 @@ func GetBlockedTables(
 			TableIDs:      blockedTableIDs,
 		}
 	default:
-		log.Panic("unsupported DDL action", zap.String("DDL", ddl.Query), zap.String("action", action.String()))
+		log.Panic("unsupported DDL action", zap.Int("querySize", len(ddl.Query)), zap.String("action", action.String()))
 	}
 	return nil
 }

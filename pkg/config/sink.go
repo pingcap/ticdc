@@ -1063,15 +1063,15 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 	getError := func() error {
 		if len(cfgInSinkURI) != len(cfgInFile) {
 			log.Panic("inconsistent configuration items in sink uri and configuration file",
-				zap.Any("cfgInSinkURI", cfgInSinkURI), zap.Any("cfgInFile", cfgInFile))
+				zap.Int("sinkURIItemCount", len(cfgInSinkURI)), zap.Int("fileItemCount", len(cfgInFile)))
 		}
 		if len(cfgInSinkURI) == 0 && len(cfgInFile) == 0 {
 			return nil
 		}
 		getErrMsg := func(cfgIn map[string]string) string {
 			var errMsg strings.Builder
-			for k, v := range cfgIn {
-				fmt.Fprintf(&errMsg, "%s=%s, ", k, v)
+			for k := range cfgIn {
+				fmt.Fprintf(&errMsg, "%s, ", k)
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}
@@ -1087,7 +1087,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 ) error {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err))
 	}
 
 	var useTableIDAsPathFromURI *bool

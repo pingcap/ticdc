@@ -111,7 +111,7 @@ func decryptValueIfNeeded(
 	if encMgr == nil {
 		log.Panic("encountered encryption-layer value but no encryption manager is configured",
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Binary("key", append([]byte(nil), key...)))
+			zap.Int("keySize", len(key)))
 	}
 	return encMgr.DecryptData(context.Background(), keyspaceID, value)
 }
@@ -457,7 +457,7 @@ func loadAndApplyDDLHistory(
 		if err != nil {
 			log.Fatal("decrypt ddl job failed when loading ddl history",
 				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+				zap.Int("ddlKeySize", len(snapIter.Key())),
 				zap.Error(err))
 		}
 		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
@@ -466,7 +466,7 @@ func loadAndApplyDDLHistory(
 		// 2. for other ddls to be ignored, they are already filtered before write to disk.
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.Int("querySize", len(ddlEvent.Query)))
 		}
 		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
 			ddlEvent:               &ddlEvent,
@@ -1093,13 +1093,13 @@ func loadAllPhysicalTablesAtTs(
 		if err != nil {
 			log.Fatal("decrypt ddl job failed when loading all physical tables",
 				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+				zap.Int("ddlKeySize", len(snapIter.Key())),
 				zap.Error(err))
 		}
 		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.Int("querySize", len(ddlEvent.Query)))
 		}
 		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
 			ddlEvent:               &ddlEvent,

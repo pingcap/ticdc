@@ -42,11 +42,9 @@ func newDDLCache() *ddlCache {
 func (c *ddlCache) addDDLEvent(ddlEvent DDLJobWithCommitTs) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	oldEvent, duplicated := c.ddlEvents.ReplaceOrInsert(ddlEvent)
+	_, duplicated := c.ddlEvents.ReplaceOrInsert(ddlEvent)
 	if duplicated {
-		log.Debug("ignore duplicated DDL event",
-			zap.Any("event", ddlEvent),
-			zap.Any("oldEvent", oldEvent))
+		log.Debug("ignore duplicated DDL event")
 	}
 }
 

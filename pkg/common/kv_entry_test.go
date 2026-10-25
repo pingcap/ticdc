@@ -245,13 +245,12 @@ func TestRawKVEntryStringRedaction(t *testing.T) {
 	}
 
 	errors.RedactLogEnabled.Store("OFF")
-	require.Equal(t, "OpType: 1, Key: key-secret, Value: value-secret, OldValue: old-secret, "+
+	require.Equal(t, "OpType: 1, KeySize: 10, ValueSize: 12, OldValueSize: 10, "+
 		"StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
 
 	errors.RedactLogEnabled.Store("ON")
-	require.Equal(t, "OpType: 1, Key: ?, Value: ?, OldValue: ?, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+	require.Equal(t, "OpType: 1, KeySize: 10, ValueSize: 12, OldValueSize: 10, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
 
 	errors.RedactLogEnabled.Store("MARKER")
-	require.Equal(t, "OpType: 1, Key: ‹key-secret›, Value: ‹value-secret›, "+
-		"OldValue: ‹old-secret›, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+	require.Equal(t, "OpType: 1, KeySize: 10, ValueSize: 12, OldValueSize: 10, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
 }

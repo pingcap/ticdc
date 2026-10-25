@@ -1683,7 +1683,7 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", util.RedactKey(rawKV.Key)),
+			zap.Int("keySize", len(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
 			zap.Bool("isInsert", rawKV.IsInsert()),
@@ -1732,7 +1732,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 		default:
 			log.Warn("unknown message type, ignore it",
 				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("messageType", targetMessage.Type.String()))
 		}
 	}
 	return nil

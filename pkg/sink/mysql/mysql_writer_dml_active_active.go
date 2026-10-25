@@ -247,7 +247,7 @@ func (c originTsChecker) shouldDropRow(row *commonEvent.RowChange, commitTs uint
 		zap.Uint64("commitTs", commitTs),
 		zap.Int64("tableID", c.tableID),
 		zap.Uint8("rowType", uint8(row.RowType)),
-		zap.Binary("rowKey", row.RowKey),
+		zap.Int("rowKeySize", len(row.RowKey)),
 		zap.Int("rowLen", row.Row.Len()))
 	return true
 }

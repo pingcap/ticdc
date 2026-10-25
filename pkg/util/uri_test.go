@@ -14,6 +14,7 @@
 package util
 
 import (
+	"errors"
 	"net/url"
 	"testing"
 
@@ -158,14 +159,24 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 
 func TestMaskSensitiveDataInURIForError(t *testing.T) {
 	require.Equal(t, "", MaskSensitiveDataInURIForError(""))
-	require.Equal(t, "abc", MaskSensitiveDataInURIForError("abc"))
+	require.Equal(t, "<uri>", MaskSensitiveDataInURIForError("abc"))
 	require.Equal(t,
-		"mysql://root:xxxxx@127.0.0.1:3306/?sasl-password=xxxxx",
+		"mysql://127.0.0.1:3306",
 		MaskSensitiveDataInURIForError("mysql://root:verysecure@127.0.0.1:3306/?sasl-password=rawsecret"))
 	require.Equal(t, "<invalid uri>", MaskSensitiveDataInURIForError("mysql://root:verysecure@127.0.0.1/%zz"))
 }
 
+func TestSafeURIForLogDropsUnrecognizedCredentials(t *testing.T) {
+	uri := "https://user:password@example.com/path-secret?custom=%7B%22nested%22%3A%22query-secret%22%7D#fragment-secret"
+	logged := SafeURIForLog(uri)
+	require.Equal(t, "https://example.com", logged)
+	for _, secret := range []string{"user", "password", "path-secret", "query-secret", "fragment-secret"} {
+		require.NotContains(t, logged, secret)
+	}
+}
+
 func TestMaskSensitiveDataInURLError(t *testing.T) {
+	require.EqualError(t, MaskSensitiveDataInURLError(errors.New("nested-token-secret")), "URI operation failed")
 	rawURL := "mysql://root:verysecure@127.0.0.1/%zz"
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
@@ -173,5 +184,5 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	maskedErr := MaskSensitiveDataInURLError(err)
 	require.NotContains(t, maskedErr.Error(), "verysecure")
 	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
-	require.Contains(t, maskedErr.Error(), "invalid URL escape")
+	require.Contains(t, maskedErr.Error(), "URI operation failed")
 }

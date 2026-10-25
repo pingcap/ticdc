@@ -56,7 +56,7 @@ func NewGlueSchemaManager(
 	if cfg.NoCredentials() {
 		awsCfg, err = awsconfig.LoadDefaultConfig(ctx)
 		if err != nil {
-			log.Info("LoadDefaultConfig failed", zap.Error(err))
+			log.Info("LoadDefaultConfig failed", zap.String("errorType", fmt.Sprintf("%T", err)))
 			return nil, errors.Trace(err)
 		}
 	} else {
@@ -149,7 +149,7 @@ func (m *glueSchemaManager) Lookup(
 
 	header, err := m.getMsgHeader(schemaID.glueSchemaID)
 	if err != nil {
-		log.Error("could not get message header", zap.Error(err))
+		log.Error("could not get message header", zap.String("errorType", fmt.Sprintf("%T", err)))
 		return "", errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
@@ -185,13 +185,13 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 
 			id, err := m.Register(ctx, schemaName, schemaDefinition)
 			if err != nil {
-				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
+				log.Error("GetCachedOrRegister: Could not register schema", zap.String("errorType", fmt.Sprintf("%T", err)))
 				return nil, errors.Trace(err)
 			}
 
 			header, err := m.getMsgHeader(id.glueSchemaID)
 			if err != nil {
-				log.Error("GetCachedOrRegister: Could not get message header", zap.Error(err))
+				log.Error("GetCachedOrRegister: Could not get message header", zap.String("errorType", fmt.Sprintf("%T", err)))
 				return nil, errors.Trace(err)
 			}
 

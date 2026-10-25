@@ -81,13 +81,12 @@ func run(_ *cobra.Command, _ []string) {
 
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Panic("invalid upstream-uri", zap.Error(err))
+		log.Panic("invalid upstream-uri")
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if !config.IsPulsarScheme(scheme) {
 		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be pulsar schema",
-			zap.String("schema", scheme),
-			zap.String("upstreamURI", upstreamURIStr))
+			zap.String("schema", scheme))
 	}
 
 	consumerOption.Adjust(upstreamURI, configFile)

@@ -68,7 +68,7 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 		default:
 			log.Warn("unknown message type, ignore it",
 				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("messageType", targetMessage.Type.String()))
 		}
 	}
 	return nil

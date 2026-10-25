@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -503,12 +504,12 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 					sleepInterval = 1 * time.Second
 				}
 				log.Info("failed to send dispatcher request message, try again later",
-					zap.String("message", req.Message.String()),
+					zap.String("messageType", fmt.Sprintf("%T", req.Message)),
 					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
-						zap.String("message", req.Message.String()))
+						zap.String("messageType", fmt.Sprintf("%T", req.Message)))
 					continue
 				}
 				// Put the request back to the channel for later retry.
@@ -523,7 +524,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
+		log.Panic("invalid dispatcher heartbeat response message", zap.Int("messageCount", len(targetMessage.Message)))
 	}
 
 	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
@@ -568,7 +569,7 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		default:
 			log.Warn("unknown message type, ignore it",
 				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("messageType", fmt.Sprintf("%T", msg)))
 		}
 	}
 	return nil
@@ -588,7 +589,7 @@ func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMes
 	}
 	log.Warn("unknown message type, ignore it",
 		zap.String("type", targetMessage.Type.String()),
-		zap.Any("msg", targetMessage))
+		zap.Int("messageCount", len(targetMessage.Message)))
 	return nil
 }
 
@@ -624,7 +625,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 				default:
 					log.Warn("unknown message type, ignore it",
 						zap.String("type", targetMessage.Type.String()),
-						zap.Any("msg", msg))
+						zap.String("messageType", fmt.Sprintf("%T", msg)))
 				}
 			}
 		}

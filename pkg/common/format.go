@@ -14,7 +14,6 @@
 package common
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -28,7 +27,7 @@ func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
 		return ""
 	}
 	if r.ChangefeedID == nil {
-		log.Warn("changefeedID is nil, it should not happen", zap.String("request", r.String()))
+		log.Warn("changefeedID is nil, it should not happen", zap.Int("statusCount", len(r.BlockStatuses)))
 		return ""
 	}
 	sb := strings.Builder{}
@@ -47,7 +46,7 @@ func FormatTableSpanBlockStatus(s *heartbeatpb.TableSpanBlockStatus) string {
 		return ""
 	}
 	if s.ID == nil {
-		log.Warn("dispatcherID is nil, it should not happen", zap.String("status", s.String()))
+		log.Warn("dispatcherID is nil, it should not happen")
 		return ""
 	}
 	sb := strings.Builder{}
@@ -98,10 +97,10 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	fmt.Fprintf(&sb, "tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
+	fmt.Fprintf(&sb, "tableID: %d, startKeySize: %d, endKeySize: %d, keyspaceID: %d",
 		s.TableID,
-		hex.EncodeToString(s.StartKey),
-		hex.EncodeToString(s.EndKey),
+		len(s.StartKey),
+		len(s.EndKey),
 		s.KeyspaceID)
 	return sb.String()
 }
@@ -111,17 +110,14 @@ func FormatMaintainerStatus(s *heartbeatpb.MaintainerStatus) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	fmt.Fprintf(&sb, "changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, maintainerEpoch: %d, errs: [",
+	fmt.Fprintf(&sb, "changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, maintainerEpoch: %d, errorCount: %d",
 		s.ChangefeedID.GetName(),
 		s.FeedState,
 		s.State.String(),
 		s.CheckpointTs,
 		s.BootstrapDone,
-		s.MaintainerEpoch)
-	for _, err := range s.Err {
-		sb.WriteString(err.String())
-	}
-	sb.WriteString("]")
+		s.MaintainerEpoch,
+		len(s.Err))
 	sb.WriteString("\n")
 	return sb.String()
 }

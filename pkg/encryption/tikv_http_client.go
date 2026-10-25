@@ -106,11 +106,8 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	if err != nil {
 		log.Warn("failed to fetch encryption meta from TiKV store",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL),
-			zap.Error(err))
-		return nil, errors.Trace(err)
+			zap.Uint32("keyspaceID", keyspaceID))
+		return nil, errors.ErrMetaOpFailed.GenWithStackByArgs("encryption meta request failed")
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -120,9 +117,7 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	if err != nil {
 		log.Warn("failed to read encryption meta response body",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL),
 			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
@@ -131,21 +126,16 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	if resp.StatusCode == http.StatusNotFound {
 		log.Debug("encryption meta not found on TiKV store",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL))
+			zap.Uint32("keyspaceID", keyspaceID))
 		return nil, errors.ErrEncryptionMetaNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Warn("unexpected encryption meta response status",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL),
 			zap.Int("statusCode", resp.StatusCode),
-			zap.Int("bodySize", len(body)),
-			zap.String("body", truncateBytesForLog(body, 256)))
-		return nil, errors.Errorf("[%d] %s", resp.StatusCode, body)
+			zap.Int("bodySize", len(body)))
+		return nil, errors.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("encryption meta HTTP status %d", resp.StatusCode))
 	}
 
 	metaResp, err := decodeEncryptionMetaResponseFromProtobuf(body)
@@ -153,12 +143,9 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 		decodeErr := errors.Annotatef(err, "protobuf decode failed: %v", err)
 		log.Warn("failed to decode encryption meta response",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL),
 			zap.String("contentType", contentType),
 			zap.Int("bodySize", len(body)),
-			zap.String("body", truncateBytesForLog(body, 256)),
 			zap.Error(decodeErr))
 		return nil, errors.Trace(decodeErr)
 	}
@@ -167,9 +154,7 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	if err != nil {
 		log.Warn("failed to convert encryption meta response",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("url", storeURL),
 			zap.Error(err))
 		return nil, err
 	}
@@ -177,10 +162,8 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	if meta.KeyspaceId != 0 && meta.KeyspaceId != keyspaceID {
 		log.Warn("encryption meta keyspace ID mismatch",
 			zap.Uint64("storeID", storeID),
-			zap.String("statusAddr", statusAddr),
 			zap.Uint32("requestedKeyspaceID", keyspaceID),
-			zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
-			zap.String("url", storeURL))
+			zap.Uint32("metaKeyspaceID", meta.KeyspaceId))
 	}
 
 	masterKeyCiphertextLen := 0
@@ -190,7 +173,6 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 
 	log.Info("fetched valid encryption meta from TiKV store",
 		zap.Uint64("storeID", storeID),
-		zap.String("statusAddr", statusAddr),
 		zap.String("contentType", contentType),
 		zap.Uint32("requestedKeyspaceID", keyspaceID),
 		zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
@@ -397,11 +379,4 @@ func (r *masterKeyResponse) toMasterKey() *MasterKey {
 		Endpoint:   r.Endpoint,
 		Ciphertext: []byte(r.Ciphertext),
 	}
-}
-
-func truncateBytesForLog(b []byte, max int) string {
-	if len(b) <= max {
-		return string(b)
-	}
-	return fmt.Sprintf("%s...(truncated, %d bytes total)", string(b[:max]), len(b))
 }

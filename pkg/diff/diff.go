@@ -468,7 +468,7 @@ func (t *TableDiff) checkChunkDataEqual(ctx context.Context, filterByRand bool, 
 	// if checksum is not equal or don't need compare checksum, compare the data
 	log.Info("select data and then check data",
 		zap.String("table", dbutil.TableName(t.TargetTable.Schema, t.TargetTable.Table)),
-		zap.String("where", dbutil.ReplacePlaceholder(chunk.Where, util.RedactStrings(chunk.Args))))
+		zap.Int("whereSize", len(chunk.Where)))
 
 	equal, err = t.compareRows(ctx, chunk)
 	if err != nil {
@@ -549,7 +549,7 @@ func (t *TableDiff) compareChecksum(ctx context.Context, chunk *ChunkRange) (boo
 	if sourceChecksum == targetChecksum {
 		log.Info("checksum is equal",
 			zap.String("table", dbutil.TableName(t.TargetTable.Schema, t.TargetTable.Table)),
-			zap.String("where", dbutil.ReplacePlaceholder(chunk.Where, util.RedactStrings(chunk.Args))),
+			zap.Int("whereSize", len(chunk.Where)),
 			zap.Int64("checksum", sourceChecksum), zap.Duration("getSourceChecksumCost", getSourceChecksumDuration),
 			zap.Duration("getTargetChecksumCost", getTargetChecksumDuration))
 		return true, nil
@@ -557,7 +557,7 @@ func (t *TableDiff) compareChecksum(ctx context.Context, chunk *ChunkRange) (boo
 
 	log.Warn("checksum is not equal",
 		zap.String("table", dbutil.TableName(t.TargetTable.Schema, t.TargetTable.Table)),
-		zap.String("where", dbutil.ReplacePlaceholder(chunk.Where, util.RedactStrings(chunk.Args))),
+		zap.Int("whereSize", len(chunk.Where)),
 		zap.Int64("sourceChecksum", sourceChecksum), zap.Int64("targetChecksum", targetChecksum),
 		zap.Duration("getSourceChecksumCost", getSourceChecksumDuration),
 		zap.Duration("getTargetChecksumCost", getTargetChecksumDuration))
@@ -685,7 +685,7 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 			// don't have source data, so all the targetRows's data is redundant, should be deleted
 			for lastTargetData != nil {
 				sql := generateDML("delete", lastTargetData, t.TargetTable.info, t.TargetTable.Schema)
-				log.Info("[delete]", zap.String("sql", util.RedactValue(sql)))
+				log.Info("[delete]", zap.Int("sqlSize", len(sql)))
 
 				select {
 				case t.sqlCh <- sql:
@@ -706,7 +706,7 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 			// target lack some data, should insert the last source datas
 			for lastSourceData != nil {
 				sql := generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-				log.Info("[insert]", zap.String("sql", util.RedactValue(sql)))
+				log.Info("[insert]", zap.Int("sqlSize", len(sql)))
 
 				select {
 				case t.sqlCh <- sql:
@@ -740,17 +740,17 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 		case 1:
 			// delete
 			sql = generateDML("delete", lastTargetData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[delete]", zap.String("sql", util.RedactValue(sql)))
+			log.Info("[delete]", zap.Int("sqlSize", len(sql)))
 			lastTargetData = nil
 		case -1:
 			// insert
 			sql = generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[insert]", zap.String("sql", util.RedactValue(sql)))
+			log.Info("[insert]", zap.Int("sqlSize", len(sql)))
 			lastSourceData = nil
 		case 0:
 			// update
 			sql = generateDML("replace", lastSourceData, t.TargetTable.info, t.TargetTable.Schema)
-			log.Info("[update]", zap.String("sql", util.RedactValue(sql)))
+			log.Info("[update]", zap.Int("sqlSize", len(sql)))
 			lastSourceData = nil
 			lastTargetData = nil
 		}
@@ -765,12 +765,12 @@ func (t *TableDiff) compareRows(ctx context.Context, chunk *ChunkRange) (bool, e
 	if equal {
 		log.Info("rows is equal", zap.String("table",
 			dbutil.TableName(t.TargetTable.Schema, t.TargetTable.Table)),
-			zap.String("where", dbutil.ReplacePlaceholder(chunk.Where, util.RedactStrings(chunk.Args))),
+			zap.Int("whereSize", len(chunk.Where)),
 			zap.Duration("cost", time.Since(beginTime)))
 	} else {
 		log.Warn("rows is not equal",
 			zap.String("table", dbutil.TableName(t.TargetTable.Schema, t.TargetTable.Table)),
-			zap.String("where", dbutil.ReplacePlaceholder(chunk.Where, util.RedactStrings(chunk.Args))),
+			zap.Int("whereSize", len(chunk.Where)),
 			zap.Duration("cost", time.Since(beginTime)))
 	}
 
@@ -795,7 +795,7 @@ func (t *TableDiff) WriteSqls(ctx context.Context, writeFixSQL func(string) erro
 
 				err := writeFixSQL(fmt.Sprintf("%s\n", dml))
 				if err != nil {
-					log.Error("write sql failed", zap.String("sql", util.RedactValue(dml)), zap.Error(err))
+					log.Error("write sql failed", zap.Int("sqlSize", len(dml)), zap.Error(err))
 				}
 
 			case <-stopWriteCh:
@@ -1043,7 +1043,7 @@ func getChunkRows(ctx context.Context, db *sql.DB, schema, table string, tableIn
 	query := fmt.Sprintf("SELECT /*!40001 SQL_NO_CACHE */ %s FROM %s WHERE %s ORDER BY %s%s",
 		columns, dbutil.TableName(schema, table), where, strings.Join(orderKeys, ","), collation)
 
-	log.Debug("select data", zap.String("sql", query), zap.String("args", util.RedactArgs(args)))
+	log.Debug("select data", zap.Int("sqlSize", len(query)), zap.String("args", util.RedactArgs(args)))
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, errors.Trace(err)

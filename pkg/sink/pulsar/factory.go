@@ -42,8 +42,7 @@ func NewCreatorFactory(config *config.PulsarConfig, changefeedID commonType.Chan
 		Logger:            NewPulsarLogger(log.L()),
 	}
 	log.Info("pulsar client factory created",
-		zap.Stringer("changefeedID", changefeedID),
-		zap.Any("clientOptions", option))
+		zap.Stringer("changefeedID", changefeedID))
 
 	var err error
 	// ismTLSAuthentication is true if it is mTLS authentication

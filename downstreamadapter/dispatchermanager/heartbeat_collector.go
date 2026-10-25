@@ -296,7 +296,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.Int("messageCount", len(msg.Message)))
 	}
 	return nil
 }
