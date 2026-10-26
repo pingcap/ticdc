@@ -64,6 +64,7 @@ func newDMLWriters(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
+	encoderConcurrency int,
 	extension string,
 	statistics *metrics.Statistics,
 	columnSelector *columnselector.ColumnSelectors,
@@ -71,7 +72,7 @@ func newDMLWriters(
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
 		encoderConfig,
-		defaultEncodingConcurrency,
+		encoderConcurrency,
 		config.WorkerCount,
 	)
 	spool, err := spool.New(
