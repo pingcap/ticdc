@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 )
@@ -57,10 +58,9 @@ type Statistics struct {
 	metricExecDDLHis prometheus.Observer
 	// metricExecDDLRunningCnt records the count of running DDL.
 	metricExecDDLRunningCnt prometheus.Gauge
-	// metricExecBatchHis records the executed DML batch size.
-	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
+	// metricExecBatchHis records the row count of each flushed DML event.
 	metricExecBatchHis prometheus.Observer
-	// metricExecBatchBytesHis records the executed batch write bytes.
+	// metricExecBatchBytesHis records the approximate original size of each flushed DML event.
 	metricExecBatchBytesHis prometheus.Observer
 	// metricTotalWriteBytesCnt records the executed DML event size.
 	metricTotalWriteBytesCnt prometheus.Counter
@@ -71,6 +71,14 @@ type Statistics struct {
 	metricExecErrCntForDML prometheus.Counter
 	// metricExecDMLCnt records the executed DML event count of the Sink.
 	metricExecDMLCnt prometheus.Counter
+}
+
+// TrackDMLEvent records rows and approximate original bytes when the event is flushed.
+func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
+	rows, size := int(event.Len()), event.GetSize()
+	event.AddPostFlushFunc(func() {
+		b.RecordDMLResult(rows, size, nil)
+	})
 }
 
 // RecordDMLResult records a completed downstream DML write. Successful writes

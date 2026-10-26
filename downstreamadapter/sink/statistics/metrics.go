@@ -20,33 +20,33 @@ import (
 
 // ---------- Metrics used in Statistics. ---------- //
 var (
-	// execBatchHistogram records batch size of a txn.
+	// execBatchHistogram records the row count of each flushed DML event.
 	execBatchHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "batch_row_count",
-			Help:      "Row count number for a given batch.",
+			Help:      "Row count of a DML event confirmed flushed by sink.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
-	// execBatchWriteBytesHistogram records bytes written for each batch.
+	// execBatchWriteBytesHistogram records the approximate original size of each flushed DML event.
 	execBatchWriteBytesHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "batch_write_bytes",
-			Help:      "Bytes number for a given batch.",
+			Help:      "Approximate original size in bytes of a DML event confirmed flushed by sink.",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	// totalWriteBytesCounter records the total number of bytes written by sink.
+	// totalWriteBytesCounter records the approximate original bytes of flushed DML events.
 	totalWriteBytesCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "write_bytes_total",
-			Help:      "Total number of bytes written by sink",
+			Help:      "Total approximate original bytes of DML events confirmed flushed by sink.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	eventSizeHistogram = prometheus.NewHistogramVec(
@@ -63,7 +63,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "dml_event_count",
-			Help:      "Total count of DML events.",
+			Help:      "Total row count of DML events confirmed flushed by sink.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	// executionErrorCounter is the counter of execution errors.

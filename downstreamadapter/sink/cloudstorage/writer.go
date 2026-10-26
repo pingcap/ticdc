@@ -274,8 +274,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		}
 		return nil
 	}()
-	d.statistics.RecordDMLResult(payload.rowsCount, payload.nBytes, err)
 	if err != nil {
+		d.statistics.RecordDMLResult(0, 0, err)
 		return err
 	}
 

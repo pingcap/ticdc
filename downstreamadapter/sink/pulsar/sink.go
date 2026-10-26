@@ -200,6 +200,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -399,11 +400,7 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.sendMessages(ctx)
 	})
 	g.Go(func() error {
-		err := s.dmlProducer.run(ctx)
-		if err != nil && ctx.Err() == nil {
-			s.statistics.RecordDMLResult(0, 0, err)
-		}
-		return err
+		return s.dmlProducer.run(ctx)
 	})
 	return g.Wait()
 }
@@ -565,18 +562,10 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 				start := time.Now()
-				rows, writeBytes := message.GetRowsCount(), int64(message.Length())
-				callback := message.Callback
-				message.Callback = func() {
-					s.statistics.RecordDMLResult(rows, writeBytes, nil)
-					if callback != nil {
-						callback()
-					}
-				}
 				message.SetPartitionKey(future.Key.PartitionKey)
 				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 					if ctx.Err() == nil {
-						s.statistics.RecordDMLResult(rows, writeBytes, err)
+						s.statistics.RecordDMLResult(0, 0, err)
 					}
 					return errors.Trace(err)
 				}

@@ -282,12 +282,12 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 			}
 			err = w.execDMLWithMaxRetries(dmls)
 		}
-		w.statistics.RecordDMLResult(dmls.rowCount, dmls.approximateSize, err)
 	} else {
 		w.tryDryRunBlock()
 	}
 
 	if err != nil {
+		w.statistics.RecordDMLResult(0, 0, err)
 		return errors.Trace(err)
 	}
 

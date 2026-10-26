@@ -24,7 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -36,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"go.uber.org/atomic"
@@ -119,8 +117,6 @@ func TestVerifyInvalidConfig(t *testing.T) {
 
 func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 	ctx := t.Context()
-	registry := prometheus.NewRegistry()
-	statistics.InitMetrics(registry)
 
 	producerErr := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 	kafkaSink, _, asyncProducer, _ := newKafkaSinkForTest(t, ctx, config.ProtocolOpen, &config.SinkConfig{})
@@ -130,28 +126,6 @@ func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 
 	require.ErrorIs(t, err, errors.ErrKafkaSendMessage)
 	require.False(t, kafkaSink.IsNormal())
-	require.Equal(t, float64(1), statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_execution_error"))
-	require.Zero(t, statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_dml_event_count"))
-}
-
-func statisticsCounterValue(t *testing.T, registry *prometheus.Registry, changefeed, name string) float64 {
-	t.Helper()
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	var value float64
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.Metric {
-			for _, label := range metric.Label {
-				if label.GetName() == "changefeed" && label.GetValue() == changefeed {
-					value += metric.GetCounter().GetValue()
-				}
-			}
-		}
-	}
-	return value
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
@@ -412,8 +386,6 @@ func TestKafkaSinkDML(t *testing.T) {
 	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key, name varchar(32))"))
 
 	t.Run("routes DML event and forwards producer callback", func(t *testing.T) {
-		registry := prometheus.NewRegistry()
-		statistics.InitMetrics(registry)
 		var callbackCount atomic.Int64
 		dmlEvent := eventHelper.DML2Event("test", "t", "insert into t values (1, 'one')")
 		dmlEvent.PostTxnFlushed = []func(){func() { callbackCount.Add(1) }}
@@ -440,12 +412,8 @@ func TestKafkaSinkDML(t *testing.T) {
 			require.Equal(t, 1, message.GetRowsCount())
 			require.NotNil(t, message.Callback)
 			require.Zero(t, callbackCount.Load())
-			require.Zero(t, statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_dml_event_count"))
-			require.Zero(t, statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_write_bytes_total"))
 			message.Callback()
 			require.Equal(t, int64(1), callbackCount.Load())
-			require.Equal(t, float64(1), statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_dml_event_count"))
-			require.Equal(t, float64(message.Length()), statisticsCounterValue(t, registry, kafkaSink.changefeedID.Name(), "ticdc_sink_write_bytes_total"))
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for Kafka Sink to send the DML message")
 		}

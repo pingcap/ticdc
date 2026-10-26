@@ -208,6 +208,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			zap.String("dispatcher", event.GetDispatcherID().String()))
 		return
 	}
+	s.statistics.TrackDMLEvent(event)
 	s.dmlWriters.addDMLEvent(event)
 }
 

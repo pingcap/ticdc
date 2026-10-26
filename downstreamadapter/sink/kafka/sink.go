@@ -223,11 +223,7 @@ func (s *sink) Run(ctx context.Context) error {
 		return s.sendCheckpoint(ctx)
 	})
 	g.Go(func() error {
-		err := s.dmlProducer.AsyncRunCallback(ctx)
-		if err != nil && ctx.Err() == nil {
-			s.statistics.RecordDMLResult(0, 0, err)
-		}
-		return err
+		return s.dmlProducer.AsyncRunCallback(ctx)
 	})
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
@@ -251,6 +247,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	if !s.isNormal.Load() {
 		return
 	}
+	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -455,17 +452,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return err
 				}
 				start := time.Now()
-				rows, writeBytes := message.GetRowsCount(), int64(message.Length())
-				callback := message.Callback
-				message.Callback = func() {
-					s.statistics.RecordDMLResult(rows, writeBytes, nil)
-					if callback != nil {
-						callback()
-					}
-				}
 				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
 					if ctx.Err() == nil {
-						s.statistics.RecordDMLResult(rows, writeBytes, err)
+						s.statistics.RecordDMLResult(0, 0, err)
 					}
 					return err
 				}

@@ -644,6 +644,7 @@
           },
           "hiddenSeries": false,
           "id": 20000,
+          "description": "Approximate original bytes of flushed DML events per second, before encoding or compression.",
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -16908,7 +16909,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Row count for batch to the downstream sink.",
+          "description": "Row count per DML event confirmed flushed to downstream.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -16971,7 +16972,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Output Row Batch Count",
+          "title": "Output DML Event Row Count",
           "tooltip": {
             "shared": true,
             "sort": 0,
