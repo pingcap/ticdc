@@ -113,12 +113,12 @@ func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Removed, replicaSet.GetStatus().ComponentStatus)
 }
 
-// TestRemoveOperator_StoppedStatusBehindBlockTs covers a dispatcher removed while
+// TestRemoveOperatorStoppedStatusBehindBlockTs covers a dispatcher removed while
 // it waits on a block event. The barrier has forwarded the stored checkpointTs to
 // blockTs-1, so the dispatcher's final Stopped status carries a lower checkpointTs.
 // The span must still become non-working, otherwise a non-cascade maintainer
 // remove never sees the DDL span stop and the maintainer handoff never finishes.
-func TestRemoveOperator_StoppedStatusBehindBlockTs(t *testing.T) {
+func TestRemoveOperatorStoppedStatusBehindBlockTs(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
 	blockTs := uint64(2000)
