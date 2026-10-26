@@ -148,6 +148,41 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
+// TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
+// and removes unused fields, retaining it only for sinks with encoders or blackhole.
+func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
+	tests := []struct {
+		sinkURI string
+		keep    bool
+	}{
+		{sinkURI: "kafka://127.0.0.1:9092/topic", keep: true},
+		{sinkURI: "pulsar://127.0.0.1:6650/topic", keep: true},
+		{sinkURI: "file:///tmp/cdc", keep: true},
+		{sinkURI: "s3://bucket/cdc", keep: true},
+		{sinkURI: "gcs://bucket/cdc", keep: true},
+		{sinkURI: "azblob://bucket/cdc", keep: true},
+		{sinkURI: "mysql://127.0.0.1:3306"},
+		{sinkURI: "tidb://127.0.0.1:4000"},
+		{sinkURI: "blackhole://", keep: true},
+	}
+	for _, tt := range tests {
+		// Cleanup must preserve the configured value for encoder-backed sinks
+		// while still dropping it for MySQL-compatible sinks.
+		t.Run(tt.sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.EncoderConcurrency = util.AddressOf(16)
+			info := &ChangeFeedInfo{SinkURI: tt.sinkURI, Config: cfg}
+			info.RmUnusedFields()
+			if tt.keep {
+				require.NotNil(t, cfg.Sink.EncoderConcurrency)
+				require.Equal(t, 16, *cfg.Sink.EncoderConcurrency)
+			} else {
+				require.Nil(t, cfg.Sink.EncoderConcurrency)
+			}
+		})
+	}
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {
