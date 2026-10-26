@@ -48,7 +48,7 @@ type regionInfo struct {
 	// It should be `true` in BDR mode
 	filterLoop bool
 	// scanPriority controls local scheduling and admission across retries.
-	scanPriority scanPriorityLevel
+	scanPriority ScanPriorityLevel
 }
 
 func newRegionInfo(
@@ -64,7 +64,7 @@ func newRegionInfo(
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
 		filterLoop:     filterLoop,
-		scanPriority:   scanPriorityLow,
+		scanPriority:   ScanPriorityLow,
 	}
 }
 

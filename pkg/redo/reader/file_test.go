@@ -27,14 +27,9 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-<<<<<<< HEAD
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-=======
-	misc "github.com/pingcap/ticdc/pkg/redo/common"
-	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
-	"github.com/pingcap/tidb/pkg/objstore/storeapi"
->>>>>>> 9797cc44b (redo: fix file upload lifecycle and replay correctness (#6595))
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )

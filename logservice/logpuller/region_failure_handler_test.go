@@ -153,13 +153,13 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 func TestRegionFailureHandlerPreservesRegionRetryPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		priority     scanPriorityLevel
+		priority     ScanPriorityLevel
 		everCaughtUp bool
-		expected     scanPriorityLevel
+		expected     ScanPriorityLevel
 	}{
-		{"busy high", scanPriorityHigh, false, scanPriorityHigh},
-		{"busy low", scanPriorityLow, false, scanPriorityLow},
-		{"busy after catch up", scanPriorityLow, true, scanPriorityHigh},
+		{"busy high", ScanPriorityHigh, false, ScanPriorityHigh},
+		{"busy low", ScanPriorityLow, false, ScanPriorityLow},
+		{"busy after catch up", ScanPriorityLow, true, ScanPriorityHigh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pdClock := pdutil.NewClock4Test()
@@ -194,15 +194,15 @@ func TestRegionFailureHandlerPreservesRegionRetryPriority(t *testing.T) {
 func TestRegionFailureHandlerPreservesRangeRetryPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		priority     scanPriorityLevel
+		priority     ScanPriorityLevel
 		everCaughtUp bool
 		err          error
-		expected     scanPriorityLevel
+		expected     ScanPriorityLevel
 	}{
-		{"epoch high", scanPriorityHigh, false, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}, scanPriorityHigh},
-		{"region not found low", scanPriorityLow, false, &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}}, scanPriorityLow},
-		{"RPC context unavailable high", scanPriorityHigh, false, &rpcCtxUnavailableErr{}, scanPriorityHigh},
-		{"RPC context unavailable after catch up", scanPriorityLow, true, &rpcCtxUnavailableErr{}, scanPriorityHigh},
+		{"epoch high", ScanPriorityHigh, false, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}, ScanPriorityHigh},
+		{"region not found low", ScanPriorityLow, false, &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}}, ScanPriorityLow},
+		{"RPC context unavailable high", ScanPriorityHigh, false, &rpcCtxUnavailableErr{}, ScanPriorityHigh},
+		{"RPC context unavailable after catch up", ScanPriorityLow, true, &rpcCtxUnavailableErr{}, ScanPriorityHigh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pdClock := pdutil.NewClock4Test()
@@ -354,7 +354,7 @@ func TestRegionFailureHandlerRoutesErrors(t *testing.T) {
 			region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 			// Keep this test focused on error routing. High priority bypasses the
 			// scan-priority clock lookup when a range retry is constructed.
-			region.scanPriority = scanPriorityHigh
+			region.scanPriority = ScanPriorityHigh
 			err := handler.handleError(t.Context(), newRegionErrorInfo(region, testCase.err))
 			if testCase.expectedError {
 				require.Error(t, err)

@@ -13,35 +13,35 @@
 
 package logpuller
 
-// scanPriorityLevel controls TiCDC's local region scheduling and admission.
-type scanPriorityLevel uint8
+// ScanPriorityLevel controls TiCDC's local region scheduling and admission.
+type ScanPriorityLevel uint8
 
 const (
-	scanPriorityUnknown scanPriorityLevel = iota
-	scanPriorityLow
-	scanPriorityHigh
+	ScanPriorityUnknown ScanPriorityLevel = iota
+	ScanPriorityLow
+	ScanPriorityHigh
 )
 
-func (priority scanPriorityLevel) String() string {
+func (priority ScanPriorityLevel) String() string {
 	switch priority {
-	case scanPriorityHigh:
+	case ScanPriorityHigh:
 		return "SCAN_PRIORITY_HIGH"
-	case scanPriorityLow:
+	case ScanPriorityLow:
 		return "SCAN_PRIORITY_LOW"
 	default:
 		return "SCAN_PRIORITY_UNKNOWN"
 	}
 }
 
-func normalizeScanPriority(priority scanPriorityLevel) scanPriorityLevel {
-	if priority == scanPriorityHigh {
-		return scanPriorityHigh
+func normalizeScanPriority(priority ScanPriorityLevel) ScanPriorityLevel {
+	if priority == ScanPriorityHigh {
+		return ScanPriorityHigh
 	}
-	return scanPriorityLow
+	return ScanPriorityLow
 }
 
-func isHighScanPriority(priority scanPriorityLevel) bool {
-	return normalizeScanPriority(priority) == scanPriorityHigh
+func isHighScanPriority(priority ScanPriorityLevel) bool {
+	return normalizeScanPriority(priority) == ScanPriorityHigh
 }
 
 type regionPriorityTask struct {
@@ -60,7 +60,7 @@ func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriori
 	}
 }
 
-func (pt *regionPriorityTask) priority() scanPriorityLevel {
+func (pt *regionPriorityTask) priority() ScanPriorityLevel {
 	return normalizeScanPriority(pt.regionInfo.scanPriority)
 }
 

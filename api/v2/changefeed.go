@@ -197,6 +197,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	if err = hasRunningImport(ctx, h.server.GetEtcdClient().GetEtcdClient(), h.server.GetPdClient().GetClusterID(ctx)); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
 	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)

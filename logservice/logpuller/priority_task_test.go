@@ -41,18 +41,18 @@ func newPriorityTestRegion(
 	}
 }
 
-func withScanPriority(region regionInfo, priority scanPriorityLevel) regionInfo {
+func withScanPriority(region regionInfo, priority ScanPriorityLevel) regionInfo {
 	region.scanPriority = priority
 	return region
 }
 
 func TestNormalizeScanPriority(t *testing.T) {
-	require.Equal(t, scanPriorityHigh, normalizeScanPriority(scanPriorityHigh))
-	require.Equal(t, scanPriorityLow, normalizeScanPriority(scanPriorityLow))
-	require.Equal(t, scanPriorityLow, normalizeScanPriority(scanPriorityUnknown))
-	require.True(t, isHighScanPriority(scanPriorityHigh))
-	require.False(t, isHighScanPriority(scanPriorityLow))
-	require.False(t, isHighScanPriority(scanPriorityUnknown))
+	require.Equal(t, ScanPriorityHigh, normalizeScanPriority(ScanPriorityHigh))
+	require.Equal(t, ScanPriorityLow, normalizeScanPriority(ScanPriorityLow))
+	require.Equal(t, ScanPriorityLow, normalizeScanPriority(ScanPriorityUnknown))
+	require.True(t, isHighScanPriority(ScanPriorityHigh))
+	require.False(t, isHighScanPriority(ScanPriorityLow))
+	require.False(t, isHighScanPriority(ScanPriorityUnknown))
 }
 
 func TestRegionPriorityTaskQueueOrder(t *testing.T) {
@@ -62,21 +62,21 @@ func TestRegionPriorityTaskQueueOrder(t *testing.T) {
 	lowTask := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(1, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
-			scanPriorityLow,
+			ScanPriorityLow,
 		),
 		3,
 	)
 	highTask1 := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(2, oracle.GoTimeToTS(currentTime.Add(-10*time.Minute))),
-			scanPriorityHigh,
+			ScanPriorityHigh,
 		),
 		2,
 	)
 	highTask2 := newRegionPriorityTask(
 		withScanPriority(
 			newPriorityTestRegion(3, oracle.GoTimeToTS(currentTime.Add(-time.Hour))),
-			scanPriorityHigh,
+			ScanPriorityHigh,
 		),
 		1,
 	)
@@ -98,9 +98,9 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 	checkpointTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
 
 	first := newRegionPriorityTask(
-		withScanPriority(newPriorityTestRegion(1, checkpointTs), scanPriorityHigh), 1)
+		withScanPriority(newPriorityTestRegion(1, checkpointTs), ScanPriorityHigh), 1)
 	second := newRegionPriorityTask(
-		withScanPriority(newPriorityTestRegion(2, checkpointTs), scanPriorityHigh), 2)
+		withScanPriority(newPriorityTestRegion(2, checkpointTs), ScanPriorityHigh), 2)
 
 	require.True(t, queue.Push(second))
 	require.True(t, queue.Push(first))
@@ -115,20 +115,20 @@ func TestRegionPriorityTaskFIFOWithinPriority(t *testing.T) {
 
 func TestRegionPriorityTaskUsesHighPriorityWindow(t *testing.T) {
 	highTask := newRegionPriorityTask(
-		withScanPriority(newPriorityTestRegion(1, 1), scanPriorityHigh), 1)
+		withScanPriority(newPriorityTestRegion(1, 1), ScanPriorityHigh), 1)
 	lowTask := newRegionPriorityTask(
-		withScanPriority(newPriorityTestRegion(2, 1), scanPriorityLow), 2)
+		withScanPriority(newPriorityTestRegion(2, 1), ScanPriorityLow), 2)
 
 	require.True(t, highTask.canUseMaxWindow())
 	require.False(t, lowTask.canUseMaxWindow())
 }
 
 func TestRegionPriorityTaskRefreshesRegionInfoBetweenStages(t *testing.T) {
-	region := withScanPriority(newPriorityTestRegion(1, 1), scanPriorityLow)
+	region := withScanPriority(newPriorityTestRegion(1, 1), ScanPriorityLow)
 	task := newRegionPriorityTask(region, 1)
-	require.Equal(t, scanPriorityLow, task.priority())
+	require.Equal(t, ScanPriorityLow, task.priority())
 
-	region.scanPriority = scanPriorityHigh
+	region.scanPriority = ScanPriorityHigh
 	task.regionInfo = region
-	require.Equal(t, scanPriorityHigh, task.priority())
+	require.Equal(t, ScanPriorityHigh, task.priority())
 }
