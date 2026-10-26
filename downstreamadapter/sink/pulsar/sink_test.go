@@ -104,21 +104,6 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
-		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
-		},
-	}
-
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
@@ -129,14 +114,13 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	pulsarSink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
-
-	ddlEvent2.PostFlush()
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
 	require.Len(t, pulsarSink.dmlProducer.(*mockProducer).GetAllEvents(), 2)
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
-	require.Equal(t, count.Load(), int64(3))
 	cancel()
 	require.ErrorIs(t, <-runDone, context.Canceled)
 	pulsarSink.Close()

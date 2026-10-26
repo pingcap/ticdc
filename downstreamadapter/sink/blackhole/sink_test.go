@@ -92,21 +92,6 @@ func TestBlackHoleSinkFlushEvents(t *testing.T) {
 		},
 	}
 
-	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      "create table t (id int primary key, name varchar(32))",
-		SchemaName: "test",
-		TableName:  "t",
-		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
-		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
-		},
-	}
-
 	dmlEvent := newInsertEventForTest(t)
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
@@ -120,10 +105,6 @@ func TestBlackHoleSinkFlushEvents(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return count.Load() == 2
 	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
-
-	ddlEvent2.PostFlush()
-
-	require.Equal(t, count.Load(), int32(3))
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {

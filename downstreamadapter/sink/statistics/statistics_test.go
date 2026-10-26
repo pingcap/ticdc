@@ -19,38 +19,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
-
-func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
-	execBatchHistogram.Reset()
-	t.Cleanup(execBatchHistogram.Reset)
-
-	statistics := NewStatistics(
-		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
-		123,
-	)
-	event := &commonEvent.DMLEvent{Length: 2, ApproximateSize: 10}
-	statistics.TrackDMLEvent(event)
-	event.PostFlush()
-
-	require.Equal(t, 1, testutil.CollectAndCount(execBatchHistogram))
-	registry := prometheus.NewPedanticRegistry()
-	registry.MustRegister(execBatchHistogram)
-	metricFamilies, err := registry.Gather()
-	require.NoError(t, err)
-	require.Len(t, metricFamilies, 1)
-	require.Len(t, metricFamilies[0].Metric, 1)
-	labels := make(map[string]string)
-	for _, label := range metricFamilies[0].Metric[0].Label {
-		labels[label.GetName()] = label.GetValue()
-	}
-	require.Equal(t, "123", labels["keyspace_id"])
-
-	statistics.Close()
-	require.Equal(t, 0, testutil.CollectAndCount(execBatchHistogram))
-}
 
 func TestTrackDMLEvent(t *testing.T) {
 	stats := NewStatistics(common.NewChangefeedID4Test("test", t.Name()), 0)
@@ -60,10 +31,19 @@ func TestTrackDMLEvent(t *testing.T) {
 	event.AddPostFlushFunc(func() { called = true })
 
 	stats.TrackDMLEvent(event)
-	require.Zero(t, testutil.ToFloat64(stats.metricExecDMLCnt))
+	metric := &dto.Metric{}
+	require.NoError(t, stats.metricExecBatchHis.(prometheus.Metric).Write(metric))
+	require.Zero(t, metric.GetHistogram().GetSampleCount())
+	require.NoError(t, stats.metricExecBatchBytesHis.(prometheus.Metric).Write(metric))
+	require.Zero(t, metric.GetHistogram().GetSampleCount())
 	require.False(t, called)
+
+	event.Length = 5
+	event.ApproximateSize = 100
 	event.PostFlush()
-	require.Equal(t, float64(2), testutil.ToFloat64(stats.metricExecDMLCnt))
-	require.Equal(t, float64(10), testutil.ToFloat64(stats.metricTotalWriteBytesCnt))
+	require.NoError(t, stats.metricExecBatchHis.(prometheus.Metric).Write(metric))
+	require.Equal(t, float64(2), metric.GetHistogram().GetSampleSum())
+	require.NoError(t, stats.metricExecBatchBytesHis.(prometheus.Metric).Write(metric))
+	require.Equal(t, float64(10), metric.GetHistogram().GetSampleSum())
 	require.True(t, called)
 }

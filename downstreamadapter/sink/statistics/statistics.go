@@ -39,10 +39,8 @@ func NewStatistics(
 	statistics.metricExecDDLRunningCnt = execDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecBatchHis = execBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
 	statistics.metricExecBatchBytesHis = execBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID)
-	statistics.metricTotalWriteBytesCnt = totalWriteBytesCounter.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecErrCntForDDL = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
 	statistics.metricExecErrCntForDML = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
-	statistics.metricExecDMLCnt = execDMLEventCounter.WithLabelValues(keyspace, changefeedID)
 
 	return statistics
 }
@@ -62,15 +60,11 @@ type Statistics struct {
 	metricExecBatchHis prometheus.Observer
 	// metricExecBatchBytesHis records the approximate original size of each flushed DML event.
 	metricExecBatchBytesHis prometheus.Observer
-	// metricTotalWriteBytesCnt records the executed DML event size.
-	metricTotalWriteBytesCnt prometheus.Counter
 
 	// metricExecErrCntForDDL records the error count of the Sink for DDL.
 	metricExecErrCntForDDL prometheus.Counter
 	// metricExecErrCntForDML records the error count of the Sink for DML.
 	metricExecErrCntForDML prometheus.Counter
-	// metricExecDMLCnt records the executed DML event count of the Sink.
-	metricExecDMLCnt prometheus.Counter
 }
 
 // TrackDMLEvent records rows and approximate original bytes when the event is flushed.
@@ -82,8 +76,6 @@ func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
 		}
 		b.metricExecBatchHis.Observe(rows)
 		b.metricExecBatchBytesHis.Observe(size)
-		b.metricExecDMLCnt.Add(rows)
-		b.metricTotalWriteBytesCnt.Add(size)
 	})
 }
 
@@ -96,10 +88,6 @@ func (b *Statistics) RecordDMLError() {
 
 // RecordDDLExecution executes a DDL and records its duration and result.
 func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
-	if b.closed.Load() {
-		_, err := executor()
-		return err
-	}
 	b.metricExecDDLRunningCnt.Inc()
 	defer b.metricExecDDLRunningCnt.Dec()
 	start := time.Now()
@@ -129,8 +117,6 @@ func (b *Statistics) Close() {
 	execBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
-	totalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
-	execDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 	execDDLCounter.DeletePartialMatch(prometheus.Labels{
 		getKeyspaceLabel(): keyspace,
 		"changefeed":       changefeedID,

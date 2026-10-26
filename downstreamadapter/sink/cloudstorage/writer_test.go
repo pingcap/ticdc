@@ -731,8 +731,12 @@ func TestWriterIndexWriteError(t *testing.T) {
 		},
 		nil,
 	)
+	var callbackCount atomic.Int64
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		callbackCount.Add(1)
+	}
 	task.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, task))
 	require.NoError(t, d.enqueueTask(ctx, newFlushTask(dispatcherID, 100)))
@@ -744,6 +748,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 
 	err = <-done
 	require.ErrorContains(t, err, "index write failed")
+	require.Zero(t, callbackCount.Load())
 }
 
 func TestWriterDataFileCloseError(t *testing.T) {

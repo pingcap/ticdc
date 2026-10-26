@@ -40,23 +40,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	// totalWriteBytesCounter records the approximate original bytes of flushed DML events.
-	totalWriteBytesCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "write_bytes_total",
-			Help:      "Total approximate original bytes of DML events confirmed flushed by sink.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	execDMLEventCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_count",
-			Help:      "Total row count of DML events confirmed flushed by sink.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
 	// executionErrorCounter is the counter of execution errors.
 	executionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -101,8 +84,6 @@ var (
 func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execBatchHistogram)
 	registry.MustRegister(execBatchWriteBytesHistogram)
-	registry.MustRegister(totalWriteBytesCounter)
-	registry.MustRegister(execDMLEventCounter)
 	registry.MustRegister(executionErrorCounter)
 	registry.MustRegister(execDDLHistogram)
 	registry.MustRegister(execDDLRunningGauge)
