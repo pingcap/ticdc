@@ -280,7 +280,7 @@ func TestVerifyTablesUsesFirstMatchingSelector(t *testing.T) {
 			tables := make([]*commonType.TableInfo, 0, len(tc.tables))
 			for _, name := range tc.tables {
 				tables = append(tables, commonType.WrapTableInfo("test", &model.TableInfo{
-					Name:       ast.NewCIStr(name),
+					Name:       parser_model.NewCIStr(name),
 					PKIsHandle: true,
 					Columns: []*model.ColumnInfo{
 						newColumnInfoForSelectorTest(1, "id", mysql.PriKeyFlag|mysql.NotNullFlag),
