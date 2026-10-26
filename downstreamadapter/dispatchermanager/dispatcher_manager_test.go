@@ -518,6 +518,7 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 
 func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 	manager := createTestManager(t)
+	require.False(t, manager.IsClosingOrClosed())
 	ctx, cancel := context.WithCancel(context.Background())
 	manager.ctx = ctx
 	manager.cancel = cancel
@@ -535,11 +536,14 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 		require.FailNow(t, "local fence should not wait for dispatcher manager cleanup")
 	}
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.True(t, manager.IsClosingOrClosed())
+	require.False(t, manager.TryClose(false))
 
 	manager.wg.Done()
 	require.Eventually(t, func() bool {
 		return manager.TryClose(false)
 	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.IsClosingOrClosed())
 }
 
 func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {

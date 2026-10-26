@@ -1054,6 +1054,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 
 // ==== remove and clean related functions ====
 
+// IsClosingOrClosed reports whether shutdown has started or completed.
+func (e *DispatcherManager) IsClosingOrClosed() bool {
+	return e.closing.Load() || e.closed.Load()
+}
+
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {
 		e.removeChangefeedRequested.Store(true)
