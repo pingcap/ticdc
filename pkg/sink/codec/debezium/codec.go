@@ -1181,14 +1181,6 @@ func (c *dbzCodec) EncodeValue(
 							}
 							c.writeDebeziumFieldSchema(fieldsWriter, col)
 						}
-						if e.TableInfo.HasVirtualColumns() {
-							for _, colInfo := range e.TableInfo.GetColumns() {
-								if commonType.IsColCDCVisible(colInfo) {
-									continue
-								}
-								c.writeDebeziumFieldSchema(fieldsWriter, colInfo)
-							}
-						}
 						util.ReturnJSONWriter(fieldsWriter)
 						fieldsJSON = fieldsBuf.String()
 					}
