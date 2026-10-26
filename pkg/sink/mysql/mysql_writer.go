@@ -277,7 +277,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 			}
 			dmls, err = w.prepareDMLs(events)
 			if err != nil {
-				w.statistics.RecordDMLResult(0, 0, err)
+				w.statistics.RecordDMLError()
 				return errors.Trace(err)
 			}
 			err = w.execDMLWithMaxRetries(dmls)
@@ -287,7 +287,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	}
 
 	if err != nil {
-		w.statistics.RecordDMLResult(0, 0, err)
+		w.statistics.RecordDMLError()
 		return errors.Trace(err)
 	}
 

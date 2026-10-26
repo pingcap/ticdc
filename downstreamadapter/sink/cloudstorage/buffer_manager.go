@@ -266,7 +266,6 @@ func buildPayload(spoolBuffer *spool.Spool, batch *tableBatch) (*payload, error)
 type payloadBuilder struct {
 	buf                bytes.Buffer
 	batch              *tableBatch
-	rowsCount          int
 	nBytes             int64
 	shouldWriteKey     bool
 	postFlushCallbacks []func()
@@ -284,7 +283,6 @@ func (b *payloadBuilder) Build() *payload {
 	return &payload{
 		tableInfo:          b.batch.tableInfo,
 		data:               b.buf.Bytes(),
-		rowsCount:          b.rowsCount,
 		nBytes:             b.nBytes,
 		entries:            b.batch.entries,
 		postFlushCallbacks: b.postFlushCallbacks,
@@ -297,7 +295,7 @@ func (b *payloadBuilder) appendEntry(spoolBuffer *spool.Spool, entry *spool.Entr
 		return err
 	}
 	for {
-		key, value, rowCount, ok, err := reader.Next()
+		key, value, _, ok, err := reader.Next()
 		if err != nil {
 			return err
 		}
@@ -314,7 +312,6 @@ func (b *payloadBuilder) appendEntry(spoolBuffer *spool.Spool, entry *spool.Entr
 		}
 		b.buf.Write(value)
 		b.nBytes += int64(len(value))
-		b.rowsCount += rowCount
 	}
 	b.postFlushCallbacks = append(b.postFlushCallbacks, reader.PostFlushCallbacks()...)
 	return nil

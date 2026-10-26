@@ -31,7 +31,9 @@ func TestExecBatchHistogramKeyspaceIDLabel(t *testing.T) {
 		common.NewChangefeedID4Test("test-keyspace", "batch-row-count-keyspace-id"),
 		123,
 	)
-	statistics.RecordDMLResult(2, 10, nil)
+	event := &commonEvent.DMLEvent{Length: 2, ApproximateSize: 10}
+	statistics.TrackDMLEvent(event)
+	event.PostFlush()
 
 	require.Equal(t, 1, testutil.CollectAndCount(execBatchHistogram))
 	registry := prometheus.NewPedanticRegistry()

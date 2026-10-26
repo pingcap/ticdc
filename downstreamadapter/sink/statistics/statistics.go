@@ -75,26 +75,23 @@ type Statistics struct {
 
 // TrackDMLEvent records rows and approximate original bytes when the event is flushed.
 func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
-	rows, size := int(event.Len()), event.GetSize()
+	rows, size := float64(event.Len()), float64(event.GetSize())
 	event.AddPostFlushFunc(func() {
-		b.RecordDMLResult(rows, size, nil)
+		if b.closed.Load() {
+			return
+		}
+		b.metricExecBatchHis.Observe(rows)
+		b.metricExecBatchBytesHis.Observe(size)
+		b.metricExecDMLCnt.Add(rows)
+		b.metricTotalWriteBytesCnt.Add(size)
 	})
 }
 
-// RecordDMLResult records a completed downstream DML write. Successful writes
-// contribute rows and bytes; failed writes increment the error counter.
-func (b *Statistics) RecordDMLResult(batchSize int, batchWriteBytes int64, err error) {
-	if b.closed.Load() {
-		return
-	}
-	if err != nil {
+// RecordDMLError records a failed downstream DML write.
+func (b *Statistics) RecordDMLError() {
+	if !b.closed.Load() {
 		b.metricExecErrCntForDML.Inc()
-		return
 	}
-	b.metricExecBatchHis.Observe(float64(batchSize))
-	b.metricExecBatchBytesHis.Observe(float64(batchWriteBytes))
-	b.metricExecDMLCnt.Add(float64(batchSize))
-	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 }
 
 // RecordDDLExecution executes a DDL and records its duration and result.
@@ -130,7 +127,6 @@ func (b *Statistics) Close() {
 	execDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
 	execBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.keyspaceID)
 	execBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
-	eventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
 	totalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)

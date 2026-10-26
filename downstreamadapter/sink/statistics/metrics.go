@@ -49,15 +49,6 @@ var (
 			Help:      "Total approximate original bytes of DML events confirmed flushed by sink.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	eventSizeHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "event_size",
-			Help:      "The size of changed events (in bytes).",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 30), // 0~32M
-		}, []string{getKeyspaceLabel(), "changefeed"})
-
 	execDMLEventCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -111,7 +102,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execBatchHistogram)
 	registry.MustRegister(execBatchWriteBytesHistogram)
 	registry.MustRegister(totalWriteBytesCounter)
-	registry.MustRegister(eventSizeHistogram)
 	registry.MustRegister(execDMLEventCounter)
 	registry.MustRegister(executionErrorCounter)
 	registry.MustRegister(execDDLHistogram)

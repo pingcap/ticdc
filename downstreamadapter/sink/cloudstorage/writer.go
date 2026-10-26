@@ -69,7 +69,6 @@ type flushTask struct {
 type payload struct {
 	tableInfo          *common.TableInfo
 	data               []byte
-	rowsCount          int
 	nBytes             int64
 	entries            []*spool.Entry
 	postFlushCallbacks []func()
@@ -275,7 +274,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return nil
 	}()
 	if err != nil {
-		d.statistics.RecordDMLResult(0, 0, err)
+		d.statistics.RecordDMLError()
 		return err
 	}
 

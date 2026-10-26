@@ -454,7 +454,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
 					if ctx.Err() == nil {
-						s.statistics.RecordDMLResult(0, 0, err)
+						s.statistics.RecordDMLError()
 					}
 					return err
 				}
