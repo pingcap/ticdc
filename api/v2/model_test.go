@@ -33,6 +33,38 @@ func TestSinkConfigDateSeparator(t *testing.T) {
 	require.ErrorContains(t, err, "CDC:ErrStorageSinkInvalidConfig")
 }
 
+func TestSinkDispatchRulesUpdate(t *testing.T) {
+	storedRules := []*DispatchRule{{Matcher: []string{"src.*"}, TargetSchema: "dst"}}
+	for _, tc := range []struct {
+		name  string
+		rules []*DispatchRule
+	}{
+		{name: "omitted"},
+		{name: "clear", rules: []*DispatchRule{}},
+		{name: "replace", rules: []*DispatchRule{{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: tc.rules}}
+			converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+			require.Equal(t, tc.rules, converted.Sink.DispatchRules)
+
+			info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+			require.NoError(t, err)
+			require.Equal(t, tc.rules, info.Config.Sink.DispatchRules)
+
+			body, err := json.Marshal(info.Config)
+			require.NoError(t, err)
+			stored := &ReplicaConfig{Sink: &SinkConfig{DispatchRules: storedRules}}
+			require.NoError(t, json.Unmarshal(body, stored))
+			want := tc.rules
+			if tc.rules == nil {
+				want = storedRules
+			}
+			require.Equal(t, want, stored.Sink.DispatchRules)
+		})
+	}
+}
+
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
@@ -97,6 +129,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 		EnableSyncPoint:       util.AddressOf(true),
 		EnableTableMonitor:    util.AddressOf(true),
 		BDRMode:               util.AddressOf(true),
+		AllowSameCluster:      util.AddressOf(true),
 		Sink: &SinkConfig{
 			CloudStorageConfig: &CloudStorageConfig{
 				UseTableIDAsPath: util.AddressOf(true),
@@ -114,6 +147,18 @@ func TestReplicaConfigConversion(t *testing.T) {
 			},
 			KafkaConfig: &KafkaConfig{
 				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+			},
+			DispatchRules: []*DispatchRule{
+				nil,
+				{
+					Matcher:      []string{"src.orders"},
+					TargetSchema: "dst_orders",
+				},
+				nil,
+				{
+					Matcher:      []string{"src.customers"},
+					TargetSchema: "dst_customers",
+				},
 			},
 		},
 		Mounter: &MounterConfig{
@@ -147,6 +192,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.EnableSyncPoint))
 	require.True(t, util.GetOrZero(internalCfg.EnableTableMonitor))
 	require.True(t, util.GetOrZero(internalCfg.BDRMode))
+	require.True(t, util.GetOrZero(internalCfg.AllowSameCluster))
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
@@ -156,6 +202,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, []*config.DispatchRule{
+		{
+			Matcher:      []string{"src.orders"},
+			TargetSchema: "dst_orders",
+		},
+		{
+			Matcher:      []string{"src.customers"},
+			TargetSchema: "dst_customers",
+		},
+	}, internalCfg.Sink.DispatchRules)
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -194,11 +250,15 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, util.GetOrZero(defaultCfg.CaseSensitive), util.GetOrZero(internalCfgNil.CaseSensitive))
 
 	// Test case 3: Conversion back to API config
+	internalCfg.Sink.DispatchRules = append(
+		[]*config.DispatchRule{nil}, internalCfg.Sink.DispatchRules...)
+	internalCfg.Sink.DispatchRules = append(internalCfg.Sink.DispatchRules, nil)
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.Equal(t, config.PerformanceModeLowLatency, util.GetOrZero(apiCfgBack.PerformanceMode))
 	require.Equal(t, uint64(1024), *apiCfgBack.MemoryQuota)
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
+	require.True(t, *apiCfgBack.AllowSameCluster)
 	require.True(t, *apiCfgBack.IgnoreIneligibleTable)
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
@@ -210,6 +270,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, []*DispatchRule{
+		{
+			Matcher:      []string{"src.orders"},
+			TargetSchema: "dst_orders",
+		},
+		{
+			Matcher:      []string{"src.customers"},
+			TargetSchema: "dst_customers",
+		},
+	}, apiCfgBack.Sink.DispatchRules)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
