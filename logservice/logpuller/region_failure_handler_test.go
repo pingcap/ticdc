@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -126,8 +128,7 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 		handler.cache.add(newTestRegionErrorInfo(&requestCancelledErr{}))
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
 
 	runDone := make(chan error, 1)
 	go func() {
@@ -152,13 +153,13 @@ func TestRegionFailureHandlerRunDrainsErrCacheWithoutDispatcher(t *testing.T) {
 func TestRegionFailureHandlerPreservesRegionRetryPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		priority     scanPriorityLevel
+		priority     ScanPriorityLevel
 		everCaughtUp bool
-		expected     scanPriorityLevel
+		expected     ScanPriorityLevel
 	}{
-		{"busy high", scanPriorityHigh, false, scanPriorityHigh},
-		{"busy low", scanPriorityLow, false, scanPriorityLow},
-		{"busy after catch up", scanPriorityLow, true, scanPriorityHigh},
+		{"busy high", ScanPriorityHigh, false, ScanPriorityHigh},
+		{"busy low", ScanPriorityLow, false, ScanPriorityLow},
+		{"busy after catch up", ScanPriorityLow, true, ScanPriorityHigh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pdClock := pdutil.NewClock4Test()
@@ -193,15 +194,15 @@ func TestRegionFailureHandlerPreservesRegionRetryPriority(t *testing.T) {
 func TestRegionFailureHandlerPreservesRangeRetryPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		priority     scanPriorityLevel
+		priority     ScanPriorityLevel
 		everCaughtUp bool
 		err          error
-		expected     scanPriorityLevel
+		expected     ScanPriorityLevel
 	}{
-		{"epoch high", scanPriorityHigh, false, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}, scanPriorityHigh},
-		{"region not found low", scanPriorityLow, false, &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}}, scanPriorityLow},
-		{"RPC context unavailable high", scanPriorityHigh, false, &rpcCtxUnavailableErr{}, scanPriorityHigh},
-		{"RPC context unavailable after catch up", scanPriorityLow, true, &rpcCtxUnavailableErr{}, scanPriorityHigh},
+		{"epoch high", ScanPriorityHigh, false, &eventError{err: &cdcpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}}, ScanPriorityHigh},
+		{"region not found low", ScanPriorityLow, false, &eventError{err: &cdcpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}}, ScanPriorityLow},
+		{"RPC context unavailable high", ScanPriorityHigh, false, &rpcCtxUnavailableErr{}, ScanPriorityHigh},
+		{"RPC context unavailable after catch up", ScanPriorityLow, true, &rpcCtxUnavailableErr{}, ScanPriorityHigh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pdClock := pdutil.NewClock4Test()
@@ -216,15 +217,276 @@ func TestRegionFailureHandlerPreservesRangeRetryPriority(t *testing.T) {
 			region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span, nil, subscribed, false)
 			region.lockedRangeState = &regionlock.LockedRangeState{}
 			region.scanPriority = tc.priority
-			var retryTask rangeTask
+			retryCh := make(chan rangeTask, 1)
 			handler := newRegionFailureHandler(nil, nil, nil, func(_ context.Context, task rangeTask) {
-				retryTask = task
+				retryCh <- task
 			})
 
-			err := handler.handleError(context.Background(), newRegionErrorInfo(region, tc.err))
+			err := handler.handleError(t.Context(), newRegionErrorInfo(region, tc.err))
 			require.NoError(t, err)
+			var retryTask rangeTask
+			select {
+			case retryTask = <-retryCh:
+			case <-time.After(time.Second):
+				t.Fatal("range retry was not scheduled")
+			}
 			require.Equal(t, tc.expected, retryTask.priority)
 			require.Equal(t, span, retryTask.span)
 		})
 	}
+}
+
+func TestRegionFailureHandlerSchedulesNotLeaderRangeRetry(t *testing.T) {
+	pdClient := newFailureRecoveryTestPDClient(t)
+	defer pdClient.Close()
+
+	regionCache := tikv.NewRegionCache(pdClient)
+	defer regionCache.Close()
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	region.subscribedSpan.priorityPolicy = newScanPriorityPolicy(pdutil.NewClock4Test(), 30*time.Minute)
+
+	rangeRetryCh := make(chan rangeTask, 2)
+	handler := newRegionFailureHandler(
+		regionCache,
+		func(*subscribedSpan) {},
+		func(context.Context, regionInfo) {
+			t.Fatal("unexpected region retry")
+		},
+		func(_ context.Context, task rangeTask) {
+			rangeRetryCh <- task
+		},
+	)
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{NotLeader: &errorpb.NotLeader{}},
+	})
+
+	ctx := t.Context()
+
+	require.NoError(t, handler.handleError(ctx, errInfo))
+
+	select {
+	case task := <-rangeRetryCh:
+		require.Equal(t, region.span, task.span)
+		require.Same(t, region.subscribedSpan, task.subscribedSpan)
+	case <-time.After(time.Second):
+		t.Fatal("not leader retry was not scheduled")
+	}
+}
+
+func TestRegionFailureHandlerRoutesErrors(t *testing.T) {
+	testCases := []struct {
+		name          string
+		err           error
+		expectedRetry string
+		expectedError bool
+	}{
+		{
+			name: "epoch not match retries range",
+			err: &eventError{err: &cdcpb.Error{
+				EpochNotMatch: &errorpb.EpochNotMatch{},
+			}},
+			expectedRetry: "range",
+		},
+		{
+			name: "region not found retries range",
+			err: &eventError{err: &cdcpb.Error{
+				RegionNotFound: &errorpb.RegionNotFound{},
+			}},
+			expectedRetry: "range",
+		},
+		{
+			name:          "missing rpc context retries range",
+			err:           &rpcCtxUnavailableErr{},
+			expectedRetry: "range",
+		},
+		{
+			name: "server busy retries region",
+			err: &eventError{err: &cdcpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{BackoffMs: 1},
+			}},
+			expectedRetry: "region",
+		},
+		{
+			name:          "unknown cdc error retries region",
+			err:           &eventError{err: &cdcpb.Error{}},
+			expectedRetry: "region",
+		},
+		{
+			name: "duplicate request is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				DuplicateRequest: &cdcpb.DuplicateRequest{},
+			}},
+			expectedError: true,
+		},
+		{
+			name: "incompatible version is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				Compatibility: &cdcpb.Compatibility{RequiredVersion: "v9.0.0"},
+			}},
+			expectedError: true,
+		},
+		{
+			name: "cluster id mismatch is terminal",
+			err: &eventError{err: &cdcpb.Error{
+				ClusterIdMismatch: &cdcpb.ClusterIDMismatch{Current: 1, Request: 2},
+			}},
+			expectedError: true,
+		},
+		{
+			name:          "unknown local error is terminal",
+			err:           errors.New("unrecoverable"),
+			expectedError: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			retryCh := make(chan string, 1)
+			handler := newRegionFailureHandler(
+				nil,
+				func(*subscribedSpan) {},
+				func(context.Context, regionInfo) { retryCh <- "region" },
+				func(context.Context, rangeTask) { retryCh <- "range" },
+			)
+			t.Cleanup(handler.cancelRecoveries)
+
+			region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+			// Keep this test focused on error routing. High priority bypasses the
+			// scan-priority clock lookup when a range retry is constructed.
+			region.scanPriority = ScanPriorityHigh
+			err := handler.handleError(t.Context(), newRegionErrorInfo(region, testCase.err))
+			if testCase.expectedError {
+				require.Error(t, err)
+				select {
+				case retry := <-retryCh:
+					t.Fatalf("terminal error unexpectedly scheduled a %s retry", retry)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			select {
+			case retry := <-retryCh:
+				require.Equal(t, testCase.expectedRetry, retry)
+			case <-time.After(time.Second):
+				t.Fatalf("timed out waiting for %s retry", testCase.expectedRetry)
+			}
+		})
+	}
+}
+
+func TestRegionRecoveryBackoffFollowsRangeAcrossRegionChanges(t *testing.T) {
+	regionRetryCh := make(chan regionInfo, 2)
+	handler := newRegionFailureHandler(
+		nil,
+		func(*subscribedSpan) {},
+		func(_ context.Context, region regionInfo) {
+			regionRetryCh <- region
+		},
+		func(context.Context, rangeTask) {},
+	)
+	t.Cleanup(handler.cancelRecoveries)
+
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	errInfo := newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(1), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("first region recovery was not scheduled")
+	}
+
+	region.verID = tikv.NewRegionVerID(2, 1, 1)
+	errInfo = newRegionErrorInfo(region, &eventError{
+		err: &cdcpb.Error{Congested: &cdcpb.Congested{}},
+	})
+	require.NoError(t, handler.handleError(context.Background(), errInfo))
+	select {
+	case retried := <-regionRetryCh:
+		require.Equal(t, uint64(2), retried.verID.GetID())
+	case <-time.After(time.Second):
+		t.Fatal("second region recovery was not scheduled")
+	}
+
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recovery.Lock()
+	attempt := handler.recovery.states[key].attempt
+	handler.recovery.Unlock()
+	require.Equal(t, uint32(2), attempt)
+}
+
+func TestScheduleRecoveryCoalescesPendingRetries(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	t.Cleanup(handler.cancelRecoveries)
+
+	ctx := t.Context()
+
+	subSpan := &subscribedSpan{subID: SubscriptionID(1)}
+	span := heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")}
+	retryCh := make(chan struct{}, 2)
+	retry := func() {
+		retryCh <- struct{}{}
+	}
+
+	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
+	handler.scheduleRecovery(ctx, subSpan, span, 100*time.Millisecond, retry)
+
+	select {
+	case <-retryCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("retry was not scheduled")
+	}
+
+	select {
+	case <-retryCh:
+		t.Fatal("expected coalesced retries for the same recovery key")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestRegionFailureHandlerRequestCancelledResetsRecoveryState(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
+	key := newRegionRecoveryKey(region.subscribedSpan.subID, region.span)
+	handler.recovery.states[key] = &regionRecoveryState{}
+
+	err := handler.handleError(context.Background(), newRegionErrorInfo(region, &requestCancelledErr{}))
+	require.NoError(t, err)
+
+	handler.recovery.Lock()
+	_, ok := handler.recovery.states[key]
+	handler.recovery.Unlock()
+	assert.False(t, ok)
+}
+
+func TestRegionFailureHandlerExpiresRecoveryStates(t *testing.T) {
+	handler := newRegionFailureHandler(nil, func(*subscribedSpan) {}, func(context.Context, regionInfo) {}, func(context.Context, rangeTask) {})
+	now := time.Now()
+	expiredKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("b")})
+	activeKey := newRegionRecoveryKey(1, heartbeatpb.TableSpan{StartKey: []byte("b"), EndKey: []byte("c")})
+	handler.recovery.states[expiredKey] = &regionRecoveryState{expiresAt: now.Add(-time.Second)}
+	handler.recovery.states[activeKey] = &regionRecoveryState{expiresAt: now.Add(time.Second)}
+
+	handler.expireRecoveries(now)
+
+	handler.recovery.Lock()
+	_, expiredExists := handler.recovery.states[expiredKey]
+	_, activeExists := handler.recovery.states[activeKey]
+	handler.recovery.Unlock()
+	require.False(t, expiredExists)
+	require.True(t, activeExists)
+}
+
+func TestSafeBackoffDuration(t *testing.T) {
+	require.Equal(t, time.Duration(0), safeBackoffDuration(0))
+	require.Equal(t, 123*time.Millisecond, safeBackoffDuration(123))
+	require.Equal(t, 10*time.Second, safeBackoffDuration(10_000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(10*60*1000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(11*60*1000))
+	require.Equal(t, 10*time.Minute, safeBackoffDuration(math.MaxUint64))
 }

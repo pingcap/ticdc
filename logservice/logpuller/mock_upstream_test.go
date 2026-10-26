@@ -144,12 +144,16 @@ func mockTsEventBatch(regionID, ts, requestID uint64) *cdcpb.ChangeDataEvent {
 }
 
 type mockChangeDataServer struct {
-	ch chan *cdcpb.ChangeDataEvent
-	wg sync.WaitGroup
+	ch        chan *cdcpb.ChangeDataEvent
+	requestCh chan *cdcpb.ChangeDataRequest
+	wg        sync.WaitGroup
 }
 
 func newMockChangeDataServer(ch chan *cdcpb.ChangeDataEvent) *mockChangeDataServer {
-	return &mockChangeDataServer{ch: ch}
+	return &mockChangeDataServer{
+		ch:        ch,
+		requestCh: make(chan *cdcpb.ChangeDataRequest, 128),
+	}
 }
 
 func (m *mockChangeDataServer) EventFeed(s cdcpb.ChangeData_EventFeedServer) error {
@@ -159,7 +163,13 @@ func (m *mockChangeDataServer) EventFeed(s cdcpb.ChangeData_EventFeedServer) err
 		defer m.wg.Done()
 		defer close(closed)
 		for {
-			if _, err := s.Recv(); err != nil {
+			request, err := s.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case m.requestCh <- request:
+			case <-s.Context().Done():
 				return
 			}
 		}

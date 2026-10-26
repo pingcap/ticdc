@@ -82,7 +82,7 @@ type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
-	priority       scanPriorityLevel
+	priority       ScanPriorityLevel
 }
 
 // upstreamHandle contains the stable TiKV and PD dependencies shared by the
@@ -107,7 +107,8 @@ type SubscriptionClient interface {
 	common.SubModule
 	// allocate a unique id for the subscription
 	AllocSubscriptionID() SubscriptionID
-	// subscribe a table span
+	// subscribe a table span. scanPriority is the minimum local scheduling
+	// priority for every Region request in the subscription, including retries.
 	Subscribe(
 		subID SubscriptionID,
 		span heartbeatpb.TableSpan,
@@ -116,6 +117,7 @@ type SubscriptionClient interface {
 		advanceResolvedTs func(ts uint64),
 		advanceInterval int64,
 		bdrMode bool,
+		scanPriority ScanPriorityLevel,
 	)
 	// unsubscribe a table span
 	Unsubscribe(subID SubscriptionID)
@@ -230,6 +232,7 @@ func (s *subscriptionClient) Subscribe(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	bdrMode bool,
+	scanPriority ScanPriorityLevel,
 ) {
 	if span.TableID == 0 {
 		log.Panic("subscription client subscribe with zero TableID")
@@ -250,6 +253,7 @@ func (s *subscriptionClient) Subscribe(
 		s.upstream.pdClock,
 		time.Duration(config.GetGlobalServerConfig().Debug.Puller.OldStartTsScanLowPriorityThreshold),
 	)
+	rt.baseScanPriority = normalizeScanPriority(scanPriority)
 	s.spanRegistry.Add(rt)
 	s.eventSink.AddPath(rt)
 
@@ -260,7 +264,7 @@ func (s *subscriptionClient) Subscribe(
 		span:           span,
 		subscribedSpan: rt,
 		filterLoop:     rt.filterLoop,
-		priority:       scanPriorityLow,
+		priority:       rt.baseScanPriority,
 	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
@@ -457,6 +461,9 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
+		if isHighScanPriority(region.subscribedSpan.baseScanPriority) {
+			region.scanPriority = ScanPriorityHigh
+		}
 		region.scanPriority = region.subscribedSpan.priorityPolicy.resolve(
 			region.scanPriority,
 			region.resolvedTs(),

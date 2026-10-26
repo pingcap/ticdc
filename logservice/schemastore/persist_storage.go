@@ -138,13 +138,12 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
-	ctx context.Context,
+	keyspaceCtx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
-	gcSafePoint uint64,
-) (*persistentStorage, error) {
+) *persistentStorage {
 	dataStorage := &persistentStorage{
 		rootDir:                root,
 		keyspaceID:             keyspaceID,
@@ -158,20 +157,15 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
-	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
-	err := dataStorage.initialize(gcSafePoint)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	return dataStorage, nil
+	dataStorage.ctx, dataStorage.cancel = context.WithCancel(keyspaceCtx)
+	return dataStorage
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(gcSafePoint uint64) error {
+func (p *persistentStorage) initialize(ctx context.Context, gcSafePoint uint64) error {
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
@@ -210,12 +204,12 @@ func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 		}
 	}
 	if !isDataReusable {
-		p.initializeFromKVStorage(dbPath, gcSafePoint)
+		return p.initializeFromKVStorage(ctx, dbPath, gcSafePoint)
 	}
 	return nil
 }
 
-func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
+func (p *persistentStorage) initializeFromKVStorage(ctx context.Context, dbPath string, gcTs uint64) error {
 	now := time.Now()
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Fatal("fail to remove path in initializeFromKVStorage")
@@ -226,9 +220,14 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Uint64("snapTs", gcTs))
 
 	var err error
-	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
-		// TODO: retry
-		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
+	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(ctx, p.db, p.kvStorage, gcTs, true); err != nil {
+		closeErr := p.db.Close()
+		p.db = nil
+		if closeErr != nil {
+			log.Warn("close schema store database after initialization failed",
+				zap.Uint32("keyspaceID", p.keyspaceID), zap.Error(closeErr))
+		}
+		return err
 	}
 
 	p.gcTs = gcTs
@@ -242,6 +241,7 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Int("databaseMapLen", len(p.databaseMap)),
 		zap.Int("tableMapLen", len(p.tableMap)),
 		zap.Any("duration(s)", time.Since(now).Seconds()))
+	return nil
 }
 
 func (p *persistentStorage) initializeFromDisk() {
@@ -604,12 +604,12 @@ func (p *persistentStorage) gc(ctx context.Context) {
 				log.Warn("get ts failed", zap.Error(err))
 				continue
 			}
-			p.doGc(gcSafePoint)
+			p.doGc(ctx, gcSafePoint)
 		}
 	}
 }
 
-func (p *persistentStorage) doGc(gcTs uint64) {
+func (p *persistentStorage) doGc(ctx context.Context, gcTs uint64) {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
 		// It might happen when all changefeed is removed in the maintainer side,
@@ -632,8 +632,11 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 	}
 
 	start := time.Now()
-	_, _, _, err := persistSchemaSnapshot(p.db, p.kvStorage, gcTs, false)
+	_, _, _, err := persistSchemaSnapshot(ctx, p.db, p.kvStorage, gcTs, false)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
@@ -753,13 +756,26 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
 
-	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+	if handler.prepareJobFunc != nil {
+		if err := handler.prepareJobFunc(p, job); err != nil {
+			return err
+		}
+	}
+
+	p.mu.Lock()
+
+	ddlEvent, err := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
 
 	p.mu.Unlock()
 
@@ -784,7 +800,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-	writePersistedDDLEvent(p.db, &ddlEvent)
+	err = writePersistedDDLEvent(p.db, &ddlEvent)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	failpoint.Inject("afterPersistingDDL", func() {
 		failpoint.Call("github.com/pingcap/ticdc/logservice/schemastore/afterPersistingDDL")
 	})
@@ -803,6 +822,28 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
+	// Iterate before updating schema metadata because some DDLs, such as drop
+	// schema, need the old metadata to determine their affected physical tables.
+	handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+		event:        &ddlEvent,
+		databaseMap:  p.databaseMap,
+		partitionMap: p.partitionMap,
+		apply: func(tableIDs ...int64) {
+			for _, tableID := range tableIDs {
+				if store, ok := p.tableInfoStoreMap[tableID]; ok {
+					switch job.Type {
+					case model.ActionCreateTable, model.ActionCreateTables:
+						log.Warn("table was registered before create DDL was handled",
+							zap.Int64("tableID", tableID),
+							zap.Uint64("finishedTs", ddlEvent.FinishedTs))
+					default:
+					}
+					store.applyDDL(&ddlEvent)
+				}
+			}
+		},
+	})
+
 	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 		event:        &ddlEvent,
 		databaseMap:  p.databaseMap,
@@ -810,26 +851,11 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
-		for _, tableID := range tableIDs {
-			if store, ok := p.tableInfoStoreMap[tableID]; ok {
-				// do some safety check
-				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
-					// newly created tables should not be registered before this ddl are handled
-					log.Panic("should not be registered", zap.Int64("tableID", tableID))
-				default:
-				}
-				store.applyDDL(&ddlEvent)
-			}
-		}
-	})
-
 	return nil
 }
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
-	switch model.ActionType(job.Type) {
+	switch job.Type {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
@@ -889,7 +915,6 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionAlterCacheTable,
 		model.ActionAlterNoCacheTable,
 		model.ActionFlashbackCluster,
-		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:

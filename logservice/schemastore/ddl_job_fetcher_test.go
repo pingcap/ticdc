@@ -14,15 +14,66 @@
 package schemastore
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/utils/heap"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
+
+type priorityRecordingSubscriptionClient struct {
+	nextID     logpuller.SubscriptionID
+	priorities []logpuller.ScanPriorityLevel
+}
+
+func (s *priorityRecordingSubscriptionClient) Name() string {
+	return "priorityRecordingSubscriptionClient"
+}
+func (s *priorityRecordingSubscriptionClient) Run(context.Context) error   { return nil }
+func (s *priorityRecordingSubscriptionClient) Close(context.Context) error { return nil }
+
+func (s *priorityRecordingSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID {
+	s.nextID++
+	return s.nextID
+}
+
+func (s *priorityRecordingSubscriptionClient) Subscribe(
+	_ logpuller.SubscriptionID,
+	_ heartbeatpb.TableSpan,
+	_ uint64,
+	_ func([]common.RawKVEntry, func()) bool,
+	_ func(uint64),
+	_ int64,
+	_ bool,
+	scanPriority logpuller.ScanPriorityLevel,
+) {
+	s.priorities = append(s.priorities, scanPriority)
+}
+
+func (s *priorityRecordingSubscriptionClient) Unsubscribe(logpuller.SubscriptionID) {}
+
+func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
+	subClient := &priorityRecordingSubscriptionClient{}
+	fetcher := newDDLJobFetcher(
+		context.Background(), subClient, nil, keyspaceID,
+		func(DDLJobWithCommitTs) {}, func(uint64) {},
+	)
+
+	require.NoError(t, fetcher.run(1))
+	require.Equal(t, []logpuller.ScanPriorityLevel{logpuller.ScanPriorityHigh}, subClient.priorities)
+}
 
 func TestAdvanceSchemaStoreResolvedTs(t *testing.T) {
 	tsCh := make(chan uint64, 100)
@@ -124,4 +175,72 @@ func TestGetAllDDLSpan(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, spans, 1)
 	require.Equal(t, int64(common.JobTableID), spans[0].TableID)
+}
+
+func TestDDLJobFetcherInputLegacyFormat(t *testing.T) {
+	job := &model.Job{
+		ID:         100,
+		Type:       model.ActionCreateTable,
+		State:      model.JobStateDone,
+		BinlogInfo: &model.HistoryInfo{},
+	}
+	rawJob, err := job.Encode(true)
+	require.NoError(t, err)
+
+	var cached []DDLJobWithCommitTs
+	fetcher := newDDLJobFetcher(
+		context.Background(), nil, nil, common.DefaultKeyspaceID,
+		func(event DDLJobWithCommitTs) { cached = append(cached, event) },
+		func(uint64) {},
+	)
+	entries := []common.RawKVEntry{
+		{OpType: common.OpTypeDelete, Key: []byte("mDDLJobList"), Value: rawJob, CRTs: 200},
+		{OpType: common.OpTypePut, Key: []byte("mDDLJobList"), Value: rawJob, StartTs: 101, CRTs: 202},
+	}
+
+	require.False(t, fetcher.input(entries, nil))
+	require.Len(t, cached, 1)
+	require.Equal(t, uint64(202), cached[0].CommitTs)
+	require.Equal(t, uint64(101), cached[0].Job.StartTS)
+	require.Equal(t, uint64(202), cached[0].Job.BinlogInfo.FinishedTS)
+	require.Equal(t, int64(100), cached[0].Job.ID)
+}
+
+func TestDDLJobFetcherInputJobTableFormat(t *testing.T) {
+	helper := commonEvent.NewEventTestHelperWithPrivateStore(t)
+	t.Cleanup(helper.Close)
+	job := &model.Job{
+		ID:         101,
+		Type:       model.ActionDropTable,
+		State:      model.JobStateDone,
+		SchemaID:   10,
+		TableID:    20,
+		BinlogInfo: &model.HistoryInfo{},
+	}
+	rawJob, err := job.Encode(true)
+	require.NoError(t, err)
+	rawKVs := helper.DML2RawKv(
+		common.JobTableID,
+		100,
+		fmt.Sprintf(
+			"insert into mysql.tidb_ddl_job(job_id, reorg, schema_ids, table_ids, job_meta, type, processing) "+
+				"values (%d, 0, '%d', '%d', x'%x', %d, 0)",
+			job.ID, job.SchemaID, job.TableID, rawJob, job.Type),
+	)
+	require.Len(t, rawKVs, 1)
+
+	var cached []DDLJobWithCommitTs
+	fetcher := newDDLJobFetcher(
+		context.Background(), nil, helper.Storage(), common.DefaultKeyspaceID,
+		func(event DDLJobWithCommitTs) { cached = append(cached, event) },
+		func(uint64) {},
+	)
+	require.False(t, fetcher.input([]common.RawKVEntry{*rawKVs[0]}, nil))
+	require.Len(t, cached, 1)
+	require.Equal(t, job.ID, cached[0].Job.ID)
+	require.Equal(t, job.Type, cached[0].Job.Type)
+	require.Equal(t, rawKVs[0].StartTs, cached[0].Job.StartTS)
+	require.Equal(t, rawKVs[0].CRTs, cached[0].Job.BinlogInfo.FinishedTS)
+	require.NotNil(t, fetcher.ddlTableInfo)
+	require.Equal(t, int64(common.JobTableID), fetcher.ddlTableInfo.DDLJobTable.TableName.TableID)
 }

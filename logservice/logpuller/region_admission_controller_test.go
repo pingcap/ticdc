@@ -113,7 +113,7 @@ func TestRegionAdmissionControllerHighPriorityUsesMaxWindow(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
 	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = scanPriorityHigh
+	highPriorityRegion.scanPriority = ScanPriorityHigh
 	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)
@@ -149,7 +149,7 @@ func TestRegionAdmissionControllerPrioritizesHighPriorityRegion(t *testing.T) {
 		prepareRegionForAdmission(createTestRegionInfo(1, 2), slowCheckpointTs),
 		currentTs)
 	highPriorityRegion := prepareRegionForAdmission(createTestRegionInfo(1, 3), slowCheckpointTs)
-	highPriorityRegion.scanPriority = scanPriorityHigh
+	highPriorityRegion.scanPriority = ScanPriorityHigh
 	submitRegionForAdmission(t, controller, highPriorityRegion, currentTs)
 
 	req2, err := controller.pop(t.Context(), nil)

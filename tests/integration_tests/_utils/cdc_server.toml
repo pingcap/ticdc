@@ -1,0 +1,3 @@
+# Use franz-go by default in integration tests.
+[debug]
+enable-kafka-franz-go = true

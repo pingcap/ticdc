@@ -75,11 +75,9 @@ func TestGetTableInfoAtTs(t *testing.T) {
 			MultipleTableInfos: []*model.TableInfo{other},
 		}}},
 		{name: "drop", tableID: 100, ts: 20, events: []PersistedDDLEvent{drop}, deleted: true},
-		// Schema DDLs do not provide per-table deletion markers. Both lookup
-		// paths fall back to the retained table schema.
-		{name: "drop schema snapshot fallback", tableID: 100, ts: 20, events: []PersistedDDLEvent{{
+		{name: "drop schema", tableID: 100, ts: 20, events: []PersistedDDLEvent{{
 			Type: byte(model.ActionDropSchema), SchemaID: 1, FinishedTs: 20,
-		}}},
+		}}, deleted: true},
 		{name: "recover", tableID: 100, ts: 30, events: []PersistedDDLEvent{drop, {
 			Type: byte(model.ActionRecoverTable), TableID: 100, SchemaName: "test", TableInfo: normal, FinishedTs: 30,
 		}}},

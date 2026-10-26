@@ -70,6 +70,7 @@ func toEventType(es string) (EventType, error) {
 		CreateDatabase,
 		DropDatabase,
 		AlterDatabase,
+		RecoverDatabase,
 		CreateTable,
 		DropTable,
 		TruncateTable,
