@@ -196,7 +196,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := statistics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stat := statistics.NewStatistics(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {

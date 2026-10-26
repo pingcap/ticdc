@@ -41,6 +41,7 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -63,7 +64,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
@@ -86,7 +87,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 
@@ -103,6 +104,30 @@ func newTestMockDB(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.Nil(t, err)
 	return db, mock
+}
+
+func writerStatisticsForTest(t *testing.T, writer *Writer) func() map[string]float64 {
+	t.Helper()
+	writer.statistics = statistics.NewStatistics(common.NewChangefeedID4Test("test", t.Name()), 0)
+	t.Cleanup(writer.statistics.Close)
+	registry := prometheus.NewRegistry()
+	statistics.InitMetrics(registry)
+	return func() map[string]float64 {
+		t.Helper()
+		families, err := registry.Gather()
+		require.NoError(t, err)
+		values := make(map[string]float64)
+		for _, family := range families {
+			for _, metric := range family.Metric {
+				for _, label := range metric.Label {
+					if label.GetName() == "changefeed" && label.GetValue() == t.Name() {
+						values[family.GetName()] += metric.GetCounter().GetValue() + metric.GetGauge().GetValue()
+					}
+				}
+			}
+		}
+		return values
+	}
 }
 
 func TestMysqlWriter_FlushDML(t *testing.T) {
@@ -247,6 +272,7 @@ func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
 func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()
+	statisticsValues := writerStatisticsForTest(t, writer)
 
 	writer.cfg.CachePrepStmts = false
 	writer.cfg.DMLMaxRetry = 0
@@ -279,6 +305,9 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 
 	// Verify that writer is now in error-caused safe mode
 	require.True(t, writer.isInErrorCausedSafeMode)
+	values := statisticsValues()
+	require.Equal(t, float64(1), values["ticdc_sink_dml_event_count"])
+	require.Zero(t, values["ticdc_sink_execution_error"])
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)

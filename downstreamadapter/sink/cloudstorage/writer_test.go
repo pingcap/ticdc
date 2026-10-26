@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,7 +61,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID)
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -480,7 +481,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -683,6 +684,8 @@ func (w *failOnCloseWriter) Close(ctx context.Context) error {
 
 func TestWriterIndexWriteError(t *testing.T) {
 	t.Parallel()
+	registry := prometheus.NewRegistry()
+	statistics.InitMetrics(registry)
 
 	ctx := context.Background()
 	parentDir := t.TempDir()
@@ -702,7 +705,8 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID)
+	t.Cleanup(statistics.Close)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -744,6 +748,21 @@ func TestWriterIndexWriteError(t *testing.T) {
 
 	err = <-done
 	require.ErrorContains(t, err, "index write failed")
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	counters := make(map[string]float64)
+	for _, family := range metricFamilies {
+		for _, metric := range family.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == "changefeed" && label.GetValue() == changefeedID.Name() {
+					counters[family.GetName()] += metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	require.Zero(t, counters["ticdc_sink_dml_event_count"])
+	require.Zero(t, counters["ticdc_sink_write_bytes_total"])
+	require.Equal(t, float64(1), counters["ticdc_sink_execution_error"])
 }
 
 func TestWriterDataFileCloseError(t *testing.T) {
@@ -768,7 +787,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)

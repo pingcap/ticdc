@@ -47,7 +47,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
-	tryExec := func() (int, int64, error) {
+	tryExec := func() error {
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
@@ -56,7 +56,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		}()
 		for {
 			if !w.grantWrite() {
-				return 0, 0, errors.Trace(w.ctx.Err())
+				return errors.Trace(w.ctx.Err())
 			}
 			admitted, err := w.dmlSession.withConn(w, writeTimeout, func() bool {
 				return w.writeGate == nil || w.writeGate.IsWritable()
@@ -93,10 +93,10 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				return nil
 			})
 			if err != nil {
-				return 0, 0, err
+				return err
 			}
 			if admitted {
-				return dmls.rowCount, dmls.approximateSize, nil
+				return nil
 			}
 		}
 	}
@@ -123,7 +123,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			failpoint.Return(err)
 		})
 
-		err := w.statistics.RecordBatchExecution(tryExec)
+		err := tryExec()
 		if err != nil {
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}

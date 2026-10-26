@@ -35,7 +35,7 @@ type Sink struct {
 func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: statistics.NewStatistics(changefeedID, keyspaceID, "sink"),
+		statistics: statistics.NewStatistics(changefeedID, keyspaceID),
 	}, nil
 }
 
@@ -108,12 +108,7 @@ func (s *Sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
-			err := s.statistics.RecordBatchExecution(func() (int, int64, error) {
-				return int(event.Len()), event.GetSize(), nil
-			})
-			if err != nil {
-				return err
-			}
+			s.statistics.RecordDMLResult(int(event.Len()), event.GetSize(), nil)
 			event.PostFlush()
 		}
 	}

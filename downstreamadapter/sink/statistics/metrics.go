@@ -28,7 +28,7 @@ var (
 			Name:      "batch_row_count",
 			Help:      "Row count number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "keyspace_id"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// execBatchWriteBytesHistogram records bytes written for each batch.
 	execBatchWriteBytesHistogram = prometheus.NewHistogramVec(
@@ -38,7 +38,7 @@ var (
 			Name:      "batch_write_bytes",
 			Help:      "Bytes number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	// totalWriteBytesCounter records the total number of bytes written by sink.
 	totalWriteBytesCounter = prometheus.NewCounterVec(
@@ -47,7 +47,7 @@ var (
 			Subsystem: "sink",
 			Name:      "write_bytes_total",
 			Help:      "Total number of bytes written by sink",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	eventSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

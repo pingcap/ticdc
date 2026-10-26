@@ -15,33 +15,30 @@ package statistics
 
 import (
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/atomic"
 )
 
 // NewStatistics creates a statistics
 func NewStatistics(
 	changefeed common.ChangeFeedID,
 	keyspaceID uint32,
-	sinkType string,
 ) *Statistics {
 	statistics := &Statistics{
-		sinkType:     sinkType,
 		changefeedID: changefeed,
 		keyspaceID:   strconv.FormatUint(uint64(keyspaceID), 10),
-		ddlTypes:     sync.Map{},
 	}
 
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = execDDLHistogram.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecDDLRunningCnt = execDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = execBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType, statistics.keyspaceID)
-	statistics.metricExecBatchBytesHis = execBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
-	statistics.metricTotalWriteBytesCnt = totalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchHis = execBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
+	statistics.metricExecBatchBytesHis = execBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID)
+	statistics.metricTotalWriteBytesCnt = totalWriteBytesCounter.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecErrCntForDDL = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
 	statistics.metricExecErrCntForDML = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
 	statistics.metricExecDMLCnt = execDMLEventCounter.WithLabelValues(keyspace, changefeedID)
@@ -52,10 +49,9 @@ func NewStatistics(
 // Statistics maintains some status and metrics of the Sink
 // Note: All methods of Statistics should be thread-safe.
 type Statistics struct {
-	sinkType     string
+	closed       atomic.Bool
 	changefeedID common.ChangeFeedID
 	keyspaceID   string
-	ddlTypes     sync.Map
 
 	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
@@ -77,57 +73,62 @@ type Statistics struct {
 	metricExecDMLCnt prometheus.Counter
 }
 
-// RecordBatchExecution stats batch executors which return (batchRowCount, batchWriteBytes, error).
-func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) error {
-	batchSize, batchWriteBytes, err := executor()
+// RecordDMLResult records a completed downstream DML write. Successful writes
+// contribute rows and bytes; failed writes increment the error counter.
+func (b *Statistics) RecordDMLResult(batchSize int, batchWriteBytes int64, err error) {
+	if b.closed.Load() {
+		return
+	}
 	if err != nil {
 		b.metricExecErrCntForDML.Inc()
-		return err
+		return
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
 	b.metricExecBatchBytesHis.Observe(float64(batchWriteBytes))
 	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
-	return nil
 }
 
-// RecordDDLExecution record the time cost of execute ddl
+// RecordDDLExecution executes a DDL and records its duration and result.
 func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
+	if b.closed.Load() {
+		_, err := executor()
+		return err
+	}
 	b.metricExecDDLRunningCnt.Inc()
 	defer b.metricExecDDLRunningCnt.Dec()
-
-	var (
-		ddlType string
-		err     error
-	)
 	start := time.Now()
-	if ddlType, err = executor(); err != nil {
+	ddlType, err := executor()
+	if b.closed.Load() {
+		return err
+	}
+	if err != nil {
 		b.metricExecErrCntForDDL.Inc()
 		return err
 	}
-	metricExecDDLCounter := execDDLCounter.WithLabelValues(
-		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
-	metricExecDDLCounter.Inc()
-	b.ddlTypes.Store(ddlType, struct{}{})
+	execDDLCounter.WithLabelValues(b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType).Inc()
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
 	return nil
 }
 
 // Close release some internal resources.
 func (b *Statistics) Close() {
+	if b.closed.Swap(true) {
+		return
+	}
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	execDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
-	execBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType, b.keyspaceID)
-	execBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
+	execDDLRunningGauge.DeleteLabelValues(keyspace, changefeedID)
+	execBatchHistogram.DeleteLabelValues(keyspace, changefeedID, b.keyspaceID)
+	execBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
 	eventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
-	b.ddlTypes.Range(func(key, value any) bool {
-		ddlType := key.(string)
-		execDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
-		return true
-	})
-	totalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID, b.sinkType)
+	totalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 	execDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
+	execDDLCounter.DeletePartialMatch(prometheus.Labels{
+		getKeyspaceLabel(): keyspace,
+		"changefeed":       changefeedID,
+	})
 }

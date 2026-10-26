@@ -168,7 +168,7 @@ func newWithComponents(
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := statistics.NewStatistics(changefeedID, keyspaceID, "sink")
+	statistics := statistics.NewStatistics(changefeedID, keyspaceID)
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -223,7 +223,11 @@ func (s *sink) Run(ctx context.Context) error {
 		return s.sendCheckpoint(ctx)
 	})
 	g.Go(func() error {
-		return s.dmlProducer.AsyncRunCallback(ctx)
+		err := s.dmlProducer.AsyncRunCallback(ctx)
+		if err != nil && ctx.Err() == nil {
+			s.statistics.RecordDMLResult(0, 0, err)
+		}
+		return err
 	})
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
@@ -451,16 +455,18 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return err
 				}
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					if err = s.dmlProducer.AsyncSend(
-						ctx,
-						future.Key.Topic,
-						future.Key.Partition,
-						message); err != nil {
-						return 0, 0, err
+				rows, writeBytes := message.GetRowsCount(), int64(message.Length())
+				callback := message.Callback
+				message.Callback = func() {
+					s.statistics.RecordDMLResult(rows, writeBytes, nil)
+					if callback != nil {
+						callback()
 					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
+				}
+				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
+					if ctx.Err() == nil {
+						s.statistics.RecordDMLResult(rows, writeBytes, err)
+					}
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

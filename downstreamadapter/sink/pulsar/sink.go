@@ -153,7 +153,7 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = sinkstatistics.NewStatistics(changefeedID, keyspaceID, "pulsar")
+	statistics = sinkstatistics.NewStatistics(changefeedID, keyspaceID)
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
@@ -399,7 +399,11 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.sendMessages(ctx)
 	})
 	g.Go(func() error {
-		return s.dmlProducer.run(ctx)
+		err := s.dmlProducer.run(ctx)
+		if err != nil && ctx.Err() == nil {
+			s.statistics.RecordDMLResult(0, 0, err)
+		}
+		return err
 	})
 	return g.Wait()
 }
@@ -561,13 +565,19 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-						return 0, 0, err
+				rows, writeBytes := message.GetRowsCount(), int64(message.Length())
+				callback := message.Callback
+				message.Callback = func() {
+					s.statistics.RecordDMLResult(rows, writeBytes, nil)
+					if callback != nil {
+						callback()
 					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
+				}
+				message.SetPartitionKey(future.Key.PartitionKey)
+				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
+					if ctx.Err() == nil {
+						s.statistics.RecordDMLResult(rows, writeBytes, err)
+					}
 					return errors.Trace(err)
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
