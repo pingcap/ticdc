@@ -31,6 +31,29 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestSchemaReadsRespectCallerCancellation(t *testing.T) {
+	keyspaceStore := &keyspaceSchemaStore{}
+	store := &schemaStore{
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			common.DefaultKeyspace.ID: keyspaceStore,
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := store.GetAllPhysicalTables(ctx, common.DefaultKeyspace, 1, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, store.RegisterTable(ctx, common.DefaultKeyspace, 1, 1), context.Canceled)
+	_, err = store.GetTableInfo(ctx, common.DefaultKeyspace, 1, 1)
+	require.ErrorIs(t, err, context.Canceled)
+
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, keyspaceStore.waitResolvedTs(ctx, 1, 1, time.Second), context.DeadlineExceeded)
+	keyspaceStore.resolvedTs.Store(1)
+	require.NoError(t, keyspaceStore.waitResolvedTs(context.Background(), 1, 1, time.Second))
+}
+
 func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	store := &schemaStore{

@@ -42,7 +42,7 @@ type eventGetter interface {
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
 	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	GetTableInfo(ctx context.Context, keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -271,7 +271,7 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
+			tableInfo, err := s.getTableInfo4Txn(session.ctx, dispatcher, tableID, rawEvent.CRTs-1)
 			if err != nil {
 				return false, err
 			}
@@ -348,12 +348,12 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	return session.dispatcherStat.isRemoved.Load(), nil
 }
 
-func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
+func (s *eventScanner) getTableInfo4Txn(ctx context.Context, dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   dispatcher.info.GetTableSpan().KeyspaceID,
 		Name: dispatcher.info.GetChangefeedID().Keyspace(),
 	}
-	tableInfo, err := s.schemaGetter.GetTableInfo(keyspaceMeta, tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}

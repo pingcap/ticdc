@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,7 +158,7 @@ func (d *EventDispatcher) Remove() {
 // EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
 // It will return after the bootstrap event is sent, or when shouldStop asks it
 // to stop because the local write path has been fenced.
-func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
+func (d *EventDispatcher) EmitBootstrap(ctx context.Context, shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -181,7 +182,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		Name: d.sharedInfo.changefeedID.Keyspace(),
 	}
 	for _, table := range tables {
-		err := schemaStore.RegisterTable(meta, table, ts)
+		err := schemaStore.RegisterTable(ctx, meta, table, ts)
 		if err != nil {
 			log.Warn("register table to schemaStore failed",
 				zap.Int64("tableID", table),
@@ -190,7 +191,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 			)
 			continue
 		}
-		tableInfo, err := schemaStore.GetTableInfo(meta, table, ts)
+		tableInfo, err := schemaStore.GetTableInfo(ctx, meta, table, ts)
 		if err != nil {
 			log.Warn("get table info failed, just ignore",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
