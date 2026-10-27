@@ -649,8 +649,9 @@ func TestWriterChecksWriteGateBeforePublishingIndex(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- d.writeDataFile(ctx, dataFile, indexFile, &payload{
-			data:   []byte(`{"id":1}`),
-			nBytes: 8,
+			data:      []byte(`{"id":1}`),
+			rowsCount: 1,
+			nBytes:    8,
 		})
 	}()
 

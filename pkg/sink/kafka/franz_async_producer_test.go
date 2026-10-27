@@ -37,7 +37,7 @@ func newTestStatistics(t *testing.T) *statistics.Statistics {
 }
 
 func TestAsyncSendClosed(t *testing.T) {
-	producer := &asyncProducer{statistics: newTestStatistics(t)}
+	producer := &asyncProducer{}
 	producer.closed.Store(true)
 
 	err := producer.AsyncSend(t.Context(), "topic", 0, &codecCommon.Message{})

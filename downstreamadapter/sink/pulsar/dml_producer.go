@@ -142,11 +142,9 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
-		p.statistics.RecordDMLError()
 		return errors.ErrPulsarProducerClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
-		p.statistics.RecordDMLError()
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
 		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),

@@ -147,7 +147,6 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
-		p.statistics.RecordDMLError()
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 	meta := &messageMetadata{
