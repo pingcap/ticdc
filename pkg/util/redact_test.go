@@ -214,7 +214,7 @@ func TestRedactArgs(t *testing.T) {
 	// Test OFF mode
 	t.Run("OFF mode", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogDisable)()
-		require.Equal(t, "(?, ?, NULL, ?)", RedactArgs(args))
+		require.Equal(t, "(value1, 123, NULL, value2)", RedactArgs(args))
 	})
 
 	// Test ON mode
@@ -226,17 +226,8 @@ func TestRedactArgs(t *testing.T) {
 	// Test MARKER mode
 	t.Run("MARKER mode", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogMarker)()
-		require.Equal(t, "(?, ?, NULL, ?)", RedactArgs(args))
+		require.Equal(t, "(‹value1›, ‹123›, NULL, ‹value2›)", RedactArgs(args))
 	})
-}
-
-func TestRedactSensitiveValueIsModeIndependent(t *testing.T) {
-	for _, mode := range []string{perrors.RedactLogDisable, perrors.RedactLogMarker, perrors.RedactLogEnable} {
-		t.Run(mode, func(t *testing.T) {
-			defer withRedactMode(t, mode)()
-			require.Equal(t, "xxxxx", RedactSensitiveValue(map[string]any{"nested": "secret-token"}))
-		})
-	}
 }
 
 func TestRedactValueEmpty(t *testing.T) {
@@ -395,14 +386,16 @@ func TestEmbeddedMarkersEscaping(t *testing.T) {
 	}
 }
 
-// TestEmbeddedMarkersInArgs verifies SQL arguments remain hidden in marker mode.
+// TestEmbeddedMarkersInArgs validates marker escaping works in RedactArgs
 func TestEmbeddedMarkersInArgs(t *testing.T) {
 	defer withRedactMode(t, perrors.RedactLogMarker)()
 
 	args := []interface{}{"normal", "has‹marker", "has›marker"}
 	result := RedactArgs(args)
 
-	require.Equal(t, "(?, ?, ?)", result)
+	require.Contains(t, result, "‹normal›", "Normal value should be wrapped")
+	require.Contains(t, result, "‹has‹‹marker›", "Opening marker should be escaped")
+	require.Contains(t, result, "‹has››marker›", "Closing marker should be escaped")
 }
 
 func TestRedactBytes(t *testing.T) {
@@ -495,7 +488,7 @@ func TestRedactStrings(t *testing.T) {
 	t.Run("OFF mode", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogDisable)()
 		result := RedactStrings(args)
-		require.Equal(t, []string{"?", "?", "?"}, result)
+		require.Equal(t, []string{"value1", "123", "secret-data"}, result)
 	})
 
 	t.Run("ON mode", func(t *testing.T) {
@@ -507,7 +500,7 @@ func TestRedactStrings(t *testing.T) {
 	t.Run("MARKER mode", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogMarker)()
 		result := RedactStrings(args)
-		require.Equal(t, []string{"?", "?", "?"}, result)
+		require.Equal(t, []string{"‹value1›", "‹123›", "‹secret-data›"}, result)
 	})
 }
 
@@ -532,7 +525,7 @@ func TestRedactStringsWithEmptyElements(t *testing.T) {
 	t.Run("OFF mode with empty strings", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogDisable)()
 		result := RedactStrings(args)
-		require.Equal(t, []string{"?", "?", "?"}, result)
+		require.Equal(t, []string{"", "value", ""}, result)
 	})
 
 	t.Run("ON mode with empty strings", func(t *testing.T) {
@@ -544,7 +537,7 @@ func TestRedactStringsWithEmptyElements(t *testing.T) {
 	t.Run("MARKER mode with empty strings", func(t *testing.T) {
 		defer withRedactMode(t, perrors.RedactLogMarker)()
 		result := RedactStrings(args)
-		require.Equal(t, []string{"?", "?", "?"}, result)
+		require.Equal(t, []string{"‹›", "‹value›", "‹›"}, result)
 	})
 }
 
@@ -569,14 +562,17 @@ func TestRedactStringsPreservesLength(t *testing.T) {
 	}
 }
 
-// TestRedactStringsWithEmbeddedMarkers verifies marker characters remain hidden.
+// TestRedactStringsWithEmbeddedMarkers validates marker escaping in string slices
 func TestRedactStringsWithEmbeddedMarkers(t *testing.T) {
 	defer withRedactMode(t, perrors.RedactLogMarker)()
 
 	args := []string{"normal", "has‹marker", "has›marker", "both‹and›here"}
 	result := RedactStrings(args)
 
-	require.Equal(t, []string{"?", "?", "?", "?"}, result)
+	require.Equal(t, "‹normal›", result[0], "Normal value should be wrapped")
+	require.Equal(t, "‹has‹‹marker›", result[1], "Opening marker should be escaped")
+	require.Equal(t, "‹has››marker›", result[2], "Closing marker should be escaped")
+	require.Equal(t, "‹both‹‹and››here›", result[3], "Both markers should be escaped")
 }
 
 // TestRedactStringsSQLComparators validates that MARKER mode values work with SQL comparators.
@@ -588,8 +584,8 @@ func TestRedactStringsSQLComparators(t *testing.T) {
 	args := []string{"1", "2"}
 	result := RedactStrings(args)
 
-	require.Equal(t, "?", result[0])
-	require.Equal(t, "?", result[1])
+	require.Equal(t, "‹1›", result[0])
+	require.Equal(t, "‹2›", result[1])
 
 	// Verify Unicode markers are different from SQL operators
 	// SQL operators: < (U+003C), > (U+003E)

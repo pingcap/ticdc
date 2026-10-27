@@ -312,7 +312,7 @@ func newJSONMessageForDML(
 			return nil, err
 		}
 	} else {
-		log.Panic("unreachable event type")
+		log.Panic("unreachable event type", zap.Any("event", e))
 	}
 
 	if config.EnableTiDBExtension {

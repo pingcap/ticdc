@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -63,13 +62,13 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 
 	key, err := a.encodeKey(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding key failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Uint64("commitTs", e.CommitTs))
+		log.Error("avro encoding key failed", zap.Error(err), zap.Any("event", e))
 		return errors.Trace(err)
 	}
 
 	value, err := a.encodeValue(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding value failed", zap.String("errorType", fmt.Sprintf("%T", err)), zap.Uint64("commitTs", e.CommitTs))
+		log.Error("avro encoding value failed", zap.Error(err), zap.Any("event", e))
 		return errors.Trace(err)
 	}
 

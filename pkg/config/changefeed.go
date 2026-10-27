@@ -239,13 +239,9 @@ func (cfg *ChangefeedConfig) String() string {
 		log.Error("failed to unmarshal changefeed config", zap.Error(err))
 		return ""
 	}
-	cloned.SinkURI = util.SafeURIForLog(cloned.SinkURI)
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
 	if cloned.SinkConfig != nil {
 		cloned.SinkConfig.MaskSensitiveData()
-		maskSinkURIsForLog(cloned.SinkConfig)
-	}
-	if cloned.Consistent != nil && cloned.Consistent.Storage != nil {
-		*cloned.Consistent.Storage = util.SafeURIForLog(*cloned.Consistent.Storage)
 	}
 	res, err := json.Marshal(cloned)
 	if err != nil {
@@ -370,45 +366,12 @@ func (info *ChangeFeedInfo) String() (str string) {
 	}
 
 	clone.maskSensitiveData()
-	clone.SinkURI = util.SafeURIForLog(info.SinkURI)
-	if clone.Config != nil {
-		if clone.Config.Sink != nil {
-			maskSinkURIsForLog(clone.Config.Sink)
-		}
-		if clone.Config.Consistent != nil && clone.Config.Consistent.Storage != nil {
-			*clone.Config.Consistent.Storage = util.SafeURIForLog(*clone.Config.Consistent.Storage)
-		}
-	}
-	if clone.Error != nil {
-		clone.Error.Message = util.RedactSensitiveValue(clone.Error.Message)
-	}
-	if clone.Warning != nil {
-		clone.Warning.Message = util.RedactSensitiveValue(clone.Warning.Message)
-	}
 
 	str, err = clone.Marshal()
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
 	return str
-}
-
-func maskSinkURIsForLog(sink *SinkConfig) {
-	if sink.SchemaRegistry != nil {
-		*sink.SchemaRegistry = util.SafeURIForLog(*sink.SchemaRegistry)
-	}
-	if sink.KafkaConfig != nil {
-		kafka := sink.KafkaConfig
-		if kafka.SASLOAuthTokenURL != nil {
-			*kafka.SASLOAuthTokenURL = util.SafeURIForLog(*kafka.SASLOAuthTokenURL)
-		}
-		if kafka.LargeMessageHandle != nil {
-			kafka.LargeMessageHandle.ClaimCheckStorageURI = util.SafeURIForLog(kafka.LargeMessageHandle.ClaimCheckStorageURI)
-		}
-	}
-	if sink.PulsarConfig != nil && sink.PulsarConfig.OAuth2 != nil {
-		sink.PulsarConfig.OAuth2.OAuth2IssuerURL = util.SafeURIForLog(sink.PulsarConfig.OAuth2.OAuth2IssuerURL)
-	}
 }
 
 // MaskChangefeedInfo returns masked metadata for display without modifying data.

@@ -12,21 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package messaging
+package util
 
 import (
 	"testing"
 
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTargetMessageStringOmitsPayload(t *testing.T) {
-	msg := &TargetMessage{
-		Type:    TypeDDLEvent,
-		Message: []IOTypeT{&commonEvent.DDLEvent{Query: "secret-in-ddl"}},
+func TestMaskProxyForLog(t *testing.T) {
+	for _, proxy := range []string{
+		"http://user:password@proxy.example.com:8080/path?token=secret&region=west",
+		"user:password@proxy.example.com:8080/path?token=secret&region=west",
+	} {
+		logged := maskProxyForLog(proxy)
+		require.Equal(t, "http://user:xxxxx@proxy.example.com:8080/path?region=west&token=xxxxx", logged)
+		require.NotContains(t, logged, "password")
+		require.NotContains(t, logged, "secret")
 	}
-	logged := msg.String()
-	require.Contains(t, logged, "MessageCount: 1")
-	require.NotContains(t, logged, "secret-in-ddl")
 }

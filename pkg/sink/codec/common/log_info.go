@@ -17,6 +17,7 @@ import (
 	"errors"
 
 	perrors "github.com/pingcap/errors"
+	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
 
@@ -71,6 +72,9 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 			StartTs:  event.StartTs,
 			CommitTs: event.CommitTs,
 		}
+		if pk := extractPrimaryKeys(event); len(pk) > 0 {
+			rowInfo.PrimaryKeys = pk
+		}
 		rows = append(rows, rowInfo)
 	}
 	if len(rows) == 0 {
@@ -92,6 +96,30 @@ func rowEventType(event *commonEvent.RowEvent) string {
 	}
 }
 
+func extractPrimaryKeys(event *commonEvent.RowEvent) []ColumnLogInfo {
+	indexes, columns := event.PrimaryKeyColumn()
+	if len(columns) == 0 {
+		return nil
+	}
+	row := event.GetRows()
+	if event.IsDelete() {
+		row = event.GetPreRows()
+	}
+
+	values := make([]ColumnLogInfo, 0, len(columns))
+	for i, col := range columns {
+		if col == nil {
+			continue
+		}
+		value := commonPkg.ExtractColVal(row, col, indexes[i])
+		values = append(values, ColumnLogInfo{
+			Name:  col.Name.String(),
+			Value: value,
+		})
+	}
+	return values
+}
+
 // SetDDLMessageLogInfo attaches DDL diagnostic info on message.
 func SetDDLMessageLogInfo(msg *Message, event *commonEvent.DDLEvent) {
 	if msg == nil || event == nil {
@@ -102,6 +130,7 @@ func SetDDLMessageLogInfo(msg *Message, event *commonEvent.DDLEvent) {
 		logInfo = &MessageLogInfo{}
 	}
 	logInfo.DDL = &DDLLogInfo{
+		Query:    event.Query,
 		StartTs:  event.GetStartTs(),
 		CommitTs: event.GetCommitTs(),
 	}

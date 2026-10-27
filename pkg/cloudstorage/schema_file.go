@@ -290,7 +290,7 @@ func (t *SchemaFile) marshalForChecksum() []byte {
 	data, err := json.MarshalIndent(payload, marshalPrefix, marshalIndent)
 	if err != nil {
 		log.Panic("marshal for the schema file checksum failed, this should not happen",
-			zap.Int("columnCount", len(sortedColumns)), zap.Error(err))
+			zap.Any("payload", payload), zap.Error(err))
 	}
 	return data
 }

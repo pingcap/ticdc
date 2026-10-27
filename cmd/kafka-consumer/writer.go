@@ -179,7 +179,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 		}
 	}
 	total, err := w.flushEventsFromGroups(ctx, groups, commitTs,
-		zap.Uint64("DDLCommitTs", commitTs), zap.String("ddlType", ddl.GetDDLType().String()))
+		zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query))
 	if err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func (w *writer) appendDDL(ddl *event.DDLEvent) {
 			log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
 				zap.Uint64("maxCommitTs", maxCommitTs),
-				zap.Int("querySize", len(ddl.Query)))
+				zap.String("DDL", ddl.Query))
 			return
 		}
 	}
@@ -469,7 +469,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kgo.Record) (bool, e
 		log.Info("DDL event received",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("ddlType", ddl.GetDDLType().String()),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 
 		needFlush = true
@@ -612,7 +612,7 @@ func (w *writer) onDDL(ddl *event.DDLEvent) {
 		}
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse ddl query failed", zap.String("ddlType", ddl.GetDDLType().String()))
+			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
 		}
 		if v, ok := stmt.(*ast.CreateTableStmt); ok {
 			if v.Partition != nil {
@@ -682,7 +682,7 @@ func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset int
 			log.Panic("dml event dispatched to the wrong partition",
 				zap.Int32("partition", partition), zap.Int32("expected", target),
 				zap.Int("partitionNum", len(w.progresses)), zap.Any("offset", offset),
-				zap.Int64("tableID", row.GetTableID()),
+				zap.Int64("tableID", row.GetTableID()), zap.Stringer("row", row),
 			)
 		}
 	}

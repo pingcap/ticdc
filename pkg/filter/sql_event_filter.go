@@ -144,7 +144,7 @@ func (f *sqlEventFilter) shouldSkipDDL(schema, table, query string, ddlType mode
 	if evenType == bf.NullEvent {
 		log.Warn("sql event filter unsupported ddl type, do nothing",
 			zap.String("type", ddlType.String()),
-			zap.Int("querySize", len(query)))
+			zap.String("query", query))
 		return false, nil
 	}
 

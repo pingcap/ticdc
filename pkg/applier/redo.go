@@ -260,7 +260,7 @@ func (ra *RedoApplier) applyDDL(
 		if ddl.DDL == nil {
 			// Note this could only happen when using old version of cdc, and the commit ts
 			// of the DDL should be equal to checkpoint ts or resolved ts.
-			log.Warn("ignore DDL without table info")
+			log.Warn("ignore DDL without table info", zap.Any("ddl", ddl))
 			return true, nil
 		}
 
@@ -299,14 +299,14 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAlterTablePartitionPlacement, timodel.ActionRecoverSchema:
 				tableDDLTs = ra.getTableDDLTs(commonType.DDLSpanTableID)
 			default:
-				log.Warn("ignore unsupport DDL", zap.Int("querySize", len(ddl.DDL.Query)))
+				log.Warn("ignore unsupport DDL", zap.String("ddl", ddl.DDL.Query))
 				return true, nil
 			}
 		}
 		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
 			log.Warn("ignore DDL which commit ts is less than current ts",
 				zap.Uint64("commitTs", ddl.DDL.CommitTs), zap.Int64("startTs", tableDDLTs.ts),
-				zap.Int("querySize", len(ddl.DDL.Query)))
+				zap.String("ddl", ddl.DDL.Query))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.
 			if ddl.DDL.NeedDroppedTables != nil {
@@ -336,7 +336,7 @@ func (ra *RedoApplier) applyDDL(
 		// compatible with old arch
 		if ra.needRecoveryInfo && ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
-				log.Warn("ignore unsupported DDL", zap.Int("querySize", len(ddl.DDL.Query)))
+				log.Warn("ignore unsupported DDL", zap.String("ddl", ddl.DDL.Query))
 				return true, nil
 			}
 		}
@@ -349,7 +349,7 @@ func (ra *RedoApplier) applyDDL(
 	if skip {
 		return nil
 	}
-	log.Warn("apply DDL", zap.Int("querySize", len(ddl.DDL.Query)))
+	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
 	// Wait block tables to flush data before applying DDL.
 	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
 	for tableID := range tableIDs {
@@ -389,11 +389,11 @@ func (ra *RedoApplier) applyRow(
 		tableDDLTs = ra.getTableDDLTs(tableID)
 	}
 	if tableDDLTs.ts >= int64(row.Row.CommitTs) {
-		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactSensitiveValue(row)))
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 	if tableDDLTs.skipDML && int64(row.Row.CommitTs)-1 == tableDDLTs.ts {
-		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactSensitiveValue(row)))
+		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 

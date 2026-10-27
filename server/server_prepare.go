@@ -53,7 +53,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("create pd client", zap.Int("endpointCount", len(c.pdEndpoints)))
+	log.Info("create pd client", zap.Strings("endpoints", c.pdEndpoints))
 	c.pdClient, err = pd.NewClientWithContext(
 		ctx, "cdc-server", c.pdEndpoints, conf.Security.PDSecurityOption(),
 		// the default `timeout` is 3s, maybe too small if the pd is busy,
@@ -83,7 +83,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 	}
 	c.pdAPIClient = pdAPIClient
 	appctx.SetService(appctx.PDAPIClient, pdAPIClient)
-	log.Info("create etcdCli", zap.Int("endpointCount", len(c.pdEndpoints)))
+	log.Info("create etcdCli", zap.Strings("endpoints", c.pdEndpoints))
 	// we do not pass a `context` to create an etcd client,
 	// to prevent it's cancelled when the server is closing.
 	// For example, when the non-owner watcher goes offline,
@@ -123,7 +123,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 		log.Warn("Fail to verify region label rule",
 			zap.Error(err),
 			zap.String("advertiseAddr", conf.AdvertiseAddr),
-			zap.Int("upstreamEndpointCount", len(c.pdEndpoints)))
+			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
 	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))

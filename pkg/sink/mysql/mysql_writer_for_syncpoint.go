@@ -79,10 +79,10 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err2 != nil {
 			log.Error("failed to write syncpoint table", zap.Error(err2))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Exec Failed"))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
 
-	log.Info("exec syncpoint ts query", zap.Uint64("commitTs", commitTs))
+	log.Info("exec syncpoint ts query", zap.String("query", query))
 
 	// set global tidb_external_ts to secondary ts
 	// TiDB supports tidb_external_ts system variable since v6.4.0.
@@ -97,7 +97,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 			if err2 != nil {
 				log.Error("failed to write syncpoint table", zap.Error(err2))
 			}
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Exec Failed"))
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 		}
 	}
 
@@ -121,7 +121,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err != nil {
 			// It is ok to ignore the error, since it will not affect the correctness of the system,
 			// and no any business logic depends on this behavior, so we just log the error.
-			log.Error("failed to clean syncpoint table", zap.Error(cerror.WrapError(cerror.ErrMySQLTxnError, err)))
+			log.Error("failed to clean syncpoint table", zap.Error(cerror.WrapError(cerror.ErrMySQLTxnError, err)), zap.Any("query", query))
 		} else {
 			w.lastCleanSyncPointTime = time.Now()
 		}

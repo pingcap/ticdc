@@ -652,7 +652,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		var err error
 		query, err = transformDDLJobQuery(job)
 		if err != nil {
-			log.Error("transformDDLJobQuery failed", zap.Int("querySize", len(job.Query)))
+			log.Error("transformDDLJobQuery failed", zap.String("query", job.Query), zap.Error(err))
 			// send the original query to downstream if transform failed
 			query = job.Query
 		}
@@ -772,7 +772,8 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
 	if err != nil {
 		log.Error("parse create table ddl failed",
-			zap.Int("querySize", len(event.Query)))
+			zap.String("query", event.Query),
+			zap.Error(err))
 		return
 	}
 	createStmt, ok := stmt.(*ast.CreateTableStmt)
@@ -788,7 +789,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		log.Warn("refer schema not found for create table like",
 			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
-			zap.Int("querySize", len(event.Query)))
+			zap.String("query", event.Query))
 		return
 	}
 	if referSchemaInfo.qualifyQuery {
@@ -797,7 +798,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		if err != nil {
 			log.Warn("restore create table like ddl failed",
 				zap.String("schema", referSchemaInfo.schemaName),
-				zap.Int("querySize", len(event.Query)),
+				zap.String("query", event.Query),
 				zap.Error(err))
 			return
 		}
@@ -808,7 +809,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		log.Warn("refer table not found for create table like",
 			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
-			zap.Int("querySize", len(event.Query)))
+			zap.String("query", event.Query))
 		return
 	}
 	event.ExtraTableID = refTableID
@@ -973,7 +974,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) (
 		} else {
 			log.Warn("failed to get rename table args from ddl job",
 				zap.Int64("jobID", args.job.ID),
-				zap.Int("querySize", len(event.Query)),
+				zap.String("query", event.Query),
 				zap.Error(err))
 		}
 	}
@@ -994,7 +995,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) (
 					zap.Int64("argsOldSchemaID", oldSchemaID),
 					zap.Int64("queryOldSchemaID", queryOldSchemaID),
 					zap.String("queryOldSchemaName", queryInfo.oldSchemaName),
-					zap.Int("querySize", len(event.Query)))
+					zap.String("query", event.Query))
 				oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
 			} else {
 				// System schemas are absent from databaseMap. Keep their ID from job args.
@@ -1038,7 +1039,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) (
 	if event.ExtraSchemaName != "" && event.ExtraTableName != "" {
 		log.Info("rebuild rename table query",
 			zap.Int64("jobID", event.ID),
-			zap.Int("querySize", len(event.Query)),
+			zap.String("query", event.Query),
 			zap.Int64("schemaID", event.SchemaID),
 			zap.String("schemaName", event.SchemaName),
 			zap.String("tableName", event.TableName),
@@ -1121,7 +1122,8 @@ func parseRenameTableQueryInfo(query string) (renameTableQueryInfo, bool) {
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
 		log.Warn("parse rename table query failed",
-			zap.Int("querySize", len(query)))
+			zap.String("query", query),
+			zap.Error(err))
 		return renameTableQueryInfo{}, false
 	}
 
@@ -1153,7 +1155,8 @@ func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
 		log.Warn("parse rename tables query failed",
-			zap.Int("querySize", len(query)))
+			zap.String("query", query),
+			zap.Error(err))
 		return nil, false
 	}
 	renameStmt, ok := stmt.(*ast.RenameTableStmt)
@@ -1179,7 +1182,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	renameArgs, err := model.GetRenameTablesArgs(args.job)
 	if err != nil {
 		log.Panic("GetRenameTablesArgs failed",
-			zap.Int("querySize", len(args.job.Query)),
+			zap.String("query", args.job.Query),
 			zap.Error(err))
 	}
 	renameTableInfos := renameArgs.RenameTableInfos
@@ -1188,7 +1191,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		log.Panic("should not happen",
 			zap.Int("renameArgsLen", len(renameTableInfos)),
 			zap.Int("multipleTableInfosLen", len(multipleTableInfos)),
-			zap.Int("querySize", len(args.job.Query)))
+			zap.String("query", args.job.Query))
 	}
 
 	// RenameTableInfos may store normalized lower-case names,
@@ -1200,7 +1203,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		log.Panic("rename tables query info length is inconsistent with args",
 			zap.Int("queryInfosLen", len(queryInfos)),
 			zap.Int("renameArgsLen", len(renameTableInfos)),
-			zap.Int("querySize", len(args.job.Query)))
+			zap.String("query", args.job.Query))
 	}
 
 	// TiDB <= v8.1 may emit empty old table names for RENAME TABLES args.
@@ -1209,7 +1212,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		// TODO: return error instead of falling back to args once builder supports error propagation.
 		log.Warn("rename tables args miss old table name and query is unavailable, keep args as-is",
 			zap.Int("tableCount", len(renameTableInfos)),
-			zap.Int("querySize", len(args.job.Query)))
+			zap.String("query", args.job.Query))
 	}
 
 	var querys []string
@@ -1981,7 +1984,7 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 	}
 	log.Panic("should not reach here",
 		zap.Any("type", event.Type),
-		zap.Int("querySize", len(event.Query)),
+		zap.String("query", event.Query),
 		zap.Int64("tableID", tableID))
 	return nil, false
 }
@@ -2225,7 +2228,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			zap.String("extraSchema", rawEvent.ExtraSchemaName),
 			zap.String("table", rawEvent.TableName),
 			zap.String("extraTable", rawEvent.ExtraTableName),
-			zap.Int("querySize", len(rawEvent.Query)),
+			zap.String("query", rawEvent.Query),
 			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
 			zap.Uint64("startTs", rawEvent.StartTs),
 		)
@@ -2236,7 +2239,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			zap.String("extraSchema", rawEvent.ExtraSchemaName),
 			zap.String("table", rawEvent.TableName),
 			zap.String("extraTable", rawEvent.ExtraTableName),
-			zap.Int("querySize", len(rawEvent.Query)),
+			zap.String("query", rawEvent.Query),
 			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
 			zap.Uint64("startTs", rawEvent.StartTs),
 		)
@@ -2460,12 +2463,13 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
 		if err != nil {
 			log.Error("parse create table ddl failed",
-				zap.Int("querySize", len(rawEvent.Query)))
+				zap.String("query", rawEvent.Query),
+				zap.Error(err))
 
 			if ignoreParseErrorForActiveActiveSyntax(err, rawEvent.Query) {
 				return ddlEvent, true, nil
 			} else {
-				return ddlEvent, false, cerror.ErrDDLEventError.GenWithStackByArgs()
+				return ddlEvent, false, err
 			}
 		}
 
@@ -2498,7 +2502,8 @@ func shouldBlockCreateTableLikeReferTable(rawEvent *PersistedDDLEvent, tableFilt
 	stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
 	if err != nil {
 		log.Warn("parse create table ddl failed when checking create table like reference filter",
-			zap.Int("querySize", len(rawEvent.Query)))
+			zap.String("query", rawEvent.Query),
+			zap.Error(err))
 		return true
 	}
 	createStmt, ok := stmt.(*ast.CreateTableStmt)
@@ -2790,11 +2795,11 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			}
 		} else if !ignoreCurrentTable {
 			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
-			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, "redacted").Error()
+			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, rawEvent.Query).Error()
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",
-				zap.Int("querySize", len(rawEvent.Query)),
+				zap.String("DDL", rawEvent.Query),
 				zap.Int64("jobID", rawEvent.ID),
 				zap.Int64("schemaID", rawEvent.SchemaID),
 				zap.Int64("tableID", rawEvent.TableID))
@@ -2848,11 +2853,11 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			}
 		} else if !ignoreCurrentTable {
 			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
-			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, "redacted").Error()
+			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, rawEvent.Query).Error()
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",
-				zap.Int("querySize", len(rawEvent.Query)),
+				zap.String("DDL", rawEvent.Query),
 				zap.Int64("jobID", rawEvent.ID),
 				zap.Int64("schemaID", rawEvent.SchemaID),
 				zap.Int64("tableID", rawEvent.TableID))
@@ -3134,7 +3139,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	tableInfos := make([]*common.TableInfo, 0)
 	blockedTableNames := make([]commonEvent.SchemaTableName, 0)
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
-		log.Panic("rename tables length is not equal table infos", zap.Int("queryCount", len(querys)), zap.Int("tableInfoCount", len(rawEvent.MultipleTableInfos)))
+		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable, ignoreCurrentTable := false, false
@@ -3207,7 +3212,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				}
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
-				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, "redacted").Error()
+				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, rawEvent.Query).Error()
 			} else {
 				// if the table is both filtered out before and after rename table, ignore
 			}
@@ -3274,7 +3279,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				}
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
-				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, "redacted").Error()
+				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, rawEvent.Query).Error()
 			} else {
 				// ignore
 			}
@@ -3341,7 +3346,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		log.Panic("query count not match table count",
 			zap.Int("queryCount", len(querys)),
 			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
-			zap.Int("querySize", len(rawEvent.Query)))
+			zap.String("query", rawEvent.Query))
 	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)

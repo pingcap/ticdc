@@ -16,7 +16,6 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -52,8 +51,8 @@ func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", util.RedactSensitiveValue(value)),
-			zap.String("errorType", fmt.Sprintf("%T", err)))
+			zap.Any("value", util.RedactAny(value)),
+			zap.Error(err))
 	}
 	d.data = value
 }
@@ -90,7 +89,7 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 
 	if err := json.Unmarshal(encodedData, msg); err != nil {
 		log.Panic("canal-json decoder unmarshal data failed",
-			zap.String("errorType", fmt.Sprintf("%T", err)), zap.Int("dataSize", len(encodedData)))
+			zap.Error(err), zap.ByteString("data", encodedData))
 		return common.MessageTypeUnknown, false
 	}
 	d.msg = msg
@@ -104,7 +103,7 @@ func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 			messageType = d.msg.messageType()
 		}
 		log.Panic("message type is not row changed",
-			zap.Any("messageType", messageType))
+			zap.Any("messageType", messageType), zap.Any("msg", d.msg))
 	}
 
 	msg := d.msg

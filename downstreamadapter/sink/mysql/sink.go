@@ -403,7 +403,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		log.Panic("mysql sink meet unknown event type",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Int("eventType", event.GetType()))
+			zap.Any("event", event))
 	}
 	if err != nil {
 		s.isNormal.Store(false)

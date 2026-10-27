@@ -163,7 +163,7 @@ func (o *OpenAPIV1) moveTable(c *gin.Context) {
 
 	c.Request.URL = url
 
-	log.Info("api v1 moveTable", zap.String("path", c.FullPath()))
+	log.Info("api v1 moveTable", zap.Any("url", url.String()))
 
 	o.v2.MoveTable(c)
 	setV1Header(c)

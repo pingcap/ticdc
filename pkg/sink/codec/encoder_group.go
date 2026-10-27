@@ -15,7 +15,6 @@ package codec
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -87,7 +86,7 @@ func NewEncoderGroup(
 		inputCh[i] = make(chan *future, defaultInputChanSize)
 		rowEventEncoders[i], err = NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
-			log.Error("failed to create row event encoder", zap.String("errorType", fmt.Sprintf("%T", err)))
+			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
 	}
@@ -97,7 +96,7 @@ func NewEncoderGroup(
 	if cfg.ShouldSendBootstrapMsg() {
 		encoder, err := NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
-			log.Error("failed to create row event encoder", zap.String("errorType", fmt.Sprintf("%T", err)))
+			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
 		}
 		bw = newBootstrapWorker(

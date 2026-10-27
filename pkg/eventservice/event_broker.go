@@ -318,7 +318,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
 		zap.Int64("EventTableID", e.GetTableID()),
-		zap.Int("querySize", len(e.Query)), zap.Uint64("commitTs", e.FinishedTs),
+		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 
@@ -834,7 +834,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
@@ -865,23 +865,23 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		case event.TypeBatchDMLEvent:
 			dmls, ok := e.(*event.BatchDMLEvent)
 			if !ok {
-				log.Panic("expect a DMLEvent, but got", zap.Int("eventType", e.GetType()))
+				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDML(remoteID, dmls, task)
 		case event.TypeDDLEvent:
 			ddl, ok := e.(*event.DDLEvent)
 			if !ok {
-				log.Panic("expect a DDLEvent, but got", zap.Int("eventType", e.GetType()))
+				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDDL(ctx, remoteID, ddl, task)
 		case event.TypeResolvedEvent:
 			re, ok := e.(event.ResolvedEvent)
 			if !ok {
-				log.Panic("expect a ResolvedEvent, but got", zap.Int("eventType", e.GetType()))
+				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
 			c.sendResolvedTs(task, re.ResolvedTs)
 		default:
-			log.Panic("unknown event type", zap.Int("eventType", e.GetType()))
+			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
 	if progress.valid {
@@ -1670,7 +1670,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	if err != nil {
 		log.Panic("create filter failed",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.Bool("filterConfigured", info.GetFilterConfig() != nil),
+			zap.Any("filterConfig", info.GetFilterConfig()),
 			zap.Error(err))
 	}
 

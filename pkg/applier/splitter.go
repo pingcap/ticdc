@@ -85,8 +85,8 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 			}
 			if event == nil || u.pendingEvent != nil {
 				log.Panic("processEvent return wrong result for pending event",
-					zap.Bool("eventPresent", event != nil),
-					zap.Bool("pendingEventPresent", u.pendingEvent != nil))
+					zap.Any("event", event),
+					zap.Any("pendingEvent", u.pendingEvent))
 			}
 			return event, nil
 		}

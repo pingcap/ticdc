@@ -145,28 +145,13 @@ func MaskSensitiveDataInURI(uri string) string {
 	return uriParsed.Redacted()
 }
 
-// SafeURIForLog keeps only the URI scheme and authority. Paths, query values,
-// fragments, opaque data, and userinfo can all carry credentials.
-func SafeURIForLog(uri string) string {
-	if uri == "" {
-		return ""
-	}
-	parsed, err := url.Parse(uri)
-	if err != nil {
-		return "<invalid uri>"
-	}
-	if parsed.Scheme == "" {
-		return "<uri>"
-	}
-	if parsed.Host == "" {
-		return parsed.Scheme + "://"
-	}
-	return parsed.Scheme + "://" + parsed.Host
-}
-
 // MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.
 func MaskSensitiveDataInURIForError(uri string) string {
-	return SafeURIForLog(uri)
+	maskedURI := MaskSensitiveDataInURI(uri)
+	if maskedURI == "" && uri != "" {
+		return "<invalid uri>"
+	}
+	return maskedURI
 }
 
 // MaskSensitiveDataInURLError masks the URL carried by net/url errors.

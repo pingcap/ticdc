@@ -101,20 +101,20 @@ func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
 		{
 			name:            "redaction disabled",
 			mode:            errors.RedactLogDisable,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
 		},
 		{
 			name:            "redaction enabled",
 			mode:            errors.RedactLogEnable,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "?",
+			expectedWarning: "?",
 		},
 		{
 			name:            "redaction marker",
 			mode:            errors.RedactLogMarker,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
 		},
 	}
 
@@ -153,20 +153,20 @@ func TestChangeFeedInfoStringRedactsErrorMessages(t *testing.T) {
 		{
 			name:            "redaction disabled",
 			mode:            errors.RedactLogDisable,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
 		},
 		{
 			name:            "redaction enabled",
 			mode:            errors.RedactLogEnable,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "?",
+			expectedWarning: "?",
 		},
 		{
 			name:            "redaction marker",
 			mode:            errors.RedactLogMarker,
-			expectedError:   "xxxxx",
-			expectedWarning: "xxxxx",
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
 		},
 	}
 
@@ -257,6 +257,7 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	} {
 		require.NotContains(t, output, secret)
 	}
+	require.Contains(t, output, "xxxxx")
 	require.Contains(t, output, "******")
 	after, err := info.Marshal()
 	require.NoError(t, err)
@@ -283,7 +284,7 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	} {
 		require.NotContains(t, output, secret)
 	}
-	require.Contains(t, output, "mysql://127.0.0.1:3306")
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
 	after, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
 	require.Equal(t, original, after)

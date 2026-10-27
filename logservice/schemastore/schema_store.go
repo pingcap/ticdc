@@ -174,7 +174,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
 			log.Info("skip ddl job with empty SchemaVersion",
 				zap.Any("type", event.Job.Type),
-				zap.Int("querySize", len(event.Job.Query)),
+				zap.String("job", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
@@ -185,7 +185,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
 			log.Info("skip already applied ddl job",
 				zap.Any("type", event.Job.Type),
-				zap.Int("querySize", len(event.Job.Query)),
+				zap.String("job", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
@@ -199,7 +199,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.Int64("tableID", event.Job.TableID),
 			zap.String("tableName", event.Job.TableName),
 			zap.Any("type", event.Job.Type),
-			zap.Int("querySize", len(event.Job.Query)),
+			zap.String("DDL", event.Job.Query),
 			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
 			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 			zap.Any("storeSchemaVersion", s.schemaVersion),
@@ -227,7 +227,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Int64("tableID", event.Job.TableID),
 				zap.String("tableName", event.Job.TableName),
 				zap.Any("type", event.Job.Type),
-				zap.Int("querySize", len(event.Job.Query)),
+				zap.String("DDL", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
@@ -259,14 +259,14 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Int64("tableID", ddlEvent.Job.TableID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
-		zap.Int("querySize", len(ddlEvent.Job.Query)))
+		zap.String("query", ddlEvent.Job.Query))
 
 	serverConfig := config.GetGlobalServerConfig()
 	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
 		if ts == ddlEvent.CommitTs {
 			log.Info("ignore ddl job by commit ts",
 				zap.Uint64("commitTs", ts),
-				zap.Int("querySize", len(ddlEvent.Job.Query)))
+				zap.String("query", ddlEvent.Job.Query))
 			return
 		}
 	}
@@ -597,7 +597,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		zap.Uint64("start", start),
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),
-		zap.Int("eventCount", len(events)))
+		zap.Any("events", events))
 	return events, end, nil
 }
 

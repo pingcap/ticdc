@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -41,7 +42,19 @@ type preparedDMLs struct {
 }
 
 func (d *preparedDMLs) LogWithoutValues() string {
-	return fmt.Sprintf("SQL Count: %d, Row Count: %d", len(d.sqls), d.rowCount)
+	// Calculate total count
+	totalCount := len(d.sqls)
+	var logBuilder strings.Builder
+	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount)
+
+	// Build SQL statements and arguments section
+	for i, sql := range d.sqls {
+		// Add formatted SQL and args to log content
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
+	}
+	logBuilder.WriteString("End")
+
+	return logBuilder.String()
 }
 
 func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
@@ -61,14 +74,15 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 	var logBuilder strings.Builder
 	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID)
 
-	// Build argument counts without recording SQL or row values.
-	for i := range d.sqls {
+	// Build SQL statements and arguments section
+	for i, sql := range d.sqls {
 		var args []interface{}
 		if i < len(d.values) {
 			args = d.values[i]
 		}
 
-		fmt.Fprintf(&logBuilder, "[%03d] ArgCount: %d,", i+1, len(args))
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
+		fmt.Fprintf(&logBuilder, "      Args: %s,", util.RedactArgs(args))
 	}
 
 	// Build timestamp information
@@ -88,8 +102,19 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqlCount: %d, rowCount: %d, approximateSize: %d, startTs: %v",
-		len(d.sqls), d.rowCount, d.approximateSize, d.tsPairs)
+	// SQL templates contain table/column names (schema info, not sensitive user data)
+	// Only values need redaction - they contain actual user data
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v",
+		d.fmtSqls(), util.RedactAny(d.values), d.rowCount, d.approximateSize, d.tsPairs)
+}
+
+func (d *preparedDMLs) fmtSqls() string {
+	builder := strings.Builder{}
+	for _, sql := range d.sqls {
+		builder.WriteString(sql)
+		builder.WriteString(";")
+	}
+	return builder.String()
 }
 
 func (d *preparedDMLs) RowsAffected() int64 {

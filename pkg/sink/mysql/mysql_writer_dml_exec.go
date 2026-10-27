@@ -35,8 +35,8 @@ import (
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) || len(dmls.sqls) != len(dmls.rowTypes) {
 		return errors.ErrUnexpected.FastGen(
-			"unexpected number of sqls and values or rowTypes, sql count is %d, values count is %d, row types count is %d",
-			len(dmls.sqls), len(dmls.values), len(dmls.rowTypes),
+			"unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s",
+			dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes,
 		)
 	}
 
@@ -51,7 +51,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
-				log.Info("Slow Query", zap.String("dmlSummary", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
+				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
 			}
 		}()
 		for {
@@ -84,8 +84,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				// use multi stmt way to execute the dmls
 				if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
 					log.Warn("multiStmtExecute failed, fallback to sequence way",
-						zap.String("errorType", fmt.Sprintf("%T", err)),
-						zap.String("dmlSummary", dmls.LogWithoutValues()),
+						zap.Error(err),
+						zap.Any("sql", dmls.LogWithoutValues()),
 						zap.Int("writerID", w.id))
 					fallbackToSeqWay = true
 					return err
@@ -100,7 +100,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			}
 		}
 	}
-	retryErr := retry.Do(w.ctx, func() error {
+	return retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
@@ -132,10 +132,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
-	if retryErr == nil || errors.Is(errors.Cause(retryErr), context.Canceled) || errors.Is(errors.Cause(retryErr), context.DeadlineExceeded) {
-		return retryErr
-	}
-	return errors.ErrMySQLTxnError.GenWithStackByArgs()
 }
 
 // sequenceExecute runs each SQL sequentially inside a transaction.
@@ -144,7 +140,7 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.Int("querySize", len(query)), zap.Int("argCount", len(args)), zap.Int("writerID", w.id))
+		log.Debug("exec row", zap.String("sql", query), zap.String("args", util.RedactArgs(args)), zap.Int("writerID", w.id))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt
@@ -173,17 +169,17 @@ func (w *Writer) sequenceExecute(
 		}
 
 		if execError != nil {
-			log.Error("ExecContext", zap.String("errorType", fmt.Sprintf("%T", execError)), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
+			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if !errors.Is(errors.Cause(rbErr), context.Canceled) {
-					log.Warn("failed to rollback txn", zap.String("errorType", fmt.Sprintf("%T", rbErr)), zap.Int("writerID", w.id))
+					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}
 			cancelFunc()
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query size:%d, arg count:%d; ", len(query), len(args))))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
 		if rowsAffected, err := res.RowsAffected(); err != nil {
-			log.Warn("get rows affected rows failed", zap.String("errorType", fmt.Sprintf("%T", err)))
+			log.Warn("get rows affected rows failed", zap.Error(err))
 		} else {
 			w.recordRowsAffected(rowsAffected, dmls.rowTypes[i])
 		}
@@ -235,9 +231,13 @@ func (w *Writer) multiStmtExecute(
 			if rbErr != nil {
 				log.Info("failed to rollback after multi statement exec error",
 					zap.Int("writerID", w.id),
-					zap.String("errorType", fmt.Sprintf("%T", rbErr)))
+					zap.Error(rbErr))
 			}
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query size:%d, arg count:%d; ", len(multiStmtSQLWithTxn), len(multiStmtArgs))))
+			args := make([]any, len(multiStmtArgs))
+			for i, arg := range multiStmtArgs {
+				args[i] = arg.Value
+			}
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
 		}
 		var rowsAffected int64
 		for _, affected := range res.(dmysql.Result).AllRowsAffected() {
@@ -261,7 +261,7 @@ func (w *Writer) logDMLTxnErr(
 			zap.Int("count", dmls.rowCount),
 			zap.String("dmls", dmls.String()),
 			zap.Int("writerID", w.id),
-			zap.String("errorType", fmt.Sprintf("%T", err)))
+			zap.Error(err))
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
 			log.Error("execute DMLs with error, can not retry",
@@ -271,7 +271,7 @@ func (w *Writer) logDMLTxnErr(
 				zap.Int("count", dmls.rowCount),
 				zap.String("dmls", dmls.String()),
 				zap.Int("writerID", w.id),
-				zap.String("errorType", fmt.Sprintf("%T", err)))
+				zap.Error(err))
 		}
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))

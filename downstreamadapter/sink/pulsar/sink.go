@@ -240,7 +240,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			log.Info("Skip ddl event",
 				zap.Uint64("startTs", event.GetStartTs()),
 				zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.Int("querySize", len(e.Query)),
+				zap.String("query", e.Query),
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
@@ -276,8 +276,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("pulsar sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-		zap.String("ddlType", event.GetDDLType().String()))
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
 	return nil
 }
 

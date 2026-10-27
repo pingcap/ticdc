@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -73,8 +75,8 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 func LogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.FullPath()
-		query := c.Request.URL.RawQuery
+		path := c.Request.URL.Path
+		query := strings.TrimPrefix(util.MaskSensitiveDataInURIForError("?"+c.Request.URL.RawQuery), "?")
 		user, _, _ := c.Request.BasicAuth()
 		c.Next()
 
@@ -90,7 +92,7 @@ func LogMiddleware() gin.HandlerFunc {
 			zap.Int("status", c.Writer.Status()),
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
-			zap.Bool("hasQuery", query != ""),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()), zap.String("client-version", version),
 			zap.String("username", user),
@@ -182,7 +184,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 		}
 	}
 	log.Info("forwarding request to another server",
-		zap.String("path", c.FullPath()),
+		zap.String("url", util.MaskSensitiveDataInURIForError(c.Request.RequestURI)),
 		zap.String("method", c.Request.Method),
 		zap.Any("fromID", fromID),
 		zap.String("toAddr", toAddr),

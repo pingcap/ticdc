@@ -190,8 +190,6 @@ func TestFormatTableSpan(t *testing.T) {
 			t.Parallel()
 			result := FormatTableSpan(tc.input)
 			require.Equal(t, tc.isEmptyString, result == "")
-			require.NotContains(t, result, "7374617274")
-			require.NotContains(t, result, "656e64")
 		})
 	}
 }
@@ -217,7 +215,6 @@ func TestFormatMaintainerStatus(t *testing.T) {
 				FeedState:    "Normal",
 				State:        heartbeatpb.ComponentState_Working,
 				CheckpointTs: 100,
-				Err:          []*heartbeatpb.RunningError{{Message: "secret-in-error"}},
 			},
 			isEmptyString: false,
 		},
@@ -228,7 +225,6 @@ func TestFormatMaintainerStatus(t *testing.T) {
 			t.Parallel()
 			result := FormatMaintainerStatus(tc.input)
 			require.Equal(t, tc.isEmptyString, result == "")
-			require.NotContains(t, result, "secret-in-error")
 		})
 	}
 }

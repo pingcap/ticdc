@@ -279,7 +279,7 @@ func (mc *messageCenter) SendEvent(msg *TargetMessage) error {
 		log.Panic("Target ID is empty, cannot send message",
 			zap.Stringer("localID", mc.id),
 			zap.String("localAddr", mc.addr),
-			zap.String("messageType", fmt.Sprintf("%T", msg.Message)))
+			zap.Stringer("message", msg))
 	}
 
 	if msg.To == mc.id {

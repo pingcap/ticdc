@@ -358,7 +358,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 			zap.String("kmsVendor", masterKey.Vendor),
 			zap.String("cmekID", masterKey.CmekId),
 			zap.String("region", masterKey.Region),
-			zap.String("endpoint", util.SafeURIForLog(masterKey.Endpoint)))
+			zap.String("endpoint", util.MaskSensitiveDataInURIForError(masterKey.Endpoint)))
 		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("KMS operation failed")
 	}
 

@@ -40,11 +40,11 @@ func (r RowDatas) Less(i, j int) bool {
 	for _, col := range r.OrderKeyCols {
 		col1, ok := r.Rows[i].Data[col.Name.O]
 		if !ok {
-			log.Fatal("data don't have column", zap.String("column", col.Name.O), zap.String("data", util.RedactSensitiveValue(r.Rows[i].Data)))
+			log.Fatal("data don't have column", zap.String("column", col.Name.O), zap.String("data", util.RedactAny(r.Rows[i].Data)))
 		}
 		col2, ok := r.Rows[j].Data[col.Name.O]
 		if !ok {
-			log.Fatal("data don't have column", zap.String("column", col.Name.O), zap.String("data", util.RedactSensitiveValue(r.Rows[j].Data)))
+			log.Fatal("data don't have column", zap.String("column", col.Name.O), zap.String("data", util.RedactAny(r.Rows[j].Data)))
 		}
 
 		if col1.IsNull {
@@ -73,11 +73,11 @@ func (r RowDatas) Less(i, j int) bool {
 
 		num1, err1 := strconv.ParseFloat(strData1, 64)
 		if err1 != nil {
-			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactSensitiveValue(strData1)), zap.Error(err1))
+			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactValue(strData1)), zap.Error(err1))
 		}
 		num2, err2 := strconv.ParseFloat(strData2, 64)
 		if err2 != nil {
-			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactSensitiveValue(strData2)), zap.Error(err2))
+			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactValue(strData2)), zap.Error(err2))
 		}
 
 		if num1 == num2 {

@@ -166,7 +166,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Int("eventType", event.GetType()))
+			zap.Any("event", event.Event))
 		return false
 	}
 
@@ -343,7 +343,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Int("eventType", event.GetType()))
+					zap.Any("event", event.Event))
 			}
 			continue
 		}
@@ -558,7 +558,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		log.Panic("drop event is not a drop event",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Int("eventType", event.GetType()))
+			zap.Any("event", event))
 	}
 
 	state := d.loadCurrentEpochState()
@@ -567,7 +567,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			log.Debug("receive a drop event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Int("eventType", event.GetType()))
+				zap.Any("event", event.Event))
 		}
 		return
 	}
@@ -586,18 +586,18 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	log.Info("handle handshake event",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
-		zap.Int("eventType", event.GetType()))
+		zap.Any("event", event))
 
 	handshakeEvent, ok := event.Event.(*commonEvent.HandshakeEvent)
 	if !ok {
-		log.Panic("handshake event is not a handshake event", zap.Int("eventType", event.GetType()))
+		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
 	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Int("eventType", event.GetType()))
+			zap.Any("event", event.Event))
 		return
 	}
 	if event.GetSeq() != 1 {

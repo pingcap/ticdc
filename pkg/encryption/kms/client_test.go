@@ -38,13 +38,13 @@ func TestKMSClientFactoryErrorOmitsCredentials(t *testing.T) {
 		}))
 	require.NoError(t, err)
 	_, err = cli.DecryptMasterKey(context.Background(), nil, "key-id", "aws-kms", "us-west-2",
-		"https://user:password@kms.example.com/secret-in-path")
+		"https://user:password@kms.example.com/kms?token=secret-in-query")
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "secret-in-factory-error")
 	for _, entry := range observedLogs.All() {
 		context := fmt.Sprint(entry.ContextMap(), entry.Message)
 		require.NotContains(t, context, "secret-in-factory-error")
-		require.NotContains(t, context, "secret-in-path")
+		require.NotContains(t, context, "secret-in-query")
 		require.NotContains(t, context, "password")
 	}
 }

@@ -63,7 +63,7 @@ func IsSameUpstreamDownstream(
 		}
 		log.Warn("skip the upstream/downstream cluster verification because allow-same-cluster is enabled",
 			zap.String("changefeedID", changefeedCfg.ChangefeedID.Name()),
-			zap.String("sinkURI", util.SafeURIForLog(changefeedCfg.SinkURI)))
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
 		return false, nil
 	}
 	if upPD == nil {
@@ -83,10 +83,10 @@ func IsSameUpstreamDownstream(
 		zap.Uint64("downID", downID),
 		zap.String("downKeyspace", downKeyspace),
 		zap.Bool("isTiDB", isTiDB),
-		zap.String("sinkURI", util.SafeURIForLog(changefeedCfg.SinkURI)))
+		zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
 	if err != nil {
 		log.Error("failed to get cluster ID from sink URI",
-			zap.String("sinkURI", util.SafeURIForLog(changefeedCfg.SinkURI)),
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)),
 			zap.Error(err))
 		return false, cerrors.Trace(err)
 	}
@@ -158,7 +158,7 @@ func getClusterIDBySinkURI(
 		// The keyspace is only used to distinguish logical clusters in Next-Gen.
 		// If it can't be determined, fall back to the legacy physical-cluster-only check.
 		log.Debug("failed to get downstream TiDB keyspace name",
-			zap.String("sinkURI", util.SafeURIForLog(sinkURI)),
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(sinkURI)),
 			zap.Error(err))
 		keyspace = ""
 	}

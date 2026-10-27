@@ -425,7 +425,7 @@ func newClient(tlsConfig *tls.Config, grpcDialOption grpc.DialOption, endpoints 
 // CreateRawEtcdClient creates etcd v3 client with detecting endpoints.
 // It will check the health of endpoints periodically, and update endpoints if needed.
 func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.DialOption, endpoints ...string) (*clientv3.Client, error) {
-	log.Info("create etcdCli", zap.Int("endpointCount", len(endpoints)))
+	log.Info("create etcdCli", zap.Strings("endpoints", endpoints))
 
 	tlsConfig, err := securityConf.ToTLSConfig()
 	if err != nil {
@@ -471,7 +471,7 @@ func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.
 					// otherwise, the subconn will be retrying in grpc layer and use exponential backoff,
 					// and it cannot recover as soon as possible.
 					if time.Since(lastAvailable) > etcdServerDisconnectedTimeout {
-						log.Info("no available endpoint, try to reset endpoints", zap.Int("lastEndpointCount", len(usedEps)))
+						log.Info("no available endpoint, try to reset endpoints", zap.Strings("lastEndpoints", usedEps))
 						client.SetEndpoints([]string{}...)
 						client.SetEndpoints(usedEps...)
 					}
@@ -481,7 +481,7 @@ func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.
 						change := fmt.Sprintf("%d->%d", len(usedEps), len(healthyEps))
 						etcdStateGauge.WithLabelValues("endpoints").Set(float64(len(healthyEps)))
 						log.Info("update endpoints", zap.String("numChange", change),
-							zap.Int("lastEndpointCount", len(usedEps)), zap.Int("endpointCount", len(client.Endpoints())))
+							zap.Strings("lastEndpoints", usedEps), zap.Strings("endpoints", client.Endpoints()))
 					}
 					lastAvailable = time.Now()
 				}
@@ -563,7 +563,7 @@ func (checker *healthyChecker) update(eps []string) {
 			client := value.(*healthyClient)
 			lastHealthy := client.lastHealth
 			if time.Since(lastHealthy) > etcdServerOfflineTimeout {
-				log.Info("some etcd server maybe offline", zap.Bool("endpointConfigured", ep != ""))
+				log.Info("some etcd server maybe offline", zap.String("endpoint", ep))
 				_ = client.Close()
 				checker.Delete(ep)
 			}

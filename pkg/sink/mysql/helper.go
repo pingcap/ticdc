@@ -289,7 +289,9 @@ func generateDSNByConfig(
 		// set the `tidb_enable_external_ts_read` to `OFF`, so cdc could write to the sink
 		dsnCfg.Params["tidb_enable_external_ts_read"] = fmt.Sprintf(`"%s"`, tidbEnableExternalTSRead)
 	}
-	log.Info("sink uri is configured")
+	dsnClone := dsnCfg.Clone()
+	dsnClone.Passwd = "******"
+	log.Info("sink uri is configured", zap.String("dsn", dsnClone.FormatDSN()))
 
 	return dsnCfg.FormatDSN(), nil
 }
@@ -550,8 +552,9 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 			zap.String("jobID", jobID),
 			zap.String("jobType", jobType),
 			zap.String("schemaState", schemaState),
-			zap.Int("querySize", len(ddl)),
+			zap.String("ddl", ddl),
 			zap.String("state", state),
+			zap.Any("jobsResults", jobsResults),
 		)
 		return timodel.StrToJobState(state), nil
 	}

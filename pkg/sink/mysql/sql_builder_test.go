@@ -21,19 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreparedDMLsLogOmitsSQLAndValues(t *testing.T) {
-	dmls := &preparedDMLs{
-		sqls:     []string{"INSERT INTO t VALUES ('secret-in-sql')"},
-		values:   [][]interface{}{{"secret-in-args"}},
-		rowCount: 1,
-	}
-	for _, logged := range []string{dmls.String(), dmls.LogWithoutValues()} {
-		require.NotContains(t, logged, "secret-in-sql")
-		require.NotContains(t, logged, "secret-in-args")
-		require.Contains(t, logged, "1")
-	}
-}
-
 // This table has 45 columns
 var preCreateTableSQL = `create table t (
 	id          int primary key auto_increment,

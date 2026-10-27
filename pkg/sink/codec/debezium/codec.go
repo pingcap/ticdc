@@ -158,9 +158,9 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 					zap.String("schema", tableInfo.GetTargetSchemaName()),
 					zap.String("table", tableInfo.GetTargetTableName()),
 					zap.String("column", colInfo.Name.O),
-					zap.Int("valueSize", len(valueStr)),
+					zap.String("value", valueStr),
 					zap.Uint64("commitTs", commitTs),
-					zap.String("errorType", fmt.Sprintf("%T", err)))
+					zap.Error(err))
 				break
 			}
 		}
@@ -1320,7 +1320,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 		timodel.ActionTruncateTable:
 		changeType = "DROP"
 	default:
-		return errors.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, "redacted")
+		return errors.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, e.Query)
 	}
 
 	var err error

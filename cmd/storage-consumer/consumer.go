@@ -634,7 +634,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	var schemaFile cloudstorage.SchemaFile
 	if err := json.Unmarshal(data, &schemaFile); err != nil {
 		log.Panic("unmarshal schema file failed, this should not happen",
-			zap.Int("contentSize", len(data)), zap.Error(err))
+			zap.ByteString("content", data), zap.Error(err))
 	}
 	schemaFileName := path[strings.LastIndex(path, "/")+1:]
 	checksumText := strings.TrimSuffix(schemaFileName[strings.LastIndex(schemaFileName, "_")+1:], ".json")
@@ -674,7 +674,8 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	if _, ok := c.tableDMLIdxMap[dmlkey]; ok {
 		// duplicate schema file found, this should not happen.
 		log.Panic("duplicate schema file found",
-			zap.String("path", path), zap.Any("schemaKey", schemaKey), zap.Any("dmlkey", dmlkey))
+			zap.String("path", path), zap.Any("schemaFile", schemaFile),
+			zap.Any("schemaKey", schemaKey), zap.Any("dmlkey", dmlkey))
 	}
 	c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{}
 }
@@ -685,7 +686,7 @@ func (c *consumer) mustGetSchemaFile(key cloudstorage.SchemaPathKey) cloudstorag
 		schemaFile = schemaFiles[key.TableVersion]
 	}
 	if schemaFile == nil {
-		log.Panic("schema file not found", zap.Any("key", key))
+		log.Panic("schema file not found", zap.Any("key", key), zap.Any("schemaFileMap", c.schemaFileMap))
 	}
 	return *schemaFile
 }
@@ -697,12 +698,12 @@ func getRenameTableOldTableKey(schemaFile cloudstorage.SchemaFile) (string, bool
 	schemaName := schemaFile.Schema
 	stmt, err := parser.New().ParseOneStmt(schemaFile.Query, "", "")
 	if err != nil {
-		log.Panic("parse statement failed", zap.Int("querySize", len(schemaFile.Query)))
+		log.Panic("parse statement failed", zap.Any("DDL", schemaFile.Query), zap.Error(err))
 	}
 	// The query in job maybe "RENAME TABLE table1 to table2"
 	renameStmt, ok := stmt.(*ast.RenameTableStmt)
 	if !ok || len(renameStmt.TableToTables) == 0 {
-		log.Panic("invalid rename table statement", zap.Int("querySize", len(schemaFile.Query)))
+		log.Panic("invalid rename table statement", zap.Any("DDL", schemaFile.Query))
 	}
 	oldTable := renameStmt.TableToTables[0].OldTable
 	if oldTable.Schema.O != "" {
@@ -763,7 +764,7 @@ func (c *consumer) handleNewFiles(
 				log.Warn("DDL event replayed with stale table version, ignore it",
 					zap.String("schema", key.Schema), zap.String("table", key.Table),
 					zap.Uint64("tableVersion", key.TableVersion), zap.Uint64("ddlWatermark", ddlWatermark),
-					zap.Int("querySize", len(schemaFile.Query)))
+					zap.String("query", schemaFile.Query))
 				continue
 			}
 
@@ -776,7 +777,7 @@ func (c *consumer) handleNewFiles(
 				zap.String("table", key.Table),
 				zap.Uint64("tableVersion", key.TableVersion),
 				zap.Uint64("ddlWatermark", ddlWatermark),
-				zap.Int("querySize", len(schemaFile.Query)))
+				zap.String("query", schemaFile.Query))
 
 			ddlEvent := schemaFile.DDLEvent()
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
@@ -785,7 +786,7 @@ func (c *consumer) handleNewFiles(
 			watermarkKey := c.updateTableDDLWatermark(schemaFile)
 			// TODO: need to cleanup schemaFileMap in the future.
 			log.Info("execute ddl event successfully",
-				zap.Int("querySize", len(schemaFile.Query)),
+				zap.String("query", schemaFile.Query),
 				zap.String("schema", key.Schema), zap.String("table", key.Table),
 				zap.Uint64("ddlWatermark", c.tableDDLWatermark[tableKey]),
 				zap.String("watermarkKey", watermarkKey))

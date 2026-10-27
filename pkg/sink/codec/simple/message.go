@@ -431,7 +431,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.String("value", util.RedactSensitiveValue(d.GetValue())), zap.String("errorType", fmt.Sprintf("%T", err)))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(d.GetValue())), zap.Error(err))
 		}
 		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
@@ -456,7 +456,7 @@ func encodeValue(
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.String("value", util.RedactSensitiveValue(value)), zap.String("errorType", fmt.Sprintf("%T", err)))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:

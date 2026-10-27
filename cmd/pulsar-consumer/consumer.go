@@ -109,7 +109,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			log.Info("terminating: context cancelled")
 			return errors.Trace(ctx.Err())
 		case consumerMsg := <-msgChan:
-			log.Debug("Received message", zap.Stringer("msgId", consumerMsg.ID()), zap.Int("payloadSize", len(consumerMsg.Payload())))
+			log.Debug("Received message", zap.Stringer("msgId", consumerMsg.ID()), zap.ByteString("content", consumerMsg.Payload()))
 			needCommit, writeErr := c.writer.WriteMessage(ctx, consumerMsg)
 			if writeErr != nil {
 				return writeErr

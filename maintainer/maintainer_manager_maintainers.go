@@ -129,7 +129,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 	case messaging.TypeRemoveMaintainerRequest:
 		return m.onRemoveMaintainerRequest(msg)
 	default:
-		log.Warn("unknown message type", zap.Int("messageCount", len(msg.Message)))
+		log.Warn("unknown message type", zap.Any("message", msg.Message))
 	}
 	return nil
 }
@@ -334,7 +334,7 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 			log.Warn("ignore remove maintainer request, "+
 				"since the maintainer not found",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.Bool("cascade", req.Cascade))
+				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID:    req.GetId(),
 				State:           heartbeatpb.ComponentState_Stopped,
@@ -436,7 +436,7 @@ func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	if !ok {
 		log.Warn("maintainer is not found",
 			zap.Stringer("changefeedID", changefeed),
-			zap.Int("messageCount", len(msg.Message)))
+			zap.String("message", msg.String()))
 		return nil
 	}
 	select {

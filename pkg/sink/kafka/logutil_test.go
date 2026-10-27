@@ -13,6 +13,7 @@
 package kafka
 
 import (
+	"strings"
 	"testing"
 
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -34,6 +35,9 @@ func TestBuildEventLogContextRowsIncluded(t *testing.T) {
 			Database: "db1",
 			Table:    "t1",
 			CommitTs: 1,
+			PrimaryKeys: []codecCommon.ColumnLogInfo{
+				{Name: "id", Value: 1},
+			},
 		},
 		{
 			Type:     "delete",
@@ -50,17 +54,30 @@ func TestBuildEventLogContextRowsIncluded(t *testing.T) {
 	require.NotContains(t, ctx, "truncatedRows")
 }
 
+func TestBuildEventLogContextLargeData(t *testing.T) {
+	largeValue := strings.Repeat("a", 12*1024)
+	info := &codecCommon.MessageLogInfo{
+		Rows: []codecCommon.RowLogInfo{
+			{Type: "insert", Table: largeValue},
+		},
+	}
+	ctx := BuildEventLogContext(info)
+	require.Contains(t, ctx, largeValue)
+	require.NotContains(t, ctx, "...(truncated)")
+}
+
 func TestBuildEventLogContextBlockEvents(t *testing.T) {
 	t.Run("ddl", func(t *testing.T) {
 		ctx := BuildEventLogContext(&codecCommon.MessageLogInfo{
 			DDL: &codecCommon.DDLLogInfo{
+				Query:    "CREATE TABLE t(id INT PRIMARY KEY)",
 				StartTs:  1,
 				CommitTs: 2,
 			},
 		})
 
 		require.Contains(t, ctx, "eventType=ddl")
-		require.NotContains(t, ctx, "ddlQuery")
+		require.Contains(t, ctx, "ddlQuery=\"CREATE TABLE t(id INT PRIMARY KEY)\"")
 		require.Contains(t, ctx, "ddlStartTs=1")
 		require.Contains(t, ctx, "ddlCommitTs=2")
 	})
@@ -73,15 +90,4 @@ func TestBuildEventLogContextBlockEvents(t *testing.T) {
 		require.Contains(t, ctx, "eventType=checkpoint")
 		require.Contains(t, ctx, "checkpointTs=3")
 	})
-}
-
-func TestBuildEventLogContextOmitsMessageContent(t *testing.T) {
-	info := &codecCommon.MessageLogInfo{
-		Rows: []codecCommon.RowLogInfo{{Type: "insert", CommitTs: 42}},
-	}
-	ctx := BuildEventLogContext(info)
-	require.Contains(t, ctx, "eventType=dml")
-	require.Contains(t, ctx, "CommitTs")
-	require.NotContains(t, ctx, "PrimaryKeys")
-	require.NotContains(t, ctx, "Value")
 }

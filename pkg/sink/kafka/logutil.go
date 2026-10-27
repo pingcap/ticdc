@@ -57,6 +57,10 @@ func BuildEventLogContext(info *codecCommon.MessageLogInfo) string {
 	}
 
 	if info.DDL != nil {
+		if info.DDL.Query != "" {
+			sb.WriteString(", ddlQuery=")
+			sb.WriteString(strconv.Quote(info.DDL.Query))
+		}
 		if info.DDL.StartTs != 0 {
 			sb.WriteString(", ddlStartTs=")
 			sb.WriteString(strconv.FormatUint(info.DDL.StartTs, 10))

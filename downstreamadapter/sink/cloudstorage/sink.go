@@ -294,7 +294,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		zap.String("schema", event.GetTargetSchemaName()),
 		zap.String("table", event.GetTargetTableName()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.Int("querySize", len(event.GetDDLQuery())),
+		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
 		zap.Stringer("ddlType", event.GetDDLType()))
 	return nil

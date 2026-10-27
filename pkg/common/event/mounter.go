@@ -101,7 +101,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		}
 		if !matched {
 			log.Error("previous columns checksum mismatch",
-				zap.Uint32("checksum", preChecksum))
+				zap.Uint32("checksum", preChecksum), zap.Any("tableInfo", tableInfo))
 			if m.integrity.ErrorHandle() {
 				return 0, nil, errors.ErrCorruptedDataMutation
 			}
@@ -125,7 +125,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		}
 		if !matched {
 			log.Error("current columns checksum mismatch",
-				zap.Uint32("checksum", currentChecksum))
+				zap.Uint32("checksum", currentChecksum), zap.Any("tableInfo", tableInfo))
 			if m.integrity.ErrorHandle() {
 				return 0, nil, errors.ErrCorruptedDataMutation
 			}

@@ -60,7 +60,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 			handler, ok := r.handlers[msg.Topic]
 			r.mu.RUnlock()
 			if !ok {
-				log.Debug("no handler for message, drop it", zap.String("messageType", msg.Type.String()))
+				log.Debug("no handler for message, drop it", zap.Any("msg", msg))
 				continue
 			}
 			start := time.Now()
@@ -81,7 +81,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
 			}
 			if err != nil {
-				log.Error("Handle message failed", zap.Error(err), zap.String("messageType", msg.Type.String()))
+				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}
 		}
 	}

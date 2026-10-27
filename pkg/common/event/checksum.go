@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
@@ -48,8 +49,8 @@ func (m *mounter) verifyChecksum(
 		expected, matched, err := verifyRawBytesChecksum(columnInfos, row, decoder, key, handle, m.tz)
 		if err != nil {
 			log.Error("calculate raw checksum failed",
-				zap.Int("version", version), zap.Any("tz", m.tz),
-				zap.Int("keySize", len(key)), zap.Int("columnCount", len(columnInfos)), zap.Error(err))
+				zap.Int("version", version), zap.Any("tz", m.tz), zap.String("handle", util.RedactValue(handle.String())),
+				zap.String("key", util.RedactKey(key)), zap.Any("columns", columnInfos), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
 		if !matched {
@@ -58,7 +59,7 @@ func (m *mounter) verifyChecksum(
 		columnChecksum, err := calculateColumnChecksum(columnInfos, row, m.tz)
 		if err != nil {
 			log.Error("failed to calculate column-level checksum, after raw checksum verification passed",
-				zap.Int("columnCount", len(columnInfos)),
+				zap.Any("columnsInfo", columnInfos),
 				zap.Any("tz", m.tz), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
@@ -82,7 +83,7 @@ func (m *mounter) verifyColumnChecksum(
 	checksum, err := calculateColumnChecksum(columnInfos, row, m.tz)
 	if err != nil {
 		log.Error("failed to calculate the checksum",
-			zap.Uint32("first", first), zap.Int("columnCount", len(columnInfos)), zap.Error(err))
+			zap.Uint32("first", first), zap.Any("columnInfos", columnInfos), zap.Error(err))
 		return 0, false, err
 	}
 
@@ -99,7 +100,7 @@ func (m *mounter) verifyColumnChecksum(
 	if !skipFail {
 		log.Error("cannot found the extra checksum, the first checksum mismatched",
 			zap.Uint32("checksum", checksum), zap.Uint32("first", first), zap.Uint32("extra", extra),
-			zap.Int("columnCount", len(columnInfos)), zap.Any("tz", m.tz))
+			zap.Any("columnInfos", columnInfos), zap.Any("tz", m.tz))
 		return checksum, false, nil
 	}
 
@@ -107,7 +108,7 @@ func (m *mounter) verifyColumnChecksum(
 		log.Warn("checksum mismatch on the old value, "+
 			"this may caused by Add Column / Drop Column executed, skip verification",
 			zap.Uint32("checksum", checksum), zap.Uint32("first", first), zap.Uint32("extra", extra),
-			zap.Int("columnCount", len(columnInfos)), zap.Any("tz", m.tz))
+			zap.Any("columnInfos", columnInfos), zap.Any("tz", m.tz))
 		m.lastSkipOldValueTime = time.Now()
 	}
 	return checksum, true, nil
@@ -175,7 +176,7 @@ func verifyRawBytesChecksum(
 		zap.Int("version", decoder.ChecksumVersion()),
 		zap.Uint32("expected", expected),
 		zap.Uint32("obtained", obtained),
-		zap.Int("columnCount", len(columnInfos)),
+		zap.Any("columns", columnInfos),
 		zap.Any("tz", tz))
 
 	return expected, false, nil

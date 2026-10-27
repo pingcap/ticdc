@@ -287,8 +287,8 @@ func (r RedoDMLEvent) IsUpdate() bool {
 func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	if len(r.Row.PreColumns) != len(r.PreColumns) || len(r.Row.Columns) != len(r.Columns) {
 		log.Panic("decode redo dmlevent failed",
-			zap.Int("preColumnCount", len(r.Row.PreColumns)), zap.Int("preValueCount", len(r.PreColumns)),
-			zap.Int("columnCount", len(r.Row.Columns)), zap.Int("valueCount", len(r.Columns)),
+			zap.Any("preColumns", r.Row.PreColumns), zap.Any("preColumnsValue", r.PreColumns),
+			zap.Any("columns", r.Row.Columns), zap.Any("columnsValue", r.Columns),
 		)
 	}
 	tidbTableInfo := &model.TableInfo{
@@ -411,7 +411,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		if err := colInfo.SetOriginDefaultValue(col.OriginDefaultValue); err != nil {
 			log.Panic("set origin default value failed",
 				zap.String("column", col.Name),
-				zap.String("originDefaultValue", "xxxxx"),
+				zap.Any("originDefaultValue", col.OriginDefaultValue),
 				zap.Error(err))
 		}
 		columns = append(columns, colInfo)
@@ -547,13 +547,13 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, raw.(string), ft.GetType(), types.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for data time", zap.String("raw", util.RedactSensitiveValue(raw)), zap.Error(err))
+			log.Panic("invalid column value for data time", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendTime(idx, val)
 	case mysql.TypeDuration:
 		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, raw.(string), types.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.String("raw", util.RedactSensitiveValue(raw)), zap.Error(err))
+			log.Panic("invalid column value for duration", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendDuration(idx, val)
 	case mysql.TypeEnum:
@@ -567,16 +567,16 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	case mysql.TypeJSON:
 		result, err := types.ParseBinaryJSONFromString(raw.(string))
 		if err != nil {
-			log.Panic("invalid column value for json", zap.String("raw", util.RedactSensitiveValue(raw)), zap.Error(err))
+			log.Panic("invalid column value for json", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendJSON(idx, result)
 	case mysql.TypeTiDBVectorFloat32:
 		result, err := types.ParseVectorFloat32(raw.(string))
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactSensitiveValue(raw)), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendVectorFloat32(idx, result)
 	default:
-		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.String("raw", util.RedactSensitiveValue(raw)))
+		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.String("raw", util.RedactAny(raw)))
 	}
 }

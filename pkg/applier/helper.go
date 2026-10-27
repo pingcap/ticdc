@@ -138,8 +138,8 @@ func splitUpdateEvent(
 		zap.Uint64("commitTs", updateEvent.Row.CommitTs),
 		zap.String("schema", updateEvent.Row.Table.Schema),
 		zap.String("table", updateEvent.Row.Table.Table),
-		zap.Int("preColCount", len(updateEvent.PreColumns)),
-		zap.Int("colCount", len(updateEvent.Columns)))
+		zap.Any("preCols", updateEvent.PreColumns),
+		zap.Any("cols", updateEvent.Columns))
 
 	return deleteEvent, insertEvent, nil
 }
