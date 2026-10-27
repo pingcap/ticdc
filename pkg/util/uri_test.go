@@ -106,12 +106,20 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"https://api.example.com/?keyspace=default&token=xxxxx",
 		},
 		{
+			"https://api.example.com/?key=secret-value",
+			"https://api.example.com/?key=xxxxx",
+		},
+		{
 			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
 			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
 		},
 		{
 			"kafka://127.0.0.1:9092/topic?key=/tmp/client.key&sasl-gssapi-keytab-path=/tmp/client.keytab",
 			"kafka://127.0.0.1:9092/topic?key=%2Ftmp%2Fclient.key&sasl-gssapi-keytab-path=%2Ftmp%2Fclient.keytab",
+		},
+		{
+			"kafka+ssl://127.0.0.1:9092/topic?key=/tmp/client.key",
+			"kafka+ssl://127.0.0.1:9092/topic?key=%2Ftmp%2Fclient.key",
 		},
 		{
 			"mysql://root:123456@127.0.0.1:3306/?time-zone=c",
@@ -166,8 +174,8 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			uri    string
 			masked string
 		}{
-			"kafka://127.0.0.1:9093/cdc?" + q + "=verysecure",
-			"kafka://127.0.0.1:9093/cdc?" + q + "=xxxxx",
+			"https://api.example.com/?" + q + "=verysecure",
+			"https://api.example.com/?" + q + "=xxxxx",
 		})
 	}
 
@@ -186,11 +194,14 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 		{uri: "s3://bucket/prefix?region=us-west-1", want: false},
 		{uri: "https://api.example.com?keyspace=default", want: false},
 		{uri: "kafka://broker/topic?kafka-client-id=client-1&output-row-key=true", want: false},
+		{uri: "kafka://broker/topic?key=%2Ftmp%2Fclient.key", want: false},
+		{uri: "kafka+ssl://broker/topic?key=%2Ftmp%2Fclient.key", want: false},
 		{uri: "https://api.example.com?authorization-endpoint=https%3A%2F%2Fauth.example.com", want: false},
 		{uri: "/api?region=west#diagnostics", want: false},
 		{uri: "https://user:password@registry.example.com", want: true},
 		{uri: "s3://bucket/prefix?Secret-Access-Key=password", want: true},
 		{uri: "https://api.example.com?authorization=Bearer%20secret-value", want: true},
+		{uri: "https://api.example.com?key=secret-value", want: true},
 		{uri: "/api?region=west#token=secret-value", want: true},
 		{uri: "https://user:password@registry.example.com/%zz", want: true},
 		{uri: "s3://bucket?secret-access-key=secret%zz", want: true},

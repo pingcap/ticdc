@@ -47,15 +47,17 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet,
-			"/api?token=secret-value&region=west&keyspace=default#token=fragment-secret-value", nil)
+			"/api?token=secret-value&key=bare-key-material&region=west&keyspace=default#token=fragment-secret-value", nil)
 		LogMiddleware()(c)
 
 		restore()
 		require.Len(t, observed.All(), 1)
 		query := observed.All()[0].ContextMap()["query"].(string)
 		require.NotContains(t, query, "secret-value")
+		require.NotContains(t, query, "bare-key-material")
 		require.NotContains(t, query, "fragment-secret-value")
 		if mode == cerrors.RedactLogDisable {
+			require.Contains(t, query, "key=xxxxx")
 			require.Contains(t, query, "region=west")
 			require.Contains(t, query, "keyspace=default")
 			require.Contains(t, query, "#token=xxxxx")

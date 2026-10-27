@@ -102,7 +102,6 @@ var nonSensitiveQueryParameterNames = map[string]struct{}{
 	"auth-tls-private-key-path": {},
 	"kafka-client":              {},
 	"kafka-client-id":           {},
-	"key":                       {},
 	"keyspace":                  {},
 	"keyspace-id":               {},
 	"oauth2-client-id":          {},
@@ -129,6 +128,15 @@ func isSensitiveQueryParameter(name string) bool {
 		}
 	}
 	return false
+}
+
+func isSensitiveQueryParameterInURI(name, scheme string) bool {
+	normalizedName := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	// Kafka parses the exact key parameter as a TLS private-key file path.
+	if normalizedName == "key" && (scheme == "kafka" || scheme == "kafka+ssl") {
+		return false
+	}
+	return isSensitiveQueryParameter(name)
 }
 
 // maskSensitiveDataInQueryLikeText handles fragment-like request target text
@@ -177,7 +185,7 @@ func ContainsSensitiveDataInURI(uri string) bool {
 		return true
 	}
 	for name := range query {
-		if isSensitiveQueryParameter(name) {
+		if isSensitiveQueryParameterInURI(name, parsed.Scheme) {
 			return true
 		}
 	}
@@ -195,7 +203,7 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	queries := uriParsed.Query()
 	for key := range queries {
-		if isSensitiveQueryParameter(key) {
+		if isSensitiveQueryParameterInURI(key, uriParsed.Scheme) {
 			queries.Set(key, "xxxxx")
 		}
 	}
