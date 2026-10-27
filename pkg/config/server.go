@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -194,8 +195,15 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
+	s, _ := c.MaskedForDisplay().Marshal()
+	return s
+}
+
+// MaskedForDisplay returns a copy suitable for logs and API responses.
+// It does not modify the active server configuration.
+func (c *ServerConfig) MaskedForDisplay() *ServerConfig {
 	if c == nil {
-		return "null"
+		return nil
 	}
 	masked := *c
 	if c.Encryption != nil {
@@ -206,6 +214,7 @@ func (c *ServerConfig) String() string {
 			encryption.KMS = &kms
 			if kms.AWS != nil {
 				aws := *kms.AWS
+				aws.Endpoint = util.MaskSensitiveDataInURIForError(aws.Endpoint)
 				aws.AccessKey = maskConfiguredSecret(aws.AccessKey)
 				aws.SecretAccessKey = maskConfiguredSecret(aws.SecretAccessKey)
 				aws.SessionToken = maskConfiguredSecret(aws.SessionToken)
@@ -213,13 +222,13 @@ func (c *ServerConfig) String() string {
 			}
 			if kms.GCP != nil {
 				gcp := *kms.GCP
+				gcp.Endpoint = util.MaskSensitiveDataInURIForError(gcp.Endpoint)
 				gcp.CredentialsJSON = maskConfiguredSecret(gcp.CredentialsJSON)
 				kms.GCP = &gcp
 			}
 		}
 	}
-	s, _ := masked.Marshal()
-	return s
+	return &masked
 }
 
 func maskConfiguredSecret(value string) string {
