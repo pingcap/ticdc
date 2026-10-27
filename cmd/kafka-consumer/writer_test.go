@@ -31,6 +31,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+func TestMaskDSNForLog(t *testing.T) {
+	require.Equal(t,
+		"reader:xxxxx@tcp(db.example.com:4000)/test?charset=utf8mb4",
+		maskDSNForLog("reader:secret@tcp(db.example.com:4000)/test?charset=utf8mb4"))
+	require.Equal(t, "<invalid dsn>", maskDSNForLog("reader:secret@tcp(db.example.com:4000)"))
+}
+
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	t.Helper()
 

@@ -143,8 +143,9 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.String("url", storeURL),
 			zap.Int("statusCode", resp.StatusCode),
-			zap.Int("bodySize", len(body)))
-		return nil, errors.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("encryption meta HTTP status %d", resp.StatusCode))
+			zap.Int("bodySize", len(body)),
+			zap.String("body", truncateBytesForLog(body, 256)))
+		return nil, errors.Errorf("[%d] %s", resp.StatusCode, body)
 	}
 
 	metaResp, err := decodeEncryptionMetaResponseFromProtobuf(body)
@@ -395,4 +396,11 @@ func (r *masterKeyResponse) toMasterKey() *MasterKey {
 		Endpoint:   r.Endpoint,
 		Ciphertext: []byte(r.Ciphertext),
 	}
+}
+
+func truncateBytesForLog(b []byte, max int) string {
+	if len(b) <= max {
+		return string(b)
+	}
+	return fmt.Sprintf("%s...(truncated, %d bytes total)", string(b[:max]), len(b))
 }

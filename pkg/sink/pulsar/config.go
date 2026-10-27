@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"go.uber.org/zap"
 )
 
 // sink config default Value
@@ -78,6 +80,7 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 	c.BrokerURL = brokerScheme + "://" + sinkURI.Host
 
 	if pulsarConfig == nil {
+		log.Debug("new pulsar config", zap.Any("config", c))
 		return c, nil
 	}
 

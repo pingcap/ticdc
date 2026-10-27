@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -115,7 +116,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if o.upstreamTiDBDSN != "" {
 		db, err = openDB(ctx, o.upstreamTiDBDSN)
 		if err != nil {
-			log.Panic("cannot open the upstream TiDB, handle key only enabled")
+			log.Panic("cannot open the upstream TiDB, handle key only enabled",
+				zap.String("dsn", maskDSNForLog(o.upstreamTiDBDSN)), zap.Error(err))
 		}
 	}
 	for i := 0; i < int(o.partitionNum); i++ {
@@ -767,9 +769,10 @@ func (w *writer) appendMessage2Group(
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
+	maskedDSN := maskDSNForLog(dsn)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		log.Error("open db failed")
+		log.Error("open db failed", zap.String("dsn", maskedDSN), zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
@@ -780,9 +783,20 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
-		log.Error("ping db failed")
+		log.Error("ping db failed", zap.String("dsn", maskedDSN), zap.Error(err))
 		return nil, errors.Trace(err)
 	}
-	log.Info("open db success")
+	log.Info("open db success", zap.String("dsn", maskedDSN))
 	return db, nil
+}
+
+func maskDSNForLog(dsn string) string {
+	cfg, err := dmysql.ParseDSN(dsn)
+	if err != nil {
+		return "<invalid dsn>"
+	}
+	if cfg.Passwd != "" {
+		cfg.Passwd = "xxxxx"
+	}
+	return cfg.FormatDSN()
 }

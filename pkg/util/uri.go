@@ -14,7 +14,6 @@
 package util
 
 import (
-	"errors"
 	"net"
 	"net/url"
 	"strings"
@@ -161,11 +160,11 @@ func MaskSensitiveDataInURLError(err error) error {
 	}
 	urlErr, ok := err.(*url.Error)
 	if !ok {
-		return errors.New("URI operation failed")
+		return err
 	}
 	return &url.Error{
 		Op:  urlErr.Op,
 		URL: MaskSensitiveDataInURIForError(urlErr.URL),
-		Err: errors.New("URI operation failed"),
+		Err: urlErr.Err,
 	}
 }

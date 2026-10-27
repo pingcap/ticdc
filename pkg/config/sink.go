@@ -1063,15 +1063,15 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 	getError := func() error {
 		if len(cfgInSinkURI) != len(cfgInFile) {
 			log.Panic("inconsistent configuration items in sink uri and configuration file",
-				zap.Int("sinkURIItemCount", len(cfgInSinkURI)), zap.Int("fileItemCount", len(cfgInFile)))
+				zap.Any("cfgInSinkURI", cfgInSinkURI), zap.Any("cfgInFile", cfgInFile))
 		}
 		if len(cfgInSinkURI) == 0 && len(cfgInFile) == 0 {
 			return nil
 		}
 		getErrMsg := func(cfgIn map[string]string) string {
 			var errMsg strings.Builder
-			for k := range cfgIn {
-				fmt.Fprintf(&errMsg, "%s, ", k)
+			for k, v := range cfgIn {
+				fmt.Fprintf(&errMsg, "%s=%s, ", k, v)
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}

@@ -27,23 +27,23 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestKMSClientFactoryErrorOmitsCredentials(t *testing.T) {
+func TestKMSClientFactoryErrorPreservesCauseAndMasksEndpoint(t *testing.T) {
 	core, observedLogs := observer.New(zapcore.DebugLevel)
 	restore := plog.ReplaceGlobals(zap.New(core), nil)
 	defer restore()
 
 	cli, err := NewClient(&config.EncryptionConfig{}, WithAWSDecryptorFactory(
 		func(context.Context, awsClientConfig) (awsDecryptor, error) {
-			return nil, errors.New("secret-in-factory-error")
+			return nil, errors.New("factory connection failed")
 		}))
 	require.NoError(t, err)
 	_, err = cli.DecryptMasterKey(context.Background(), nil, "key-id", "aws-kms", "us-west-2",
 		"https://user:password@kms.example.com/kms?token=secret-in-query")
 	require.Error(t, err)
-	require.NotContains(t, err.Error(), "secret-in-factory-error")
+	require.Contains(t, err.Error(), "factory connection failed")
 	for _, entry := range observedLogs.All() {
 		context := fmt.Sprint(entry.ContextMap(), entry.Message)
-		require.NotContains(t, context, "secret-in-factory-error")
+		require.Contains(t, context, "factory connection failed")
 		require.NotContains(t, context, "secret-in-query")
 		require.NotContains(t, context, "password")
 	}

@@ -14,7 +14,6 @@
 package util
 
 import (
-	"errors"
 	"net/url"
 	"testing"
 
@@ -167,7 +166,6 @@ func TestMaskSensitiveDataInURIForError(t *testing.T) {
 }
 
 func TestMaskSensitiveDataInURLError(t *testing.T) {
-	require.EqualError(t, MaskSensitiveDataInURLError(errors.New("secret-token")), "URI operation failed")
 	rawURL := "mysql://root:verysecure@127.0.0.1/%zz"
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
@@ -175,5 +173,5 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	maskedErr := MaskSensitiveDataInURLError(err)
 	require.NotContains(t, maskedErr.Error(), "verysecure")
 	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
-	require.Contains(t, maskedErr.Error(), "URI operation failed")
+	require.Contains(t, maskedErr.Error(), "invalid URL escape")
 }

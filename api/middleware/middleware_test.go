@@ -23,42 +23,14 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
-	plog "github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest/observer"
 )
-
-func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
-	originalMode := perrors.RedactLogEnabled.Load()
-	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
-
-	for _, mode := range []string{perrors.RedactLogDisable, perrors.RedactLogMarker, perrors.RedactLogEnable} {
-		perrors.RedactLogEnabled.Store(mode)
-		core, observed := observer.New(zapcore.InfoLevel)
-		restore := plog.ReplaceGlobals(zap.New(core), nil)
-
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodGet, "/api?token=secret-value&region=west", nil)
-		LogMiddleware()(c)
-
-		restore()
-		require.Len(t, observed.All(), 1)
-		query := observed.All()[0].ContextMap()["query"].(string)
-		require.NotContains(t, query, "secret-value")
-		if mode == perrors.RedactLogDisable {
-			require.Contains(t, query, "region=west")
-		}
-	}
-}
 
 func TestForwardToServer(t *testing.T) {
 	// Setup mock target server

@@ -125,8 +125,9 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
 				zap.String("region", awsCfg.Region),
-				zap.String("endpoint", util.MaskSensitiveDataInURIForError(awsCfg.Endpoint)))
-			return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("KMS operation failed")
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(awsCfg.Endpoint)),
+				zap.Error(err))
+			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
@@ -134,8 +135,9 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
 				zap.String("region", awsCfg.Region),
-				zap.String("endpoint", util.MaskSensitiveDataInURIForError(awsCfg.Endpoint)))
-			return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("KMS operation failed")
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(awsCfg.Endpoint)),
+				zap.Error(err))
+			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
 	case vendorGCP:
@@ -145,16 +147,18 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 			log.Warn("failed to create gcp kms client",
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
-				zap.String("endpoint", util.MaskSensitiveDataInURIForError(gcpCfg.Endpoint)))
-			return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("KMS operation failed")
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(gcpCfg.Endpoint)),
+				zap.Error(err))
+			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
 			log.Warn("failed to decrypt master key via gcp kms",
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
-				zap.String("endpoint", util.MaskSensitiveDataInURIForError(gcpCfg.Endpoint)))
-			return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("KMS operation failed")
+				zap.String("endpoint", util.MaskSensitiveDataInURIForError(gcpCfg.Endpoint)),
+				zap.Error(err))
+			return nil, cerrors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
 	default:
@@ -282,8 +286,9 @@ func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsD
 			zap.String("region", cfg.Region),
 			zap.String("endpoint", util.MaskSensitiveDataInURIForError(cfg.Endpoint)),
 			zap.Bool("hasProfile", cfg.Profile != ""),
-			zap.Bool("hasStaticCredentials", cfg.AccessKey != ""))
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("aws KMS client initialization failed")
+			zap.Bool("hasStaticCredentials", cfg.AccessKey != ""),
+			zap.Error(err))
+		return nil, err
 	}
 
 	c.awsMu.Lock()
@@ -315,8 +320,9 @@ func (c *client) getGCPDecryptor(ctx context.Context, cfg gcpClientConfig) (gcpD
 		log.Warn("failed to initialize gcp kms decryptor",
 			zap.String("endpoint", util.MaskSensitiveDataInURIForError(cfg.Endpoint)),
 			zap.Bool("hasCredentialsFile", cfg.CredentialsFile != ""),
-			zap.Bool("hasCredentialsJSON", cfg.CredentialsJSON != ""))
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("gcp KMS client initialization failed")
+			zap.Bool("hasCredentialsJSON", cfg.CredentialsJSON != ""),
+			zap.Error(err))
+		return nil, err
 	}
 
 	c.gcpMu.Lock()
