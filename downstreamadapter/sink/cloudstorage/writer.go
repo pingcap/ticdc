@@ -232,34 +232,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 	start := time.Now()
-	err := func() error {
-		if d.config.FlushConcurrency <= 1 {
-			return d.storage.WriteFile(ctx, dataFilePath, payload.data)
-		}
-		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
-			Concurrency: d.config.FlushConcurrency,
-		})
-		if err != nil {
-			return err
-		}
-		if _, err = writer.Write(ctx, payload.data); err != nil {
-			closeErr := writer.Close(ctx)
-			if closeErr != nil {
-				log.Warn("failed to close writer after write failure",
-					zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-					zap.String("path", dataFilePath), zap.Error(closeErr))
-			}
-			return err
-		}
-		if err = writer.Close(ctx); err != nil {
-			log.Error("failed to close concurrency writer",
-				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-				zap.String("path", dataFilePath), zap.Error(err))
-			return err
-		}
-		return nil
-	}()
-	if err != nil {
+	if err := d.writeFile(ctx, dataFilePath, payload.data); err != nil {
 		d.statistics.RecordDMLError()
 		return err
 	}
@@ -291,6 +264,35 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}
 	// Help GC release the potentially large encoded payload buffer before returning.
 	payload.data = nil
+	return nil
+}
+
+func (d *writer) writeFile(ctx context.Context, filePath string, data []byte) error {
+	if d.config.FlushConcurrency <= 1 {
+		return d.storage.WriteFile(ctx, filePath, data)
+	}
+	writer, err := d.storage.Create(ctx, filePath, &storeapi.WriterOption{
+		Concurrency: d.config.FlushConcurrency,
+	})
+	if err != nil {
+		return err
+	}
+	keyspace := d.changeFeedID.Keyspace()
+	changefeed := d.changeFeedID.Name()
+	if _, err = writer.Write(ctx, data); err != nil {
+		if closeErr := writer.Close(ctx); closeErr != nil {
+			log.Warn("failed to close writer after write failure",
+				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+				zap.String("path", filePath), zap.Error(closeErr))
+		}
+		return err
+	}
+	if err = writer.Close(ctx); err != nil {
+		log.Error("failed to close concurrency writer",
+			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+			zap.String("path", filePath), zap.Error(err))
+		return err
+	}
 	return nil
 }
 
