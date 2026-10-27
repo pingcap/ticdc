@@ -131,6 +131,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
+			err = util.MaskSensitiveDataInURLError(err)
 			log.Warn("failed to decrypt master key via aws kms",
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
@@ -153,6 +154,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
+			err = util.MaskSensitiveDataInURLError(err)
 			log.Warn("failed to decrypt master key via gcp kms",
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
@@ -282,6 +284,7 @@ func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsD
 
 	cli, err := c.awsFactory(ctx, cfg)
 	if err != nil {
+		err = util.MaskSensitiveDataInURLError(err)
 		log.Warn("failed to initialize aws kms decryptor",
 			zap.String("region", cfg.Region),
 			zap.String("endpoint", util.MaskSensitiveDataInURIForError(cfg.Endpoint)),
@@ -317,6 +320,7 @@ func (c *client) getGCPDecryptor(ctx context.Context, cfg gcpClientConfig) (gcpD
 
 	cli, err := c.gcpFactory(ctx, cfg)
 	if err != nil {
+		err = util.MaskSensitiveDataInURLError(err)
 		log.Warn("failed to initialize gcp kms decryptor",
 			zap.String("endpoint", util.MaskSensitiveDataInURIForError(cfg.Endpoint)),
 			zap.Bool("hasCredentialsFile", cfg.CredentialsFile != ""),

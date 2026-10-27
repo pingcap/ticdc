@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"testing"
 
 	plog "github.com/pingcap/log"
@@ -34,13 +35,21 @@ func TestKMSClientFactoryErrorPreservesCauseAndMasksEndpoint(t *testing.T) {
 
 	cli, err := NewClient(&config.EncryptionConfig{}, WithAWSDecryptorFactory(
 		func(context.Context, awsClientConfig) (awsDecryptor, error) {
-			return nil, errors.New("factory connection failed")
+			return nil, fmt.Errorf("factory connection failed: %w", &url.Error{
+				Op:  "POST",
+				URL: "https://user:password@kms.example.com/kms?region=west&token=secret-in-query",
+				Err: errors.New("connection refused"),
+			})
 		}))
 	require.NoError(t, err)
 	_, err = cli.DecryptMasterKey(context.Background(), nil, "key-id", "aws-kms", "us-west-2",
 		"https://user:password@kms.example.com/kms?token=secret-in-query")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "factory connection failed")
+	require.Contains(t, err.Error(), "connection refused")
+	require.Contains(t, err.Error(), "region=west")
+	require.NotContains(t, err.Error(), "secret-in-query")
+	require.NotContains(t, err.Error(), "password")
 	for _, entry := range observedLogs.All() {
 		context := fmt.Sprint(entry.ContextMap(), entry.Message)
 		require.Contains(t, context, "factory connection failed")

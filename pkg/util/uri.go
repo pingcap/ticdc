@@ -14,6 +14,7 @@
 package util
 
 import (
+	stderrors "errors"
 	"net"
 	"net/url"
 	"strings"
@@ -88,13 +89,30 @@ var sensitiveQueryParameterNames = []string{
 	"signature",
 	"credential",
 	"private",
-	"client",
+}
+
+// These supported URI parameters contain credential-related words but carry
+// identifiers, feature flags, or file paths rather than secret values.
+var nonSensitiveQueryParameterNames = map[string]struct{}{
+	"auth-tls-private-key-path": {},
+	"kafka-client":              {},
+	"kafka-client-id":           {},
+	"key":                       {},
+	"keyspace":                  {},
+	"keyspace-id":               {},
+	"oauth2-client-id":          {},
+	"oauth2-private-key":        {},
+	"output-row-key":            {},
+	"sasl-gssapi-keytab-path":   {},
+	"sasl-oauth-client-id":      {},
+	"tls-key-file-path":         {},
+	"token-from-file":           {},
 }
 
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
-	if name == "kafka-client" {
-		return false // Selects the Kafka client implementation, not a credential.
+	if _, ok := nonSensitiveQueryParameterNames[strings.ReplaceAll(name, "_", "-")]; ok {
+		return false
 	}
 	for _, sensitive := range sensitiveQueryParameterNames {
 		if strings.Contains(name, sensitive) {
@@ -103,6 +121,15 @@ func isSensitiveQueryParameter(name string) bool {
 	}
 	return false
 }
+
+type maskedWrappedURLError struct {
+	err     error
+	message string
+}
+
+func (e *maskedWrappedURLError) Error() string { return e.message }
+
+func (e *maskedWrappedURLError) Unwrap() error { return e.err }
 
 // ContainsSensitiveDataInURI reports whether a URI includes credential fields.
 // Invalid URIs are treated as sensitive because they cannot be safely inspected.
@@ -158,13 +185,23 @@ func MaskSensitiveDataInURLError(err error) error {
 	if err == nil {
 		return nil
 	}
-	urlErr, ok := err.(*url.Error)
-	if !ok {
+	var urlErr *url.Error
+	if !stderrors.As(err, &urlErr) {
 		return err
 	}
-	return &url.Error{
+	if urlErr.URL == "" {
+		return err
+	}
+	maskedURLMetadata := &url.Error{
 		Op:  urlErr.Op,
 		URL: MaskSensitiveDataInURIForError(urlErr.URL),
 		Err: urlErr.Err,
+	}
+	if err == urlErr {
+		return maskedURLMetadata
+	}
+	return &maskedWrappedURLError{
+		err:     err,
+		message: strings.ReplaceAll(err.Error(), urlErr.URL, maskedURLMetadata.URL),
 	}
 }

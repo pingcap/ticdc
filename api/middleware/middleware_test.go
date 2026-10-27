@@ -47,7 +47,7 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		restore := plog.ReplaceGlobals(zap.New(core), nil)
 
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodGet, "/api?token=secret-value&region=west", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api?token=secret-value&region=west&keyspace=default", nil)
 		LogMiddleware()(c)
 
 		restore()
@@ -56,6 +56,7 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		require.NotContains(t, query, "secret-value")
 		if mode == perrors.RedactLogDisable {
 			require.Contains(t, query, "region=west")
+			require.Contains(t, query, "keyspace=default")
 		}
 	}
 }

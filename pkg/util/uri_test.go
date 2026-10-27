@@ -14,6 +14,8 @@
 package util
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -100,6 +102,18 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"kafka://127.0.0.1:9092/topic?kafka-client=franz&sasl-password=xxxxx",
 		},
 		{
+			"https://api.example.com/?keyspace=default&token=secret",
+			"https://api.example.com/?keyspace=default&token=xxxxx",
+		},
+		{
+			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
+			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
+		},
+		{
+			"kafka://127.0.0.1:9092/topic?key=/tmp/client.key&sasl-gssapi-keytab-path=/tmp/client.keytab",
+			"kafka://127.0.0.1:9092/topic?key=%2Ftmp%2Fclient.key&sasl-gssapi-keytab-path=%2Ftmp%2Fclient.keytab",
+		},
+		{
 			"mysql://root:123456@127.0.0.1:3306/?time-zone=c",
 			"mysql://root:xxxxx@127.0.0.1:3306/?time-zone=c",
 		},
@@ -116,6 +130,10 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"mysql://root:xxxxx@127.0.0.1:3306/?client_secret=xxxxx",
 		},
 		{
+			"https://api.example.com/?api-key=secret&client-id=diagnostic-client",
+			"https://api.example.com/?api-key=xxxxx&client-id=diagnostic-client",
+		},
+		{
 			"",
 			"",
 		},
@@ -125,6 +143,9 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		},
 	}
 	for _, q := range sensitiveQueryParameterNames {
+		if !isSensitiveQueryParameter(q) {
+			continue
+		}
 		tests = append(tests, struct {
 			uri    string
 			masked string
@@ -147,6 +168,8 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 	}{
 		{uri: "https://user@registry.example.com", want: false},
 		{uri: "s3://bucket/prefix?region=us-west-1", want: false},
+		{uri: "https://api.example.com?keyspace=default", want: false},
+		{uri: "kafka://broker/topic?kafka-client-id=client-1&output-row-key=true", want: false},
 		{uri: "https://user:password@registry.example.com", want: true},
 		{uri: "s3://bucket/prefix?Secret-Access-Key=password", want: true},
 		{uri: "https://user:password@registry.example.com/%zz", want: true},
@@ -166,6 +189,9 @@ func TestMaskSensitiveDataInURIForError(t *testing.T) {
 }
 
 func TestMaskSensitiveDataInURLError(t *testing.T) {
+	emptyURLErr := fmt.Errorf("request failed: %w", &url.Error{Op: "GET", Err: errors.New("missing URL")})
+	require.Same(t, emptyURLErr, MaskSensitiveDataInURLError(emptyURLErr))
+
 	rawURL := "mysql://root:verysecure@127.0.0.1/%zz"
 	_, err := url.Parse(rawURL)
 	require.Error(t, err)
@@ -174,4 +200,18 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	require.NotContains(t, maskedErr.Error(), "verysecure")
 	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, maskedErr.Error(), "invalid URL escape")
+
+	cause := errors.New("connection refused")
+	wrappedErr := fmt.Errorf("kms request failed: %w", &url.Error{
+		Op:  "POST",
+		URL: "https://user:password@kms.example.com/path?region=west&token=secret-token",
+		Err: cause,
+	})
+	maskedErr = MaskSensitiveDataInURLError(wrappedErr)
+	require.Contains(t, maskedErr.Error(), "kms request failed")
+	require.Contains(t, maskedErr.Error(), "connection refused")
+	require.Contains(t, maskedErr.Error(), "region=west")
+	require.NotContains(t, maskedErr.Error(), "password")
+	require.NotContains(t, maskedErr.Error(), "secret-token")
+	require.ErrorIs(t, maskedErr, cause)
 }
