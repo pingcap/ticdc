@@ -134,6 +134,10 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"https://api.example.com/?api-key=xxxxx&client-id=diagnostic-client",
 		},
 		{
+			"https://kms.example.com/?authorization=Bearer%20secret-value&authorization-endpoint=https%3A%2F%2Fauth.example.com",
+			"https://kms.example.com/?authorization=xxxxx&authorization-endpoint=https%3A%2F%2Fauth.example.com",
+		},
+		{
 			"/api?region=west#token=secret-value",
 			"/api?region=west#token=xxxxx",
 		},
@@ -182,9 +186,11 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 		{uri: "s3://bucket/prefix?region=us-west-1", want: false},
 		{uri: "https://api.example.com?keyspace=default", want: false},
 		{uri: "kafka://broker/topic?kafka-client-id=client-1&output-row-key=true", want: false},
+		{uri: "https://api.example.com?authorization-endpoint=https%3A%2F%2Fauth.example.com", want: false},
 		{uri: "/api?region=west#diagnostics", want: false},
 		{uri: "https://user:password@registry.example.com", want: true},
 		{uri: "s3://bucket/prefix?Secret-Access-Key=password", want: true},
+		{uri: "https://api.example.com?authorization=Bearer%20secret-value", want: true},
 		{uri: "/api?region=west#token=secret-value", want: true},
 		{uri: "https://user:password@registry.example.com/%zz", want: true},
 		{uri: "s3://bucket?secret-access-key=secret%zz", want: true},

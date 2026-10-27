@@ -91,6 +91,10 @@ var sensitiveQueryParameterNames = []string{
 	"private",
 }
 
+var sensitiveQueryParameterExactNames = map[string]struct{}{
+	"authorization": {},
+}
+
 // These supported URI parameters contain credential-related words but carry
 // identifiers, feature flags, or file paths rather than secret values.
 var nonSensitiveQueryParameterNames = map[string]struct{}{
@@ -111,8 +115,12 @@ var nonSensitiveQueryParameterNames = map[string]struct{}{
 
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
-	if _, ok := nonSensitiveQueryParameterNames[strings.ReplaceAll(name, "_", "-")]; ok {
+	normalizedName := strings.ReplaceAll(name, "_", "-")
+	if _, ok := nonSensitiveQueryParameterNames[normalizedName]; ok {
 		return false
+	}
+	if _, ok := sensitiveQueryParameterExactNames[normalizedName]; ok {
+		return true
 	}
 	for _, sensitive := range sensitiveQueryParameterNames {
 		if strings.Contains(name, sensitive) {

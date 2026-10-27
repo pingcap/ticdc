@@ -39,7 +39,8 @@ func TestRegisterRoutesConfig(t *testing.T) {
 	testConfig.Encryption.KMS.AWS.AccessKey = "aws-access-secret"
 	testConfig.Encryption.KMS.AWS.SecretAccessKey = "aws-private-secret"
 	testConfig.Encryption.KMS.AWS.SessionToken = "aws-session-secret"
-	testConfig.Encryption.KMS.AWS.Endpoint = "https://user:aws-endpoint-password@kms.example.com/path?token=aws-endpoint-token&region=west"
+	testConfig.Encryption.KMS.AWS.Endpoint = "https://user:aws-endpoint-password@kms.example.com/path?" +
+		"authorization=Bearer%20aws-authorization-secret&token=aws-endpoint-token&region=west"
 	testConfig.Encryption.KMS.GCP.CredentialsJSON = `{"private_key":"gcp-private-secret"}`
 	testConfig.Encryption.KMS.GCP.Endpoint = "https://user:gcp-endpoint-password@kms.gcp.example.com/path?access_token=gcp-endpoint-token"
 	config.StoreGlobalServerConfig(testConfig)
@@ -65,7 +66,7 @@ func TestRegisterRoutesConfig(t *testing.T) {
 			require.Equal(t, testConfig.DataDir, payload["data-dir"])
 			for _, secret := range []string{
 				"aws-access-secret", "aws-private-secret", "aws-session-secret",
-				"aws-endpoint-password", "aws-endpoint-token",
+				"aws-endpoint-password", "aws-endpoint-token", "aws-authorization-secret",
 				"gcp-private-secret", "gcp-endpoint-password", "gcp-endpoint-token",
 			} {
 				require.NotContains(t, resp.Body.String(), secret)
@@ -73,7 +74,8 @@ func TestRegisterRoutesConfig(t *testing.T) {
 			kms := payload["encryption"].(map[string]any)["kms"].(map[string]any)
 			aws := kms["aws"].(map[string]any)
 			require.Equal(t, "xxxxx", aws["secret_access_key"])
-			require.Contains(t, aws["endpoint"], "kms.example.com/path?region=west")
+			require.Contains(t, aws["endpoint"], "kms.example.com/path?authorization=xxxxx")
+			require.Contains(t, aws["endpoint"], "region=west")
 			gcp := kms["gcp"].(map[string]any)
 			require.Equal(t, "xxxxx", gcp["credentials_json"])
 		})
