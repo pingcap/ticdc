@@ -20,23 +20,23 @@ import (
 
 // ---------- Metrics used in Statistics. ---------- //
 var (
-	// execBatchHistogram records the row count of each flushed DML event.
+	// execBatchHistogram records the row count of each successfully delivered DML batch.
 	execBatchHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "batch_row_count",
-			Help:      "Row count of a DML event confirmed flushed by sink.",
+			Help:      "Row count number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
 
-	// execBatchWriteBytesHistogram records the approximate original size of each flushed DML event.
+	// execBatchWriteBytesHistogram records the write bytes of each successfully delivered DML batch.
 	execBatchWriteBytesHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "batch_write_bytes",
-			Help:      "Approximate original size in bytes of a DML event confirmed flushed by sink.",
+			Help:      "Bytes number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
 		}, []string{getKeyspaceLabel(), "changefeed"})
 

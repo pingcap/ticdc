@@ -69,6 +69,7 @@ type flushTask struct {
 type payload struct {
 	tableInfo          *common.TableInfo
 	data               []byte
+	rowsCount          int
 	nBytes             int64
 	entries            []*spool.Entry
 	postFlushCallbacks []func()
@@ -278,6 +279,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
+	d.statistics.RecordDMLBatch(payload.rowsCount, payload.nBytes)
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	d.metricFlushBytes.Observe(float64(payload.nBytes))
 

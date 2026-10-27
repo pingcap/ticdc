@@ -38,6 +38,7 @@ type newPulsarDMLProducerFunc func(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	statistics *sinkstatistics.Statistics,
 ) (dmlProducer, error)
 
 type newPulsarDDLProducerFunc func(
@@ -102,8 +103,9 @@ func newPulsarDMLProducer(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	statistics *sinkstatistics.Statistics,
 ) (dmlProducer, error) {
-	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh, statistics)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +156,7 @@ func newWithComponent(
 
 	failpointCh := make(chan error, 1)
 	statistics = sinkstatistics.NewStatistics(changefeedID, keyspaceID)
-	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, statistics)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +202,6 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -564,9 +565,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				message.SetPartitionKey(future.Key.PartitionKey)
 				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-					if ctx.Err() == nil {
-						s.statistics.RecordDMLError()
-					}
 					return errors.Trace(err)
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

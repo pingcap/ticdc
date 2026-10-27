@@ -58,7 +58,6 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
-	s.statistics.TrackDMLEvent(event)
 	s.eventCh.Push(event)
 }
 
@@ -109,6 +108,7 @@ func (s *Sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
+			s.statistics.RecordDMLBatch(int(event.Len()), event.GetSize())
 			event.PostFlush()
 		}
 	}

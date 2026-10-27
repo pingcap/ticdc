@@ -96,6 +96,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				return err
 			}
 			if admitted {
+				w.statistics.RecordDMLBatch(dmls.rowCount, dmls.approximateSize)
 				return nil
 			}
 		}
@@ -125,6 +126,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 
 		err := tryExec()
 		if err != nil {
+			w.statistics.RecordDMLError()
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
 		return nil

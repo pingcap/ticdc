@@ -19,6 +19,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -30,13 +31,16 @@ type saramaAsyncProducer struct {
 	client       sarama.Client
 	producer     sarama.AsyncProducer
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 
 	closed *atomic.Bool
 }
 
 type messageMetadata struct {
-	callback func()
-	logInfo  *codecCommon.MessageLogInfo
+	callback   func()
+	logInfo    *codecCommon.MessageLogInfo
+	rows       int
+	writeBytes int64
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -102,8 +106,11 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
-					if meta != nil && meta.callback != nil {
-						meta.callback()
+					if meta != nil {
+						p.statistics.RecordDMLBatch(meta.rows, meta.writeBytes)
+						if meta.callback != nil {
+							meta.callback()
+						}
 					}
 				default:
 					log.Error("kafka producer received unknown message metadata type",
@@ -125,6 +132,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommon.MessageLogInfo) error {
+	p.statistics.RecordDMLError()
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),
@@ -139,11 +147,14 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *codecCommon.Message,
 ) error {
 	if p.closed.Load() {
+		p.statistics.RecordDMLError()
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 	meta := &messageMetadata{
-		callback: message.Callback,
-		logInfo:  message.LogInfo,
+		callback:   message.Callback,
+		logInfo:    message.LogInfo,
+		rows:       message.GetRowsCount(),
+		writeBytes: int64(message.Length()),
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
@@ -154,6 +165,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
+		p.statistics.RecordDMLError()
 		return context.Cause(ctx)
 	case p.producer.Input() <- msg:
 	}

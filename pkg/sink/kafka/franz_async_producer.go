@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -28,6 +29,7 @@ import (
 type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 
 	closed   atomic.Bool
 	resultCh chan asyncProduceResult
@@ -51,6 +53,7 @@ func (p *asyncProducer) Close() {
 
 func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *codecCommon.Message) error {
 	if p.closed.Load() {
+		p.statistics.RecordDMLError()
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 
@@ -63,7 +66,13 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 
 	callback := message.Callback
 	logInfo := message.LogInfo
+	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
 	promise := func(_ *kgo.Record, err error) {
+		if err != nil {
+			p.statistics.RecordDMLError()
+		} else {
+			p.statistics.RecordDMLBatch(rows, writeBytes)
+		}
 		result := asyncProduceResult{
 			callback: callback,
 			logInfo:  logInfo,
@@ -80,9 +89,11 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	// If it waits for buffer space, canceling ctx makes it return; propagate the cause below.
 	select {
 	case <-ctx.Done():
+		p.statistics.RecordDMLError()
 		return context.Cause(ctx)
 	default:
 	}
+	// Once Produce is called, the promise owns delivery accounting, including cancellation.
 	p.client.Produce(ctx, record, promise)
 	return context.Cause(ctx)
 }

@@ -17,33 +17,23 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTrackDMLEvent(t *testing.T) {
+func TestRecordDMLBatch(t *testing.T) {
 	stats := NewStatistics(common.NewChangefeedID4Test("test", t.Name()), 0)
 	t.Cleanup(stats.Close)
-	event := &commonEvent.DMLEvent{Length: 2, ApproximateSize: 10}
-	called := false
-	event.AddPostFlushFunc(func() { called = true })
 
-	stats.TrackDMLEvent(event)
+	stats.RecordDMLBatch(100, 1024)
+	stats.RecordDMLBatch(200, 2048)
+
 	metric := &dto.Metric{}
 	require.NoError(t, stats.metricExecBatchHis.(prometheus.Metric).Write(metric))
-	require.Zero(t, metric.GetHistogram().GetSampleCount())
+	require.Equal(t, uint64(2), metric.GetHistogram().GetSampleCount())
+	require.Equal(t, float64(300), metric.GetHistogram().GetSampleSum())
 	require.NoError(t, stats.metricExecBatchBytesHis.(prometheus.Metric).Write(metric))
-	require.Zero(t, metric.GetHistogram().GetSampleCount())
-	require.False(t, called)
-
-	event.Length = 5
-	event.ApproximateSize = 100
-	event.PostFlush()
-	require.NoError(t, stats.metricExecBatchHis.(prometheus.Metric).Write(metric))
-	require.Equal(t, float64(2), metric.GetHistogram().GetSampleSum())
-	require.NoError(t, stats.metricExecBatchBytesHis.(prometheus.Metric).Write(metric))
-	require.Equal(t, float64(10), metric.GetHistogram().GetSampleSum())
-	require.True(t, called)
+	require.Equal(t, uint64(2), metric.GetHistogram().GetSampleCount())
+	require.Equal(t, float64(3072), metric.GetHistogram().GetSampleSum())
 }

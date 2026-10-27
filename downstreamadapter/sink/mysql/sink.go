@@ -370,9 +370,6 @@ func (s *Sink) SetWriteGate(gate *writelease.Gate) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	if !s.cfg.DryRun {
-		s.statistics.TrackDMLEvent(event)
-	}
 	s.conflictDetector.Add(event)
 }
 

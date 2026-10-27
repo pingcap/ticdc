@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 )
@@ -56,9 +55,9 @@ type Statistics struct {
 	metricExecDDLHis prometheus.Observer
 	// metricExecDDLRunningCnt records the count of running DDL.
 	metricExecDDLRunningCnt prometheus.Gauge
-	// metricExecBatchHis records the row count of each flushed DML event.
+	// metricExecBatchHis records the row count of each successfully delivered DML batch.
 	metricExecBatchHis prometheus.Observer
-	// metricExecBatchBytesHis records the approximate original size of each flushed DML event.
+	// metricExecBatchBytesHis records the write bytes of each successfully delivered DML batch.
 	metricExecBatchBytesHis prometheus.Observer
 
 	// metricExecErrCntForDDL records the error count of the Sink for DDL.
@@ -67,16 +66,13 @@ type Statistics struct {
 	metricExecErrCntForDML prometheus.Counter
 }
 
-// TrackDMLEvent records rows and approximate original bytes when the event is flushed.
-func (b *Statistics) TrackDMLEvent(event *commonEvent.DMLEvent) {
-	rows, size := float64(event.Len()), float64(event.GetSize())
-	event.AddPostFlushFunc(func() {
-		if b.closed.Load() {
-			return
-		}
-		b.metricExecBatchHis.Observe(rows)
-		b.metricExecBatchBytesHis.Observe(size)
-	})
+// RecordDMLBatch records a successfully delivered DML batch.
+func (b *Statistics) RecordDMLBatch(rows int, writeBytes int64) {
+	if b.closed.Load() {
+		return
+	}
+	b.metricExecBatchHis.Observe(float64(rows))
+	b.metricExecBatchBytesHis.Observe(float64(writeBytes))
 }
 
 // RecordDMLError records a failed downstream DML write.

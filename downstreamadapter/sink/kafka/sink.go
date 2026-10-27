@@ -119,7 +119,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewFactory(ctx, options, changefeedID)
+	factory, err := kafka.NewFactory(ctx, options, changefeedID, nil)
 	if err != nil {
 		return err
 	}
@@ -154,21 +154,22 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
+	statistics := statistics.NewStatistics(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, statistics)
 	if err != nil {
+		statistics.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, statistics, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	keyspaceID uint32,
+	statistics *statistics.Statistics,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := statistics.NewStatistics(changefeedID, keyspaceID)
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -247,7 +248,6 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	if !s.isNormal.Load() {
 		return
 	}
-	s.statistics.TrackDMLEvent(event)
 	s.eventChan.Push(event)
 }
 
@@ -453,9 +453,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				}
 				start := time.Now()
 				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
-					if ctx.Err() == nil {
-						s.statistics.RecordDMLError()
-					}
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())

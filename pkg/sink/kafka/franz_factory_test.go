@@ -36,6 +36,7 @@ func TestSharedClientLifecycle(t *testing.T) {
 		t.Context(),
 		o,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "shared-client"),
+		newTestStatistics(t),
 	)
 	require.NoError(t, err)
 	factory := created.(*franzFactory)

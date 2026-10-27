@@ -22,6 +22,7 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -45,6 +46,7 @@ type dmlProducer interface {
 // dmlProducers is used to send messages to pulsar.
 type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
+	statistics   *statistics.Statistics
 	// producers is used to send messages to pulsar.
 	// One topic only use one producer , so we want to have many topics but use less memory,
 	// lru is a good idea to solve this question.
@@ -72,6 +74,7 @@ func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	statistics *statistics.Statistics,
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("keyspace", changefeedID.Keyspace()),
@@ -103,6 +106,7 @@ func newDMLProducers(
 
 	p := &dmlProducers{
 		changefeedID: changefeedID,
+		statistics:   statistics,
 		comp:         comp,
 		producers:    producers,
 		closed:       false,
@@ -138,9 +142,11 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
+		p.statistics.RecordDMLError()
 		return errors.ErrPulsarProducerClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
+		p.statistics.RecordDMLError()
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
 		log.Info("PulsarSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
@@ -155,15 +161,18 @@ func (p *dmlProducers) asyncSendMessage(
 
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
+		p.statistics.RecordDMLError()
 		return err
 	}
 
 	// if for stress test record , add count to message callback function
 
+	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
 	producer.SendAsync(ctx, data,
 		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
 			if err != nil {
+				p.statistics.RecordDMLError()
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
@@ -182,10 +191,12 @@ func (p *dmlProducers) asyncSendMessage(
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
-			} else if message.Callback != nil {
-				// success
-				message.Callback()
-				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
+			} else {
+				p.statistics.RecordDMLBatch(rows, writeBytes)
+				if message.Callback != nil {
+					message.Callback()
+					pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
+				}
 			}
 		})
 

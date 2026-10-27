@@ -34,7 +34,7 @@ func TestProducerRejectsSendAfterClose(t *testing.T) {
 	require.ErrorIs(t, syncProducer.SendMessage(t.Context(), "topic", 1, message), errors.ErrKafkaSinkClosed)
 	require.ErrorIs(t, syncProducer.SendMessages(t.Context(), "topic", 1, message), errors.ErrKafkaSinkClosed)
 
-	asyncProducer := &saramaAsyncProducer{closed: atomic.NewBool(true)}
+	asyncProducer := &saramaAsyncProducer{closed: atomic.NewBool(true), statistics: newTestStatistics(t)}
 	require.ErrorIs(t, asyncProducer.AsyncSend(context.Background(), "topic", 0, message), errors.ErrKafkaSinkClosed)
 }
 
@@ -123,6 +123,7 @@ func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
 	cause := io.ErrClosedPipe
 	producer := &saramaAsyncProducer{
+		statistics:   newTestStatistics(t),
 		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
 	}
 

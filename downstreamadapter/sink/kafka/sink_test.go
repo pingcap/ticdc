@@ -294,7 +294,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "async-creation-fails"),
-			common.DefaultKeyspaceID,
+			statistics.NewStatistics(common.NewChangefeedID4Test("test", "async-creation-fails"), common.DefaultKeyspaceID),
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -323,7 +323,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "sync-creation-fails"),
-			common.DefaultKeyspaceID,
+			statistics.NewStatistics(common.NewChangefeedID4Test("test", "sync-creation-fails"), common.DefaultKeyspaceID),
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -355,7 +355,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "successful-construction"),
-			common.DefaultKeyspaceID,
+			statistics.NewStatistics(common.NewChangefeedID4Test("test", "successful-construction"), common.DefaultKeyspaceID),
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -668,7 +668,7 @@ func newKafkaSinkForTest(
 	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
 	factory.EXPECT().Close().AnyTimes()
 
-	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
+	kafkaSink, err := newWithComponents(ctx, changefeedID, statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID), protocol, components{
 		encoderGroup:   encoderGroup,
 		encoder:        encoder,
 		columnSelector: columnSelector,

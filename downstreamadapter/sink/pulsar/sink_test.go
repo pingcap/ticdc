@@ -178,7 +178,7 @@ func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 			&config.SinkConfig{},
 			component{},
 			config.ProtocolCanalJSON,
-			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+			func(common.ChangeFeedID, component, chan error, *statistics.Statistics) (dmlProducer, error) {
 				var producer *dmlProducers
 				return producer, expectedErr
 			},
@@ -207,7 +207,7 @@ func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 			&config.SinkConfig{},
 			component{},
 			config.ProtocolCanalJSON,
-			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+			func(common.ChangeFeedID, component, chan error, *statistics.Statistics) (dmlProducer, error) {
 				return newMockDMLProducer(), nil
 			},
 			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
