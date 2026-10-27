@@ -83,11 +83,11 @@ func (b *Statistics) RecordDMLError() {
 }
 
 // RecordDDLExecution executes a DDL and records its duration and result.
-func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
+func (b *Statistics) RecordDDLExecution(ddlType string, executor func() error) error {
 	b.metricExecDDLRunningCnt.Inc()
 	defer b.metricExecDDLRunningCnt.Dec()
 	start := time.Now()
-	ddlType, err := executor()
+	err := executor()
 	if b.closed.Load() {
 		return err
 	}

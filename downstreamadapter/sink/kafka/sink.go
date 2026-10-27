@@ -491,16 +491,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
-		ddlType := e.GetDDLType().String()
-		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
-			})
-		} else {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
-			})
-		}
+		err = s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			if s.partitionRule == helper.PartitionAll {
+				return s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
+			}
+			return s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
+		})
 		if err != nil {
 			return err
 		}

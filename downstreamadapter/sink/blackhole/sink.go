@@ -72,9 +72,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
 		log.Debug("BlackHoleSink: DDL Event", zap.String("ddl", e.GetDDLQuery()))
-		ddlType := e.GetDDLType().String()
-		err := s.statistics.RecordDDLExecution(func() (string, error) {
-			return ddlType, nil
+		err := s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			return nil
 		})
 		if err != nil {
 			return err

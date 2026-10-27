@@ -66,7 +66,6 @@ func TestAsyncPartition(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	producer := &asyncProducer{
-		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-partition"),
 		resultCh:     make(chan asyncProduceResult, 1),
@@ -106,7 +105,6 @@ func TestFactoryCloseUnblocksPromise(t *testing.T) {
 	defer factory.Close()
 
 	producer := &asyncProducer{
-		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-close-full-result-channel"),
 		resultCh:     make(chan asyncProduceResult, 1),
@@ -266,7 +264,6 @@ func TestBufferBackpressure(t *testing.T) {
 	require.NoError(t, err)
 
 	producer := &asyncProducer{
-		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "backpressure"),
 		resultCh:     make(chan asyncProduceResult, 2),

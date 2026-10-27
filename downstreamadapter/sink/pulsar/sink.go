@@ -137,8 +137,8 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		stats       *statistics.Statistics
 	)
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
 			if ddlProducer != nil {
@@ -147,15 +147,12 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
-			if stats != nil {
-				stats.Close()
-			}
+			stats.Close()
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	stats = statistics.New(changefeedID, keyspaceID)
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, stats)
 	if err != nil {
 		return nil, err
@@ -263,16 +260,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
-		ddlType := e.GetDDLType().String()
-		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
-			})
-		} else {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
-			})
-		}
+		err = s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			if s.partitionRule == helper.PartitionAll {
+				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
+			}
+			return s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
+		})
 		if err != nil {
 			return err
 		}

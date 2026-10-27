@@ -311,12 +311,8 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 		return err
 	}
-	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
-		if err != nil {
-			return "", err
-		}
-		return v.GetDDLType().String(), nil
+	return s.statistics.RecordDDLExecution(v.GetDDLType().String(), func() error {
+		return s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 	})
 }
 
