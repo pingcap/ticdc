@@ -68,10 +68,11 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	logInfo := message.LogInfo
 	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
 	promise := func(_ *kgo.Record, err error) {
-		if err != nil {
-			p.statistics.RecordDMLError()
-		} else {
+		switch err {
+		case nil:
 			p.statistics.RecordDMLBatch(rows, writeBytes)
+		default:
+			p.statistics.RecordDMLError()
 		}
 		result := asyncProduceResult{
 			callback: callback,
@@ -89,7 +90,6 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 	// If it waits for buffer space, canceling ctx makes it return; propagate the cause below.
 	select {
 	case <-ctx.Done():
-		p.statistics.RecordDMLError()
 		return context.Cause(ctx)
 	default:
 	}

@@ -155,7 +155,7 @@ func newWithComponent(
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = sinkstatistics.NewStatistics(changefeedID, keyspaceID)
+	statistics = sinkstatistics.New(changefeedID, keyspaceID)
 	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, statistics)
 	if err != nil {
 		return nil, err

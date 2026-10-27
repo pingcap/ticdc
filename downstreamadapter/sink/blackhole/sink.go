@@ -35,7 +35,7 @@ type Sink struct {
 func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: statistics.NewStatistics(changefeedID, keyspaceID),
+		statistics: statistics.New(changefeedID, keyspaceID),
 	}, nil
 }
 

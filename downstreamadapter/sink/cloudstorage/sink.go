@@ -138,7 +138,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := statistics.NewStatistics(changefeedID, keyspaceID)
+	statistics := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
 			statistics.Close()

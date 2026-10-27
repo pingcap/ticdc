@@ -23,7 +23,7 @@ import (
 )
 
 func TestRecordDMLBatch(t *testing.T) {
-	stats := NewStatistics(common.NewChangefeedID4Test("test", t.Name()), 0)
+	stats := New(common.NewChangefeedID4Test("test", t.Name()), 0)
 	t.Cleanup(stats.Close)
 
 	stats.RecordDMLBatch(100, 1024)

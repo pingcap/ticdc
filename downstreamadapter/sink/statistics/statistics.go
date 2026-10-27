@@ -22,8 +22,8 @@ import (
 	"go.uber.org/atomic"
 )
 
-// NewStatistics creates a statistics
-func NewStatistics(
+// New creates sink statistics.
+func New(
 	changefeed common.ChangeFeedID,
 	keyspaceID uint32,
 ) *Statistics {

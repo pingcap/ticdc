@@ -43,7 +43,7 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	cfg.EnableDDLTs = true
 	cfg.IsTiDB = false // Default to non-TiDB
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 
@@ -65,7 +65,7 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	cfg.EnableDDLTs = true
 	cfg.IsTiDB = true // TiDB downstream
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
 	t.Cleanup(writer.Close)
 

@@ -283,6 +283,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		}
 	} else {
 		w.tryDryRunBlock()
+		w.statistics.RecordDMLBatch(dmls.rowCount, dmls.approximateSize)
 	}
 
 	if err != nil {

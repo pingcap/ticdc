@@ -49,7 +49,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink, false)
 	require.NoError(t, err)
 
-	statistics := statistics.NewStatistics(changefeedID, common.DefaultKeyspaceID)
+	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
 	pulsarSink := &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  newMockDMLProducer(),

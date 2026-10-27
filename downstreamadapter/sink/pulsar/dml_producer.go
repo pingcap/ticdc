@@ -191,12 +191,12 @@ func (p *dmlProducers) asyncSendMessage(
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
-			} else {
-				p.statistics.RecordDMLBatch(rows, writeBytes)
-				if message.Callback != nil {
-					message.Callback()
-					pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
-				}
+				return
+			}
+			p.statistics.RecordDMLBatch(rows, writeBytes)
+			if message.Callback != nil {
+				message.Callback()
+				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
 			}
 		})
 

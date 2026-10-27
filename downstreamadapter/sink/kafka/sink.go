@@ -154,7 +154,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	statistics := statistics.NewStatistics(changefeedID, keyspaceID)
+	statistics := statistics.New(changefeedID, keyspaceID)
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, statistics)
 	if err != nil {
 		statistics.Close()

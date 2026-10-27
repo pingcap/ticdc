@@ -165,7 +165,6 @@ func (p *saramaAsyncProducer) AsyncSend(
 	}
 	select {
 	case <-ctx.Done():
-		p.statistics.RecordDMLError()
 		return context.Cause(ctx)
 	case p.producer.Input() <- msg:
 	}

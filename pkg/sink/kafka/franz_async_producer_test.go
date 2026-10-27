@@ -31,7 +31,7 @@ import (
 )
 
 func newTestStatistics(t *testing.T) *statistics.Statistics {
-	stats := statistics.NewStatistics(common.NewChangefeedID4Test(common.DefaultKeyspaceName, t.Name()), common.DefaultKeyspaceID)
+	stats := statistics.New(common.NewChangefeedID4Test(common.DefaultKeyspaceName, t.Name()), common.DefaultKeyspaceID)
 	t.Cleanup(stats.Close)
 	return stats
 }
