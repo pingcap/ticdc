@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -144,14 +144,14 @@ func (d *dmlWriters) run(ctx context.Context) error {
 func (d *dmlWriters) deleteMetrics() {
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
-	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
+	metrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
+	metrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	metrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {
@@ -199,7 +199,7 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
 	defer func() {
-		sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
+		metrics.CloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
 			Observe(time.Since(start).Seconds())
 	}()
 

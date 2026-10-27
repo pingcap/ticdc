@@ -28,13 +28,12 @@ import (
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
@@ -46,16 +45,16 @@ var _ reader.RedoLogReader = &MockReader{}
 type MockReader struct {
 	checkpointTs uint64
 	resolvedTs   uint64
-	redoLogCh    chan *commonEvent.RedoDMLEvent
-	ddlEventCh   chan *commonEvent.RedoDDLEvent
+	redoLogCh    chan *event.RedoDMLEvent
+	ddlEventCh   chan *event.RedoDDLEvent
 }
 
 // NewMockReader creates a new MockReader
 func NewMockReader(
 	checkpointTs uint64,
 	resolvedTs uint64,
-	redoLogCh chan *commonEvent.RedoDMLEvent,
-	ddlEventCh chan *commonEvent.RedoDDLEvent,
+	redoLogCh chan *event.RedoDMLEvent,
+	ddlEventCh chan *event.RedoDDLEvent,
 ) *MockReader {
 	return &MockReader{
 		checkpointTs: checkpointTs,
@@ -71,7 +70,7 @@ func (br *MockReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *MockReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDMLEvent, err error) {
+func (br *MockReader) ReadNextRow(ctx context.Context) (row *event.RedoDMLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -81,7 +80,7 @@ func (br *MockReader) ReadNextRow(ctx context.Context) (row *commonEvent.RedoDML
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *commonEvent.RedoDDLEvent, err error) {
+func (br *MockReader) ReadNextDDL(ctx context.Context) (ddl *event.RedoDDLEvent, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -96,8 +95,8 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
-func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
-	return commonType.ChangeFeedID{}
+func (br *MockReader) GetChangefeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
 }
 
 // GetVersion implements LogReader.GetVersion
@@ -106,7 +105,7 @@ func (br *MockReader) GetVersion() int {
 }
 
 func newFlag(flag uint) uint64 {
-	var result commonType.ColumnFlagType
+	var result common.ColumnFlagType
 	if flag == pmysql.PriKeyFlag {
 		result.SetIsHandleKey()
 		result.SetIsPrimaryKey()
@@ -118,18 +117,18 @@ func TestApplyRowSpill(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	ap.needRecoveryInfo = false
 	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
-	newRow := func(startTs, commitTs uint64, value int64) *commonEvent.RedoDMLEvent {
-		return &commonEvent.RedoDMLEvent{
-			Row: &commonEvent.DMLEventInRedoLog{
+	newRow := func(startTs, commitTs uint64, value int64) *event.RedoDMLEvent {
+		return &event.RedoDMLEvent{
+			Row: &event.DMLEventInRedoLog{
 				StartTs: startTs, CommitTs: commitTs,
 				Table:        &common.TableName{Schema: "test", Table: "t", TableID: 42},
-				Columns:      []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeLonglong}},
+				Columns:      []*event.RedoColumn{{Name: "id", Type: pmysql.TypeLonglong}},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{{Value: value, Flag: newFlag(pmysql.PriKeyFlag)}},
+			Columns: []event.RedoColumnValue{{Value: value, Flag: newFlag(pmysql.PriKeyFlag)}},
 		}
 	}
-	rows := []*commonEvent.RedoDMLEvent{
+	rows := []*event.RedoDMLEvent{
 		newRow(105, 110, 1),
 		newRow(115, 120, 2),
 		newRow(115, 120, 3),
@@ -139,7 +138,7 @@ func TestApplyRowSpill(t *testing.T) {
 	rows[1].Row.PreColumns, rows[1].Row.Columns = rows[1].Row.Columns, nil
 	rows[1].PreColumns, rows[1].Columns = rows[1].Columns, nil
 	rows[2].Row.PreColumns = rows[2].Row.Columns
-	rows[2].PreColumns = []commonEvent.RedoColumnValue{{Value: int64(2), Flag: newFlag(pmysql.PriKeyFlag)}}
+	rows[2].PreColumns = []event.RedoColumnValue{{Value: int64(2), Flag: newFlag(pmysql.PriKeyFlag)}}
 	for _, row := range rows {
 		require.NoError(t, ap.applyRow(row, 100))
 	}
@@ -189,19 +188,19 @@ func TestApplySkippedDropCleansSpill(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
 	ap.tableDDLTs[42] = ddlTs{ts: 100}
 	ap.tableDDLTs[common.DDLSpanTableID] = ddlTs{ts: 120}
-	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
-		Row: &commonEvent.DMLEventInRedoLog{
+	require.NoError(t, ap.applyRow(&event.RedoDMLEvent{
+		Row: &event.DMLEventInRedoLog{
 			StartTs: 105, CommitTs: 110,
 			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
 		},
 	}, 100))
 	require.Positive(t, ap.spillStore.PendingBytes())
-	require.NoError(t, ap.applyDDL(t.Context(), &commonEvent.RedoDDLEvent{
-		Type: byte(timodel.ActionDropTable),
-		DDL: &commonEvent.DDLEventInRedoLog{
+	require.NoError(t, ap.applyDDL(t.Context(), &event.RedoDDLEvent{
+		Type: byte(model.ActionDropTable),
+		DDL: &event.DDLEventInRedoLog{
 			CommitTs: 120, Query: "DROP TABLE test.t",
-			NeedDroppedTables: &commonEvent.InfluencedTables{
-				InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
+			NeedDroppedTables: &event.InfluencedTables{
+				InfluenceType: event.InfluenceTypeNormal, TableIDs: []int64{42},
 			},
 		},
 	}, 100))
@@ -216,8 +215,8 @@ func TestConsumeLogsCleansSpillOnCancel(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{Dir: dir})
 	ap.needRecoveryInfo = false
 	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
-	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
-		Row: &commonEvent.DMLEventInRedoLog{
+	require.NoError(t, ap.applyRow(&event.RedoDMLEvent{
+		Row: &event.DMLEventInRedoLog{
 			StartTs: 105, CommitTs: 110,
 			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
 		},
@@ -253,15 +252,15 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			stat := statistics.New(changefeedID, common.DefaultKeyspaceID)
 			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
 			defer metadataWriter.Close()
-			ddl := &commonEvent.DDLEvent{
-				Type: byte(timodel.ActionDropColumn), SchemaName: "test", TableName: "t",
+			ddl := &event.DDLEvent{
+				Type: byte(model.ActionDropColumn), SchemaName: "test", TableName: "t",
 				Query: "ALTER TABLE test.t DROP COLUMN id", FinishedTs: 120,
-				BlockedTables: &commonEvent.InfluencedTables{
-					InfluenceType: commonEvent.InfluenceTypeNormal,
+				BlockedTables: &event.InfluencedTables{
+					InfluenceType: event.InfluenceTypeNormal,
 					TableIDs:      []int64{42, common.DDLSpanTableID},
 				},
-				NeedDroppedTables: &commonEvent.InfluencedTables{
-					InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
+				NeedDroppedTables: &event.InfluencedTables{
+					InfluenceType: event.InfluenceTypeNormal, TableIDs: []int64{42},
 				},
 			}
 			// Persist the actual key-loss payload: before execution both records
@@ -299,25 +298,25 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			var keyFlag common.ColumnFlagType
 			keyFlag.SetIsHandleKey()
 			keyFlag.SetIsUniqueKey()
-			rows := make(chan *commonEvent.RedoDMLEvent, 1)
-			rows <- &commonEvent.RedoDMLEvent{
-				Row: &commonEvent.DMLEventInRedoLog{
+			rows := make(chan *event.RedoDMLEvent, 1)
+			rows <- &event.RedoDMLEvent{
+				Row: &event.DMLEventInRedoLog{
 					StartTs: 105, CommitTs: 110,
 					Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
-					Columns: []*commonEvent.RedoColumn{
+					Columns: []*event.RedoColumn{
 						{Name: "id", Type: pmysql.TypeLonglong}, {Name: "v", Type: pmysql.TypeLong},
 					},
 					IndexColumns: [][]int{{0}},
 				},
-				Columns: []commonEvent.RedoColumnValue{{Value: int64(1), Flag: uint64(keyFlag)}, {Value: int64(10)}},
+				Columns: []event.RedoColumnValue{{Value: int64(1), Flag: uint64(keyFlag)}, {Value: int64(10)}},
 			}
 			close(rows)
-			ddls := make(chan *commonEvent.RedoDDLEvent, 1)
-			ddls <- &commonEvent.RedoDDLEvent{
+			ddls := make(chan *event.RedoDDLEvent, 1)
+			ddls <- &event.RedoDDLEvent{
 				Type: ddl.Type, TableName: common.TableName{Schema: "test", Table: "t", TableID: 42},
-				DDL: &commonEvent.DDLEventInRedoLog{
+				DDL: &event.DDLEventInRedoLog{
 					CommitTs: ddl.FinishedTs, Query: ddl.Query,
-					Columns:       []*commonEvent.ColumnInfo{{Name: "v", Type: pmysql.TypeLong}},
+					Columns:       []*event.ColumnInfo{{Name: "v", Type: pmysql.TypeLong}},
 					BlockedTables: ddl.BlockedTables, NeedDroppedTables: ddl.NeedDroppedTables,
 				},
 			}
@@ -346,8 +345,8 @@ func TestApply(t *testing.T) {
 
 	checkpointTs := uint64(1000)
 	resolvedTs := uint64(2000)
-	redoLogCh := make(chan *commonEvent.RedoDMLEvent, 1024)
-	ddlEventCh := make(chan *commonEvent.RedoDDLEvent, 1024)
+	redoLogCh := make(chan *event.RedoDMLEvent, 1024)
+	ddlEventCh := make(chan *event.RedoDDLEvent, 1024)
 	createMockReader := func(ctx context.Context, cfg *RedoApplierConfig) (reader.RedoLogReader, error) {
 		return NewMockReader(checkpointTs, resolvedTs, redoLogCh, ddlEventCh), nil
 	}
@@ -361,23 +360,23 @@ func TestApply(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
-		State: timodel.StatePublic,
+		State: model.StatePublic,
 	})
-	dmls := []*commonEvent.RedoDMLEvent{
+	dmls := []*event.RedoDMLEvent{
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1100,
 				CommitTs: 1200,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(1),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -390,21 +389,21 @@ func TestApply(t *testing.T) {
 		// update event which doesn't modify handle key
 		// split into delete+insert when safe-mode is true
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1120,
 				CommitTs: 1220,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(1),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -413,7 +412,7 @@ func TestApply(t *testing.T) {
 					Value: []byte("3"),
 				},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(1),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -424,17 +423,17 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1150,
 				CommitTs: 1250,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(10),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -445,17 +444,17 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1150,
 				CommitTs: 1250,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(100),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -466,17 +465,17 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1200,
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(10),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -487,21 +486,21 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1200,
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(2),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -510,7 +509,7 @@ func TestApply(t *testing.T) {
 					Value: []byte("3"),
 				},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(1),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -521,21 +520,21 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			Row: &commonEvent.DMLEventInRedoLog{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1200,
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(200),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -544,7 +543,7 @@ func TestApply(t *testing.T) {
 					Value: []byte("300"),
 				},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(100),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -558,26 +557,26 @@ func TestApply(t *testing.T) {
 	for _, dml := range dmls {
 		redoLogCh <- dml
 	}
-	ddls := []*commonEvent.RedoDDLEvent{
+	ddls := []*event.RedoDDLEvent{
 		{
-			DDL: &commonEvent.DDLEventInRedoLog{
+			DDL: &event.DDLEventInRedoLog{
 				CommitTs: checkpointTs,
 				Query:    "create table checkpoint(id int)",
 			},
 			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 		{
-			DDL: &commonEvent.DDLEventInRedoLog{
+			DDL: &event.DDLEventInRedoLog{
 				CommitTs: resolvedTs,
 				Query:    "create table resolved(id int not null unique key)",
 			},
 			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {
@@ -617,8 +616,8 @@ func TestApplyBigTxn(t *testing.T) {
 
 	checkpointTs := uint64(1000)
 	resolvedTs := uint64(2000)
-	redoLogCh := make(chan *commonEvent.RedoDMLEvent, 1024)
-	ddlEventCh := make(chan *commonEvent.RedoDDLEvent, 1024)
+	redoLogCh := make(chan *event.RedoDMLEvent, 1024)
+	ddlEventCh := make(chan *event.RedoDDLEvent, 1024)
 	createMockReader := func(ctx context.Context, cfg *RedoApplierConfig) (reader.RedoLogReader, error) {
 		return NewMockReader(checkpointTs, resolvedTs, redoLogCh, ddlEventCh), nil
 	}
@@ -632,26 +631,26 @@ func TestApplyBigTxn(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
-		State: timodel.StatePublic,
+		State: model.StatePublic,
 	})
 
-	dmls := make([]*commonEvent.RedoDMLEvent, 0)
+	dmls := make([]*event.RedoDMLEvent, 0)
 	// insert some rows
 	for i := 1; i <= 100; i++ {
-		dml := &commonEvent.RedoDMLEvent{
-			Row: &commonEvent.DMLEventInRedoLog{
+		dml := &event.RedoDMLEvent{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1100,
 				CommitTs: 1200,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(i),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -665,22 +664,22 @@ func TestApplyBigTxn(t *testing.T) {
 	}
 	// update
 	for i := 1; i <= 100; i++ {
-		dml := &commonEvent.RedoDMLEvent{
-			Row: &commonEvent.DMLEventInRedoLog{
+		dml := &event.RedoDMLEvent{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1200,
 				CommitTs: 1300,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(i * 10),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -689,7 +688,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(i),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -703,18 +702,18 @@ func TestApplyBigTxn(t *testing.T) {
 	}
 	// delete and update
 	for i := 1; i <= 50; i++ {
-		dml := &commonEvent.RedoDMLEvent{
-			Row: &commonEvent.DMLEventInRedoLog{
+		dml := &event.RedoDMLEvent{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1300,
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(i * 10),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -727,22 +726,22 @@ func TestApplyBigTxn(t *testing.T) {
 		dmls = append(dmls, dml)
 	}
 	for i := 51; i <= 100; i++ {
-		dml := &commonEvent.RedoDMLEvent{
-			Row: &commonEvent.DMLEventInRedoLog{
+		dml := &event.RedoDMLEvent{
+			Row: &event.DMLEventInRedoLog{
 				StartTs:  1300,
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
-				Columns: []*commonEvent.RedoColumn{
+				Columns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
-				PreColumns: []*commonEvent.RedoColumn{
+				PreColumns: []*event.RedoColumn{
 					{Name: "a", Type: pmysql.TypeLong},
 					{Name: "b", Type: pmysql.TypeString},
 				},
 				IndexColumns: [][]int{{0}},
 			},
-			Columns: []commonEvent.RedoColumnValue{
+			Columns: []event.RedoColumnValue{
 				{
 					Value: int64(i * 100),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -751,7 +750,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Value: []byte(fmt.Sprintf("%d", i*100+1)),
 				},
 			},
-			PreColumns: []commonEvent.RedoColumnValue{
+			PreColumns: []event.RedoColumnValue{
 				{
 					Value: int64(i * 10),
 					Flag:  newFlag(pmysql.PriKeyFlag),
@@ -766,26 +765,26 @@ func TestApplyBigTxn(t *testing.T) {
 	for _, dml := range dmls {
 		redoLogCh <- dml
 	}
-	ddls := []*commonEvent.RedoDDLEvent{
+	ddls := []*event.RedoDDLEvent{
 		{
-			DDL: &commonEvent.DDLEventInRedoLog{
+			DDL: &event.DDLEventInRedoLog{
 				CommitTs: checkpointTs,
 				Query:    "create table checkpoint(id int)",
 			},
 			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 		{
-			DDL: &commonEvent.DDLEventInRedoLog{
+			DDL: &event.DDLEventInRedoLog{
 				CommitTs: resolvedTs,
 				Query:    "create table resolved(id int not null unique key)",
 			},
 			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {

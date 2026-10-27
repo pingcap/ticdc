@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -37,7 +37,7 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
 	nameFieldType.SetFlen(32)
 
-	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+	tableInfo := common.WrapTableInfo("test", &model.TableInfo{
 		ID:       20,
 		Name:     ast.NewCIStr("t"),
 		UpdateTS: 100,
@@ -49,7 +49,7 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 	require.NotNil(t, tableInfo)
 
 	event := commonEvent.NewDMLEvent(
-		commonType.NewDispatcherID(),
+		common.NewDispatcherID(),
 		tableInfo.TableName.TableID,
 		1,
 		2,
@@ -59,7 +59,7 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 	rows.AppendRow(chunk.MutRowFromValues(int64(1), "test").ToRow())
 	rows.AppendRow(chunk.MutRowFromValues(int64(2), "test2").ToRow())
 	event.SetRows(rows)
-	event.RowTypes = []commonType.RowType{commonType.RowTypeInsert, commonType.RowTypeInsert}
+	event.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
 	event.Length = 2
 	event.ApproximateSize = rows.MemoryUsage()
 	event.TableInfoVersion = tableInfo.GetUpdateTS()
@@ -68,7 +68,7 @@ func newInsertEventForTest(t *testing.T) *commonEvent.DMLEvent {
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlackHoleSinkFlushEvents(t *testing.T) {
-	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sink.Run(ctx)
@@ -108,7 +108,7 @@ func TestBlackHoleSinkFlushEvents(t *testing.T) {
 }
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
-	sink, err := New(commonType.NewChangefeedID(commonType.DefaultKeyspaceName), commonType.DefaultKeyspaceID)
+	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName), common.DefaultKeyspaceID)
 	require.NoError(t, err)
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())

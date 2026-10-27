@@ -19,7 +19,7 @@ import (
 	"time"
 
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"

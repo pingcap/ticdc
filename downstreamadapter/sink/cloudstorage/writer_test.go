@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -124,7 +124,7 @@ func TestWriterRun(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		}
-		dmlEvent := &commonEvent.DMLEvent{
+		dmlEvent := &event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
@@ -198,7 +198,7 @@ func TestWriterFlushMarker(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
@@ -262,7 +262,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherA,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
@@ -285,7 +285,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherB,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 101,
 			TableInfo: commonType.WrapTableInfo("test", &model.TableInfo{
 				ID:   101,
@@ -345,7 +345,7 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 	dispatcherID := commonType.NewDispatcherID()
 
-	dmlEvent := &commonEvent.DMLEvent{
+	dmlEvent := &event.DMLEvent{
 		PhysicalTableID: 100,
 		TableInfo:       tableInfo,
 	}
@@ -506,7 +506,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
@@ -726,7 +726,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
@@ -797,7 +797,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		&commonEvent.DMLEvent{
+		&event.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},

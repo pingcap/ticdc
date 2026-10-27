@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	sinkstatistics "github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -38,7 +38,7 @@ type newPulsarDMLProducerFunc func(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
-	statistics *sinkstatistics.Statistics,
+	statistics *statistics.Statistics,
 ) (dmlProducer, error)
 
 type newPulsarDDLProducerFunc func(
@@ -54,7 +54,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *sinkstatistics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -103,7 +103,7 @@ func newPulsarDMLProducer(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
-	statistics *sinkstatistics.Statistics,
+	statistics *statistics.Statistics,
 ) (dmlProducer, error) {
 	producer, err := newDMLProducers(changefeedID, comp, failpointCh, statistics)
 	if err != nil {
@@ -137,7 +137,7 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *sinkstatistics.Statistics
+		stats       *statistics.Statistics
 	)
 	defer func() {
 		if err != nil {
@@ -147,16 +147,16 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
-			if statistics != nil {
-				statistics.Close()
+			if stats != nil {
+				stats.Close()
 			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = sinkstatistics.New(changefeedID, keyspaceID)
-	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, statistics)
+	stats = statistics.New(changefeedID, keyspaceID)
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, stats)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func newWithComponent(
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stats,
 		isNormal:      atomic.NewBool(true),
 		ctx:           ctx,
 	}, nil

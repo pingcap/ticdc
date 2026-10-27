@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -129,7 +129,7 @@ func TestKafkaSinkRunReturnsAsyncProducerError(t *testing.T) {
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -138,33 +138,33 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.NotNil(t, job)
 
 	var count atomic.Int64
-	ddlEvent := &commonEvent.DDLEvent{
+	ddlEvent := &event.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 1,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
 	}
 
-	ddlEvent2 := &commonEvent.DDLEvent{
+	ddlEvent2 := &event.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
@@ -218,7 +218,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 }
 
 func TestKafkaSinkWriteGateBlocksDMLSend(t *testing.T) {
-	eventHelper := commonEvent.NewEventTestHelper(t)
+	eventHelper := event.NewEventTestHelper(t)
 	defer eventHelper.Close()
 	eventHelper.Tk().MustExec("use test")
 	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key)"))
@@ -367,7 +367,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink.Close()
 		require.Equal(t, int64(5), closeCount.Load())
 		require.False(t, kafkaSink.IsNormal())
-		kafkaSink.AddDMLEvent(&commonEvent.DMLEvent{})
+		kafkaSink.AddDMLEvent(&event.DMLEvent{})
 		require.Zero(t, kafkaSink.eventChan.Len())
 
 		_, ok, err := kafkaSink.eventChan.GetWithContext(t.Context())
@@ -380,7 +380,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 }
 
 func TestKafkaSinkDML(t *testing.T) {
-	eventHelper := commonEvent.NewEventTestHelper(t)
+	eventHelper := event.NewEventTestHelper(t)
 	defer eventHelper.Close()
 	eventHelper.Tk().MustExec("use test")
 	require.NotNil(t, eventHelper.DDL2Job("create table t (id int primary key, name varchar(32))"))
@@ -474,7 +474,7 @@ func TestKafkaSinkDML(t *testing.T) {
 }
 
 func TestKafkaSinkDDL(t *testing.T) {
-	ddlEvent := &commonEvent.DDLEvent{
+	ddlEvent := &event.DDLEvent{
 		Type:       byte(model.ActionCreateTable),
 		SchemaName: "test",
 		TableName:  "t",
@@ -532,7 +532,7 @@ func TestKafkaSinkDDL(t *testing.T) {
 	t.Run("nil encoded message", func(t *testing.T) {
 		kafkaSink, _, _, _ := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolDebezium, &config.SinkConfig{})
-		unsupportedDDL := &commonEvent.DDLEvent{Type: byte(model.ActionNone), Query: "unsupported"}
+		unsupportedDDL := &event.DDLEvent{Type: byte(model.ActionNone), Query: "unsupported"}
 
 		require.NoError(t, kafkaSink.sendDDLEvent(unsupportedDDL))
 	})
@@ -540,7 +540,7 @@ func TestKafkaSinkDDL(t *testing.T) {
 	t.Run("unsupported block event", func(t *testing.T) {
 		kafkaSink, _, _, _ := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolOpen, &config.SinkConfig{})
-		syncPoint := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 1, 1, 1)
+		syncPoint := event.NewSyncPointEvent(common.NewDispatcherID(), 1, 1, 1)
 
 		require.ErrorIs(t, kafkaSink.WriteBlockEvent(syncPoint), errors.ErrInvalidEventType)
 	})
@@ -569,7 +569,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		}}
 		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolOpen, sinkConfig)
-		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
+		kafkaSink.SetTableSchemaStore(event.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 			{SchemaName: "db2", Tables: []*heartbeatpb.TableInfo{{TableName: "t2"}}},
 		}, common.KafkaSinkType, false))
@@ -602,7 +602,7 @@ func TestKafkaSinkCheckpoint(t *testing.T) {
 		}}
 		kafkaSink, topicManager, _, syncProducer := newKafkaSinkForTest(
 			t, t.Context(), config.ProtocolOpen, sinkConfig)
-		kafkaSink.SetTableSchemaStore(commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
+		kafkaSink.SetTableSchemaStore(event.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
 			{SchemaName: "db1", Tables: []*heartbeatpb.TableInfo{{TableName: "t1"}}},
 		}, common.KafkaSinkType, false))
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()

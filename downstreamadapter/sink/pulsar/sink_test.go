@@ -23,9 +23,9 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -56,8 +56,8 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		ddlProducer:  newMockDDLProducer(),
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
+		eventChan:        chann.NewUnlimitedChannelDefault[*event.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*event.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -81,7 +81,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 
 	var count atomic.Int64
 
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -89,16 +89,16 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
-	ddlEvent := &commonEvent.DDLEvent{
+	ddlEvent := &event.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
@@ -133,11 +133,11 @@ func TestPulsarSinkWriteGateBlocksDDLSend(t *testing.T) {
 	gate := writelease.NewGate()
 	pulsarSink.SetWriteGate(gate)
 
-	ddlEvent := &commonEvent.DDLEvent{
+	ddlEvent := &event.DDLEvent{
 		Query:      "create table t (id int primary key)",
 		FinishedTs: 1,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
 	}
@@ -166,7 +166,7 @@ func TestPulsarSinkBatchConfig(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	ddlProducerCreated := false
 	var err error
 
@@ -196,7 +196,7 @@ func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	var err error
 
 	require.NotPanics(t, func() {
