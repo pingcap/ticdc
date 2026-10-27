@@ -119,7 +119,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewFactory(ctx, options, changefeedID)
+	factory, err := kafka.NewFactory(ctx, options, changefeedID, nil)
 	if err != nil {
 		return err
 	}
@@ -154,17 +154,19 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
+	stats := statistics.New(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, stats)
 	if err != nil {
+		stats.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, stats, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	keyspaceID uint32,
+	stats *statistics.Statistics,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
@@ -173,7 +175,6 @@ func newWithComponents(
 		asyncProducer kafka.AsyncProducer
 		syncProducer  kafka.SyncProducer
 	)
-	statistics := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err == nil {
 			return
@@ -185,10 +186,10 @@ func newWithComponents(
 			asyncProducer.Close()
 		}
 		comp.close()
-		statistics.Close()
+		stats.Close()
 	}()
 
-	asyncProducer, err = comp.factory.AsyncProducer(ctx, statistics)
+	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +207,7 @@ func newWithComponents(
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stats,
 
 		checkpointChan: make(chan uint64, 16),
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
@@ -451,6 +452,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return err
 				}
 				start := time.Now()
+				helper.TrackDMLMessage(message, s.statistics)
 				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
 					return err
 				}

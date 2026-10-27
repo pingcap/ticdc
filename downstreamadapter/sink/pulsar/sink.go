@@ -564,6 +564,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				}
 				start := time.Now()
 				message.SetPartitionKey(future.Key.PartitionKey)
+				helper.TrackDMLMessage(message, s.statistics)
 				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 					return errors.Trace(err)
 				}

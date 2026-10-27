@@ -37,10 +37,8 @@ type saramaAsyncProducer struct {
 }
 
 type messageMetadata struct {
-	callback   func()
-	logInfo    *codecCommon.MessageLogInfo
-	rows       int
-	writeBytes int64
+	callback func()
+	logInfo  *codecCommon.MessageLogInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -106,11 +104,8 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
-					if meta != nil {
-						p.statistics.RecordDMLBatch(meta.rows, meta.writeBytes)
-						if meta.callback != nil {
-							meta.callback()
-						}
+					if meta != nil && meta.callback != nil {
+						meta.callback()
 					}
 				default:
 					log.Error("kafka producer received unknown message metadata type",
@@ -150,10 +145,8 @@ func (p *saramaAsyncProducer) AsyncSend(
 		return errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 	}
 	meta := &messageMetadata{
-		callback:   message.Callback,
-		logInfo:    message.LogInfo,
-		rows:       message.GetRowsCount(),
-		writeBytes: int64(message.Length()),
+		callback: message.Callback,
+		logInfo:  message.LogInfo,
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,

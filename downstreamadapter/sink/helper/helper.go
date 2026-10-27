@@ -17,12 +17,25 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 )
+
+// TrackDMLMessage records a DML batch when the message is successfully delivered.
+func TrackDMLMessage(message *common.Message, stats *statistics.Statistics) {
+	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
+	callback := message.Callback
+	message.Callback = func() {
+		stats.RecordDMLBatch(rows, writeBytes)
+		if callback != nil {
+			callback()
+		}
+	}
+}
 
 // DDLDispatchRule is the dispatch rule for DDL event.
 type DDLDispatchRule int

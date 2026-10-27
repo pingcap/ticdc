@@ -9,7 +9,6 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	statistics "github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	common "github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
@@ -52,18 +51,18 @@ func (mr *MockFactoryMockRecorder) AdminClient(ctx interface{}) *gomock.Call {
 }
 
 // AsyncProducer mocks base method.
-func (m *MockFactory) AsyncProducer(ctx context.Context, statistics *statistics.Statistics) (AsyncProducer, error) {
+func (m *MockFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AsyncProducer", ctx, statistics)
+	ret := m.ctrl.Call(m, "AsyncProducer", ctx)
 	ret0, _ := ret[0].(AsyncProducer)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // AsyncProducer indicates an expected call of AsyncProducer.
-func (mr *MockFactoryMockRecorder) AsyncProducer(ctx, statistics interface{}) *gomock.Call {
+func (mr *MockFactoryMockRecorder) AsyncProducer(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncProducer", reflect.TypeOf((*MockFactory)(nil).AsyncProducer), ctx, statistics)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncProducer", reflect.TypeOf((*MockFactory)(nil).AsyncProducer), ctx)
 }
 
 // Close mocks base method.

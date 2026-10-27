@@ -48,7 +48,7 @@ func TestAsyncSendClosed(t *testing.T) {
 func TestAsyncSendCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	producer := &asyncProducer{statistics: newTestStatistics(t)}
+	producer := &asyncProducer{}
 	require.ErrorIs(t, producer.AsyncSend(ctx, "topic", 0, &codecCommon.Message{}), context.Canceled)
 }
 

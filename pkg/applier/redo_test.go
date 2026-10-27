@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
@@ -95,8 +95,8 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
-func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
-	return commonType.ChangeFeedID{}
+func (br *MockReader) GetChangefeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
 }
 
 // GetVersion implements LogReader.GetVersion
@@ -105,7 +105,7 @@ func (br *MockReader) GetVersion() int {
 }
 
 func newFlag(flag uint) uint64 {
-	var result commonType.ColumnFlagType
+	var result common.ColumnFlagType
 	if flag == pmysql.PriKeyFlag {
 		result.SetIsHandleKey()
 		result.SetIsPrimaryKey()
@@ -121,7 +121,7 @@ func TestApplyRowSpill(t *testing.T) {
 		return &commonEvent.RedoDMLEvent{
 			Row: &commonEvent.DMLEventInRedoLog{
 				StartTs: startTs, CommitTs: commitTs,
-				Table:        &commonType.TableName{Schema: "test", Table: "t", TableID: 42},
+				Table:        &common.TableName{Schema: "test", Table: "t", TableID: 42},
 				Columns:      []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeLonglong}},
 				IndexColumns: [][]int{{0}},
 			},
@@ -170,7 +170,7 @@ func TestApplyRowSpill(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, uint64(120), events[0].CommitTs)
 	require.Equal(t, uint64(115), events[0].StartTs)
-	require.Equal(t, []commonType.RowType{commonType.RowTypeDelete, commonType.RowTypeUpdate, commonType.RowTypeUpdate}, events[0].RowTypes)
+	require.Equal(t, []common.RowType{common.RowTypeDelete, common.RowTypeUpdate, common.RowTypeUpdate}, events[0].RowTypes)
 	require.Equal(t, int32(2), events[0].Length)
 	events[0].PostFlush()
 	require.NoError(t, batch.Ack())
@@ -187,11 +187,11 @@ func TestApplySkippedDropCleansSpill(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
 	t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
 	ap.tableDDLTs[42] = ddlTs{ts: 100}
-	ap.tableDDLTs[commonType.DDLSpanTableID] = ddlTs{ts: 120}
+	ap.tableDDLTs[common.DDLSpanTableID] = ddlTs{ts: 120}
 	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
 		Row: &commonEvent.DMLEventInRedoLog{
 			StartTs: 105, CommitTs: 110,
-			Table: &commonType.TableName{Schema: "test", Table: "t", TableID: 42},
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
 		},
 	}, 100))
 	require.Positive(t, ap.spillStore.PendingBytes())
@@ -218,7 +218,7 @@ func TestConsumeLogsCleansSpillOnCancel(t *testing.T) {
 	require.NoError(t, ap.applyRow(&commonEvent.RedoDMLEvent{
 		Row: &commonEvent.DMLEventInRedoLog{
 			StartTs: 105, CommitTs: 110,
-			Table: &commonType.TableName{Schema: "test", Table: "t", TableID: 42},
+			Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
 		},
 	}, 100))
 	files, err := os.ReadDir(dir)
@@ -242,14 +242,14 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 			require.NoError(t, err)
 			defer db.Close()
-			changefeedID := commonType.NewChangefeedID4Test("default", "test")
+			changefeedID := common.NewChangefeedID4Test("default", "test")
 			mysqlCfg := pkgMysql.New()
 			// Recovery queries remain enabled in the applier. Metadata writes are
 			// exercised explicitly below; only reapplying the unfinished ALTER
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+			stat := statistics.New(changefeedID, common.DefaultKeyspaceID)
 			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{
@@ -257,7 +257,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 				Query: "ALTER TABLE test.t DROP COLUMN id", FinishedTs: 120,
 				BlockedTables: &commonEvent.InfluencedTables{
 					InfluenceType: commonEvent.InfluenceTypeNormal,
-					TableIDs:      []int64{42, commonType.DDLSpanTableID},
+					TableIDs:      []int64{42, common.DDLSpanTableID},
 				},
 				NeedDroppedTables: &commonEvent.InfluencedTables{
 					InfluenceType: commonEvent.InfluenceTypeNormal, TableIDs: []int64{42},
@@ -279,7 +279,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 				mock.ExpectCommit()
 				require.NoError(t, metadataWriter.SendDDLTs(ddl))
 			}
-			for _, tableID := range []int64{42, commonType.DDLSpanTableID} {
+			for _, tableID := range []int64{42, common.DDLSpanTableID} {
 				query := fmt.Sprintf("SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 "+
 					"WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'default/test', %d), ('default', 'default/test', -1))", tableID)
 				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
@@ -295,14 +295,14 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 				mock.ExpectCommit()
 			}
 
-			var keyFlag commonType.ColumnFlagType
+			var keyFlag common.ColumnFlagType
 			keyFlag.SetIsHandleKey()
 			keyFlag.SetIsUniqueKey()
 			rows := make(chan *commonEvent.RedoDMLEvent, 1)
 			rows <- &commonEvent.RedoDMLEvent{
 				Row: &commonEvent.DMLEventInRedoLog{
 					StartTs: 105, CommitTs: 110,
-					Table: &commonType.TableName{Schema: "test", Table: "t", TableID: 42},
+					Table: &common.TableName{Schema: "test", Table: "t", TableID: 42},
 					Columns: []*commonEvent.RedoColumn{
 						{Name: "id", Type: pmysql.TypeLonglong}, {Name: "v", Type: pmysql.TypeLong},
 					},
@@ -313,7 +313,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			close(rows)
 			ddls := make(chan *commonEvent.RedoDDLEvent, 1)
 			ddls <- &commonEvent.RedoDDLEvent{
-				Type: ddl.Type, TableName: commonType.TableName{Schema: "test", Table: "t", TableID: 42},
+				Type: ddl.Type, TableName: common.TableName{Schema: "test", Table: "t", TableID: 42},
 				DDL: &commonEvent.DDLEventInRedoLog{
 					CommitTs: ddl.FinishedTs, Query: ddl.Query,
 					Columns:       []*commonEvent.ColumnInfo{{Name: "v", Type: pmysql.TypeLong}},
@@ -324,7 +324,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{Dir: t.TempDir()})
 			ap.rd = NewMockReader(100, 130, rows, ddls)
 			ap.updateSplitter = newUpdateEventSplitter(ap.rd, ap.cfg.Dir)
-			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false, false, time.Second, commonType.DefaultKeyspaceID)
+			ap.mysqlSink = dmysql.NewMySQLSink(ctx, changefeedID, mysqlCfg, db, false, false, time.Second, common.DefaultKeyspaceID)
 			defer ap.mysqlSink.Close()
 			require.True(t, ap.needRecoveryInfo)
 			require.ErrorIs(t, ap.consumeLogs(ctx), errApplyFinished)
@@ -360,7 +360,7 @@ func TestApply(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
 		State: model.StatePublic,
 	})
@@ -563,7 +563,7 @@ func TestApply(t *testing.T) {
 				CommitTs: checkpointTs,
 				Query:    "create table checkpoint(id int)",
 			},
-			TableName: commonType.TableName{
+			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
 			Type: byte(model.ActionCreateTable),
@@ -573,7 +573,7 @@ func TestApply(t *testing.T) {
 				CommitTs: resolvedTs,
 				Query:    "create table resolved(id int not null unique key)",
 			},
-			TableName: commonType.TableName{
+			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
 			Type: byte(model.ActionCreateTable),
@@ -596,7 +596,7 @@ func TestApply(t *testing.T) {
 	ap := NewRedoApplier(applyCfg)
 	// use mock db init sink
 	cfg := &config.ChangefeedConfig{
-		ChangefeedID: commonType.NewChangefeedID4Test(commonType.DefaultKeyspace.Name, "test"),
+		ChangefeedID: common.NewChangefeedID4Test(common.DefaultKeyspace.Name, "test"),
 		SinkURI:      applyCfg.SinkURI,
 		SinkConfig:   config.GetDefaultReplicaConfig().Sink,
 	}
@@ -604,7 +604,7 @@ func TestApply(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, commonType.DefaultKeyspaceID)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -631,7 +631,7 @@ func TestApplyBigTxn(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
 		State: model.StatePublic,
 	})
@@ -771,7 +771,7 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: checkpointTs,
 				Query:    "create table checkpoint(id int)",
 			},
-			TableName: commonType.TableName{
+			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
 			Type: byte(model.ActionCreateTable),
@@ -781,7 +781,7 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: resolvedTs,
 				Query:    "create table resolved(id int not null unique key)",
 			},
-			TableName: commonType.TableName{
+			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
 			Type: byte(model.ActionCreateTable),
@@ -804,7 +804,7 @@ func TestApplyBigTxn(t *testing.T) {
 	ap := NewRedoApplier(applyCfg)
 	// use mock db init sink
 	cfg := &config.ChangefeedConfig{
-		ChangefeedID: commonType.NewChangefeedID4Test(commonType.DefaultKeyspace.Name, "test"),
+		ChangefeedID: common.NewChangefeedID4Test(common.DefaultKeyspace.Name, "test"),
 		SinkURI:      applyCfg.SinkURI,
 		SinkConfig:   config.GetDefaultReplicaConfig().Sink,
 	}
@@ -812,7 +812,7 @@ func TestApplyBigTxn(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, commonType.DefaultKeyspaceID)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second, common.DefaultKeyspaceID)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)

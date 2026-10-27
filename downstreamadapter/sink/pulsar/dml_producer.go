@@ -165,7 +165,6 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// if for stress test record , add count to message callback function
 
-	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
 	producer.SendAsync(ctx, data,
 		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
@@ -191,7 +190,6 @@ func (p *dmlProducers) asyncSendMessage(
 				}
 				return
 			}
-			p.statistics.RecordDMLBatch(rows, writeBytes)
 			if message.Callback != nil {
 				message.Callback()
 				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())

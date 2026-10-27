@@ -65,14 +65,7 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 
 	callback := message.Callback
 	logInfo := message.LogInfo
-	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
 	promise := func(_ *kgo.Record, err error) {
-		switch err {
-		case nil:
-			p.statistics.RecordDMLBatch(rows, writeBytes)
-		default:
-			p.statistics.RecordDMLError()
-		}
 		result := asyncProduceResult{
 			callback: callback,
 			logInfo:  logInfo,
@@ -92,7 +85,6 @@ func (p *asyncProducer) AsyncSend(ctx context.Context, topic string, partition i
 		return context.Cause(ctx)
 	default:
 	}
-	// Once Produce is called, the promise owns delivery accounting, including cancellation.
 	p.client.Produce(ctx, record, promise)
 	return context.Cause(ctx)
 }
@@ -106,6 +98,7 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 			return context.Cause(p.client.Context())
 		case result := <-p.resultCh:
 			if result.err != nil {
+				p.statistics.RecordDMLError()
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.Name()),
