@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/aws/smithy-go"
 	plog "github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
@@ -62,12 +63,54 @@ type fakeDecryptor struct {
 	lastKeyID     string
 	lastCipher    []byte
 	plaintextResp []byte
+	decryptErr    error
 }
 
 func (d *fakeDecryptor) Decrypt(ctx context.Context, keyID string, ciphertext []byte) ([]byte, error) {
 	d.lastKeyID = keyID
 	d.lastCipher = append(d.lastCipher[:0], ciphertext...)
-	return append([]byte(nil), d.plaintextResp...), nil
+	return append([]byte(nil), d.plaintextResp...), d.decryptErr
+}
+
+func TestKMSClientAWSDecryptErrorPreservesCauseAndMasksEndpoint(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.DebugLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
+	cause := errors.New("connection refused")
+	decryptErr := &smithy.OperationError{
+		ServiceID:     "KMS",
+		OperationName: "Decrypt",
+		Err: &url.Error{
+			Op:  "POST",
+			URL: "https://user:password@kms.example.com/kms?region=west&token=decrypt-secret",
+			Err: cause,
+		},
+	}
+	cli, err := NewClient(&config.EncryptionConfig{}, WithAWSDecryptorFactory(
+		func(context.Context, awsClientConfig) (awsDecryptor, error) {
+			return &fakeDecryptor{decryptErr: decryptErr}, nil
+		}))
+	require.NoError(t, err)
+
+	_, err = cli.DecryptMasterKey(context.Background(), nil, "key-id", "aws-kms", "us-west-2",
+		"https://user:password@kms.example.com/kms?token=decrypt-secret")
+	require.Error(t, err)
+	require.ErrorIs(t, err, cause)
+	require.Contains(t, err.Error(), "operation error KMS: Decrypt")
+	require.Contains(t, err.Error(), "connection refused")
+	require.Contains(t, err.Error(), "region=west")
+	require.NotContains(t, err.Error(), "decrypt-secret")
+	require.NotContains(t, err.Error(), "password")
+
+	entries := observedLogs.FilterMessage("failed to decrypt master key via aws kms").All()
+	require.Len(t, entries, 1)
+	logged := fmt.Sprint(entries[0].ContextMap())
+	require.Contains(t, logged, "operation error KMS: Decrypt")
+	require.Contains(t, logged, "connection refused")
+	require.Contains(t, logged, "region=west")
+	require.NotContains(t, logged, "decrypt-secret")
+	require.NotContains(t, logged, "password")
 }
 
 type fakeClosableDecryptor struct {
