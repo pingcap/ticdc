@@ -34,7 +34,7 @@ func TestDecoderReusesTableInfo(t *testing.T) {
 	key := &messageKey{Schema: "test", Table: "t", Ts: 100}
 	cols := map[string]column{"id": {Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("1")}}
 	first := d.queryTableInfo(key, &messageRow{Update: cols})
-	require.Nil(t, d.tables[d.tableCacheKey(key)].columns["id"].Value)
+	require.Nil(t, d.tables[d.tableCacheKeyLocked(key)].columns["id"].Value)
 	cols["id"] = column{Type: mysql.TypeLong, Flag: primaryKeyFlag, Value: json.Number("2")}
 	require.Same(t, first, d.queryTableInfo(key, &messageRow{Update: cols}))
 	// DDL messages can be repeated or arrive out of timestamp order.

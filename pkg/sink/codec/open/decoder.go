@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -56,6 +57,7 @@ type cachedTable struct {
 }
 
 type decoder struct {
+	tableMu sync.Mutex
 	// Keep old intervals available for delayed decoding of buffered messages.
 	tables      map[tableCacheKey]*cachedTable
 	ddlCommitTs map[[2]string][]uint64
@@ -328,14 +330,18 @@ func buildColumns(
 // layout as ordinary messages. Cached columns never retain row values.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
 	schema, table := key.Schema, key.Table
-	cacheKey := b.tableCacheKey(key)
+	b.tableMu.Lock()
+	cacheKey := b.tableCacheKeyLocked(key)
 	cached := b.tables[cacheKey]
+	b.tableMu.Unlock()
 	var holder *common.ColumnsHolder
 	if cached == nil {
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
 		columns = buildColumns(holder, columns)
 		b.queryTableInfo(key, &messageRow{Update: columns})
+		b.tableMu.Lock()
 		cached = b.tables[cacheKey]
+		b.tableMu.Unlock()
 	}
 	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
 	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
@@ -417,7 +423,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 }
 
 // DML at the DDL commit timestamp is flushed before that DDL.
-func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
+func (b *decoder) tableCacheKeyLocked(key *messageKey) tableCacheKey {
 	var version uint64
 	for _, name := range [][2]string{{"", ""}, {key.Schema, ""}, {key.Schema, key.Table}} {
 		timestamps := b.ddlCommitTs[name]
@@ -433,6 +439,8 @@ func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
 	if ts == 0 {
 		return
 	}
+	b.tableMu.Lock()
+	defer b.tableMu.Unlock()
 	if b.ddlCommitTs == nil {
 		b.ddlCommitTs = make(map[[2]string][]uint64)
 	}
@@ -445,11 +453,13 @@ func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	b.tableMu.Lock()
+	defer b.tableMu.Unlock()
 	columns := value.Update
 	if columns == nil {
 		columns = value.Delete
 	}
-	tableKey := b.tableCacheKey(key)
+	tableKey := b.tableCacheKeyLocked(key)
 	if cached := b.tables[tableKey]; cached != nil {
 		id := cached.info.TableName.TableID
 		key.Partition = &id

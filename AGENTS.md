@@ -34,7 +34,7 @@ Read these only when relevant to the task:
 
 ## Project Structure & Module Organization
 
-- `cmd/`: buildable binaries (e.g. `cmd/cdc`, `cmd/kafka-consumer`).
+- `cmd/`: buildable binaries (e.g. `cmd/cdc`, `cmd/consumer`).
 - `downstreamadapter/`: downstream adapters and sinks (e.g. `downstreamadapter/sink/kafka`).
 - `pkg/`: shared libraries (config, codec, sink implementations, errors, utilities).
 - `server/`, `coordinator/`, `maintainer/`, `logservice/`: runtime components and orchestration.

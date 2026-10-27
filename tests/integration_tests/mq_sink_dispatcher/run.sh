@@ -9,7 +9,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 MAX_RETRIES=10
 
-# use kafka-consumer with canal-json decoder to sync data from kafka to mysql
+# use cdc_consumer with canal-json decoder to sync data from kafka to mysql
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ]; then
 		return
@@ -53,7 +53,7 @@ function run() {
 
 	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} $changefeed_id "normal" "null" ""
 
-	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?enable-ddl-ts=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" --config="$CUR/conf/new_changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer.log 2>&1 &
+	run_consumer "$WORK_DIR" "${SINK_URI}&upstream-tidb-dsn=$(printf '%s' "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" | jq -sRr @uri)" "$CUR/conf/new_changefeed.toml"
 
 	run_sql "INSERT INTO dispatcher.index values (2, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO dispatcher.index values (3, 4);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
