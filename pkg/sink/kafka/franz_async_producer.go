@@ -98,7 +98,9 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 			return context.Cause(p.client.Context())
 		case result := <-p.resultCh:
 			if result.err != nil {
-				p.statistics.RecordDMLError()
+				if p.statistics != nil {
+					p.statistics.RecordDMLError()
+				}
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.Name()),

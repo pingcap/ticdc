@@ -138,14 +138,14 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := statistics.New(changefeedID, keyspaceID)
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
-			statistics.Close()
+			stats.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, stats, columnSelectors)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func New(
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
+		statistics:               stats,
 		isNormal:                 atomic.NewBool(true),
 
 		ctx: ctx,

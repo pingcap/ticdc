@@ -60,10 +60,10 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", statistics, spoolBuffer)
+		cfg, ".json", stats, spoolBuffer)
 	return d
 }
 
@@ -480,11 +480,11 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tidbTableInfo := &model.TableInfo{
 		ID:   100,
@@ -702,11 +702,11 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
-	t.Cleanup(statistics.Close)
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+	t.Cleanup(stats.Close)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
 		ID:   100,
@@ -774,10 +774,10 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
 		ID:   100,

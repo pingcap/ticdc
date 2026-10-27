@@ -65,7 +65,7 @@ func newDMLWriters(
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 	columnSelector *columnselector.ColumnSelectors,
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
@@ -90,12 +90,12 @@ func newDMLWriters(
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spool)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, stats, spool)
 	}
 
 	return &dmlWriters{
 		changefeedID:   changefeedID,
-		statistics:     statistics,
+		statistics:     stats,
 		msgCh:          messageCh,
 		encodeGroup:    encoderGroup,
 		spool:          spool,

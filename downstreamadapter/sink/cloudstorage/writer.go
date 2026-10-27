@@ -81,7 +81,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (
@@ -95,7 +95,7 @@ func newWriter(
 		config:            config,
 		spool:             spoolBuffer,
 		flushCh:           make(chan flushTask, 64),
-		statistics:        statistics,
+		statistics:        stats,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
 		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),

@@ -63,8 +63,8 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
@@ -86,8 +86,8 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := statistics.New(changefeedID, common.DefaultKeyspaceID)
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 
 	if kerneltype.IsNextGen() {

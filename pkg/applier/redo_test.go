@@ -249,8 +249,8 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := statistics.New(changefeedID, common.DefaultKeyspaceID)
-			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
+			stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stats, nil)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{
 				Type: byte(model.ActionDropColumn), SchemaName: "test", TableName: "t",

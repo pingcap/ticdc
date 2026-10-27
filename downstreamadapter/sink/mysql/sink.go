@@ -196,7 +196,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := statistics.New(changefeedID, keyspaceID)
+	stats := statistics.New(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -221,7 +221,7 @@ func newMySQLSinkWithDBs(
 		controlDB:      controlDB,
 		controlAsyncDB: controlAsyncDB,
 		dmlWriter:      make([]*mysql.Writer, cfg.WorkerCount),
-		statistics:     stat,
+		statistics:     stats,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
 			causality.TxnCacheOption{
 				Count:         cfg.WorkerCount,
@@ -237,9 +237,9 @@ func newMySQLSinkWithDBs(
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stats, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stats, nil)
 	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
 	if enableActiveActive {
 		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)

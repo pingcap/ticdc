@@ -27,21 +27,21 @@ func New(
 	changefeed common.ChangeFeedID,
 	keyspaceID uint32,
 ) *Statistics {
-	statistics := &Statistics{
+	stats := &Statistics{
 		changefeedID: changefeed,
 		keyspaceID:   strconv.FormatUint(uint64(keyspaceID), 10),
 	}
 
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
-	statistics.metricExecDDLHis = execDDLHistogram.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecDDLRunningCnt = execDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecBatchHis = execBatchHistogram.WithLabelValues(keyspace, changefeedID, statistics.keyspaceID)
-	statistics.metricExecBatchBytesHis = execBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID)
-	statistics.metricExecErrCntForDDL = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
-	statistics.metricExecErrCntForDML = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
+	stats.metricExecDDLHis = execDDLHistogram.WithLabelValues(keyspace, changefeedID)
+	stats.metricExecDDLRunningCnt = execDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
+	stats.metricExecBatchHis = execBatchHistogram.WithLabelValues(keyspace, changefeedID, stats.keyspaceID)
+	stats.metricExecBatchBytesHis = execBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID)
+	stats.metricExecErrCntForDDL = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "ddl")
+	stats.metricExecErrCntForDML = executionErrorCounter.WithLabelValues(keyspace, changefeedID, "dml")
 
-	return statistics
+	return stats
 }
 
 // Statistics maintains some status and metrics of the Sink

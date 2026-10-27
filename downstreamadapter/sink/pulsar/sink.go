@@ -38,7 +38,7 @@ type newPulsarDMLProducerFunc func(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 ) (dmlProducer, error)
 
 type newPulsarDDLProducerFunc func(
@@ -103,9 +103,9 @@ func newPulsarDMLProducer(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 ) (dmlProducer, error) {
-	producer, err := newDMLProducers(changefeedID, comp, failpointCh, statistics)
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh, stats)
 	if err != nil {
 		return nil, err
 	}

@@ -74,7 +74,7 @@ func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("keyspace", changefeedID.Keyspace()),
@@ -106,7 +106,7 @@ func newDMLProducers(
 
 	p := &dmlProducers{
 		changefeedID: changefeedID,
-		statistics:   statistics,
+		statistics:   stats,
 		comp:         comp,
 		producers:    producers,
 		closed:       false,

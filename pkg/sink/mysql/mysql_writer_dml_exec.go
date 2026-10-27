@@ -101,7 +101,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			}
 		}
 	}
-	return retry.Do(w.ctx, func() error {
+	err := retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
@@ -126,7 +126,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 
 		err := tryExec()
 		if err != nil {
-			w.statistics.RecordDMLError()
 			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
 		return nil
@@ -134,6 +133,10 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
+	if err != nil {
+		w.statistics.RecordDMLError()
+	}
+	return err
 }
 
 // sequenceExecute runs each SQL sequentially inside a transaction.

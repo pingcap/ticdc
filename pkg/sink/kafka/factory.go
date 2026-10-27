@@ -22,6 +22,7 @@ import (
 )
 
 // NewFactory selects the Kafka client for one changefeed without automatic fallback.
+// stats may be nil for callers that only perform admin operations, such as config verification.
 func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stats *statistics.Statistics) (Factory, error) {
 	if o.Client == KafkaClientSarama {
 		return newSaramaFactory(ctx, o, changefeedID, stats)

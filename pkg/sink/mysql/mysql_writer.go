@@ -108,7 +108,7 @@ func NewWriter(
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
-	statistics *statistics.Statistics,
+	stats *statistics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	writerCtx, cancel := context.WithCancel(ctx)
@@ -123,7 +123,7 @@ func NewWriter(
 		lastCleanSyncPointTime:         time.Now(),
 		ddlTsTableInit:                 false,
 		stmtCache:                      cfg.stmtCache,
-		statistics:                     statistics,
+		statistics:                     stats,
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
 		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
