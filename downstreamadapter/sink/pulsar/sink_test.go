@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/writelease"
@@ -56,8 +56,8 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		ddlProducer:  newMockDDLProducer(),
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        chann.NewUnlimitedChannelDefault[*event.DMLEvent](),
-		rowChan:          chann.NewUnlimitedChannelDefault[*event.MQRowEvent](),
+		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -81,7 +81,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 
 	var count atomic.Int64
 
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -89,16 +89,16 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
-	ddlEvent := &event.DDLEvent{
+	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,
-		BlockedTables: &event.InfluencedTables{
-			InfluenceType: event.InfluenceTypeNormal,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
@@ -133,11 +133,11 @@ func TestPulsarSinkWriteGateBlocksDDLSend(t *testing.T) {
 	gate := writelease.NewGate()
 	pulsarSink.SetWriteGate(gate)
 
-	ddlEvent := &event.DDLEvent{
+	ddlEvent := &commonEvent.DDLEvent{
 		Query:      "create table t (id int primary key)",
 		FinishedTs: 1,
-		BlockedTables: &event.InfluencedTables{
-			InfluenceType: event.InfluenceTypeNormal,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
 	}
