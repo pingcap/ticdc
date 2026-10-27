@@ -15,6 +15,7 @@ package middleware
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -87,6 +88,13 @@ func LogMiddleware() gin.HandlerFunc {
 		if err != nil {
 			stdErr = err.Err
 		}
+		errorCodeField, errorTypeField := zap.Skip(), zap.Skip()
+		if stdErr != nil {
+			if code, ok := errors.RFCCode(stdErr); ok {
+				errorCodeField = zap.String("errorCode", string(code))
+			}
+			errorTypeField = zap.String("errorType", fmt.Sprintf("%T", errors.Cause(stdErr)))
+		}
 		version := c.Request.Header.Get(ClientVersionHeader)
 		log.Info("cdc open api request",
 			zap.Int("status", c.Writer.Status()),
@@ -96,7 +104,8 @@ func LogMiddleware() gin.HandlerFunc {
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()), zap.String("client-version", version),
 			zap.String("username", user),
-			zap.Bool("hasError", stdErr != nil),
+			errorCodeField,
+			errorTypeField,
 			zap.Duration("duration", cost),
 		)
 	}

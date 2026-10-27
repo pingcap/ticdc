@@ -16,6 +16,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -37,7 +38,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
+func TestLogMiddlewareMasksCredentialQueryAndRecordsErrorDetails(t *testing.T) {
 	originalMode := perrors.RedactLogEnabled.Load()
 	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
 
@@ -48,11 +49,16 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodGet, "/api?token=secret-value&region=west", nil)
+		_ = c.Error(cerrors.ErrAPIInvalidParam.GenWithStackByArgs("error-secret"))
 		LogMiddleware()(c)
 
 		restore()
 		require.Len(t, observed.All(), 1)
-		query := observed.All()[0].ContextMap()["query"].(string)
+		fields := observed.All()[0].ContextMap()
+		require.Equal(t, string(cerrors.ErrAPIInvalidParam.RFCCode()), fields["errorCode"])
+		require.Contains(t, fields["errorType"], "Error")
+		require.NotContains(t, fmt.Sprint(fields), "error-secret")
+		query := fields["query"].(string)
 		require.NotContains(t, query, "secret-value")
 		if mode == perrors.RedactLogDisable {
 			require.Contains(t, query, "region=west")
