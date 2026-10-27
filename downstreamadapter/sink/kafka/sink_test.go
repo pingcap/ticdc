@@ -24,7 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -285,7 +284,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		topicManager := topicmanager.NewMockTopicManager(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
-		factory.EXPECT().AsyncProducer(gomock.Any()).Return(nil, cause)
+		factory.EXPECT().AsyncProducer(gomock.Any(), gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
 			adminClient.EXPECT().Close(),
 			topicManager.EXPECT().Close(),
@@ -295,7 +294,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "async-creation-fails"),
-			statistics.New(common.NewChangefeedID4Test("test", "async-creation-fails"), common.DefaultKeyspaceID),
+			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -312,7 +311,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		asyncProducer := kafka.NewMockAsyncProducer(ctrl)
 		cause := errors.ErrKafkaSendMessage.GenWithStackByArgs()
 
-		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
+		factory.EXPECT().AsyncProducer(gomock.Any(), gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(nil, cause)
 		gomock.InOrder(
 			asyncProducer.EXPECT().Close(),
@@ -324,7 +323,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "sync-creation-fails"),
-			statistics.New(common.NewChangefeedID4Test("test", "sync-creation-fails"), common.DefaultKeyspaceID),
+			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -342,7 +341,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		syncProducer := kafka.NewMockSyncProducer(ctrl)
 		var closeCount atomic.Int64
 
-		factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
+		factory.EXPECT().AsyncProducer(gomock.Any(), gomock.Any()).Return(asyncProducer, nil)
 		factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 		factory.EXPECT().MetricsCollector(adminClient).Return(noopMetricsCollector{})
 		gomock.InOrder(
@@ -356,7 +355,7 @@ func TestKafkaSinkConstructionAndCleanup(t *testing.T) {
 		kafkaSink, err := newWithComponents(
 			t.Context(),
 			common.NewChangefeedID4Test("test", "successful-construction"),
-			statistics.New(common.NewChangefeedID4Test("test", "successful-construction"), common.DefaultKeyspaceID),
+			common.DefaultKeyspaceID,
 			config.ProtocolOpen,
 			components{factory: factory, adminClient: adminClient, topicManager: topicManager},
 		)
@@ -664,12 +663,12 @@ func newKafkaSinkForTest(
 	asyncProducer.EXPECT().Close().AnyTimes()
 	syncProducer.EXPECT().Close().AnyTimes()
 	factory := kafka.NewMockFactory(ctrl)
-	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
+	factory.EXPECT().AsyncProducer(gomock.Any(), gomock.Any()).Return(asyncProducer, nil)
 	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
 	factory.EXPECT().MetricsCollector(nil).Return(noopMetricsCollector{})
 	factory.EXPECT().Close().AnyTimes()
 
-	kafkaSink, err := newWithComponents(ctx, changefeedID, statistics.New(changefeedID, common.DefaultKeyspaceID), protocol, components{
+	kafkaSink, err := newWithComponents(ctx, changefeedID, common.DefaultKeyspaceID, protocol, components{
 		encoderGroup:   encoderGroup,
 		encoder:        encoder,
 		columnSelector: columnSelector,

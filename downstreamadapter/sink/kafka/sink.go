@@ -119,7 +119,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 		return err
 	}
 
-	factory, err := kafka.NewFactory(ctx, options, changefeedID, nil)
+	factory, err := kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return err
 	}
@@ -154,19 +154,17 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	statistics := statistics.New(changefeedID, keyspaceID)
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, statistics)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive)
 	if err != nil {
-		statistics.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, statistics, protocol, comp)
+	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	statistics *statistics.Statistics,
+	keyspaceID uint32,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
@@ -175,6 +173,7 @@ func newWithComponents(
 		asyncProducer kafka.AsyncProducer
 		syncProducer  kafka.SyncProducer
 	)
+	statistics := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err == nil {
 			return
@@ -189,7 +188,7 @@ func newWithComponents(
 		statistics.Close()
 	}()
 
-	asyncProducer, err = comp.factory.AsyncProducer(ctx)
+	asyncProducer, err = comp.factory.AsyncProducer(ctx, statistics)
 	if err != nil {
 		return nil, err
 	}

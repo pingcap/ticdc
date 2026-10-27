@@ -22,11 +22,11 @@ import (
 )
 
 // NewFactory selects the Kafka client for one changefeed without automatic fallback.
-func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, statistics *statistics.Statistics) (Factory, error) {
+func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	if o.Client == KafkaClientSarama {
-		return newSaramaFactory(ctx, o, changefeedID, statistics)
+		return newSaramaFactory(ctx, o, changefeedID)
 	}
-	return newFranzFactory(ctx, o, changefeedID, statistics)
+	return newFranzFactory(ctx, o, changefeedID)
 }
 
 // Factory creates Kafka components for one changefeed.
@@ -37,8 +37,8 @@ type Factory interface {
 	AdminClient(ctx context.Context) (AdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
-	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context) (AsyncProducer, error)
+	// AsyncProducer creates an async producer with caller-owned statistics.
+	AsyncProducer(ctx context.Context, statistics *statistics.Statistics) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient AdminClient) MetricsCollector
 }

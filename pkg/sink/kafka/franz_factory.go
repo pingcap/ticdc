@@ -31,12 +31,11 @@ import (
 
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
-	statistics   *statistics.Statistics
 	client       *kgo.Client
 	closed       atomic.Bool
 }
 
-func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, statistics *statistics.Statistics) (Factory, error) {
+func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	adminOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
@@ -90,7 +89,6 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		zap.Duration("writeTimeout", o.WriteTimeout))
 	return &franzFactory{
 		changefeedID: changefeedID,
-		statistics:   statistics,
 		client:       client,
 	}, nil
 }
@@ -109,10 +107,10 @@ func (f *franzFactory) SyncProducer(context.Context) (SyncProducer, error) {
 	}, nil
 }
 
-func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
+func (f *franzFactory) AsyncProducer(_ context.Context, statistics *statistics.Statistics) (AsyncProducer, error) {
 	return &asyncProducer{
 		client:       f.client,
-		statistics:   f.statistics,
+		statistics:   statistics,
 		changefeedID: f.changefeedID,
 		resultCh:     make(chan asyncProduceResult, 1),
 	}, nil

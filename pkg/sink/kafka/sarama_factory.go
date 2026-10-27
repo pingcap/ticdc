@@ -29,7 +29,6 @@ import (
 
 type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
-	statistics     *statistics.Statistics
 	option         *options
 	metricRegistry metrics.Registry
 }
@@ -37,7 +36,7 @@ type saramaFactory struct {
 func (*saramaFactory) Close() {}
 
 // newSaramaFactory constructs a Factory with sarama implementation.
-func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, statistics *statistics.Statistics) (Factory, error) {
+func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start)
@@ -77,7 +76,6 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 		zap.Duration("writeTimeout", o.WriteTimeout))
 
 	return &saramaFactory{
-		statistics:     statistics,
 		changefeedID:   changefeedID,
 		option:         o,
 		metricRegistry: metrics.NewRegistry(),
@@ -158,7 +156,7 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 
 // AsyncProducer return an Async SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+func (f *saramaFactory) AsyncProducer(ctx context.Context, statistics *statistics.Statistics) (AsyncProducer, error) {
 	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
@@ -177,7 +175,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}
 	return &saramaAsyncProducer{
 		client:       client,
-		statistics:   f.statistics,
+		statistics:   statistics,
 		producer:     p,
 		changefeedID: f.changefeedID,
 		closed:       atomic.NewBool(false),

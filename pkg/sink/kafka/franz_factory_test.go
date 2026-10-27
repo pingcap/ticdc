@@ -36,7 +36,6 @@ func TestSharedClientLifecycle(t *testing.T) {
 		t.Context(),
 		o,
 		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "shared-client"),
-		newTestStatistics(t),
 	)
 	require.NoError(t, err)
 	factory := created.(*franzFactory)
@@ -45,9 +44,11 @@ func TestSharedClientLifecycle(t *testing.T) {
 	adminClient, err := factory.AdminClient(t.Context())
 	require.NoError(t, err)
 
-	asyncClient, err := factory.AsyncProducer(t.Context())
+	statistics := newTestStatistics(t)
+	asyncClient, err := factory.AsyncProducer(t.Context(), statistics)
 	require.NoError(t, err)
 	asyncProducer := asyncClient.(*asyncProducer)
+	require.Same(t, statistics, asyncProducer.statistics)
 
 	syncClient, err := factory.SyncProducer(t.Context())
 	require.NoError(t, err)

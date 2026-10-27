@@ -140,7 +140,7 @@ func TestFactorySelection(t *testing.T) {
 			o.BrokerEndpoints = cluster.ListenAddrs()
 			o.Topic = topic
 
-			factory, err := NewFactory(context.Background(), o, changefeedID, nil)
+			factory, err := NewFactory(context.Background(), o, changefeedID)
 			require.NoError(t, err)
 			require.IsType(t, test.expected, factory)
 
