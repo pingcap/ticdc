@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -31,8 +31,8 @@ func TestRegisterRoutesConfig(t *testing.T) {
 
 	originalConfig := config.GetGlobalServerConfig()
 	defer config.StoreGlobalServerConfig(originalConfig)
-	originalMode := perrors.RedactLogEnabled.Load()
-	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
 
 	testConfig := originalConfig.Clone()
 	testConfig.DataDir = "/tmp/codex-test-data-dir"
@@ -53,9 +53,9 @@ func TestRegisterRoutesConfig(t *testing.T) {
 	router := gin.New()
 	RegisterRoutes(router, nil, prometheus.NewRegistry())
 
-	for _, mode := range []string{perrors.RedactLogDisable, perrors.RedactLogMarker, perrors.RedactLogEnable} {
+	for _, mode := range []string{errors.RedactLogDisable, errors.RedactLogMarker, errors.RedactLogEnable} {
 		t.Run(mode, func(t *testing.T) {
-			perrors.RedactLogEnabled.Store(mode)
+			errors.RedactLogEnabled.Store(mode)
 			req := httptest.NewRequest(http.MethodGet, "/config", nil)
 			resp := httptest.NewRecorder()
 			router.ServeHTTP(resp, req)

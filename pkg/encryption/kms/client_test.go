@@ -15,7 +15,6 @@ package kms
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"testing"
@@ -23,6 +22,7 @@ import (
 	"github.com/aws/smithy-go"
 	plog "github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

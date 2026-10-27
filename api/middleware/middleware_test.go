@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	plog "github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
@@ -38,11 +37,11 @@ import (
 )
 
 func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
-	originalMode := perrors.RedactLogEnabled.Load()
-	t.Cleanup(func() { perrors.RedactLogEnabled.Store(originalMode) })
+	originalMode := cerrors.RedactLogEnabled.Load()
+	t.Cleanup(func() { cerrors.RedactLogEnabled.Store(originalMode) })
 
-	for _, mode := range []string{perrors.RedactLogDisable, perrors.RedactLogMarker, perrors.RedactLogEnable} {
-		perrors.RedactLogEnabled.Store(mode)
+	for _, mode := range []string{cerrors.RedactLogDisable, cerrors.RedactLogMarker, cerrors.RedactLogEnable} {
+		cerrors.RedactLogEnabled.Store(mode)
 		core, observed := observer.New(zapcore.InfoLevel)
 		restore := plog.ReplaceGlobals(zap.New(core), nil)
 
@@ -56,7 +55,7 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		query := observed.All()[0].ContextMap()["query"].(string)
 		require.NotContains(t, query, "secret-value")
 		require.NotContains(t, query, "fragment-secret-value")
-		if mode == perrors.RedactLogDisable {
+		if mode == cerrors.RedactLogDisable {
 			require.Contains(t, query, "region=west")
 			require.Contains(t, query, "keyspace=default")
 			require.Contains(t, query, "#token=xxxxx")

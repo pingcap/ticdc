@@ -14,10 +14,11 @@
 package util
 
 import (
-	stderrors "errors"
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // IsValidIPv6AddressFormatInURI reports whether hostPort is a valid IPv6 address in URI.
@@ -221,22 +222,15 @@ func MaskSensitiveDataInURLError(err error) error {
 		return nil
 	}
 	var urlErr *url.Error
-	if !stderrors.As(err, &urlErr) {
+	if !errors.As(err, &urlErr) {
 		return err
 	}
 	if urlErr.URL == "" {
 		return err
 	}
-	maskedURLMetadata := &url.Error{
-		Op:  urlErr.Op,
-		URL: MaskSensitiveDataInURIForError(urlErr.URL),
-		Err: urlErr.Err,
-	}
-	if err == urlErr {
-		return maskedURLMetadata
-	}
+	maskedURL := MaskSensitiveDataInURIForError(urlErr.URL)
 	return &maskedWrappedURLError{
 		err:     err,
-		message: strings.ReplaceAll(err.Error(), urlErr.URL, maskedURLMetadata.URL),
+		message: strings.ReplaceAll(err.Error(), urlErr.URL, maskedURL),
 	}
 }

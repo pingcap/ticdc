@@ -14,11 +14,11 @@
 package util
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
