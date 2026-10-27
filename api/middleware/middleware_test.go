@@ -47,21 +47,28 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		restore := plog.ReplaceGlobals(zap.New(core), nil)
 
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodGet, "/api?token=secret-value&region=west&keyspace=default", nil)
+		c.Request = httptest.NewRequest(http.MethodGet,
+			"/api?token=secret-value&region=west&keyspace=default#token=fragment-secret-value", nil)
 		LogMiddleware()(c)
 
 		restore()
 		require.Len(t, observed.All(), 1)
 		query := observed.All()[0].ContextMap()["query"].(string)
 		require.NotContains(t, query, "secret-value")
+		require.NotContains(t, query, "fragment-secret-value")
 		if mode == perrors.RedactLogDisable {
 			require.Contains(t, query, "region=west")
 			require.Contains(t, query, "keyspace=default")
+			require.Contains(t, query, "#token=xxxxx")
 		}
 	}
 }
 
 func TestForwardToServer(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
 	// Setup mock target server
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify received headers
@@ -80,7 +87,7 @@ func TestForwardToServer(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 
 	// Create test request
-	req := httptest.NewRequest("GET", "/test-path", nil)
+	req := httptest.NewRequest("GET", "/test-path?region=west#token=forward-secret-value", nil)
 	req.Header.Set("X-Original-Header", "original-value")
 	c.Request = req
 
@@ -91,6 +98,17 @@ func TestForwardToServer(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "test-value", w.Header().Get("X-Test-Header"))
 	require.Equal(t, "test response", w.Body.String())
+	var loggedURL string
+	for _, entry := range observed.All() {
+		if entry.Message == "forwarding request to another server" {
+			loggedURL = entry.ContextMap()["url"].(string)
+			break
+		}
+	}
+	require.NotEmpty(t, loggedURL)
+	require.Contains(t, loggedURL, "region=west")
+	require.NotContains(t, loggedURL, "forward-secret-value")
+	require.Contains(t, loggedURL, "token=xxxxx")
 }
 
 func TestForwardToServerExceedMaxForwardTimes(t *testing.T) {

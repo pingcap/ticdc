@@ -122,6 +122,26 @@ func isSensitiveQueryParameter(name string) bool {
 	return false
 }
 
+// maskSensitiveDataInQueryLikeText handles fragment-like request target text
+// without rewriting ordinary URI fragments.
+func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
+	parts := strings.Split(text, "&")
+	masked := false
+	for i, part := range parts {
+		name, _, hasValue := strings.Cut(part, "=")
+		if !hasValue {
+			continue
+		}
+		decodedName, err := url.QueryUnescape(name)
+		if err != nil || !isSensitiveQueryParameter(decodedName) {
+			continue
+		}
+		parts[i] = name + "=xxxxx"
+		masked = true
+	}
+	return strings.Join(parts, "&"), masked
+}
+
 type maskedWrappedURLError struct {
 	err     error
 	message string
@@ -152,6 +172,9 @@ func ContainsSensitiveDataInURI(uri string) bool {
 			return true
 		}
 	}
+	if _, sensitive := maskSensitiveDataInQueryLikeText(parsed.Fragment); sensitive {
+		return true
+	}
 	return false
 }
 
@@ -168,6 +191,10 @@ func MaskSensitiveDataInURI(uri string) string {
 		}
 	}
 	uriParsed.RawQuery = queries.Encode()
+	if fragment, masked := maskSensitiveDataInQueryLikeText(uriParsed.Fragment); masked {
+		uriParsed.Fragment = fragment
+		uriParsed.RawFragment = ""
+	}
 	return uriParsed.Redacted()
 }
 
