@@ -8,6 +8,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/snapshot/bootstrap"
@@ -25,6 +26,11 @@ func (m *Maintainer) snapshotBeforeBootstrap(responses map[node.ID]*heartbeatpb.
 		return false
 	}
 	cfg := m.info.Config.Snapshot
+	serverCfg := config.GetGlobalServerConfig()
+	artifactDir := cfg.ArtifactDir
+	if cfg.ProviderURL == "" {
+		artifactDir = serverCfg.SnapshotArtifactDir
+	}
 	if err := cfg.ValidateRuntime(); err != nil {
 		m.handleError(err)
 		return false
@@ -34,8 +40,8 @@ func (m *Maintainer) snapshotBeforeBootstrap(responses map[node.ID]*heartbeatpb.
 		m.handleError(protocol.Wrap(err))
 		return false
 	}
-	if len(responses) != 1 || responses[m.selfNode.ID] == nil || uri.Scheme != "kafka" || uri.Query().Get("protocol") != "open-protocol" || cfg.ArtifactDir == "" || cfg.ProviderURL == "" || cfg.BackupURI == "" || len(cfg.BackupDigest) != 64 || m.enableRedo || len(m.info.Config.Filter.EventFilters) > 0 {
-		m.handleError(protocol.Invalid("snapshot demo requires single capture, kafka open-protocol, frozen backup digest, artifact dir, Provider and no redo/event filters"))
+	if len(responses) != 1 || responses[m.selfNode.ID] == nil || uri.Scheme != "kafka" || uri.Query().Get("protocol") != "open-protocol" || artifactDir == "" || (cfg.ProviderURL == "" && serverCfg.SnapshotCSEBinary == "") || cfg.BackupURI == "" || len(cfg.BackupDigest) != 64 || m.enableRedo || len(m.info.Config.Filter.EventFilters) > 0 {
+		m.handleError(protocol.Invalid("snapshot requires one capture, kafka open-protocol, frozen backup digest, artifact directory, CSE binary, and no redo/event filters"))
 		return false
 	}
 	options := kafka.NewOptions()
@@ -57,7 +63,7 @@ func (m *Maintainer) snapshotBeforeBootstrap(responses map[node.ID]*heartbeatpb.
 		m.handleError(protocol.Invalid("capture snapshot capability unavailable"))
 		return false
 	}
-	controller := bootstrap.Controller{ID: m.changefeedID, Epoch: m.info.Epoch, TS: m.info.StartTs, Keyspace: m.controller.keyspaceMeta.ID, Config: cfg, Repository: repo, Capture: capture, Freeze: func() (bootstrap.SchemaBundle, []protocol.Span, error) {
+	controller := bootstrap.Controller{ID: m.changefeedID, Epoch: m.info.Epoch, TS: m.info.StartTs, Keyspace: m.controller.keyspaceMeta.ID, Config: cfg, ArtifactDir: artifactDir, CSEBinary: serverCfg.SnapshotCSEBinary, ExportWorkers: serverCfg.SnapshotExportWorkers, MinFreeBytes: serverCfg.SnapshotMinFreeBytes, Repository: repo, Capture: capture, Freeze: func() (bootstrap.SchemaBundle, []protocol.Span, error) {
 		bundle := bootstrap.SchemaBundle{SnapshotTS: m.info.StartTs}
 		tables, err := m.controller.loadTables(m.info.StartTs)
 		if err != nil {

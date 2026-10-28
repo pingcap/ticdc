@@ -9,9 +9,12 @@ parser.add_argument("result")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", default="4400")
 parser.add_argument("--user", default="root")
+parser.add_argument("--database", default="snapshot_demo")
 args = parser.parse_args()
+if not args.database.replace("_", "").isalnum():
+    raise SystemExit("invalid database")
 result = json.load(open(args.result))
-sql = "SELECT JSON_OBJECT('id',id,'balance',balance,'note',note,'revision',revision) FROM snapshot_demo.accounts ORDER BY id"
+sql = "SELECT JSON_OBJECT('id',id,'balance',balance,'note',note,'revision',revision) FROM "+args.database+".accounts ORDER BY id"
 data = subprocess.check_output(["mysql", "--batch", "--raw", "--skip-column-names", "-h"+args.host, "-P"+args.port, "-u"+args.user, "-e", sql], text=True)
 expected = {str(row["id"]): row for row in map(json.loads, data.splitlines())}
 assert result["final_rows"] == expected, "Kafka replay differs from SQL rows"

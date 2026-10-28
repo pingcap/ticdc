@@ -6,13 +6,73 @@ It uses one TiCDC capture, Kafka open protocol, and a shared local artifact
 directory. Snapshot rows are mounted with the schema at `B` and enter the same
 capture-owned Kafka sink as incremental rows.
 
+## Embedded local profile (October 2026)
+
+The default deployment for the October design runs the export controller inside
+TiCDC. No `snapshot-provider` process or Provider HTTP endpoint is needed.
+`pkg/snapshot/provider` is the local CSE Runner; the standalone HTTP adapter
+below remains for the earlier demo.
+
+The capture administrator sets these **server** settings, not the changefeed:
+
+```toml
+newarch = true
+snapshot-cse-binary = "/opt/ticdc/bin/cse-snapshot-wrapper"
+snapshot-artifact-dir = "/var/lib/ticdc/snapshot-artifacts"
+snapshot-export-workers = 16
+snapshot-min-free-bytes = 10737418240
+```
+
+The binary and artifact paths must be absolute. Place the artifact directory on
+a persistent volume accessible after a restart on the same node. The capture
+image must include a CSE CLI version matching the packed-backup format; the
+capture's object-store identity needs read access to the selected backup. The
+server controls the CLI path, so a changefeed cannot execute an arbitrary
+program. `snapshot-export-workers` is limited to 1–32; the free-space check
+pauses new ranges when the artifact filesystem has less than the configured
+available space. Applied chunks are deleted only after their broker-ACK receipt
+is durable. Keep enough volume headroom for already running ranges.
+
+For the large packed backup used in the performance test, the fixed wrapper
+execs the pinned `cse-ctl` with `--file-memory-limit-mib 4096`; the CSE
+default of 512 MiB failed on one large packed shard. This is an image/server
+setting, never a changefeed setting. Size the Pod memory limit for the number
+of concurrent CSE processes and observe their actual RSS. In this lab, the
+wrapper and capture receive `DFS_S3_KEY_ID` and `DFS_S3_SECRET_KEY` from the
+server environment; Cloud should inject scoped credentials from its secret
+mechanism rather than embedding them in changefeed configuration.
+
+A changefeed uses the existing create API/CLI with `[snapshot]` containing
+`backup-uri`, `backup-digest`, `apply-workers`, and `inflight-bytes`; an
+empty `provider-url` selects the embedded Runner. The selected tables remain
+in `[filter]`. This first profile requires one capture and Kafka open protocol.
+The plan, range winners, receipts, and final marker remain on the volume and
+within the normal changefeed status. An exported range does not release the
+incremental barrier: only all durable apply receipts and the final marker do.
+
+For TiDB Cloud, package the version-matched `cdc` and `cse-ctl` in the capture
+image, mount a dedicated persistent volume at the artifact path, grant read
+access to the packed backup, and apply the server settings above. The Cloud
+control plane then creates one changefeed with the backup URI/digest and table
+filter; it does not schedule each range. Pin the active snapshot to the capture
+that can access its volume. A lost node/volume is an explicit failed or blocked
+snapshot, not an automatic cross-node handoff. Shared S3 artifacts and
+distributed task ownership are a later stage.
+
+Build TiCDC with a real semantic release version in ldflags. A bare `go build`
+reports `Version: None` and its CLI rejects changefeed creation. For example:
+
+```sh
+go build -tags=nextgen -ldflags "-X github.com/pingcap/ticdc/pkg/version.ReleaseVersion=v8.5.4 -X github.com/pingcap/ticdc/pkg/version.GitHash=$(git rev-parse HEAD) -X github.com/pingcap/tiflow/pkg/version.ReleaseVersion=v8.5.4" -o bin/cdc ./cmd/cdc
+```
+
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
 | CSE `cse-ctl snapshot` | Plan physical ranges and scan the immutable backup into bounded SnapshotKV chunks; no row decoding or sink |
 | `pkg/snapshot/protocol` | Versioned artifacts, exact coverage checks, chunk decoder, stable row identity |
-| `pkg/snapshot/provider`, `cmd/snapshot-provider` | Independent BR controller/Runner; launch CSE, publish one immutable RangeExport winner, reconcile publication gaps, serve cursor discovery |
+| `pkg/snapshot/provider` | Embedded local BR controller/Runner; launch CSE, publish one immutable RangeExport winner, reconcile publication gaps, serve cursor discovery; `cmd/snapshot-provider` remains an optional HTTP adapter for the earlier demo |
 | `pkg/snapshot/store` | Single-host durable file CAS, immutable objects and paged range tasks |
 | `pkg/snapshot/bootstrap` | Generation, schema freeze, discovery, assignment, receipt and finalization controller |
 | `coordinator/changefeed` | Persist the optional snapshot child **inside the existing ChangeFeedStatus key**, with status/info revision and owner-epoch checks |
@@ -25,7 +85,7 @@ objects are immutable; attempts never overwrite a winner. The final
 `SNAPSHOT_COMMITTED` phase and global marker are one status CAS transaction.
 Normal checkpoint, pause and epoch updates preserve the snapshot child.
 
-## Build
+## Legacy standalone demo build
 
 Use the `codex/snapshot-e2e-demo` worktree in each repository. The CSE worktree
 is based on packed-reader PR #5709 at `ce471b0d203d3e5d3800355e1324a7ed12aa25de`;
@@ -45,7 +105,7 @@ cargo build -p cse-ctl
 cp "${CARGO_TARGET_DIR:-target}/debug/cse-ctl" "$RUN/bin/cse-ctl"
 ```
 
-## Run on 10.2.15.7
+## Legacy standalone installation on 10.2.15.7
 
 The installed run is `/data/nvme0n1/cse-snapshot-demo-20260921`:
 
@@ -76,21 +136,20 @@ python3 tests/integration_tests/native_snapshot/demo.py verify --root "$RUN"
 curl -s 'http://127.0.0.1:18300/api/v2/changefeeds/native-snapshot-demo?keyspace=snap_demo_0921'
 ```
 
-To prepare another fixture, use a **new run directory**, copy/build its binaries,
-and stop the old demo processes before reusing the same service ports. Removing
-old demo changefeeds or choosing a fresh keyspace avoids feeding fixture resets
-into prior validation topics. `--reset-fixture` explicitly drops only the
-`snapshot_demo` database. It does not rebuild the cluster.
+To prepare another embedded fixture, use a **new run directory**, copy/build its
+binaries, and choose a new capture port, cluster ID, feed ID and Kafka topic.
+`--reset-fixture` explicitly drops only the chosen database, not the cluster.
 
 ```sh
-python3 tests/integration_tests/native_snapshot/demo.py stop --root "$OLD_RUN"
 # A Python environment with boto3 is needed only for prepare; credentials are
 # read from the existing CSE config and never put in the manifest or sink URI.
-python3 tests/integration_tests/native_snapshot/demo.py prepare --root "$RUN" --reset-fixture
-python3 tests/integration_tests/native_snapshot/demo.py start --root "$RUN" --cluster-id unique-demo-cluster --provider-workers 1
-python3 tests/integration_tests/native_snapshot/demo.py create --root "$RUN" --name unique-demo-feed --topic unique-demo-topic
-python3 tests/integration_tests/native_snapshot/demo.py wait --root "$RUN" --name unique-demo-feed
-python3 tests/integration_tests/native_snapshot/demo.py verify --root "$RUN" --name unique-demo-feed --topic unique-demo-topic
+export CSE=/opt/ticdc/bin/cse-ctl ARTIFACT=/var/lib/ticdc/snapshot-artifacts
+export SERVER=http://127.0.0.1:18395 ADDR=10.2.15.7:18395
+python3 tests/integration_tests/native_snapshot/demo.py prepare --root "$RUN" --artifact-root "$ARTIFACT" --embedded-provider --cse-binary "$CSE" --database unique_demo --reset-fixture
+python3 tests/integration_tests/native_snapshot/demo.py start --root "$RUN" --artifact-root "$ARTIFACT" --embedded-provider --cse-binary "$CSE" --cluster-id unique-demo-cluster --provider-workers 1 --server "$SERVER" --advertise-addr "$ADDR"
+python3 tests/integration_tests/native_snapshot/demo.py create --root "$RUN" --embedded-provider --name unique-demo-feed --topic unique-demo-topic --server "$SERVER"
+python3 tests/integration_tests/native_snapshot/demo.py wait --root "$RUN" --name unique-demo-feed --server "$SERVER"
+python3 tests/integration_tests/native_snapshot/demo.py verify --root "$RUN" --name unique-demo-feed --topic unique-demo-topic --server "$SERVER" --database unique_demo
 ```
 
 Preparation writes 3,000 accounts and an empty table, takes a lightweight backup,

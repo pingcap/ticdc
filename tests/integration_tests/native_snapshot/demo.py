@@ -17,13 +17,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["prepare", "start", "stop", "create", "wait", "verify"])
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--artifact-root", type=Path, help="persistent snapshot artifact directory")
     parser.add_argument("--keyspace", default="snap_demo_0921")
+    parser.add_argument("--database", default="snapshot_demo")
     parser.add_argument("--pd", default="http://127.0.0.1:2379")
     parser.add_argument("--sql-port", default="4400")
     parser.add_argument("--broker", default="10.2.15.7:9092")
     parser.add_argument("--server", default="http://127.0.0.1:18300")
     parser.add_argument("--provider-workers", type=int, default=1)
     parser.add_argument("--provider", default="http://127.0.0.1:18400")
+    parser.add_argument("--embedded-provider", action="store_true", help="run the CSE export controller inside TiCDC")
     parser.add_argument("--worker", default="http://127.0.0.1:39000")
     parser.add_argument("--name", default="native-snapshot-demo")
     parser.add_argument("--topic", default="native-snapshot-demo-20260921")
@@ -33,7 +36,10 @@ def main():
     parser.add_argument("--advertise-addr", default="10.2.15.7:18300")
     parser.add_argument("--reset-fixture", action="store_true", help="drop only snapshot_demo before seeding")
     args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.database):
+        raise SystemExit("database must be a simple SQL identifier")
     root = args.root.resolve()
+    artifact_root = args.artifact_root.resolve() if args.artifact_root else root / "artifacts"
     root.mkdir(parents=True, exist_ok=True)
     (root / "logs").mkdir(exist_ok=True)
 
@@ -60,11 +66,11 @@ def main():
         if len(args.keyspace) > 20:
             raise SystemExit("TiCDC keyspace names must be at most 20 characters")
         if args.reset_fixture:
-            sql("DROP DATABASE IF EXISTS snapshot_demo")
-        sql('CREATE DATABASE snapshot_demo; CREATE TABLE snapshot_demo.accounts(id BIGINT PRIMARY KEY,balance BIGINT NOT NULL,note VARCHAR(100)); CREATE TABLE snapshot_demo.empty_table(id INT PRIMARY KEY); SET GLOBAL tidb_gc_life_time="24h";')
+            sql("DROP DATABASE IF EXISTS " + args.database)
+        sql('CREATE DATABASE '+args.database+'; CREATE TABLE '+args.database+'.accounts(id BIGINT PRIMARY KEY,balance BIGINT NOT NULL,note VARCHAR(100)); CREATE TABLE '+args.database+'.empty_table(id INT PRIMARY KEY); SET GLOBAL tidb_gc_life_time="24h";')
         for start in range(1, 3001, 500):
             values = ",".join("(%d,%d,'snapshot-%d')" % (i, i*10, i) for i in range(start, start+500))
-            sql("INSERT INTO snapshot_demo.accounts VALUES " + values)
+            sql("INSERT INTO "+args.database+".accounts VALUES " + values)
         backup = http(args.worker+"/api/v1/x/cluster/lightweight_backup", {})
         write("backup.json", backup)
         with (root / "logs/pack.log").open("w") as log:
@@ -81,12 +87,16 @@ def main():
         keyspace = http(args.pd+"/pd/api/v2/keyspaces/"+args.keyspace)
         manifest = {"snapshot_ts": ts, "keyspace_id": keyspace["id"], "backup_uri": "s3://"+path+"?endpoint="+config("s3-endpoint")+"&region=local", "backup_digest": hashlib.sha256(data).hexdigest()}
         write("manifest.json", manifest)
-        sql("USE snapshot_demo; UPDATE accounts SET balance=99999,note='updated-after-B' WHERE id=1; DELETE FROM accounts WHERE id=2; INSERT INTO accounts VALUES(3001,30010,'inserted-after-B'); ALTER TABLE accounts ADD COLUMN revision INT DEFAULT 0; INSERT INTO accounts VALUES(3002,30020,'after-DDL',1);")
+        sql("USE "+args.database+"; UPDATE accounts SET balance=99999,note='updated-after-B' WHERE id=1; DELETE FROM accounts WHERE id=2; INSERT INTO accounts VALUES(3001,30010,'inserted-after-B'); ALTER TABLE accounts ADD COLUMN revision INT DEFAULT 0; INSERT INTO accounts VALUES(3002,30020,'after-DDL',1);")
         # An SQL snapshot TSO taken after all fixture commits bounds the wait.
         target = int(sql("BEGIN; SELECT @@tidb_current_ts; COMMIT;").strip())
         write("target.json", {"checkpoint_ts": target})
-        config_text = '[filter]\nrules=["snapshot_demo.*"]\n[snapshot]\n'
-        for k, v in {"backup-uri": manifest["backup_uri"], "backup-digest": manifest["backup_digest"], "provider-url": args.provider, "artifact-dir": str(root/"artifacts")}.items():
+        config_text = '[filter]\nrules=['+json.dumps(args.database+".*")+']\n[snapshot]\n'
+        snapshot_config = {"backup-uri": manifest["backup_uri"], "backup-digest": manifest["backup_digest"]}
+        if not args.embedded_provider:
+            snapshot_config["provider-url"] = args.provider
+            snapshot_config["artifact-dir"] = str(artifact_root)
+        for k, v in snapshot_config.items():
             config_text += k+"="+json.dumps(v)+"\n"
         (root / "changefeed.toml").write_text(config_text)
         print(json.dumps({"snapshot_ts": ts, "keyspace_id": keyspace["id"], "target_ts": target}))
@@ -97,15 +107,18 @@ def main():
         env.update(DFS_S3_KEY_ID=config("s3-key-id"), DFS_S3_SECRET_KEY=config("s3-secret-key"))
         from urllib.parse import urlsplit
         commands = {
-            "provider": [str(root/"bin/snapshot-provider"), "-root", str(root/"artifacts"), "-cse-binary", args.cse_binary, "-listen", urlsplit(args.provider).netloc, "-workers", str(args.provider_workers)],
+            "provider": [str(root/"bin/snapshot-provider"), "-root", str(artifact_root), "-cse-binary", args.cse_binary, "-listen", urlsplit(args.provider).netloc, "-workers", str(args.provider_workers)],
             "cdc": [str(root/"bin/cdc"), "server", "--pd="+args.pd, "--addr=0.0.0.0:"+str(urlsplit(args.server).port), "--advertise-addr="+args.advertise_addr, "--cluster-id="+args.cluster_id, "--data-dir="+str(root/"cdc-data"), "--log-file="+str(root/"logs/cdc.log"), "--config="+str(root/"cdc.toml")],
         }
+        if args.embedded_provider:
+            commands.pop("provider")
+            commands["cdc"].extend(["--snapshot-cse-binary="+args.cse_binary, "--snapshot-artifact-dir="+str(artifact_root), "--snapshot-export-workers="+str(args.provider_workers)])
         for name, command in commands.items():
             pidfile = root/(name+".pid")
             if pidfile.exists() and Path("/proc/"+pidfile.read_text()+"/cmdline").exists():
                 raise SystemExit(name+" PID still exists; stop before starting")
             with (root/("logs/"+name+"-stdout.log")).open("a") as log:
-                proc = subprocess.Popen(command, env=env if name=="provider" else None, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                proc = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             pidfile.write_text(str(proc.pid))
             print(name, proc.pid)
         for _ in range(300):
@@ -167,7 +180,7 @@ def main():
     elif args.action == "verify":
         output = root/(args.name+"-verification.json")
         subprocess.run([str(root/"bin/snapshot-verify"), "-broker", args.broker, "-topic", args.topic, "-output", str(output), "-spec", http(args.server+"/api/v2/changefeeds/"+args.name+"?keyspace="+args.keyspace)["snapshot"]["spec_ref"]["uri"]], check=True)
-        subprocess.run(["python3", str(Path(__file__).with_name("compare.py")), str(output), "--port", args.sql_port], check=True)
+        subprocess.run(["python3", str(Path(__file__).with_name("compare.py")), str(output), "--port", args.sql_port, "--database", args.database], check=True)
 
 
 if __name__ == "__main__":

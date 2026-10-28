@@ -18,21 +18,29 @@ import (
 )
 
 type Controller struct {
-	ID         common.ChangeFeedID
-	Epoch      uint64
-	TS         uint64
-	Keyspace   uint32
-	Config     *protocol.Config
-	Repository Repository
-	Capture    Capture
-	Freeze     func() (SchemaBundle, []protocol.Span, error)
+	ID            common.ChangeFeedID
+	Epoch         uint64
+	TS            uint64
+	Keyspace      uint32
+	Config        *protocol.Config
+	ArtifactDir   string
+	CSEBinary     string
+	ExportWorkers int
+	MinFreeBytes  int64
+	Repository    Repository
+	Capture       Capture
+	Freeze        func() (SchemaBundle, []protocol.Span, error)
 }
 
 func (c Controller) Run(ctx context.Context) (result error) {
 	if err := c.Config.ValidateRuntime(); err != nil {
 		return err
 	}
-	objects := store.Local{Root: c.Config.ArtifactDir}
+	artifactDir := c.ArtifactDir
+	if artifactDir == "" {
+		artifactDir = c.Config.ArtifactDir
+	}
+	objects := store.Local{Root: artifactDir}
 	dir := filepath.Join(objects.Root, "cdc", c.ID.ID().String())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return protocol.Wrap(err)
@@ -91,7 +99,17 @@ func (c Controller) Run(ctx context.Context) (result error) {
 	if err = protocol.Read(state.SpecRef, &spec); err != nil {
 		return err
 	}
-	client := provider.Client{URL: c.Config.ProviderURL}
+	var client provider.Caller = provider.Client{URL: c.Config.ProviderURL}
+	if c.Config.ProviderURL == "" {
+		if c.CSEBinary == "" {
+			return protocol.Invalid("embedded snapshot export requires a configured CSE binary")
+		}
+		local := provider.New(artifactDir, c.CSEBinary)
+		local.Workers = c.ExportWorkers
+		local.MinFreeBytes = c.MinFreeBytes
+		defer local.Close()
+		client = provider.LocalClient{Server: local}
+	}
 	var job provider.Job
 	if err = client.Call(ctx, "ensure", provider.Request{SpecRef: state.SpecRef}, &job); err != nil {
 		return err
@@ -135,6 +153,11 @@ func (c Controller) Run(ctx context.Context) (result error) {
 	tasks := store.Tasks{Objects: objects, Job: spec.JobID, Digest: job.PlanRef.Digest, Epoch: c.Epoch, Plan: plan}
 	if err = tasks.Init(); err != nil {
 		return err
+	}
+	if c.Config.ProviderURL == "" {
+		if err = cleanupAppliedChunks(artifactDir, spec.JobID, tasks); err != nil {
+			return err
+		}
 	}
 	complete := false
 	for {
@@ -222,7 +245,7 @@ func (c Controller) Run(ctx context.Context) (result error) {
 			return protocol.Invalid("incomplete exact range receipts")
 		}
 	}
-	state.Marker = &protocol.Marker{SnapshotTS: spec.SnapshotTS, SnapshotID: spec.SnapshotID, PlanDigest: state.PlanRef.Digest, OutputFence: "single-capture-all-broker-acks"}
+	state.Marker = &protocol.Marker{SnapshotTS: spec.SnapshotTS, SnapshotID: spec.SnapshotID, OutputFence: "single-capture-all-broker-acks"}
 	state.Phase = "SNAPSHOT_COMMITTED"
 	return save()
 }
@@ -279,9 +302,21 @@ func (c Controller) applyReady(ctx context.Context, tasks store.Tasks, spec prot
 				if err != nil {
 					return err
 				}
+				if c.Config.ProviderURL == "" {
+					if err = removeExportChunks(c.artifactDir(), spec.JobID, ex); err != nil {
+						return err
+					}
+				}
 			}
 			return nil
 		})
 	}
 	return group.Wait()
+}
+
+func (c Controller) artifactDir() string {
+	if c.ArtifactDir != "" {
+		return c.ArtifactDir
+	}
+	return c.Config.ArtifactDir
 }

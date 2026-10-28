@@ -4,6 +4,8 @@ package provider
 import (
 	"context"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,6 +48,8 @@ func TestPublishedExportRecoveredAndCursorFinalTail(t *testing.T) {
 	require.NoError(t, client.Call(context.Background(), "list", Request{JobID: "job", Limit: 1, Cursor: first}, &page))
 	require.True(t, page.Complete)
 	require.Len(t, page.Exports, 1)
+	require.NoError(t, (LocalClient{Server: s}).Call(context.Background(), "list", Request{JobID: "job", Limit: 1, Cursor: first}, &page))
+	require.True(t, page.Complete)
 	var job Job
 	require.NoError(t, client.Call(context.Background(), "ensure", Request{SpecRef: specRef}, &job))
 	require.Equal(t, "SOURCE_COMPLETE", job.Phase)
@@ -53,6 +57,67 @@ func TestPublishedExportRecoveredAndCursorFinalTail(t *testing.T) {
 	other, e := s.Objects.Put("other-spec", spec)
 	require.NoError(t, e)
 	require.Error(t, client.Call(context.Background(), "ensure", Request{SpecRef: other}, &job))
+}
+
+func TestEmbeddedCloseStopsExportWithoutFailingJob(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "started")
+	t.Setenv("SNAPSHOT_TEST_MARKER", marker)
+	binary := filepath.Join(root, "cse-ctl")
+	require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\nprintf started > \"$SNAPSHOT_TEST_MARKER\"\nexec sleep 30\n"), 0o700))
+	s := New(root, binary)
+	spec := protocol.Spec{ProtocolVersion: 1, JobID: "job", SnapshotID: "s", SnapshotTS: 42, SelectedSpans: []protocol.Span{{TableID: 1, Start: []byte("a"), End: []byte("z")}}}
+	ref, err := s.Objects.Put("spec", spec)
+	require.NoError(t, err)
+	var job Job
+	require.NoError(t, (LocalClient{Server: s}).Call(context.Background(), "ensure", Request{SpecRef: ref}, &job))
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	s.Close()
+	_, err = s.Objects.Read(key("job"), &job)
+	require.NoError(t, err)
+	require.Equal(t, "PLANNING", job.Phase)
+}
+
+func TestLocalExportPausesWhenArtifactDiskIsLow(t *testing.T) {
+	s := New(t.TempDir(), "unused")
+	s.MinFreeBytes = 1 << 62
+	_, err := s.Objects.Put(key("job"), Job{Phase: "MATERIALIZING"})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	require.Error(t, s.waitForSpace(ctx, "job"))
+	var job Job
+	_, err = s.Objects.Read(key("job"), &job)
+	require.NoError(t, err)
+	require.Equal(t, "BLOCKED_SPACE", job.Phase)
+}
+
+func TestRetryBatchUsesFreshAttemptsAndStopsOnCancellation(t *testing.T) {
+	attempts := 0
+	want := protocol.ObjectRef{URI: "candidate.json"}
+	got, err := retryBatch(context.Background(), func() (protocol.ObjectRef, error) {
+		attempts++
+		if attempts < 3 {
+			return protocol.ObjectRef{}, protocol.Invalid("temporary CSE failure")
+		}
+		return want, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, 3, attempts)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	attempts = 0
+	_, err = retryBatch(ctx, func() (protocol.ObjectRef, error) {
+		attempts++
+		return protocol.ObjectRef{}, nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, attempts)
 }
 
 func TestMaterializeRangesBoundedAndComplete(t *testing.T) {

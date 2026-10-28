@@ -110,12 +110,11 @@ type State struct {
 type Marker struct {
 	SnapshotTS  uint64 `json:"snapshot_ts"`
 	SnapshotID  string `json:"snapshot_id"`
-	PlanDigest  string `json:"plan_digest"`
 	OutputFence string `json:"output_fence"`
 }
 
-// Config is opt-in. The initial deployment uses one capture and a shared local
-// artifact directory. Provider and capture are independent modules.
+// Config is opt-in. An empty ProviderURL selects the embedded local runner;
+// ArtifactDir and ProviderURL remain for the standalone demo adapter.
 type Config struct {
 	ApplyWorkers  int    `toml:"apply-workers" json:"apply-workers,omitempty"`
 	InflightBytes int64  `toml:"inflight-bytes" json:"inflight-bytes,omitempty"`

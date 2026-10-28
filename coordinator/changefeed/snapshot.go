@@ -56,7 +56,7 @@ func (b *EtcdBackend) SaveSnapshot(ctx context.Context, id common.ChangeFeedID, 
 				return protocol.Invalid("cannot roll back snapshot marker")
 			}
 		}
-		if next.Marker != nil && (next.Phase != "SNAPSHOT_COMMITTED" || next.Marker.PlanDigest != next.PlanRef.Digest || next.Marker.SnapshotTS != next.SnapshotTS) {
+		if next.Marker != nil && (next.Phase != "SNAPSHOT_COMMITTED" || next.PlanRef.URI == "" || next.Marker.SnapshotID != next.SnapshotID || next.Marker.SnapshotTS != next.SnapshotTS) {
 			return protocol.Invalid("marker/phase mismatch")
 		}
 		status.Snapshot = next

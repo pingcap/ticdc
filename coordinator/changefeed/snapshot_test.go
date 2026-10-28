@@ -24,7 +24,7 @@ func TestCheckpointPreservesSnapshotAcrossConflict(t *testing.T) {
 	backend := NewEtcdBackend(cdc)
 	id := common.NewChangeFeedIDWithName("demo", common.DefaultKeyspaceName)
 	first := &config.ChangeFeedStatus{CheckpointTs: 42, Snapshot: &protocol.State{Generation: "g", Phase: "APPLYING"}}
-	marker := &protocol.Marker{SnapshotTS: 42, SnapshotID: "s", PlanDigest: "p"}
+	marker := &protocol.Marker{SnapshotTS: 42, SnapshotID: "s"}
 	second := &config.ChangeFeedStatus{CheckpointTs: 42, Progress: config.ProgressStopping, Snapshot: &protocol.State{Generation: "g", Phase: "SNAPSHOT_COMMITTED", Marker: marker}}
 	gomock.InOrder(cdc.EXPECT().GetChangeFeedStatus(gomock.Any(), id).Return(first, int64(1), nil), raw.EXPECT().Txn(gomock.Any(), gomock.Len(1), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{}, nil), cdc.EXPECT().GetChangeFeedStatus(gomock.Any(), id).Return(second, int64(2), nil), raw.EXPECT().Txn(gomock.Any(), gomock.Len(1), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ []clientv3.Cmp, ops []clientv3.Op, _ []clientv3.Op) (*clientv3.TxnResponse, error) {
 		var s config.ChangeFeedStatus

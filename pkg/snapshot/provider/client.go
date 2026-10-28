@@ -14,6 +14,29 @@ import (
 
 type Client struct{ URL string }
 
+// Caller keeps the snapshot bootstrap independent of whether the Provider is
+// reached over HTTP or embedded in the TiCDC process.
+type Caller interface {
+	Call(context.Context, string, Request, any) error
+}
+
+type LocalClient struct{ Server *Server }
+
+func (c LocalClient) Call(ctx context.Context, method string, req Request, out any) error {
+	if err := ctx.Err(); err != nil {
+		return protocol.Wrap(err)
+	}
+	result, err := c.Server.invoke(method, req)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return protocol.Wrap(err)
+	}
+	return protocol.Wrap(json.Unmarshal(b, out))
+}
+
 func (c Client) Call(ctx context.Context, method string, req Request, out any) error {
 	b, e := json.Marshal(req)
 	if e != nil {

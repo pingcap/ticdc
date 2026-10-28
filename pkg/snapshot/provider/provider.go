@@ -46,11 +46,15 @@ type Request struct {
 type Server struct {
 	Objects store.Local
 	Binary  string
+	// MinFreeBytes pauses new ranges while the artifact filesystem is low on space.
+	MinFreeBytes int64
 	// Workers bounds concurrent local materialize-range processes per job.
 	// Configure before serving requests; values below one retain serial execution.
 	Workers int
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
+	closed  bool
+	workers sync.WaitGroup
 }
 
 func New(root, binary string) *Server {
@@ -122,14 +126,24 @@ func (s *Server) Ensure(ref protocol.ObjectRef) (Job, error) {
 func (s *Server) start(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	if _, ok := s.running[id]; ok {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.running[id] = cancel
+	s.workers.Add(1)
 	go func() {
-		defer func() { cancel(); s.mu.Lock(); delete(s.running, id); s.mu.Unlock() }()
-		if e := s.run(ctx, id); e != nil {
+		defer func() {
+			cancel()
+			s.mu.Lock()
+			delete(s.running, id)
+			s.mu.Unlock()
+			s.workers.Done()
+		}()
+		if e := s.run(ctx, id); e != nil && ctx.Err() == nil {
 			_ = s.update(id, func(j *Job) error {
 				if j.Phase != "CANCELED" {
 					j.Phase = "FAILED"
@@ -139,6 +153,17 @@ func (s *Server) start(id string) {
 			})
 		}
 	}()
+}
+
+// Close stops all local export processes and waits for their work to finish.
+func (s *Server) Close() {
+	s.mu.Lock()
+	s.closed = true
+	for _, cancel := range s.running {
+		cancel()
+	}
+	s.mu.Unlock()
+	s.workers.Wait()
 }
 
 func (s *Server) batch(ctx context.Context, id, command string, task map[string]any) (protocol.ObjectRef, error) {
@@ -213,7 +238,9 @@ func (s *Server) run(ctx context.Context, id string) error {
 		}); e != nil {
 			return e
 		}
-		ref, e := s.batch(ctx, id, "plan", map[string]any{"spec": j.Spec})
+		ref, e := retryBatch(ctx, func() (protocol.ObjectRef, error) {
+			return s.batch(ctx, id, "plan", map[string]any{"spec": j.Spec})
+		})
 		if e != nil {
 			return e
 		}
@@ -316,7 +343,12 @@ func (s *Server) materialize(ctx context.Context, id string, j Job, r protocol.S
 		return e
 	}
 	if v == "" {
-		ref, e := s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 64 << 20})
+		if e = s.waitForSpace(ctx, id); e != nil {
+			return e
+		}
+		ref, e := retryBatch(ctx, func() (protocol.ObjectRef, error) {
+			return s.batch(ctx, id, "materialize-range", map[string]any{"spec": j.Spec, "range": r, "plan_digest": j.PlanRef.Digest, "chunk_bytes": 64 << 20})
+		})
 		if e != nil {
 			return e
 		}
@@ -371,20 +403,82 @@ func (s *Server) materialize(ctx context.Context, id string, j Job, r protocol.S
 	return nil
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != "POST" {
-		http.Error(w, "POST required", 405)
-		return
+// A failed CSE process gets a fresh attempt directory. Published range winners
+// are never retried; callers validate each successful candidate before publish.
+func retryBatch(ctx context.Context, run func() (protocol.ObjectRef, error)) (protocol.ObjectRef, error) {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if e := ctx.Err(); e != nil {
+			return protocol.ObjectRef{}, protocol.Wrap(e)
+		}
+		var ref protocol.ObjectRef
+		ref, err = run()
+		if err == nil {
+			return ref, nil
+		}
+		if attempt == 2 {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return protocol.ObjectRef{}, protocol.Wrap(ctx.Err())
+		case <-timer.C:
+		}
 	}
-	var req Request
-	if e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); e != nil {
-		http.Error(w, "invalid request", 400)
-		return
+	return protocol.ObjectRef{}, err
+}
+
+func (s *Server) waitForSpace(ctx context.Context, id string) error {
+	if s.MinFreeBytes == 0 {
+		return nil
 	}
+	blocked := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return protocol.Wrap(err)
+		}
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(s.Objects.Root, &stat); err != nil {
+			return protocol.Wrap(err)
+		}
+		if int64(stat.Bavail)*int64(stat.Bsize) >= s.MinFreeBytes {
+			if blocked {
+				return s.update(id, func(j *Job) error {
+					if err := activeJob(j); err != nil {
+						return err
+					}
+					j.Phase = "MATERIALIZING"
+					return nil
+				})
+			}
+			return nil
+		}
+		if !blocked {
+			if err := s.update(id, func(j *Job) error {
+				if err := activeJob(j); err != nil {
+					return err
+				}
+				j.Phase = "BLOCKED_SPACE"
+				return nil
+			}); err != nil {
+				return err
+			}
+			blocked = true
+		}
+		select {
+		case <-ctx.Done():
+			return protocol.Wrap(ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (s *Server) invoke(method string, req Request) (any, error) {
 	var out any
 	var err error
-	if r.URL.Path == "/ensure" {
+	if method == "ensure" {
 		out, err = s.Ensure(req.SpecRef)
 	} else if !validID(req.JobID) {
 		err = protocol.Invalid("invalid job ID")
@@ -398,13 +492,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			// A Provider can restart between CDC polls without losing an HTTP
 			// request. Reconcile durable work even when Ensure is not repeated.
-			if (r.URL.Path == "/status" || r.URL.Path == "/list") && j.Phase != "SOURCE_COMPLETE" && j.Phase != "FAILED" && j.Phase != "CANCELED" {
+			if (method == "status" || method == "list") && j.Phase != "SOURCE_COMPLETE" && j.Phase != "FAILED" && j.Phase != "CANCELED" {
 				s.start(req.JobID)
 			}
-			switch r.URL.Path {
-			case "/status":
+			switch method {
+			case "status":
 				out = j
-			case "/list":
+			case "list":
 				var offset int
 				if req.Cursor != "" {
 					b, e := base64.RawURLEncoding.DecodeString(req.Cursor)
@@ -434,7 +528,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				end := min(offset+limit, len(j.Exports))
 				cursor := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s:%d", req.JobID, j.PlanRef.Digest, end)))
 				out = Page{j.Exports[offset:end], cursor, j.Phase == "SOURCE_COMPLETE" && end == len(j.Exports)}
-			case "/cancel":
+			case "cancel":
 				err = s.update(req.JobID, func(j *Job) error { j.Phase = "CANCELED"; return nil })
 				s.mu.Lock()
 				if cancel := s.running[req.JobID]; cancel != nil {
@@ -443,11 +537,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 				out = map[string]bool{"canceled": true}
 			default:
-				http.NotFound(w, r)
-				return
+				err = protocol.Invalid("unknown provider method")
 			}
 		}
 	}
+	return out, err
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != "POST" {
+		http.Error(w, "POST required", 405)
+		return
+	}
+	var req Request
+	if e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); e != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	out, err := s.invoke(strings.TrimPrefix(r.URL.Path, "/"), req)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return

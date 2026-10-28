@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -102,9 +103,11 @@ var defaultServerConfig = &ServerConfig{
 		},
 		InternalErrOutput: "stderr",
 	},
-	DataDir: "",
-	GcTTL:   24 * 60 * 60, // 24H
-	TZ:      "System",
+	DataDir:               "",
+	SnapshotExportWorkers: 1,
+	SnapshotMinFreeBytes:  10 << 30,
+	GcTTL:                 24 * 60 * 60, // 24H
+	TZ:                    "System",
 	// Disabled by default. When enabled in next-gen mode, TiCDC uses
 	// service safepoint v2 instead of GC barriers.
 	EnableLegacySafePoint: false,
@@ -148,6 +151,13 @@ type ServerConfig struct {
 	Log      *LogConfig `toml:"log" json:"log"`
 
 	DataDir string `toml:"data-dir" json:"data-dir"`
+
+	// SnapshotCSEBinary enables the embedded local CSE packed-backup exporter.
+	// It is a server setting, never a changefeed-provided executable path.
+	SnapshotCSEBinary     string `toml:"snapshot-cse-binary" json:"snapshot-cse-binary"`
+	SnapshotArtifactDir   string `toml:"snapshot-artifact-dir" json:"snapshot-artifact-dir"`
+	SnapshotExportWorkers int    `toml:"snapshot-export-workers" json:"snapshot-export-workers"`
+	SnapshotMinFreeBytes  int64  `toml:"snapshot-min-free-bytes" json:"snapshot-min-free-bytes"`
 
 	GcTTL int64  `toml:"gc-ttl" json:"gc-ttl"`
 	TZ    string `toml:"tz" json:"tz"`
@@ -256,6 +266,18 @@ func (c *ServerConfig) Clone() *ServerConfig {
 
 // ValidateAndAdjust validates and adjusts the server configuration
 func (c *ServerConfig) ValidateAndAdjust() error {
+	if c.SnapshotExportWorkers == 0 {
+		c.SnapshotExportWorkers = 1
+	}
+	if c.SnapshotExportWorkers < 1 || c.SnapshotExportWorkers > 32 {
+		return cerror.ErrInvalidServerOption.GenWithStack("snapshot-export-workers must be between 1 and 32")
+	}
+	if c.SnapshotMinFreeBytes < 0 {
+		return cerror.ErrInvalidServerOption.GenWithStack("snapshot-min-free-bytes cannot be negative")
+	}
+	if c.SnapshotCSEBinary != "" && (!filepath.IsAbs(c.SnapshotCSEBinary) || !filepath.IsAbs(c.SnapshotArtifactDir)) {
+		return cerror.ErrInvalidServerOption.GenWithStack("embedded snapshot requires absolute snapshot-cse-binary and snapshot-artifact-dir paths")
+	}
 	if !isValidClusterID(c.ClusterID) {
 		return cerror.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("bad cluster-id"+
 			"please match the pattern \"^[a-zA-Z0-9]+(\\-[a-zA-Z0-9]+)*$\", and not the list of"+
