@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	"github.com/golang/mock/gomock"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -33,14 +34,23 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestMysqlResult(t *testing.T, rowsAffected ...int64) *mysqlmock.MockResult {
+	t.Helper()
+	result := mysqlmock.NewMockResult(gomock.NewController(t))
+	result.EXPECT().AllRowsAffected().Return(rowsAffected)
+	return result
+}
 
 func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
@@ -119,10 +129,13 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2", 3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 3, 0))
 
+	actualRowsAffected := writer.getRowsAffectedCounter("actual", "total")
+	before := testutil.ToFloat64(actualRowsAffected)
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(actualRowsAffected))
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -149,7 +162,7 @@ func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	done := make(chan error, 1)
 	go func() {
@@ -259,7 +272,7 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 	// Second execution should use REPLACE (safe mode) and succeed
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
 	require.NoError(t, err)
@@ -293,7 +306,7 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -806,7 +819,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	// for dml event, it is a replace since we set it's commitTs less than replicatingTs
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	// for ddl job for table t1
 	mock.ExpectBegin()
