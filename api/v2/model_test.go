@@ -133,7 +133,6 @@ func TestReplicaConfigConversion(t *testing.T) {
 			FlushIntervalInMs: util.AddressOf(int64(2000)),
 			Storage:           util.AddressOf("s3://test"),
 			SpoolDiskQuota:    util.AddressOf(int64(2048)),
-			SpoolBaseDir:      util.AddressOf("/tmp/redo-spool"),
 		},
 	}
 
