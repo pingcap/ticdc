@@ -212,9 +212,10 @@ func isLZ4Compressed(data []byte) bool {
 	return bytes.Equal(data[:4], lz4MagicNumber)
 }
 
-func readAllFromBuffer(buf []byte) (logHeap, error) {
+func readAllFromBuffer(buf []byte, fileName string) (logHeap, error) {
 	r := &reader{
-		br: bytes.NewReader(buf),
+		br:       bytes.NewReader(buf),
+		fileName: fileName,
 	}
 	defer r.Close()
 
@@ -251,19 +252,22 @@ func sortAndWriteFile(
 	if err != nil {
 		return cerror.WrapError(cerror.ErrExternalStorageAPI, err)
 	}
-	if len(fileContent) == 0 {
-		log.Warn("download file is empty", zap.String("file", fileName))
-		return nil
-	}
 	// it's lz4 compressed, decompress it
 	if isLZ4Compressed(fileContent) {
 		if fileContent, err = compression.Decode(compression.LZ4, fileContent); err != nil {
 			return err
 		}
 	}
+	if len(fileContent) == 0 {
+		if filepath.Ext(fileName) != redo.TmpEXT {
+			return cerror.WrapError(cerror.ErrRedoFileOp, io.ErrUnexpectedEOF)
+		}
+		log.Warn("download file is empty", zap.String("file", fileName))
+		return nil
+	}
 
 	// sort data
-	h, err := readAllFromBuffer(fileContent)
+	h, err := readAllFromBuffer(fileContent, fileName)
 	if err != nil {
 		return err
 	}
@@ -318,11 +322,15 @@ func shouldOpen(startTs uint64, name, fixedType string) (bool, error) {
 func (r *reader) Read() (*pevent.RedoLog, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	temporary := filepath.Ext(r.fileName) == redo.TmpEXT
 
 	lenField, err := readInt64(r.br)
 	if err != nil {
 		if err == io.EOF {
 			return nil, err
+		}
+		if temporary && cerror.Is(err, io.ErrUnexpectedEOF) {
+			return nil, io.EOF
 		}
 		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
 	}
@@ -331,18 +339,23 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 	data := make([]byte, recBytes+padBytes)
 	_, err = io.ReadFull(r.br, data)
 	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if temporary && (cerror.Is(err, io.EOF) || cerror.Is(err, io.ErrUnexpectedEOF)) {
 			log.Warn("read redo log have unexpected io error",
 				zap.String("fileName", r.fileName),
 				zap.Error(err))
 			return nil, io.EOF
+		}
+		// A complete frame header promises a body. Even zero bytes of body
+		// in a sealed file is truncation, not the normal end of the file.
+		if cerror.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
 		}
 		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
 	}
 
 	redoLog, _, err := codec.UnmarshalRedoLog(data[:recBytes])
 	if err != nil {
-		if r.isTornEntry(data) {
+		if temporary && r.isTornEntry(data) {
 			// just return io.EOF, since if torn write it is the last redoLog entry
 			return nil, io.EOF
 		}

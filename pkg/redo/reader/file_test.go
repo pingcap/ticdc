@@ -15,18 +15,89 @@ package reader
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/pingcap/log"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
+
+func TestReadTruncatedRedoFile(t *testing.T) {
+	remote := t.TempDir()
+	genLogFile(t.Context(), t, remote, redo.RedoRowLogFileType, 11, 12)
+	paths, err := filepath.Glob(filepath.Join(remote, "*.log"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	data, err := os.ReadFile(paths[0])
+	require.NoError(t, err)
+	recBytes, padBytes := decodeFrameSize(int64(binary.LittleEndian.Uint64(data[:8])))
+	lastFrame := frameSizeBytes + int(recBytes+padBytes)
+
+	for _, temporary := range []bool{false, true} {
+		for _, damage := range []string{"empty", "partial header", "missing body", "partial body", "torn body"} {
+			t.Run(fmt.Sprintf("temporary=%t/%s", temporary, damage), func(t *testing.T) {
+				damaged := append([]byte(nil), data...)
+				switch damage {
+				case "empty":
+					damaged = nil
+				case "partial header":
+					damaged = damaged[:lastFrame+4]
+				case "missing body":
+					damaged = damaged[:lastFrame+8]
+				case "partial body":
+					damaged = damaged[:len(damaged)-1]
+				case "torn body":
+					clear(damaged[lastFrame+8:])
+				}
+				name := filepath.Base(paths[0])
+				if temporary {
+					name += redo.TmpEXT
+				}
+				storageDir := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(storageDir, name), damaged, 0o600))
+				uri, err := url.Parse("file://" + storageDir)
+				require.NoError(t, err)
+				rd := &LogReader{
+					cfg:   &LogReaderConfig{Dir: t.TempDir(), URI: *uri, UseExternalStorage: true},
+					meta:  &misc.LogMeta{CheckpointTs: 10, ResolvedTs: 12},
+					rowCh: make(chan *pevent.RedoDMLEvent, 4),
+				}
+				err = rd.runRowReader(t.Context())
+				if !temporary {
+					if damage == "torn body" {
+						require.ErrorIs(t, err, errors.ErrUnmarshalFailed)
+					} else {
+						require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+					}
+					require.NotErrorIs(t, err, io.EOF)
+					return
+				}
+				require.NoError(t, err)
+				var commits []uint64
+				for row := range rd.rowCh {
+					commits = append(commits, row.Row.CommitTs)
+				}
+				if damage == "empty" {
+					require.Empty(t, commits)
+				} else {
+					require.Equal(t, []uint64{12}, commits)
+				}
+			})
+		}
+	}
+}
 
 func TestReaderNewReader(t *testing.T) {
 	_, err := newReaders(context.Background(), nil)
