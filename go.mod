@@ -1,6 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.26.9
+go 1.27.3
 
 // Keep the Go 1.25 default behaviors that Go 1.26 changed:
 //   - urlstrictcolons=0: the sink URI may carry several Kafka broker endpoints
@@ -62,6 +62,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
+<<<<<<< HEAD
 	github.com/pingcap/kvproto v0.0.0-20260803062813-07aa8c6a46fa
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
@@ -70,6 +71,16 @@ require (
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260730162841-dc0024f088cb
 	github.com/pingcap/tiflow v0.0.0-20260731065716-b558e06929bf
 	github.com/prometheus/client_golang v1.23.2
+=======
+	github.com/pingcap/kvproto v0.0.0-20260820070758-623e58e60fa9
+	github.com/pingcap/log v1.1.1-0.20261007233122-0034994d1a22
+	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
+	github.com/pingcap/tidb v1.1.0-beta.0.20260923092734-13103a00793a
+	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260923082834-1869807c5fdb
+	github.com/pingcap/tiflow v0.0.0-20261022140142-d97553f199e6
+	github.com/prometheus/client_golang v1.23.0
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/prometheus/client_model v0.6.2
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9
@@ -80,9 +91,15 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
 	github.com/thanhpk/randstr v1.0.6
+<<<<<<< HEAD
 	github.com/tikv/client-go/v2 v2.0.8-0.20260908025646-0f91f124d321
 	github.com/tikv/pd v1.1.0-beta.0.20260611085009-4ae8cc5777be
 	github.com/tikv/pd/client v0.0.0-20260804033407-85a975a5ca78
+=======
+	github.com/tikv/client-go/v2 v2.0.8-0.20260928031501-8edb23f6c7ee
+	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
+	github.com/tikv/pd/client v0.0.0-20260805103528-afa43111d149
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/tinylib/msgp v1.5.0
 	github.com/twmb/franz-go v1.22.2
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
@@ -115,6 +132,22 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
+<<<<<<< HEAD
+=======
+replace (
+	// Following modules are replaced to use grpc v1.65.0
+	// We can remove these replacements after upgrading grpc to > 1.65
+	cloud.google.com/go/kms => cloud.google.com/go/kms v1.15.8
+	cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.37.0
+	cloud.google.com/go/storage => cloud.google.com/go/storage v1.39.1
+	// Temporary Go 1.27 map ABI support from https://github.com/pingcap/tidb/pull/72081.
+	// Replace both modules with official TiDB versions after upstream support lands.
+	github.com/pingcap/tidb => github.com/lidezhu/tidb v1.1.0-beta.0.20261022085814-a0b7b9c028c4
+	github.com/pingcap/tidb/pkg/parser => github.com/dillon-zheng/tidb/pkg/parser v0.0.0-20261017065457-8b21f5b35742
+	google.golang.org/api => google.golang.org/api v0.170.0
+)
+
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 require (
 	cel.dev/expr v0.25.1 // indirect
 	cloud.google.com/go v0.123.0 // indirect
@@ -141,10 +174,27 @@ require (
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
+<<<<<<< HEAD
 	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1581 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/apache/arrow-go/v18 v18.5.0 // indirect
 	github.com/apache/thrift v0.23.0 // indirect
+=======
+	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
+	github.com/alibabacloud-go/darabonba-openapi/v2 v2.0.11 // indirect
+	github.com/alibabacloud-go/debug v1.0.1 // indirect
+	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
+	github.com/alibabacloud-go/openapi-util v0.1.1 // indirect
+	github.com/alibabacloud-go/sts-20150401/v2 v2.0.4 // indirect
+	github.com/alibabacloud-go/tea v1.3.11 // indirect
+	github.com/alibabacloud-go/tea-utils/v2 v2.0.7 // indirect
+	github.com/alibabacloud-go/tea-xml v1.1.3 // indirect
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.2.3 // indirect
+	github.com/aliyun/credentials-go v1.4.7 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/apache/arrow-go/v18 v18.6.1-0.20260713210906-efc145c067b6 // indirect
+	github.com/apache/thrift v0.24.0 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
@@ -178,6 +228,12 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cheggaaa/pb/v3 v3.0.8 // indirect
 	github.com/cilium/ebpf v0.4.0 // indirect
+<<<<<<< HEAD
+=======
+	github.com/clbanning/mxj v1.8.4 // indirect
+	github.com/clbanning/mxj/v2 v2.7.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/cloudfoundry/gosigar v1.3.6 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
@@ -235,8 +291,15 @@ require (
 	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
+<<<<<<< HEAD
 	github.com/google/flatbuffers v24.3.25+incompatible // indirect
 	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc // indirect
+=======
+	github.com/google/flatbuffers v25.12.19+incompatible // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/google/pprof v0.0.0-20250903194437-c28834ac2320 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
 	github.com/googleapis/gax-go/v2 v2.18.0 // indirect
@@ -284,6 +347,7 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20230326075908-cb1d2100619a // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+<<<<<<< HEAD
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
@@ -291,6 +355,16 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/mtibben/percent v0.2.1 // indirect
+=======
+	github.com/mattn/go-runewidth v0.0.20 // indirect
+	github.com/mitchellh/copystructure v1.0.0 // indirect
+	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/mitchellh/reflectwalk v1.0.1 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/mozillazg/go-httpheader v0.2.1 // indirect
+	github.com/mschoch/smat v0.2.0 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncw/directio v1.0.5 // indirect
 	github.com/ngaut/pools v0.0.0-20180318154953-b7bc8c42aac7 // indirect
@@ -307,7 +381,12 @@ require (
 	github.com/pingcap/check v0.0.0-20211026125417-57bd13f7b5f0 // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
+<<<<<<< HEAD
 	github.com/pingcap/tipb v0.0.0-20260617071407-7c071244534b // indirect
+=======
+	github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf // indirect
+	github.com/pingcap/tipb v0.0.0-20261006155659-59b678398b17 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
@@ -336,9 +415,14 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/spkg/bom v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
+<<<<<<< HEAD
 	github.com/swaggo/files v0.0.0-20210815190702-a29dd2bc99b2 // indirect
 	github.com/swaggo/gin-swagger v1.2.0 // indirect
 	github.com/swaggo/swag v1.16.3 // indirect
+=======
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.142 // indirect
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.74 // indirect
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 	github.com/tiancaiamao/appdash v0.0.0-20181126055449-889f96f722a2 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/btree v1.7.0 // indirect
