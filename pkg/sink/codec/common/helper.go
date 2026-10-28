@@ -321,9 +321,6 @@ func queryRowChecksumAux(
 	return result
 }
 
-<<<<<<< HEAD
-// MustSnapshotQuery query the db by the snapshot read with the given commitTs
-=======
 func queryRowChecksumFromColumns(
 	ctx context.Context, conn *sql.Conn, query string, columns []*model.ColumnInfo,
 ) (checksum uint32, err error) {
@@ -396,9 +393,7 @@ func queryRowChecksumFromColumns(
 	return checksum, errors.WrapError(errors.ErrDecodeFailed, err)
 }
 
-// MustSnapshotQuery queries a snapshot at commitTs. An optional SQL projection
-// replaces SELECT *; callers must build it from trusted, quoted column names.
->>>>>>> 90a0a9aa4 (event: serialize row checksum in dml event (#6343))
+// MustSnapshotQuery query the db by the snapshot read with the given commitTs
 func MustSnapshotQuery(
 	ctx context.Context, db *sql.DB, commitTs uint64, schema, table string, conditions map[string]interface{},
 ) *ColumnsHolder {
