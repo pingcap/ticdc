@@ -19,9 +19,10 @@ import (
 	"time"
 
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -45,6 +46,7 @@ type dmlProducer interface {
 // dmlProducers is used to send messages to pulsar.
 type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
+	statistics   *statistics.Statistics
 	// producers is used to send messages to pulsar.
 	// One topic only use one producer , so we want to have many topics but use less memory,
 	// lru is a good idea to solve this question.
@@ -72,6 +74,7 @@ func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	stats *statistics.Statistics,
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("keyspace", changefeedID.Keyspace()),
@@ -103,6 +106,7 @@ func newDMLProducers(
 
 	p := &dmlProducers{
 		changefeedID: changefeedID,
+		statistics:   stats,
 		comp:         comp,
 		producers:    producers,
 		closed:       false,
@@ -155,6 +159,7 @@ func (p *dmlProducers) asyncSendMessage(
 
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
+		p.statistics.RecordDMLError()
 		return err
 	}
 
@@ -164,6 +169,7 @@ func (p *dmlProducers) asyncSendMessage(
 		func(_ pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
 			if err != nil {
+				p.statistics.RecordDMLError()
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
@@ -182,8 +188,9 @@ func (p *dmlProducers) asyncSendMessage(
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
-			} else if message.Callback != nil {
-				// success
+				return
+			}
+			if message.Callback != nil {
 				message.Callback()
 				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
 			}

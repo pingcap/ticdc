@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package pulsar
 
 import (
 	"sync"
@@ -21,19 +21,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetMQMetricRegistryReturnsSharedRegistryConcurrently(t *testing.T) {
-	restoreMQMetricRegistryForTest(t, nil)
+func TestGetMetricRegistryReturnsSharedRegistryConcurrently(t *testing.T) {
+	restoreMetricRegistryForTest(t, nil)
 
 	const workerCount = 32
 	results := make(chan *prometheus.Registry, workerCount)
 
 	var wg sync.WaitGroup
-	wg.Add(workerCount)
 	for range workerCount {
-		go func() {
-			defer wg.Done()
-			results <- GetMQMetricRegistry()
-		}()
+		wg.Go(func() {
+			results <- getMetricRegistry()
+		})
 	}
 
 	wg.Wait()
@@ -51,24 +49,25 @@ func TestGetMQMetricRegistryReturnsSharedRegistryConcurrently(t *testing.T) {
 	require.Same(t, prometheus.DefaultRegisterer.(*prometheus.Registry), shared)
 }
 
-func TestGetMQMetricRegistryReturnsPreconfiguredRegistry(t *testing.T) {
+func TestGetMetricRegistryReturnsPreconfiguredRegistry(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	restoreMQMetricRegistryForTest(t, registry)
+	restoreMetricRegistryForTest(t, nil)
+	InitMetrics(registry)
 
-	require.Same(t, registry, GetMQMetricRegistry())
+	require.Same(t, registry, getMetricRegistry())
 }
 
-func restoreMQMetricRegistryForTest(t *testing.T, registry *prometheus.Registry) {
+func restoreMetricRegistryForTest(t *testing.T, registry *prometheus.Registry) {
 	t.Helper()
 
-	mqServerRegistryMu.Lock()
-	original := mqServerRegistry
-	mqServerRegistry = registry
-	mqServerRegistryMu.Unlock()
+	metricRegistryMu.Lock()
+	original := metricRegistry
+	metricRegistry = registry
+	metricRegistryMu.Unlock()
 
 	t.Cleanup(func() {
-		mqServerRegistryMu.Lock()
-		mqServerRegistry = original
-		mqServerRegistryMu.Unlock()
+		metricRegistryMu.Lock()
+		metricRegistry = original
+		metricRegistryMu.Unlock()
 	})
 }

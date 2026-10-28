@@ -526,7 +526,7 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	var val uint64
 	switch v := raw.(type) {
 	case uint64:
-		val = (v)
+		val = v
 	case int64:
 		val = uint64(v)
 	}

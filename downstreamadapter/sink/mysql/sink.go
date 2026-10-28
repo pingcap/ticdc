@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -56,7 +57,7 @@ type Sink struct {
 	dmlDB          *sql.DB
 	controlDB      *sql.DB
 	controlAsyncDB *sql.DB
-	statistics     *metrics.Statistics
+	statistics     *statistics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -195,7 +196,7 @@ func newMySQLSinkWithDBs(
 		controlAsyncDB = controlDB
 	}
 
-	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
+	stats := statistics.New(changefeedID, keyspaceID)
 
 	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
@@ -220,7 +221,7 @@ func newMySQLSinkWithDBs(
 		controlDB:      controlDB,
 		controlAsyncDB: controlAsyncDB,
 		dmlWriter:      make([]*mysql.Writer, cfg.WorkerCount),
-		statistics:     stat,
+		statistics:     stats,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
 			causality.TxnCacheOption{
 				Count:         cfg.WorkerCount,
@@ -236,9 +237,9 @@ func newMySQLSinkWithDBs(
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stats, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat, nil)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stats, nil)
 	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
 	if enableActiveActive {
 		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, controlDB, changefeedID, cfg.MaxTxnRow, progressInterval)

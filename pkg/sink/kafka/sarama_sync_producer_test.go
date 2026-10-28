@@ -123,6 +123,7 @@ func TestSyncProducerErrorWrappedOnce(t *testing.T) {
 func TestAsyncProducerErrorWrappedOnce(t *testing.T) {
 	cause := io.ErrClosedPipe
 	producer := &saramaAsyncProducer{
+		statistics:   newTestStatistics(t),
 		changefeedID: common.NewChangeFeedIDWithName("test", "default"),
 	}
 

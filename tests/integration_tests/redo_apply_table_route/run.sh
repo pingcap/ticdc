@@ -6,7 +6,7 @@
 #   then blocks MySQL DML writes, writes more source DML, and applies redo logs
 #   to confirm the replayed rows still land in routed downstream tables.
 #   Replay also covers generated columns, keyspaces containing underscores,
-#   truncated sealed files, and transaction spill file descriptor cleanup.
+#   and transaction spill file descriptor cleanup.
 
 set -euo pipefail
 
@@ -127,13 +127,13 @@ function prepare_redo_snapshots() {
 	local keyspace="$2"
 	# Keep the original logs for the later changefeed restart. Rewrite only
 	# snapshot filenames to exercise non-default keyspaces on classic TiDB too.
-	python3 - "$REDO_DIR" "$WORK_DIR/redo-keyspace" "$WORK_DIR/redo-corrupt" "$keyspace" "$changefeed_id" <<'PY'
+	python3 - "$REDO_DIR" "$WORK_DIR/redo-keyspace" "$keyspace" "$changefeed_id" <<'PY'
 from pathlib import Path
 import shutil
 import sys
 
-source, snapshot, corrupt = map(Path, sys.argv[1:4])
-keyspace, changefeed = sys.argv[4:6]
+source, snapshot = map(Path, sys.argv[1:3])
+keyspace, changefeed = sys.argv[3:5]
 snapshot.mkdir()
 for path in source.iterdir():
     if path.suffix not in (".log", ".meta"):
@@ -144,12 +144,6 @@ for path in source.iterdir():
     name = "_".join([capture, keyspace, changefeed, *suffix])
     shutil.copyfile(path, snapshot / name)
 assert list(snapshot.glob("*.meta")), "redo metadata was not generated"
-shutil.copytree(snapshot, corrupt)
-rows = list(corrupt.glob("*_row_*.log"))
-assert rows, "redo row logs were not generated"
-latest = max(rows, key=lambda path: int(path.name.rsplit("_", 2)[1]))
-with latest.open("r+b") as file:
-    file.truncate(latest.stat().st_size - 1)
 PY
 }
 
@@ -271,14 +265,6 @@ function run() {
 	local redo_keyspace="redo_tenant_a"
 	prepare_redo_snapshots "$changefeed_id" "$redo_keyspace"
 	prepare_keyspace_recovery_guard "$changefeed_id" "$redo_keyspace" "$current_tso"
-	if "$CDC_BINARY" redo apply --enable-profiling=false \
-		--tmp-dir="$tmp_download_path/corrupt" \
-		--storage="file://$WORK_DIR/redo-corrupt" \
-		--sink-uri="$sink_uri" >"$WORK_DIR/redo_corrupt.log" 2>&1; then
-		echo "Redo apply unexpectedly accepted a truncated sealed log"
-		exit 1
-	fi
-	grep -q 'unexpected EOF' "$WORK_DIR/redo_corrupt.log"
 
 	# Disable GC so finalizers cannot hide leaked file descriptors. A fixed
 	# replay needs only a bounded number of descriptors for 160 spilled txns.

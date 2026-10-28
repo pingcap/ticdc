@@ -26,15 +26,14 @@ import (
 	"github.com/phayes/freeport"
 	"github.com/pingcap/ticdc/cmd/util"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
@@ -96,8 +95,8 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
-func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
-	return commonType.ChangeFeedID{}
+func (br *MockReader) GetChangefeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
 }
 
 // GetVersion implements LogReader.GetVersion
@@ -106,7 +105,7 @@ func (br *MockReader) GetVersion() int {
 }
 
 func newFlag(flag uint) uint64 {
-	var result commonType.ColumnFlagType
+	var result common.ColumnFlagType
 	if flag == pmysql.PriKeyFlag {
 		result.SetIsHandleKey()
 		result.SetIsPrimaryKey()
@@ -197,7 +196,7 @@ func TestApplySkippedDropCleansSpill(t *testing.T) {
 	}, 100))
 	require.Positive(t, ap.spillStore.PendingBytes())
 	require.NoError(t, ap.applyDDL(t.Context(), &commonEvent.RedoDDLEvent{
-		Type: byte(timodel.ActionDropTable),
+		Type: byte(model.ActionDropTable),
 		DDL: &commonEvent.DDLEventInRedoLog{
 			CommitTs: 120, Query: "DROP TABLE test.t",
 			NeedDroppedTables: &commonEvent.InfluencedTables{
@@ -250,11 +249,11 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
+			stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stats, nil)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{
-				Type: byte(timodel.ActionDropColumn), SchemaName: "test", TableName: "t",
+				Type: byte(model.ActionDropColumn), SchemaName: "test", TableName: "t",
 				Query: "ALTER TABLE test.t DROP COLUMN id", FinishedTs: 120,
 				BlockedTables: &commonEvent.InfluencedTables{
 					InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -361,9 +360,9 @@ func TestApply(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
-		State: timodel.StatePublic,
+		State: model.StatePublic,
 	})
 	dmls := []*commonEvent.RedoDMLEvent{
 		{
@@ -567,7 +566,7 @@ func TestApply(t *testing.T) {
 			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 		{
 			DDL: &commonEvent.DDLEventInRedoLog{
@@ -577,7 +576,7 @@ func TestApply(t *testing.T) {
 			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {
@@ -632,9 +631,9 @@ func TestApplyBigTxn(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &model.TableInfo{
 		Name:  ast.NewCIStr("t1"),
-		State: timodel.StatePublic,
+		State: model.StatePublic,
 	})
 
 	dmls := make([]*commonEvent.RedoDMLEvent, 0)
@@ -775,7 +774,7 @@ func TestApplyBigTxn(t *testing.T) {
 			TableName: common.TableName{
 				Schema: "test", Table: "checkpoint",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 		{
 			DDL: &commonEvent.DDLEventInRedoLog{
@@ -785,7 +784,7 @@ func TestApplyBigTxn(t *testing.T) {
 			TableName: common.TableName{
 				Schema: "test", Table: "resolved",
 			},
-			Type: byte(timodel.ActionCreateTable),
+			Type: byte(model.ActionCreateTable),
 		},
 	}
 	for _, ddl := range ddls {
