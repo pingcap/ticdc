@@ -16,6 +16,7 @@ package util
 import (
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -142,7 +143,15 @@ func isSensitiveQueryParameterInURI(name, scheme string) bool {
 // maskSensitiveDataInQueryLikeText handles fragment-like request target text
 // without rewriting ordinary URI fragments.
 func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
-	parts := strings.Split(text, "&")
+	prefix := ""
+	queryText := text
+	if question := strings.IndexByte(text, '?'); question >= 0 {
+		if equals := strings.IndexByte(text, '='); equals == -1 || question < equals {
+			prefix = text[:question+1]
+			queryText = text[question+1:]
+		}
+	}
+	parts := strings.Split(queryText, "&")
 	masked := false
 	for i, part := range parts {
 		name, _, hasValue := strings.Cut(part, "=")
@@ -156,7 +165,7 @@ func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
 		parts[i] = name + "=xxxxx"
 		masked = true
 	}
-	return strings.Join(parts, "&"), masked
+	return prefix + strings.Join(parts, "&"), masked
 }
 
 type maskedWrappedURLError struct {
@@ -237,8 +246,10 @@ func MaskSensitiveDataInURLError(err error) error {
 		return err
 	}
 	maskedURL := MaskSensitiveDataInURIForError(urlErr.URL)
+	message := strings.ReplaceAll(err.Error(), strconv.Quote(urlErr.URL), strconv.Quote(maskedURL))
+	message = strings.ReplaceAll(message, urlErr.URL, maskedURL)
 	return &maskedWrappedURLError{
 		err:     err,
-		message: strings.ReplaceAll(err.Error(), urlErr.URL, maskedURL),
+		message: message,
 	}
 }

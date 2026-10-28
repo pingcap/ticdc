@@ -150,6 +150,18 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"/api?region=west#token=xxxxx",
 		},
 		{
+			"http://h/p#/callback?token=secret-value",
+			"http://h/p#/callback?token=xxxxx",
+		},
+		{
+			"http://h/p#/callback?authorization=Bearer%20secret-value",
+			"http://h/p#/callback?authorization=xxxxx",
+		},
+		{
+			"http://h/p#/private?region=west",
+			"http://h/p#/private?region=west",
+		},
+		{
 			"/api?region=west#diagnostics",
 			"/api?region=west#diagnostics",
 		},
@@ -231,6 +243,38 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	require.NotContains(t, maskedErr.Error(), "verysecure")
 	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, maskedErr.Error(), "invalid URL escape")
+
+	for _, tc := range []struct {
+		name       string
+		rawURL     string
+		credential string
+	}{
+		{
+			name:       "quote in userinfo",
+			rawURL:     `https://user:before"credential-after@kms.example.com`,
+			credential: "credential-after",
+		},
+		{
+			name:       "backslash in userinfo",
+			rawURL:     `https://user:before\credential-after@kms.example.com`,
+			credential: "credential-after",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, parseErr := url.Parse(tc.rawURL)
+			require.Error(t, parseErr)
+
+			maskedParseErr := MaskSensitiveDataInURLError(parseErr)
+			require.NotContains(t, maskedParseErr.Error(), tc.credential)
+			require.Contains(t, maskedParseErr.Error(), `parse "<invalid uri>"`)
+		})
+	}
+
+	quotedQueryURL := `https://kms.example.com/path?token=before"query-credential`
+	quotedQueryErr := &url.Error{Op: "GET", URL: quotedQueryURL, Err: errors.New("request failed")}
+	maskedQuotedQueryErr := MaskSensitiveDataInURLError(quotedQueryErr)
+	require.NotContains(t, maskedQuotedQueryErr.Error(), "query-credential")
+	require.Contains(t, maskedQuotedQueryErr.Error(), "token=xxxxx")
 
 	cause := errors.New("connection refused")
 	wrappedErr := fmt.Errorf("kms request failed: %w", &url.Error{
