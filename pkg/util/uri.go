@@ -91,36 +91,19 @@ var sensitiveQueryParameterNames = []string{
 	"signature",
 	"credential",
 	"private",
+	"client",
 }
 
 var sensitiveQueryParameterExactNames = map[string]struct{}{
 	"authorization": {},
 }
 
-// These supported URI parameters contain credential-related words but carry
-// identifiers, feature flags, or file paths rather than secret values.
-var nonSensitiveQueryParameterNames = map[string]struct{}{
-	"auth-tls-private-key-path": {},
-	"kafka-client":              {},
-	"kafka-client-id":           {},
-	"keyspace":                  {},
-	"keyspace-id":               {},
-	"oauth2-client-id":          {},
-	"oauth2-private-key":        {},
-	"output-row-key":            {},
-	"sasl-gssapi-keytab-path":   {},
-	"sasl-oauth-client-id":      {},
-	"tls-key-file-path":         {},
-	"token-from-file":           {},
-}
-
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
-	normalizedName := strings.ReplaceAll(name, "_", "-")
-	if _, ok := nonSensitiveQueryParameterNames[normalizedName]; ok {
-		return false
+	if name == "kafka-client" {
+		return false // Selects the Kafka client implementation, not a credential.
 	}
-	if _, ok := sensitiveQueryParameterExactNames[normalizedName]; ok {
+	if _, ok := sensitiveQueryParameterExactNames[name]; ok {
 		return true
 	}
 	for _, sensitive := range sensitiveQueryParameterNames {
@@ -129,15 +112,6 @@ func isSensitiveQueryParameter(name string) bool {
 		}
 	}
 	return false
-}
-
-func isSensitiveQueryParameterInURI(name, scheme string) bool {
-	normalizedName := strings.ReplaceAll(strings.ToLower(name), "_", "-")
-	// Kafka parses the exact key parameter as a TLS private-key file path.
-	if normalizedName == "key" && (scheme == "kafka" || scheme == "kafka+ssl") {
-		return false
-	}
-	return isSensitiveQueryParameter(name)
 }
 
 // maskSensitiveDataInQueryLikeText handles fragment-like request target text
@@ -194,7 +168,7 @@ func ContainsSensitiveDataInURI(uri string) bool {
 		return true
 	}
 	for name := range query {
-		if isSensitiveQueryParameterInURI(name, parsed.Scheme) {
+		if isSensitiveQueryParameter(name) {
 			return true
 		}
 	}
@@ -212,7 +186,7 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	queries := uriParsed.Query()
 	for key := range queries {
-		if isSensitiveQueryParameterInURI(key, uriParsed.Scheme) {
+		if isSensitiveQueryParameter(key) {
 			queries.Set(key, "xxxxx")
 		}
 	}

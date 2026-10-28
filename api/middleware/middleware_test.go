@@ -59,7 +59,7 @@ func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
 		if mode == cerrors.RedactLogDisable {
 			require.Contains(t, query, "key=xxxxx")
 			require.Contains(t, query, "region=west")
-			require.Contains(t, query, "keyspace=default")
+			require.Contains(t, query, "keyspace=xxxxx")
 			require.Contains(t, query, "#token=xxxxx")
 		}
 	}

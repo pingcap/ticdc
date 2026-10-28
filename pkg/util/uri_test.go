@@ -103,7 +103,7 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		},
 		{
 			"https://api.example.com/?keyspace=default&token=secret",
-			"https://api.example.com/?keyspace=default&token=xxxxx",
+			"https://api.example.com/?keyspace=xxxxx&token=xxxxx",
 		},
 		{
 			"https://api.example.com/?key=secret-value",
@@ -111,15 +111,15 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		},
 		{
 			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
-			"kafka://127.0.0.1:9092/topic?kafka-client-id=unit-test&output-row-key=true",
+			"kafka://127.0.0.1:9092/topic?kafka-client-id=xxxxx&output-row-key=xxxxx",
 		},
 		{
 			"kafka://127.0.0.1:9092/topic?key=/tmp/client.key&sasl-gssapi-keytab-path=/tmp/client.keytab",
-			"kafka://127.0.0.1:9092/topic?key=%2Ftmp%2Fclient.key&sasl-gssapi-keytab-path=%2Ftmp%2Fclient.keytab",
+			"kafka://127.0.0.1:9092/topic?key=xxxxx&sasl-gssapi-keytab-path=xxxxx",
 		},
 		{
 			"kafka+ssl://127.0.0.1:9092/topic?key=/tmp/client.key",
-			"kafka+ssl://127.0.0.1:9092/topic?key=%2Ftmp%2Fclient.key",
+			"kafka+ssl://127.0.0.1:9092/topic?key=xxxxx",
 		},
 		{
 			"mysql://root:123456@127.0.0.1:3306/?time-zone=c",
@@ -139,7 +139,7 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		},
 		{
 			"https://api.example.com/?api-key=secret&client-id=diagnostic-client",
-			"https://api.example.com/?api-key=xxxxx&client-id=diagnostic-client",
+			"https://api.example.com/?api-key=xxxxx&client-id=xxxxx",
 		},
 		{
 			"https://kms.example.com/?authorization=Bearer%20secret-value&authorization-endpoint=https%3A%2F%2Fauth.example.com",
@@ -204,10 +204,10 @@ func TestContainsSensitiveDataInURI(t *testing.T) {
 	}{
 		{uri: "https://user@registry.example.com", want: false},
 		{uri: "s3://bucket/prefix?region=us-west-1", want: false},
-		{uri: "https://api.example.com?keyspace=default", want: false},
-		{uri: "kafka://broker/topic?kafka-client-id=client-1&output-row-key=true", want: false},
-		{uri: "kafka://broker/topic?key=%2Ftmp%2Fclient.key", want: false},
-		{uri: "kafka+ssl://broker/topic?key=%2Ftmp%2Fclient.key", want: false},
+		{uri: "https://api.example.com?keyspace=default", want: true},
+		{uri: "kafka://broker/topic?kafka-client-id=client-1&output-row-key=true", want: true},
+		{uri: "kafka://broker/topic?key=%2Ftmp%2Fclient.key", want: true},
+		{uri: "kafka+ssl://broker/topic?key=%2Ftmp%2Fclient.key", want: true},
 		{uri: "https://api.example.com?authorization-endpoint=https%3A%2F%2Fauth.example.com", want: false},
 		{uri: "/api?region=west#diagnostics", want: false},
 		{uri: "https://user:password@registry.example.com", want: true},
