@@ -5,7 +5,7 @@
 #   It first runs a table_route-style SQL workload through normal replication,
 #   then blocks MySQL DML writes, writes more source DML, and applies redo logs
 #   to confirm the replayed rows still land in routed downstream tables.
-#   Replay also covers generated columns, keyspaces containing underscores,
+#   Replay also covers generated columns, non-default keyspaces,
 #   and transaction spill file descriptor cleanup.
 
 set -euo pipefail
@@ -262,7 +262,8 @@ function run() {
 	target_users_before_redo=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 	require_equal "$target_users_before_redo" "$pre_redo_users_count" "failpoint did not block MySQL DML before redo apply"
 
-	local redo_keyspace="redo_tenant_a"
+	# The release-8.5 log filename parser does not support keyspaces with underscores.
+	local redo_keyspace="redo-tenant-a"
 	prepare_redo_snapshots "$changefeed_id" "$redo_keyspace"
 	prepare_keyspace_recovery_guard "$changefeed_id" "$redo_keyspace" "$current_tso"
 
