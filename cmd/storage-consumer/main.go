@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
 )
@@ -72,7 +71,7 @@ func init() {
 
 	uri, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Error("invalid upstream-uri", zap.Error(util.MaskSensitiveDataInURLError(err)))
+		log.Error("invalid upstream-uri", zap.Error(err))
 		os.Exit(1)
 	}
 	upstreamURI = uri

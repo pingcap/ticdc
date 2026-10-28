@@ -92,19 +92,13 @@ var sensitiveQueryParameterNames = []string{
 	"credential",
 	"private",
 	"client",
-}
-
-var sensitiveQueryParameterExactNames = map[string]struct{}{
-	"authorization": {},
+	"authorization",
 }
 
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
 	if name == "kafka-client" {
 		return false // Selects the Kafka client implementation, not a credential.
-	}
-	if _, ok := sensitiveQueryParameterExactNames[name]; ok {
-		return true
 	}
 	for _, sensitive := range sensitiveQueryParameterNames {
 		if strings.Contains(name, sensitive) {

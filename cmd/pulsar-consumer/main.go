@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -82,13 +81,13 @@ func run(_ *cobra.Command, _ []string) {
 
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Panic("invalid upstream-uri", zap.Error(util.MaskSensitiveDataInURLError(err)))
+		log.Panic("invalid upstream-uri", zap.Error(err))
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if !config.IsPulsarScheme(scheme) {
 		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be pulsar schema",
 			zap.String("schema", scheme),
-			zap.String("upstreamURI", util.MaskSensitiveDataInURIForError(upstreamURIStr)))
+			zap.String("upstreamURI", upstreamURIStr))
 	}
 
 	consumerOption.Adjust(upstreamURI, configFile)
