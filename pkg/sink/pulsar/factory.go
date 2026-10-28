@@ -17,7 +17,6 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -38,7 +37,7 @@ func NewCreatorFactory(config *config.PulsarConfig, changefeedID commonType.Chan
 		ConnectionTimeout: config.ConnectionTimeout.Duration(),
 		OperationTimeout:  config.OperationTimeout.Duration(),
 		// add pulsar default metrics
-		MetricsRegisterer: metrics.GetMQMetricRegistry(),
+		MetricsRegisterer: getMetricRegistry(),
 		Logger:            NewPulsarLogger(log.L()),
 	}
 	log.Info("pulsar client factory created",
