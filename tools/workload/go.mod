@@ -1,6 +1,10 @@
 module workload
 
+<<<<<<< HEAD
 go 1.25.8
+=======
+go 1.27.3
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 
 require (
 	github.com/BurntSushi/toml v1.5.0

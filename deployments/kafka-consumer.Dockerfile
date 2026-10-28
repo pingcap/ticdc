@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 FROM golang:1.25-alpine AS builder
+=======
+FROM golang:1.27.3-alpine AS builder
+>>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 # `binutils-gold` provides `ld.gold`. Without it, the kafka-consumer build on arm64 fails
 # at the final link step with: `collect2: fatal error: cannot find 'ld'`.
 #
