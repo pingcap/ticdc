@@ -1810,7 +1810,7 @@ func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
 		}
 		if isPartitionTable(info) {
 			partitionInfo := make(BasicPartitionInfo)
-			partitionInfo.AddPartitionIDs((getAllPartitionIDs(info))...)
+			partitionInfo.AddPartitionIDs(getAllPartitionIDs(info)...)
 			args.partitionMap[info.ID] = partitionInfo
 		}
 	}
