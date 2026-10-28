@@ -243,19 +243,11 @@ function run() {
 	local pre_redo_users_count
 	pre_redo_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 
-<<<<<<< HEAD
-	cleanup_process "$CDC_BINARY"
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
-	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
-=======
-	check_cdc_server_guard --workdir "$WORK_DIR"
-	stop_cdc_server_guards
 	cleanup_process "$(basename "$CDC_BINARY")"
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
 	# Preserve raw UPDATE records in redo so replay must spill deferred inserts.
 	GO_FAILPOINTS+=';github.com/pingcap/ticdc/pkg/eventservice/OutputRawRedoUpdates=return(true)'
-	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
->>>>>>> 9797cc44b (redo: fix file upload lifecycle and replay correctness (#6595))
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	write_redo_only_dml
 
@@ -265,13 +257,7 @@ function run() {
 	current_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	ensure 50 check_redo_resolved_ts "$changefeed_id" "$current_tso" "$storage_path" "$tmp_download_path/meta"
 
-<<<<<<< HEAD
-	cleanup_process "$CDC_BINARY"
-=======
-	check_cdc_server_guard --workdir "$WORK_DIR"
-	stop_cdc_server_guards
 	cleanup_process "$(basename "$CDC_BINARY")"
->>>>>>> 9797cc44b (redo: fix file upload lifecycle and replay correctness (#6595))
 	export GO_FAILPOINTS=''
 
 	local target_users_before_redo
@@ -313,13 +299,7 @@ function run() {
 
 	wait_query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed WHERE id = 101 AND name = 'after_redo';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "1" 30
 
-<<<<<<< HEAD
-	cleanup_process "$CDC_BINARY"
-=======
-	check_cdc_server_guard --workdir "$WORK_DIR"
-	stop_cdc_server_guards
 	cleanup_process "$(basename "$CDC_BINARY")"
->>>>>>> 9797cc44b (redo: fix file upload lifecycle and replay correctness (#6595))
 }
 
 trap 'stop_test "$WORK_DIR"' EXIT
