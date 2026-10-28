@@ -15,6 +15,7 @@ package encryption
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,10 +23,14 @@ import (
 
 	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	plog "github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client/opt"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type mockTiKVMetaPDClient struct {
@@ -35,6 +40,50 @@ type mockTiKVMetaPDClient struct {
 
 func (m *mockTiKVMetaPDClient) GetAllStores(ctx context.Context, opts ...pdopt.GetStoreOption) ([]*metapb.Store, error) {
 	return m.stores, nil
+}
+
+func TestTiKVEncryptionHTTPClientResponseBodyLogging(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       string
+		wantLogged bool
+	}{
+		{name: "HTTP error keeps diagnostics", statusCode: http.StatusInternalServerError, body: "diagnostic response", wantLogged: true},
+		{name: "decode error hides encryption payload", statusCode: http.StatusOK, body: "encrypted-key-material", wantLogged: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, observedLogs := observer.New(zapcore.DebugLevel)
+			restore := plog.ReplaceGlobals(zap.New(core), nil)
+			defer restore()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			srvURL, err := url.Parse(srv.URL)
+			require.NoError(t, err)
+			client, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{stores: []*metapb.Store{
+				{Id: 1, StatusAddress: srvURL.Host},
+			}}, nil)
+			require.NoError(t, err)
+
+			_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
+			require.Error(t, err)
+			logged := ""
+			for _, entry := range observedLogs.All() {
+				logged += fmt.Sprint(entry.ContextMap(), entry.Message)
+			}
+			if tc.wantLogged {
+				require.Contains(t, logged, tc.body)
+			} else {
+				require.NotContains(t, logged, tc.body)
+				require.Contains(t, logged, "bodySize")
+			}
+		})
+	}
 }
 
 func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {

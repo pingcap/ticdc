@@ -1,5 +1,42 @@
 # Repository Guidelines
 
+<<<<<<< HEAD
+=======
+## Purpose & Boundaries
+
+- Help implement, review, and document focused changes in this repository.
+- Follow the user's task, keep changes minimal, and avoid unrelated refactors or cleanup.
+- If requirements conflict or are unclear, surface the ambiguity before changing code.
+- Do not commit, branch, or publish changes unless explicitly asked.
+
+## Agent Change Discipline
+
+- Make surgical changes: touch only files required by the task.
+- Do not refactor adjacent code, rename symbols, or reformat unrelated files unless the task requires it.
+- Prefer the simplest solution that solves the problem; do not add speculative abstractions, features, or configurability.
+- Match existing style and patterns. Remove only unused imports, variables, functions, or files introduced by your change.
+- Never expose physical credentials or key material in production logs, debug logs, errors, configuration displays, or API responses. This includes passwords, tokens, authorization values, access or secret keys, private keys, credential-bearing URLs or DSNs, and nested third-party errors.
+- Apply masking at logging and display boundaries while preserving useful non-sensitive diagnostics. Do not redact CDC payloads or test-only consumer output unless the task explicitly requires it.
+- Validate changes with targeted tests or checks when practical.
+
+## Before Changing Code
+
+- Identify the objective, non-objectives, touched module, and expected validation.
+- Check the relevant detailed guide before changing errors, logs, tests, generated files, or cross-component behavior.
+- Prefer package-owned changes and tests before adding shared abstractions or broad integration coverage.
+
+## Detailed Guides
+
+Read these only when relevant to the task:
+
+- Repository map: use [docs/agents/repository-map.md](docs/agents/repository-map.md) to choose the owning module and nearby tests.
+- Validation: use [docs/agents/validation.md](docs/agents/validation.md) to choose the narrowest sufficient build, test, or lint command.
+- Generated code: use [docs/agents/generated-code.md](docs/agents/generated-code.md) before changing protobufs, mocks, dashboards, or generated files.
+- Error handling: use predefined repository errors; see [docs/agents/error-handling.md](docs/agents/error-handling.md) before changing error creation, wrapping, or propagation.
+- Logging: logs are operational signals; see [docs/agents/logging.md](docs/agents/logging.md) before adding, removing, or rewriting logs.
+- Testing: prefer focused deterministic tests; see [docs/agents/testing.md](docs/agents/testing.md) before adding or changing tests.
+
+>>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 ## Project Structure & Module Organization
 
 - `cmd/`: buildable binaries (e.g. `cmd/cdc`, `cmd/kafka-consumer`).
