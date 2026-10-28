@@ -38,8 +38,6 @@ const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	statistics   *statistics.Statistics
-
 	// msgCh is the only unbounded queue in the storage sink pipeline.
 	// External callers push tasks into it, addTasks consumes it, and
 	// dmlWriters.close is the only place allowed to close it.
@@ -95,7 +93,6 @@ func newDMLWriters(
 
 	return &dmlWriters{
 		changefeedID:   changefeedID,
-		statistics:     stats,
 		msgCh:          messageCh,
 		encodeGroup:    encoderGroup,
 		spool:          spool,
