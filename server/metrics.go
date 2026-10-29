@@ -15,6 +15,8 @@ package server
 
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
+	"github.com/pingcap/ticdc/logservice/coordinator"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
@@ -26,6 +28,8 @@ var registry = prometheus.NewRegistry()
 
 func registerMetrics() {
 	metrics.InitMetrics(registry)
+	logcoordinator.RegisterMetrics(registry)
+	schemastore.RegisterMetrics(registry)
 	cloudstorage.InitMetrics(registry)
 	mysql.InitMetrics(registry)
 	pulsar.InitMetrics(registry)
