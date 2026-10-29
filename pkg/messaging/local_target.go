@@ -16,6 +16,7 @@ package messaging
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/failpoint"
 	. "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -82,6 +83,25 @@ func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*Targe
 		m.To = s.localId
 		m.From = s.localId
 		m.Sequence = s.sequence.Add(1)
+		// Exercise the remote serialization path in single-node integration tests.
+		failpoint.Inject("ForceMarshalBatchDMLEvent", func() {
+			if m.Type == TypeBatchDMLEvent {
+				cloned := *m
+				cloned.Message = make([]IOTypeT, len(m.Message))
+				for j, event := range m.Message {
+					data, err := event.Marshal()
+					if err != nil {
+						failpoint.Return(err)
+					}
+					decoded, err := decodeIOType(m.Type, data)
+					if err != nil {
+						failpoint.Return(err)
+					}
+					cloned.Message[j] = decoded
+				}
+				m = &cloned
+			}
+		})
 		select {
 		case ch <- m:
 		default:
