@@ -1,0 +1,9 @@
+allow-same-cluster = true
+case-sensitive = true
+
+[filter]
+rules = ['allow_same_cluster_src.*']
+
+[[sink.dispatchers]]
+matcher = ['allow_same_cluster_src.*']
+target-schema = 'ALLOW_SAME_CLUSTER_SRC'

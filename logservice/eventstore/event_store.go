@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -721,7 +722,16 @@ func (e *eventStore) RegisterDispatcher(
 		resolvedTsAdvanceInterval = 0
 	}
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, subStat.config.bdrMode)
+	e.subClient.Subscribe(
+		subStat.subID,
+		*dispatcherSpan,
+		startTs,
+		consumeKVEvents,
+		advanceResolvedTs,
+		resolvedTsAdvanceInterval,
+		subStat.config.bdrMode,
+		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),

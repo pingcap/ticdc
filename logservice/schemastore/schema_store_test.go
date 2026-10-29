@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -28,7 +29,10 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -37,10 +41,14 @@ type trackingSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]struct{}
+	priorities    map[logpuller.SubscriptionID]cdcpb.ScanPriority
 }
 
 func newTrackingSubscriptionClient() *trackingSubscriptionClient {
-	return &trackingSubscriptionClient{subscriptions: make(map[logpuller.SubscriptionID]struct{})}
+	return &trackingSubscriptionClient{
+		subscriptions: make(map[logpuller.SubscriptionID]struct{}),
+		priorities:    make(map[logpuller.SubscriptionID]cdcpb.ScanPriority),
+	}
 }
 
 func (s *trackingSubscriptionClient) Name() string { return "trackingSubscriptionClient" }
@@ -61,16 +69,19 @@ func (s *trackingSubscriptionClient) Subscribe(
 	_ func(uint64),
 	_ int64,
 	_ bool,
+	priority cdcpb.ScanPriority,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[subID] = struct{}{}
+	s.priorities[subID] = priority
 }
 
 func (s *trackingSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptions, subID)
+	delete(s.priorities, subID)
 }
 
 func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bool {
@@ -80,28 +91,106 @@ func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bo
 	return ok
 }
 
+func (s *trackingSubscriptionClient) subscriptionPriorities() []cdcpb.ScanPriority {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	priorities := make([]cdcpb.ScanPriority, 0, len(s.priorities))
+	for _, priority := range s.priorities {
+		priorities = append(priorities, priority)
+	}
+	return priorities
+}
+
+func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:                    lifecycleCtx,
+		cancel:                 lifecycleCancel,
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	initializationCtx, cancel := store.newInitializationContext(context.Background())
+	defer cancel()
+
+	// Registration holds this lock while loading the initial snapshot. Close
+	// must cancel that work before waiting for the lock.
+	store.keyspaceLocker.Lock()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close(context.Background())
+	}()
+	select {
+	case <-initializationCtx.Done():
+		require.ErrorIs(t, initializationCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		store.keyspaceLocker.Unlock()
+		require.FailNow(t, "keyspace initialization context was not canceled")
+	}
+	store.keyspaceLocker.Unlock()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema store did not close after registration finished")
+	}
+}
+
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	keyspaceCtx, keyspaceCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {
+				ctx:    keyspaceCtx,
+				cancel: keyspaceCancel,
+			},
+		},
+		tombstoneKeyspaces: make(map[uint32]struct{}),
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
+
 func TestRemoveTombstoneKeyspace(t *testing.T) {
 	const keyspaceID = uint32(42)
 	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
-	storeCtx, cancel := context.WithCancel(context.Background())
+	schemaStoreCtx, cancelSchemaStore := context.WithCancel(context.Background())
+	defer cancelSchemaStore()
+	keyspaceCtx, cancelKeyspace := context.WithCancel(schemaStoreCtx)
 	storage := newPersistentStorageForTest(t.TempDir(), nil)
 	require.NoError(t, storage.run())
 
 	subClient := newTrackingSubscriptionClient()
-	fetcher := newDDLJobFetcher(storeCtx, subClient, nil, keyspaceID, nil, nil)
+	fetcher := newDDLJobFetcher(keyspaceCtx, subClient, nil, keyspaceID, nil, nil)
 	subID := subClient.AllocSubscriptionID()
-	subClient.Subscribe(subID, heartbeatpb.TableSpan{}, 0, nil, nil, 0, false)
+	subClient.Subscribe(
+		subID,
+		heartbeatpb.TableSpan{},
+		0,
+		nil,
+		nil,
+		0,
+		false,
+		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+	)
 	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
 
 	keyspaceStore := &keyspaceSchemaStore{
-		ctx:           storeCtx,
-		cancel:        cancel,
+		ctx:           keyspaceCtx,
+		cancel:        cancelKeyspace,
 		ddlJobFetcher: fetcher,
 		dataStorage:   storage,
 		unsortedCache: newDDLCache(),
 		notifyCh:      make(chan any, 1),
 	}
 	store := &schemaStore{
+		ctx:                    schemaStoreCtx,
+		cancel:                 cancelSchemaStore,
 		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{keyspaceID: keyspaceStore},
 		tombstoneKeyspaces:     make(map[uint32]struct{}),
 	}
@@ -140,7 +229,7 @@ func TestRemoveTombstoneKeyspace(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 
-	require.ErrorIs(t, storeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
 	require.False(t, subClient.contains(subID))
 	var panicValue any
 	func() {
@@ -275,6 +364,134 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
+}
+
+func TestRenameTableFromSystemSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		version     model.JobVersion
+		query       string
+		partitioned bool
+		multiple    bool
+	}{
+		{name: "single table v1", version: model.JobVersion1, query: "RENAME TABLE mysql.a TO test.a"},
+		{name: "single table v2", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a"},
+		{name: "unqualified source", version: model.JobVersion2, query: "RENAME TABLE a TO test.a"},
+		{name: "partitioned table", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a", partitioned: true},
+		{name: "multiple tables", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a, test.b TO test.c", multiple: true},
+		{name: "multiple partitioned tables", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a, test.b TO test.c", multiple: true, partitioned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pstorage := newPersistentStorageForTest(dir, []mockDBInfo{{
+				dbInfo: &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")},
+				tables: []*model.TableInfo{newEligibleTableInfoForTest(102, "b")},
+			}})
+			t.Cleanup(func() { require.NoError(t, pstorage.close()) })
+			store := &keyspaceSchemaStore{
+				pdClock:       pdutil.NewClock4Test(),
+				unsortedCache: newDDLCache(),
+				dataStorage:   pstorage,
+				notifyCh:      make(chan any, 1),
+			}
+
+			// System-table creation is filtered before it reaches persistent storage.
+			createJob := buildCreateTableJobForTest(1, 101, "a", 1000)
+			createJob.SchemaName = "mysql"
+			createJob.BinlogInfo.SchemaVersion = 1
+			store.writeDDLEvent(DDLJobWithCommitTs{Job: createJob, CommitTs: 1000})
+			store.advancePendingResolvedTs(1000)
+			store.tryUpdateResolvedTs()
+			require.NotContains(t, pstorage.databaseMap, int64(1))
+			require.NotContains(t, pstorage.tableMap, int64(101))
+
+			job := buildRenameTableJobForTest(100, 101, "a", 1010, &model.InvolvingSchemaInfo{
+				Database: "mysql",
+				Table:    "a",
+			})
+			job.Version = tc.version
+			job.FillArgs(&model.RenameTableArgs{
+				OldSchemaID:   1,
+				OldSchemaName: ast.NewCIStr("mysql"),
+				NewTableName:  ast.NewCIStr("a"),
+			})
+			if tc.multiple {
+				job = buildRenameTablesJobForTest(
+					[]int64{1, 100}, []int64{100, 100}, []int64{101, 102},
+					[]string{"mysql", "test"}, []string{"a", "b"}, []string{"a", "c"}, 1010)
+			}
+			physicalIDs := []int64{101}
+			if tc.partitioned {
+				physicalIDs = []int64{201, 202}
+				tableInfo := newEligiblePartitionTableInfoForTest(101, "a", []model.PartitionDefinition{
+					{ID: 201}, {ID: 202},
+				})
+				if tc.multiple {
+					job.BinlogInfo.MultipleTableInfos[0] = tableInfo
+				} else {
+					job.BinlogInfo.TableInfo = tableInfo
+				}
+			}
+			job.Query = tc.query
+			job.SchemaName = "test"
+			job.BinlogInfo.SchemaVersion = 2
+			// Exercise the persisted argument format used by the DDL puller.
+			encodedJob, err := job.Encode(true)
+			require.NoError(t, err)
+			job = &model.Job{}
+			require.NoError(t, job.Decode(encodedJob))
+			store.writeDDLEvent(DDLJobWithCommitTs{Job: job, CommitTs: 1010})
+			store.advancePendingResolvedTs(1010)
+			store.tryUpdateResolvedTs()
+			require.Equal(t, uint64(1010), store.resolvedTs.Load())
+			require.Equal(t, &BasicTableInfo{SchemaID: 100, Name: "a"}, pstorage.tableMap[101])
+			require.True(t, pstorage.databaseMap[100].Tables[101])
+			require.NotContains(t, pstorage.databaseMap, int64(1))
+			if tc.multiple {
+				require.Equal(t, "c", pstorage.tableMap[102].Name)
+			}
+			if tc.partitioned {
+				require.Len(t, pstorage.partitionMap[101], 2)
+			}
+
+			// Only feeds selecting the new table receive the existing rename error.
+			for _, tableFilter := range []filter.Filter{
+				buildTableFilterByNameForTest("test", "a"),
+				buildTableFilterByNameForTest("*", "*"),
+			} {
+				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
+				require.NoError(t, err)
+				require.Len(t, events, 1)
+				require.Contains(t, events[0].Err, "ErrSyncRenameTableFailed")
+			}
+			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), 1000, 10)
+			require.NoError(t, err)
+			require.Empty(t, events)
+
+			// Snapshot reconstruction and restart must also handle the missing old table.
+			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"))
+			require.NoError(t, err)
+			var actualIDs []int64
+			for _, table := range tables {
+				require.Equal(t, "test", table.SchemaName)
+				require.Equal(t, "a", table.TableName)
+				actualIDs = append(actualIDs, table.TableID)
+			}
+			require.ElementsMatch(t, physicalIDs, actualIDs)
+			expectedTables, expectedPartitions := pstorage.tableMap, pstorage.partitionMap
+			require.NoError(t, pstorage.close())
+			pstorage = loadPersistentStorageFromPathForTest(dir, 1011)
+			require.Equal(t, expectedTables, pstorage.tableMap)
+			require.Equal(t, expectedPartitions, pstorage.partitionMap)
+			dropJob := buildDropTableJobForTest(100, 101, 1020)
+			if tc.partitioned {
+				dropJob = buildDropPartitionTableJobForTest(100, 101, "a", physicalIDs, 1020)
+			}
+			require.NoError(t, pstorage.handleDDLJob(dropJob))
+			require.NotContains(t, pstorage.tableMap, int64(101))
+			require.NotContains(t, pstorage.partitionMap, int64(101))
+		})
+	}
 }
 
 func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {

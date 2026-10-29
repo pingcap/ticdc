@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
@@ -299,6 +301,10 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.Error(t, config.ValidateAndAdjust(sinkURI))
+	config.Consistent.Storage = new("s3://bucket/%zz?secret-access-key=redo-secret-sentinel")
+	err = config.ValidateAndAdjust(sinkURI)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+	require.NotContains(t, err.Error(), "redo-secret-sentinel")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
@@ -310,4 +316,25 @@ func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.NoError(t, config.ValidateAndAdjust(sinkURI))
+}
+
+func TestReplicaConfig_AllowSameCluster(t *testing.T) {
+	t.Parallel()
+
+	cfg := GetDefaultReplicaConfig()
+	require.Nil(t, cfg.AllowSameCluster)
+
+	// `allow-same-cluster` is a top-level option of the changefeed config file.
+	metaData, err := toml.Decode("allow-same-cluster = true\n", cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.True(t, util.GetOrZero(cfg.AllowSameCluster))
+
+	// Clone must keep the option, the config is cloned when it is converted to the API model.
+	require.True(t, util.GetOrZero(cfg.Clone().AllowSameCluster))
+
+	// The same upstream/downstream check runs on the ChangefeedConfig derived from the persisted
+	// replica config, so the option must survive the conversion to skip the check.
+	info := &ChangeFeedInfo{Config: cfg}
+	require.True(t, info.ToChangefeedConfig().AllowSameCluster)
 }

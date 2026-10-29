@@ -23,10 +23,10 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +43,8 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	cfg.EnableDDLTs = true
 	cfg.IsTiDB = false // Default to non-TiDB
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 
 	// Initialize table schema store
@@ -65,8 +65,8 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	cfg.EnableDDLTs = true
 	cfg.IsTiDB = true // TiDB downstream
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 
 	// Initialize table schema store

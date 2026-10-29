@@ -315,8 +315,12 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		// }
 		// if flag.IsBinary(){
 		// }
-		// if flag.IsGeneratedColumn() {
-		// }
+		if flag.IsGeneratedColumn() {
+			// Redo only includes stored columns and does not retain the expression.
+			// A non-empty marker keeps generated columns out of downstream DML.
+			colInfo.GeneratedExprString = "pass_generated_check"
+			colInfo.GeneratedStored = true
+		}
 		if flag.IsPrimaryKey() {
 			colInfo.AddFlag(mysql.PriKeyFlag)
 		}
@@ -522,7 +526,7 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	var val uint64
 	switch v := raw.(type) {
 	case uint64:
-		val = (v)
+		val = v
 	case int64:
 		val = uint64(v)
 	}

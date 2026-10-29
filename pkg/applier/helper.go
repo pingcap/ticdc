@@ -18,9 +18,11 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
@@ -142,46 +144,29 @@ func splitUpdateEvent(
 	return deleteEvent, insertEvent, nil
 }
 
-// EventsGroup could store change event message.
-type eventsGroup struct {
-	tableID int64
-
-	events        []*commonEvent.DMLEvent
-	highWatermark uint64
-}
-
-// newEventsGroup will create new event group.
-func newEventsGroup(tableID int64) *eventsGroup {
-	return &eventsGroup{
-		tableID: tableID,
+// Share one restorer across all redo rows so the spill backlog does not retain
+// a decoder closure or a materialized DML event for each row.
+var redoDMLMessageRestorer = codeccommon.NewDMLMessageRestorer(func(data []byte) ([]*codeccommon.DMLMessage, error) {
+	_, value, err := util.UnmarshalDMLMessageData(data)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// append will append an event to event groups.
-func (g *eventsGroup) append(row *commonEvent.DMLEvent) {
-	g.highWatermark = row.CommitTs
-	var lastDMLEvent *commonEvent.DMLEvent
-	if len(g.events) > 0 {
-		lastDMLEvent = g.events[len(g.events)-1]
+	row := new(commonEvent.RedoDMLEvent)
+	if _, err := row.UnmarshalMsg(value); err != nil {
+		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
-	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
-		g.events = append(g.events, row)
-		return
-	}
+	return []*codeccommon.DMLMessage{newRedoDMLMessage(row)}, nil
+})
 
-	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-		lastDMLEvent.Length += row.Length
-		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+func newRedoDMLMessage(row *commonEvent.RedoDMLEvent) *codeccommon.DMLMessage {
+	rowType := commonType.RowTypeInsert
+	if row.IsDelete() {
+		rowType = commonType.RowTypeDelete
+	} else if row.IsUpdate() {
+		rowType = commonType.RowTypeUpdate
 	}
-}
-
-// getEvents will get all events.
-func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
-	result := g.events
-	g.events = nil
-	return result
+	return codeccommon.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
+		row.Row.Table.Table, row.Row.CommitTs, rowType, row.ToDMLEvent)
 }
 
 type ddlTs struct {

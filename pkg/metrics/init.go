@@ -14,7 +14,7 @@
 package metrics
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
@@ -31,6 +31,7 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDispatcherMetrics(registry)
 	initMessagingMetrics(registry)
 	initSinkMetrics(registry)
+	statistics.InitMetrics(registry)
 	initEventStoreMetrics(registry)
 	initSchemaStoreMetrics(registry)
 	initEventServiceMetrics(registry)
@@ -43,7 +44,6 @@ func InitMetrics(registry *prometheus.Registry) {
 
 	kafka.InitMetrics(registry)
 	gc.InitMetrics(registry)
-	metrics.InitCloudStorageMetrics(registry)
 	initRedoMetrics(registry)
 	initDDLMetrics(registry)
 }

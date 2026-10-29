@@ -340,7 +340,6 @@ func NewDispatcherManager(
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.IsLowLatencyMode(),
-		manager.config.TimeZone,
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
 		outputRawChangeEvent,
@@ -529,7 +528,7 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return newWritePathClosedError()
 	}
 	// before bootstrap finished, cannot send any event.
-	success := tableTriggerDispatcher.EmitBootstrap(e.writePathClosed.Load)
+	success := tableTriggerDispatcher.EmitBootstrap(e.ctx, e.writePathClosed.Load)
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()
 	}
@@ -1053,6 +1052,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 }
 
 // ==== remove and clean related functions ====
+
+// IsClosingOrClosed reports whether shutdown has started or completed.
+func (e *DispatcherManager) IsClosingOrClosed() bool {
+	return e.closing.Load() || e.closed.Load()
+}
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {

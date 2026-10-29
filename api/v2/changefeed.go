@@ -199,6 +199,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
+	if err = hasRunningImport(ctx, h.server.GetEtcdClient().GetEtcdClient(), pdClient.GetClusterID(ctx)); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	tmpInfo := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
 		SinkURI:      cfg.SinkURI,
@@ -382,6 +387,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if len(changefeeds) == 0 {
+		c.JSON(http.StatusOK, toListResponse(c, []ChangefeedCommonInfo{}))
+		return
+	}
+	info := changefeeds[0]
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
@@ -460,6 +477,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -540,6 +561,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
@@ -588,7 +616,7 @@ func CfInfoToAPIModel(
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-		replicaConfig.maskSensitiveData()
+		replicaConfig.omitSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
@@ -1018,7 +1046,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	updateCfConfig := &ChangefeedConfig{}
+	updateCfConfig := &struct {
+		ChangefeedConfig
+		ReplicaConfig json.RawMessage `json:"replica_config"`
+	}{}
 	if err = c.BindJSON(updateCfConfig); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
@@ -1035,9 +1066,16 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 		targetTsUpdated = true
 	}
-	if updateCfConfig.ReplicaConfig != nil {
+	if len(updateCfConfig.ReplicaConfig) != 0 && string(updateCfConfig.ReplicaConfig) != "null" {
 		configUpdated = true
-		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		// Apply supplied fields to a copy of the real configuration. API responses
+		// omit credentials, and explicit replacement values are always used literally.
+		replicaConfig := ToAPIReplicaConfig(oldCfInfo.Config)
+		if err := json.Unmarshal(updateCfConfig.ReplicaConfig, replicaConfig); err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
+		oldCfInfo.Config = replicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true

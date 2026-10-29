@@ -19,6 +19,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -30,6 +31,7 @@ type saramaAsyncProducer struct {
 	client       sarama.Client
 	producer     sarama.AsyncProducer
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 
 	closed *atomic.Bool
 }
@@ -125,6 +127,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err error, logInfo *codecCommon.MessageLogInfo) error {
+	if p.statistics != nil {
+		p.statistics.RecordDMLError()
+	}
 	log.Error("kafka message send failed",
 		zap.String("keyspace", p.changefeedID.Keyspace()),
 		zap.String("changefeed", p.changefeedID.Name()),

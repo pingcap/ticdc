@@ -152,6 +152,7 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
+	ctx    context.Context
 	cancel context.CancelFunc
 
 	checkpointTsGauge    prometheus.Gauge
@@ -160,6 +161,11 @@ type Maintainer struct {
 	resolvedTsGauge    prometheus.Gauge
 	resolvedTsLagGauge prometheus.Gauge
 	eventChLenGauge    prometheus.Gauge
+
+	// The syncpoint gauges are nil until this maintainer sees its first syncpoint written,
+	// so that no series is reported before then. Only accessed by updateMetrics.
+	syncPointTsGauge    prometheus.Gauge
+	syncPointTsLagGauge prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -261,6 +267,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
 	m.cancel = cancel
 
 	go m.runHandleEvents(ctx)
@@ -484,6 +491,8 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerSyncPointTsLagGauge.DeleteLabelValues(keyspace, name)
 
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
@@ -876,6 +885,22 @@ func (m *Maintainer) updateMetrics() {
 	m.resolvedTsGauge.Set(float64(phyResolvedTs))
 	lag = float64(pdPhysicalTime-phyResolvedTs) / 1e3
 	m.resolvedTsLagGauge.Set(lag)
+
+	// Only report syncpoints written while this maintainer is running. Before the first
+	// one (or when syncpoint is disabled) there is no series.
+	syncPointTs := m.controller.barrier.GetLastSyncPointTs()
+	if syncPointTs == 0 {
+		return
+	}
+	if m.syncPointTsGauge == nil {
+		keyspace, name := m.changefeedID.Keyspace(), m.changefeedID.Name()
+		m.syncPointTsGauge = metrics.MaintainerSyncPointTsGauge.WithLabelValues(keyspace, name)
+		m.syncPointTsLagGauge = metrics.MaintainerSyncPointTsLagGauge.WithLabelValues(keyspace, name)
+	}
+	phySyncPointTs := oracle.ExtractPhysical(syncPointTs)
+	m.syncPointTsGauge.Set(float64(phySyncPointTs))
+	lag = float64(pdPhysicalTime-phySyncPointTs) / 1e3
+	m.syncPointTsLagGauge.Set(lag)
 }
 
 // send message to other components
@@ -1136,7 +1161,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
-	postBootstrapRequest, err := m.controller.FinishBootstrap(responses, isMySQLSinkCompatible)
+	postBootstrapRequest, err := m.controller.FinishBootstrap(m.ctx, responses, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

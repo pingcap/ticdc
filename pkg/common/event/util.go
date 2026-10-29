@@ -894,7 +894,7 @@ func (s *EventTestHelper) dropUserSchemas() {
 		if isSystemSchema(name) {
 			continue
 		}
-		s.tk.MustExec("drop database if exists `" + name + "`")
+		s.tk.MustExec("drop database if exists " + common.QuoteName(name))
 	}
 	s.tk.MustExec("create database if not exists test")
 }
@@ -971,12 +971,12 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 }
 
 // IsSplitable returns whether the table is eligible for split in all sinks
-// Only the table with pk and no uk can always be splitted in all sinks.
+// Only tables with a clustered primary key and no other unique key can be split in all sinks.
 func IsSplitable(tableInfo *common.TableInfo) bool {
 	// some ddl jobs do not have table info, such as drop database, we just ignore checking these jobs
 	if tableInfo == nil {
 		return true
 	}
 
-	return common.IsSplitable(tableInfo.GetPkColInfo(), tableInfo.GetIndices())
+	return common.IsSplitable(tableInfo.HasClusteredPrimaryKey(), tableInfo.GetIndices())
 }

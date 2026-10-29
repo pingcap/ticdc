@@ -17,20 +17,24 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
 const (
+	// MaskedSensitiveValue is the placeholder used when exposing sensitive
+	// configuration values.
+	MaskedSensitiveValue = "******"
+
 	// DefaultMaxMessageBytes sets the default value for max-message-bytes.
 	DefaultMaxMessageBytes = 10 * 1024 * 1024 // 10M
 	// DefaultAdvanceTimeoutInSec sets the default value for advance-timeout-in-sec.
@@ -130,11 +134,11 @@ func (l AtomicityLevel) validate(scheme string) error {
 		// MqSink only support `noneTxnAtomicity`.
 		if IsMQScheme(scheme) {
 			errMsg := fmt.Sprintf("%s level atomicity is not supported by %s scheme", l, scheme)
-			return cerror.ErrSinkURIInvalid.GenWithStackByArgs(errMsg)
+			return errors.ErrSinkURIInvalid.GenWithStackByArgs(errMsg)
 		}
 	default:
 		errMsg := fmt.Sprintf("%s level atomicity is not supported by %s scheme", l, scheme)
-		return cerror.ErrSinkURIInvalid.GenWithStackByArgs(errMsg)
+		return errors.ErrSinkURIInvalid.GenWithStackByArgs(errMsg)
 	}
 	return nil
 }
@@ -301,13 +305,13 @@ func (c *CSVConfig) validateAndAdjust() error {
 
 	// validate quote
 	if len(c.Quote) > 1 {
-		return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+		return errors.WrapError(errors.ErrSinkInvalidConfig,
 			errors.New("csv config quote contains more than one character"))
 	}
 	if len(c.Quote) == 1 {
 		quote := c.Quote[0]
 		if quote == CR || quote == LF {
-			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+			return errors.WrapError(errors.ErrSinkInvalidConfig,
 				errors.New("csv config quote cannot be line break character"))
 		}
 	}
@@ -315,15 +319,15 @@ func (c *CSVConfig) validateAndAdjust() error {
 	// validate delimiter
 	switch len(c.Delimiter) {
 	case 0:
-		return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+		return errors.WrapError(errors.ErrSinkInvalidConfig,
 			errors.New("csv config delimiter cannot be empty"))
 	case 1, 2, 3:
 		if strings.ContainsRune(c.Delimiter, CR) || strings.ContainsRune(c.Delimiter, LF) {
-			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+			return errors.WrapError(errors.ErrSinkInvalidConfig,
 				errors.New("csv config delimiter contains line break characters"))
 		}
 	default:
-		return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+		return errors.WrapError(errors.ErrSinkInvalidConfig,
 			errors.New("csv config delimiter contains more than three characters, note that escape "+
 				"sequences can only be used in double quotes in toml configuration items."))
 	}
@@ -331,7 +335,7 @@ func (c *CSVConfig) validateAndAdjust() error {
 	if len(c.Quote) > 0 {
 		for _, r := range c.Delimiter {
 			if strings.ContainsRune(c.Quote, r) {
-				return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+				return errors.WrapError(errors.ErrSinkInvalidConfig,
 					errors.New("csv config quote and delimiter has common characters which is not allowed"))
 			}
 		}
@@ -341,7 +345,7 @@ func (c *CSVConfig) validateAndAdjust() error {
 	switch c.BinaryEncodingMethod {
 	case BinaryEncodingHex, BinaryEncodingBase64:
 	default:
-		return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+		return errors.WrapError(errors.ErrSinkInvalidConfig,
 			errors.New("csv config binary-encoding-method can only be hex or base64"))
 	}
 
@@ -371,7 +375,7 @@ func (d *DateSeparator) FromString(separator string) error {
 	case "day":
 		*d = DateSeparatorDay
 	default:
-		return cerror.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(separator)
+		return errors.ErrStorageSinkInvalidDateSeparator.GenWithStackByArgs(separator)
 	}
 
 	return nil
@@ -385,7 +389,7 @@ func (d DateSeparator) MarshalText() ([]byte, error) {
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (d *DateSeparator) UnmarshalText(text []byte) error {
 	if err := d.FromString(string(text)); err != nil {
-		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
 			"invalid date separator %q", text)
 	}
 	return nil
@@ -542,7 +546,7 @@ func (k *KafkaConfig) MaskSensitiveData() {
 	}
 	for _, field := range sensitiveFields {
 		if field != nil && *field != "" {
-			*field = "******"
+			*field = MaskedSensitiveValue
 		}
 	}
 	if k.SASLOAuthTokenURL != nil {
@@ -710,13 +714,14 @@ func (c *PulsarConfig) GetOutputRawChangeEvent() bool {
 // MaskSensitiveData masks sensitive data in PulsarConfig
 func (c *PulsarConfig) MaskSensitiveData() {
 	if c.AuthenticationToken != nil {
-		c.AuthenticationToken = aws.String("******")
+		c.AuthenticationToken = aws.String(MaskedSensitiveValue)
 	}
 	if c.BasicPassword != nil {
-		c.BasicPassword = aws.String("******")
+		c.BasicPassword = aws.String(MaskedSensitiveValue)
 	}
 	if c.OAuth2 != nil {
-		c.OAuth2.OAuth2PrivateKey = "******"
+		c.OAuth2.OAuth2PrivateKey = MaskedSensitiveValue
+		c.OAuth2.OAuth2IssuerURL = util.MaskSensitiveDataInURI(c.OAuth2.OAuth2IssuerURL)
 	}
 }
 
@@ -798,13 +803,17 @@ func CheckUseTableIDAsPathCompatibility(
 	if util.GetOrZero(useTableIDAsPathFromConfig) == util.GetOrZero(useTableIDAsPathFromURI) {
 		return nil
 	}
-	return cerror.ErrIncompatibleSinkConfig.GenWithStackByArgs(
+	return errors.ErrIncompatibleSinkConfig.GenWithStackByArgs(
 		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromURI)),
 		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromConfig)),
 	)
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
+	s.DispatchRules = slices.DeleteFunc(s.DispatchRules, func(rule *DispatchRule) bool {
+		return rule == nil
+	})
+
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
 		return err
 	}
@@ -842,7 +851,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	if s.SchemaRegistry != nil &&
 		(s.KafkaConfig != nil && s.KafkaConfig.GlueSchemaRegistryConfig != nil) {
-		return cerror.ErrInvalidReplicaConfig.
+		return errors.ErrInvalidReplicaConfig.
 			GenWithStackByArgs("schema-registry and glue-schema-registry-config" +
 				"cannot be set at the same time," +
 				"schema-registry is used by confluent schema registry, " +
@@ -870,7 +879,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	for _, rule := range s.DispatchRules {
 		if rule.DispatcherRule != "" && rule.PartitionRule != "" {
 			log.Error("dispatcher and partition cannot be configured both", zap.Any("rule", rule))
-			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+			return errors.WrapError(errors.ErrSinkInvalidConfig,
 				errors.New(fmt.Sprintf("dispatcher and partition cannot be "+
 					"configured both for rule:%v", rule)))
 		}
@@ -884,7 +893,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	if util.GetOrZero(s.EncoderConcurrency) < 0 {
-		return cerror.ErrSinkInvalidConfig.GenWithStack(
+		return errors.ErrSinkInvalidConfig.GenWithStack(
 			"encoder-concurrency should greater than 0, but got %d", s.EncoderConcurrency)
 	}
 
@@ -894,7 +903,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	if util.GetOrZero(s.DeleteOnlyOutputHandleKeyColumns) && protocol == ProtocolCsv {
-		return cerror.ErrSinkInvalidConfig.GenWithStack(
+		return errors.ErrSinkInvalidConfig.GenWithStack(
 			"CSV protocol always output all columns for the delete event, " +
 				"do not set `delete-only-output-handle-key-columns` to true")
 	}
@@ -945,7 +954,7 @@ func (s *SinkConfig) validateAndAdjustSinkURI(sinkURI *url.URL) error {
 	}
 
 	if err := s.applyParameterBySinkURI(sinkURI); err != nil {
-		if !cerror.ErrIncompatibleSinkConfig.Equal(err) {
+		if !errors.ErrIncompatibleSinkConfig.Equal(err) {
 			return err
 		}
 		// Ignore `ErrIncompatibleSinkConfig` here to:
@@ -966,7 +975,7 @@ func (s *SinkConfig) validateAndAdjustSinkURI(sinkURI *url.URL) error {
 
 	// Check that protocol config is compatible with the scheme.
 	if IsMySQLCompatibleScheme(sinkURI.Scheme) && s.Protocol != nil {
-		return cerror.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("protocol %s "+
+		return errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("protocol %s "+
 			"is incompatible with %s scheme", util.GetOrZero(s.Protocol), sinkURI.Scheme))
 	}
 	// For testing purposes, any protocol should be legal for blackhole.
@@ -1066,7 +1075,7 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 			}
 			return errMsg.String()[0 : errMsg.Len()-2]
 		}
-		return cerror.ErrIncompatibleSinkConfig.GenWithStackByArgs(
+		return errors.ErrIncompatibleSinkConfig.GenWithStackByArgs(
 			getErrMsg(cfgInSinkURI), getErrMsg(cfgInFile))
 	}
 	return getError()
@@ -1078,7 +1087,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 ) error {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err))
 	}
 
 	var useTableIDAsPathFromURI *bool
@@ -1087,7 +1096,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 		if useTableIDAsPathValue != "" {
 			enabled, parseErr := strconv.ParseBool(useTableIDAsPathValue)
 			if parseErr != nil {
-				return cerror.WrapError(cerror.ErrSinkURIInvalid, parseErr)
+				return errors.WrapError(errors.ErrSinkURIInvalid, parseErr)
 			}
 			useTableIDAsPathFromURI = util.AddressOf(enabled)
 		}
@@ -1118,7 +1127,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)
-		if cerror.ErrIncompatibleSinkConfig.Equal(err) {
+		if errors.ErrIncompatibleSinkConfig.Equal(err) {
 			return true
 		}
 		if useTableIDAsPathFromURI == nil {
@@ -1139,7 +1148,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 	}
 
 	compatibilityError := s.applyParameterBySinkURI(sinkURI)
-	if uriParamsChanged && cerror.ErrIncompatibleSinkConfig.Equal(compatibilityError) {
+	if uriParamsChanged && errors.ErrIncompatibleSinkConfig.Equal(compatibilityError) {
 		// Ignore compatibility error if the sinkURI make such changes.
 		return nil
 	}
@@ -1162,15 +1171,15 @@ type GlueSchemaRegistryConfig struct {
 // Validate the GlueSchemaRegistryConfig.
 func (g *GlueSchemaRegistryConfig) Validate() error {
 	if g.RegistryName == "" {
-		return cerror.ErrInvalidGlueSchemaRegistryConfig.
+		return errors.ErrInvalidGlueSchemaRegistryConfig.
 			GenWithStack("registry-name is empty, is must be set")
 	}
 	if g.Region == "" {
-		return cerror.ErrInvalidGlueSchemaRegistryConfig.
+		return errors.ErrInvalidGlueSchemaRegistryConfig.
 			GenWithStack("region is empty, is must be set")
 	}
 	if g.AccessKey != "" && g.SecretAccessKey == "" {
-		return cerror.ErrInvalidGlueSchemaRegistryConfig.
+		return errors.ErrInvalidGlueSchemaRegistryConfig.
 			GenWithStack("access-key is set, but access-key-secret is empty, they must be set together")
 	}
 	return nil
@@ -1217,7 +1226,7 @@ func validateRoutingExpression(fieldName, expr string) error {
 	if expr == "" || validRoutingExpressionRegexp.MatchString(expr) {
 		return nil
 	}
-	return cerror.ErrInvalidTableRoutingRule.GenWithStack(
+	return errors.ErrInvalidTableRoutingRule.GenWithStack(
 		"%s %q must contain only literal text, {schema}, and {table}",
 		fieldName,
 		expr,
