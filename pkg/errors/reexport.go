@@ -21,6 +21,12 @@ import (
 
 type RFCErrorCode = perrors.RFCErrorCode
 
+const (
+	RedactLogEnable  = perrors.RedactLogEnable
+	RedactLogDisable = perrors.RedactLogDisable
+	RedactLogMarker  = perrors.RedactLogMarker
+)
+
 var (
 	// Is is a shortcut for errors.Is.
 	Is = errors.Is

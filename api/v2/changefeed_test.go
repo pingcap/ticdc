@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +144,135 @@ func TestDeleteMissingChangefeedRequiresAuthentication(t *testing.T) {
 	require.False(t, coordinator.removeCalled)
 }
 
+func TestGetChangefeedRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	const keyspaceID = uint32(42)
+	coordinator := &resumeNormalCoordinator{
+		info: &config.ChangeFeedInfo{
+			ChangefeedID: common.NewChangeFeedIDWithName("test", "keyspace-a"),
+			KeyspaceID:   keyspaceID,
+			State:        config.StateFailed,
+			Error: &config.RunningError{
+				Message: "sensitive-row-value",
+			},
+		},
+		status: &config.ChangeFeedStatus{},
+	}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds/test?keyspace=keyspace-a",
+		nil,
+	)
+	c.Params = gin.Params{{Key: api.APIOpVarChangefeedID, Value: "test"}}
+
+	handler.GetChangeFeed(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.NotContains(t, w.Body.String(), "sensitive-row-value")
+	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
+}
+
+func TestListChangefeedsRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	cfg.Security.ClientAllowedUser = []string{"alice"}
+	config.StoreGlobalServerConfig(cfg)
+
+	ctrl := gomock.NewController(t)
+	etcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient.EXPECT().GetEtcdClient().Return(nil)
+
+	const keyspaceID = uint32(42)
+	coordinator := &resumeNormalCoordinator{
+		listInfos: []*config.ChangeFeedInfo{
+			{
+				ChangefeedID: common.NewChangeFeedIDWithName("test", "deleted-keyspace"),
+				KeyspaceID:   keyspaceID,
+				State:        config.StateFailed,
+				Error: &config.RunningError{
+					Message: "sensitive-row-value",
+				},
+			},
+		},
+		listStatuses: []*config.ChangeFeedStatus{{CheckpointTs: 1}},
+	}
+	handler := &OpenAPIV2{server: &deleteMissingServer{
+		coordinator: coordinator,
+		etcdClient:  etcdClient,
+	}}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds?keyspace=deleted-keyspace",
+		nil,
+	)
+
+	handler.ListChangeFeeds(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.NotContains(t, w.Body.String(), "sensitive-row-value")
+	require.Equal(t, keyspaceID, middleware.GetKeyspaceFromContext(c).GetId())
+}
+
+func TestListChangefeedsAllowsEmptyResultWithoutAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = true
+	config.StoreGlobalServerConfig(cfg)
+
+	coordinator := &resumeNormalCoordinator{}
+	srv := &resumeNormalServer{coordinator: coordinator}
+	handler := &OpenAPIV2{server: srv}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/changefeeds?keyspace=deleted-keyspace",
+		nil,
+	)
+
+	handler.ListChangeFeeds(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.JSONEq(t, `{"total":0,"items":[]}`, w.Body.String())
+	require.False(t, srv.etcdClientRequested)
+}
+
 func TestLoadKeyspaceInContext(t *testing.T) {
 	if !kerneltype.IsNextGen() {
 		t.Skip("keyspace authentication context is only needed in next-gen")
@@ -162,6 +292,41 @@ func TestLoadKeyspaceInContext(t *testing.T) {
 	loadKeyspaceInContext(c, keyspaceManager)
 
 	require.Equal(t, uint32(1), middleware.GetKeyspaceFromContext(c).GetId())
+}
+
+func TestVerifyTableSkipsRedoStorageIOCheck(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	previous, _ := appcontext.TryGetService[keyspace.Manager](appcontext.KeyspaceManager)
+	t.Cleanup(func() { appcontext.SetService(appcontext.KeyspaceManager, previous) })
+	manager := keyspace.NewMockManager(gomock.NewController(t))
+	manager.EXPECT().GetStorage(gomock.Any(), common.DefaultKeyspaceName).
+		Return(nil, errors.New("stop after replica config validation"))
+	appcontext.SetService[keyspace.Manager](appcontext.KeyspaceManager, manager)
+
+	storageDir := filepath.Join(t.TempDir(), "redo")
+	replicaConfig := GetDefaultReplicaConfig()
+	replicaConfig.Consistent.Level = new("eventual")
+	replicaConfig.Consistent.Storage = new("nfs://" + storageDir)
+	body, err := json.Marshal(&ChangefeedConfig{
+		SinkURI:       "blackhole://",
+		ReplicaConfig: replicaConfig,
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v2/verify_table?keyspace="+common.DefaultKeyspaceName,
+		strings.NewReader(string(body)),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	(&OpenAPIV2{}).VerifyTable(c)
+
+	require.Len(t, c.Errors, 1)
+	require.NoDirExists(t, storageDir)
 }
 
 // TestValidateResumeChangefeedState covers the API-side guard that runs before
@@ -246,6 +411,8 @@ func (s *resumeNormalServer) GetMaintainerManager() *maintainer.Manager { return
 type resumeNormalCoordinator struct {
 	info         *config.ChangeFeedInfo
 	status       *config.ChangeFeedStatus
+	listInfos    []*config.ChangeFeedInfo
+	listStatuses []*config.ChangeFeedStatus
 	updated      *config.ChangeFeedInfo
 	resumeCalled bool
 }
@@ -255,7 +422,7 @@ func (c *resumeNormalCoordinator) Stop() {}
 func (c *resumeNormalCoordinator) Run(ctx context.Context) error { return nil }
 
 func (c *resumeNormalCoordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
-	return nil, nil, nil
+	return c.listInfos, c.listStatuses, nil
 }
 
 func (c *resumeNormalCoordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
