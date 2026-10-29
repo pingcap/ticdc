@@ -69,5 +69,6 @@ run_mockgen -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/gc_c
 run_mockgen -source pkg/redo/writer/writer.go -destination pkg/redo/writer/writer_mock.go -package writer
 run_mockgen -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock
 run_mockgen -destination pkg/messaging/mock/message_center_mock.go -package mock github.com/pingcap/ticdc/pkg/messaging MessageCenter
+run_mockgen -source pkg/snapshot/bootstrap/interfaces.go -destination pkg/snapshot/bootstrap/interfaces_mock_test.go -package bootstrap
 
 wait_for_batch

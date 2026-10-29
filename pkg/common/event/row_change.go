@@ -88,7 +88,14 @@ type TopicPartitionKey struct {
 	TotalPartition int32
 }
 
+type SnapshotRow struct {
+	ID         string
+	SnapshotID string
+	Timestamp  uint64
+}
+
 type RowEvent struct {
+	Snapshot        *SnapshotRow
 	PhysicalTableID int64
 	TableInfo       *common.TableInfo
 	StartTs         uint64

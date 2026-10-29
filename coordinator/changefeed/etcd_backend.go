@@ -181,30 +181,29 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 	if err != nil {
 		return errors.Trace(err)
 	}
-	status := &config.ChangeFeedStatus{
-		CheckpointTs: checkpointTs,
-		Progress:     progress,
+	for retry := 0; retry < 20; retry++ {
+		status, revision, err := b.etcdClient.GetChangeFeedStatus(ctx, info.ChangefeedID)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		status.CheckpointTs = checkpointTs
+		status.Progress = progress
+		statusStr, err := status.Marshal()
+		if err != nil {
+			return err
+		}
+		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), info.ChangefeedID.DisplayName)
+		resp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+			[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(jobKey), "=", revision)},
+			[]clientv3.Op{clientv3.OpPut(infoKey, newStr), clientv3.OpPut(jobKey, statusStr)}, nil)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if resp.Succeeded {
+			return nil
+		}
 	}
-	statusStr, err := status.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), info.ChangefeedID.DisplayName)
-	opsThen := []clientv3.Op{}
-	opsThen = append(opsThen,
-		clientv3.OpPut(infoKey, newStr),
-		clientv3.OpPut(jobKey, statusStr),
-	)
-
-	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, []clientv3.Cmp{}, opsThen, []clientv3.Op{})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("update changefeed %s failed", info.ChangefeedID.Name()))
-		return errors.Trace(err)
-	}
-	return nil
+	return cerror.ErrMetaOpFailed.GenWithStackByArgs("update changefeed status contention")
 }
 
 // FinishInit acknowledges initialization without overwriting status
@@ -387,35 +386,11 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 		return errors.Trace(err)
 	}
 	info.State = config.StateStopped
-	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
-	inforValue, err := info.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
 	status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-	status.Progress = config.ProgressStopping
 	if err != nil {
 		return errors.Trace(err)
 	}
-	jobValue, err := status.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
-	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, nil,
-		[]clientv3.Op{
-			clientv3.OpPut(jobKey, jobValue),
-			clientv3.OpPut(infoKey, inforValue),
-		},
-		[]clientv3.Op{})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("pause changefeed %s failed", id.DisplayName))
-		return errors.Trace(err)
-	}
-	return nil
+	return b.UpdateChangefeed(ctx, info, status.CheckpointTs, config.ProgressStopping)
 }
 
 func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
@@ -492,40 +467,40 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 }
 
 func (b *EtcdBackend) UpdateChangefeedCheckpointTs(ctx context.Context, cps map[common.ChangeFeedID]uint64) error {
-	opsThen := make([]clientv3.Op, 0, 128)
-	batchSize := 0
-
-	txnFunc := func() error {
-		putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, []clientv3.Cmp{}, opsThen, []clientv3.Op{})
-		if err != nil {
-			return errors.Trace(err)
-		}
-		logEtcdOps(opsThen, putResp.Succeeded)
-		if !putResp.Succeeded {
-			return errors.New("commit failed")
-		}
-		return err
+	ids := make([]common.ChangeFeedID, 0, len(cps))
+	for id := range cps {
+		ids = append(ids, id)
 	}
-	for cfID, checkpointTs := range cps {
-		status := &config.ChangeFeedStatus{CheckpointTs: checkpointTs, Progress: config.ProgressNone}
-		jobValue, err := status.Marshal()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), cfID.DisplayName)
-		opsThen = append(opsThen, clientv3.OpPut(jobKey, jobValue))
-		batchSize++
-		if batchSize >= 128 {
-			if err = txnFunc(); err != nil {
+	for start := 0; start < len(ids); start += 128 {
+		saved := false
+		for retry := 0; retry < 20; retry++ {
+			var ops []clientv3.Op
+			var comparisons []clientv3.Cmp
+			for _, id := range ids[start:min(start+128, len(ids))] {
+				status, revision, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				status.CheckpointTs = max(status.CheckpointTs, cps[id])
+				value, err := status.Marshal()
+				if err != nil {
+					return err
+				}
+				key := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
+				comparisons = append(comparisons, clientv3.Compare(clientv3.ModRevision(key), "=", revision))
+				ops = append(ops, clientv3.OpPut(key, value))
+			}
+			response, err := b.etcdClient.GetEtcdClient().Txn(ctx, comparisons, ops, nil)
+			if err != nil {
 				return errors.Trace(err)
 			}
-			opsThen = opsThen[:0]
-			batchSize = 0
+			if response.Succeeded {
+				saved = true
+				break
+			}
 		}
-	}
-	if batchSize > 0 {
-		if err := txnFunc(); err != nil {
-			return errors.Trace(err)
+		if !saved {
+			return cerror.ErrMetaOpFailed.GenWithStackByArgs("checkpoint CAS contention")
 		}
 	}
 	return nil

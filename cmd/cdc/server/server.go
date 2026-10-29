@@ -76,6 +76,10 @@ func (o *options) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.serverConfig.LogLevel, "log-level", o.serverConfig.LogLevel, "log level (etc: debug|info|warn|error)")
 
 	cmd.Flags().StringVar(&o.serverConfig.DataDir, "data-dir", o.serverConfig.DataDir, "the path to the directory used to store TiCDC-generated data")
+	cmd.Flags().StringVar(&o.serverConfig.SnapshotCSEBinary, "snapshot-cse-binary", o.serverConfig.SnapshotCSEBinary, "CSE binary for embedded packed-backup snapshot export")
+	cmd.Flags().StringVar(&o.serverConfig.SnapshotArtifactDir, "snapshot-artifact-dir", o.serverConfig.SnapshotArtifactDir, "persistent artifact directory for embedded snapshot export")
+	cmd.Flags().IntVar(&o.serverConfig.SnapshotExportWorkers, "snapshot-export-workers", o.serverConfig.SnapshotExportWorkers, "maximum concurrent local snapshot export processes per changefeed")
+	cmd.Flags().Int64Var(&o.serverConfig.SnapshotMinFreeBytes, "snapshot-min-free-bytes", o.serverConfig.SnapshotMinFreeBytes, "minimum free bytes before starting another snapshot range")
 
 	cmd.Flags().StringSliceVar(&o.pdEndpoints, "pd", []string{"http://127.0.0.1:2379"}, "Set the PD endpoints to use. Use ',' to separate multiple PDs")
 	cmd.Flags().StringVar(&o.serverConfigFilePath, "config", "", "Path of the configuration file")
@@ -212,6 +216,14 @@ func (o *options) complete(command *cobra.Command) error {
 			cfg.LogLevel = o.serverConfig.LogLevel
 		case "data-dir":
 			cfg.DataDir = o.serverConfig.DataDir
+		case "snapshot-cse-binary":
+			cfg.SnapshotCSEBinary = o.serverConfig.SnapshotCSEBinary
+		case "snapshot-artifact-dir":
+			cfg.SnapshotArtifactDir = o.serverConfig.SnapshotArtifactDir
+		case "snapshot-export-workers":
+			cfg.SnapshotExportWorkers = o.serverConfig.SnapshotExportWorkers
+		case "snapshot-min-free-bytes":
+			cfg.SnapshotMinFreeBytes = o.serverConfig.SnapshotMinFreeBytes
 		case "ca":
 			cfg.Security.CAPath = o.serverConfig.Security.CAPath
 		case "cert":

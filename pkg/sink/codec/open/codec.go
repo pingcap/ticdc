@@ -45,6 +45,11 @@ func encodeRowChangedEvent(
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
+		if e.Snapshot != nil {
+			keyWriter.WriteStringField("snapshot_record_id", e.Snapshot.ID)
+			keyWriter.WriteStringField("snapshot_id", e.Snapshot.SnapshotID)
+			keyWriter.WriteUint64Field("snapshot_ts", e.Snapshot.Timestamp)
+		}
 		keyWriter.WriteStringField("scm", e.TableInfo.GetTargetSchemaName())
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTargetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeRow))

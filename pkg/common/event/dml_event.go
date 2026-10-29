@@ -377,6 +377,8 @@ func (b *BatchDMLEvent) DMLCount() int {
 
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.
 type DMLEvent struct {
+	// Snapshot is local capture metadata; never transported through EventStore.
+	Snapshot *SnapshotRow `json:"-"`
 	// Version is the version of the DMLEvent struct.
 	Version         int                 `json:"version"`
 	DispatcherID    common.DispatcherID `json:"dispatcher_id"`

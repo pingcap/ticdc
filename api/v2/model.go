@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
+	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -212,17 +213,18 @@ func (d *JSONDuration) UnmarshalText(text []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	PerformanceMode          *string `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
-	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
-	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
-	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
-	CaseSensitive            *bool   `json:"case_sensitive,omitempty" toml:"case-sensitive,omitempty"`
-	ForceReplicate           *bool   `json:"force_replicate,omitempty" toml:"force-replicate,omitempty"`
-	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty" toml:"ignore-ineligible-table,omitempty"`
-	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty" toml:"check-gc-safe-point,omitempty"`
-	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
-	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
-	BDRMode                  *bool   `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
+	Snapshot                 *protocol.Config `json:"snapshot,omitempty"`
+	PerformanceMode          *string          `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
+	MemoryQuota              *uint64          `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
+	EventCollectorBatchCount *int             `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int             `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
+	CaseSensitive            *bool            `json:"case_sensitive,omitempty" toml:"case-sensitive,omitempty"`
+	ForceReplicate           *bool            `json:"force_replicate,omitempty" toml:"force-replicate,omitempty"`
+	IgnoreIneligibleTable    *bool            `json:"ignore_ineligible_table,omitempty" toml:"ignore-ineligible-table,omitempty"`
+	CheckGCSafePoint         *bool            `json:"check_gc_safe_point,omitempty" toml:"check-gc-safe-point,omitempty"`
+	EnableSyncPoint          *bool            `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
+	EnableTableMonitor       *bool            `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
+	BDRMode                  *bool            `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
 	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
 	// By default TiCDC rejects such a changefeed to avoid self-replication loops.
 	AllowSameCluster *bool `json:"allow_same_cluster,omitempty" toml:"allow-same-cluster,omitempty"`
@@ -263,6 +265,9 @@ func (c *ReplicaConfig) ToInternalReplicaConfig() *config.ReplicaConfig {
 func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	res *config.ReplicaConfig,
 ) *config.ReplicaConfig {
+	if c.Snapshot != nil {
+		res.Snapshot = c.Snapshot
+	}
 	if c.PerformanceMode != nil {
 		res.PerformanceMode = c.PerformanceMode
 	}
@@ -729,6 +734,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
+		Snapshot:                 cloned.Snapshot,
 		PerformanceMode:          cloned.PerformanceMode,
 		MemoryQuota:              cloned.MemoryQuota,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
@@ -1421,11 +1427,13 @@ type ResolveLockReq struct {
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
-	UpstreamID uint64    `json:"upstream_id,omitempty" toml:"upstream-id,omitempty"`
-	ID         string    `json:"id" toml:"id"`
-	Keyspace   string    `json:"keyspace" toml:"keyspace"`
-	SinkURI    string    `json:"sink_uri,omitempty" toml:"sink-uri,omitempty"`
-	CreateTime time.Time `json:"create_time" toml:"create-time"`
+	Snapshot          *protocol.State `json:"snapshot,omitempty"`
+	BootstrapComplete bool            `json:"bootstrap_complete"`
+	UpstreamID        uint64          `json:"upstream_id,omitempty" toml:"upstream-id,omitempty"`
+	ID                string          `json:"id" toml:"id"`
+	Keyspace          string          `json:"keyspace" toml:"keyspace"`
+	SinkURI           string          `json:"sink_uri,omitempty" toml:"sink-uri,omitempty"`
+	CreateTime        time.Time       `json:"create_time" toml:"create-time"`
 	// Start sync at this commit ts if `StartTs` is specify or using the CreateTime of changefeed.
 	StartTs uint64 `json:"start_ts,omitempty" toml:"start-ts,omitempty"`
 	// The ChangeFeed will exits until sync to timestamp TargetTs

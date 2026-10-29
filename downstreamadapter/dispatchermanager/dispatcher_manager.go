@@ -148,7 +148,10 @@ type DispatcherManager struct {
 	// writeSink is the capture-write-gated view passed to dispatchers.
 	// sink remains the concrete implementation used for lifecycle and
 	// sink-specific recovery operations.
-	writeSink sink.Sink
+	writeSink       sink.Sink
+	sinkStopped     chan struct{}
+	snapshotMu      sync.Mutex
+	snapshotRuntime *snapshotRuntime
 
 	// redo related
 	// redoEnabled is immutable and set to true if enabled.
@@ -236,6 +239,7 @@ func NewDispatcherManager(
 	}
 
 	manager = &DispatcherManager{
+		sinkStopped:           make(chan struct{}),
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
@@ -393,6 +397,7 @@ func NewDispatcherManager(
 	go func() {
 		defer manager.wg.Done()
 		err := manager.sink.Run(ctx)
+		close(manager.sinkStopped)
 		manager.handleError(ctx, err)
 	}()
 
