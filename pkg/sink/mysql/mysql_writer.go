@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -159,7 +158,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 // the writer is shutting down, so callers must not execute the downstream write.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
-		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 		return true
 	}
 	for {
@@ -167,7 +166,7 @@ func (w *Writer) grantWrite() bool {
 			return false
 		}
 		if w.writeGate.IsWritable() {
-			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 			return true
 		}
 	}

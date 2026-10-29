@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -445,8 +444,8 @@ func (oc *Controller) finalizeOperator(
 	delete(oc.lastWarnTime, opID)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-	metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+	operatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
@@ -535,8 +534,8 @@ func (oc *Controller) pushOperatorWithAdmission(
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
-	metrics.TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	totalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 	return true
 }
 
@@ -703,9 +702,9 @@ func (oc *Controller) Close() {
 	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
 
 	for _, opType := range opTypes {
-		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		totalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
 	}
 }
 

@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -168,7 +167,7 @@ func (c *NodeManager) Run(ctx context.Context) error {
 		"capture-manager")
 
 	state := orchestrator.NewGlobalState(c.etcdClient.GetClusterID(), cfg.CaptureSessionTTL)
-	metrics.CaptureSafeToRescheduleDelaySeconds.Set(float64(state.CaptureRemoveTTLSeconds()))
+	captureSafeToRescheduleDelaySeconds.Set(float64(state.CaptureRemoveTTLSeconds()))
 	return watcher.RunEtcdWorker(ctx, c, state, time.Millisecond*50)
 }
 

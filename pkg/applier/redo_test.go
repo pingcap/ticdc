@@ -25,6 +25,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"

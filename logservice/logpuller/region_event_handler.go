@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -29,16 +28,16 @@ import (
 )
 
 var (
-	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = pullerEventCounter.WithLabelValues("event")
 
-	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
-	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
-	metricRegionEventHandleDurationMixed    = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
-	metricRegionEventHandleDurationError    = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("error")
+	metricRegionEventHandleDurationEntries  = subscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
+	metricRegionEventHandleDurationResolved = subscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
+	metricRegionEventHandleDurationMixed    = subscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
+	metricRegionEventHandleDurationError    = subscriptionClientRegionEventHandleDuration.WithLabelValues("error")
 
-	metricConsumeKVEventsCallbackDurationClearCache        = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
-	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
-	metricConsumeKVEventsCallbackDurationWakeSubscription  = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
+	metricConsumeKVEventsCallbackDurationClearCache        = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
+	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
+	metricConsumeKVEventsCallbackDurationWakeSubscription  = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
 )
 
 const (

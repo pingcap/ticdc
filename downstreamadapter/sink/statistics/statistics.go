@@ -14,10 +14,10 @@
 package statistics
 
 import (
-	"strconv"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 )
@@ -29,7 +29,7 @@ func New(
 ) *Statistics {
 	stats := &Statistics{
 		changefeedID: changefeed,
-		keyspaceID:   strconv.FormatUint(uint64(keyspaceID), 10),
+		keyspaceID:   metrics.FormatKeyspaceID(keyspaceID),
 	}
 
 	keyspace := changefeed.Keyspace()
@@ -114,7 +114,7 @@ func (b *Statistics) Close() {
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	executionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
 	execDDLCounter.DeletePartialMatch(prometheus.Labels{
-		getKeyspaceLabel(): keyspace,
-		"changefeed":       changefeedID,
+		metrics.GetKeyspaceLabel(): keyspace,
+		"changefeed":               changefeedID,
 	})
 }

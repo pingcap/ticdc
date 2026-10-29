@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
@@ -270,7 +269,7 @@ func (c *memoryQuotaController) AcquireEvent(
 	acquired := c.eventNotifier.wait(ctx, span, func() bool {
 		return c.tryAcquireEvent(bytes)
 	})
-	metrics.LogPullerMemoryQuotaEventWaitDuration.Observe(time.Since(start).Seconds())
+	logPullerMemoryQuotaEventWaitDuration.Observe(time.Since(start).Seconds())
 	return acquired
 }
 
@@ -323,12 +322,12 @@ func (c *memoryQuotaController) UpdateMetrics() {
 	scanUsed := c.scanUsed
 	c.scanMu.Unlock()
 
-	metrics.LogPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
-	metrics.LogPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
-	metrics.LogPullerMemoryQuota.WithLabelValues("scan_estimated").Set(float64(scanUsed))
-	metrics.LogPullerMemoryQuotaEventWaiterCount.Set(
+	logPullerMemoryQuota.WithLabelValues("max").Set(float64(c.capacity))
+	logPullerMemoryQuota.WithLabelValues("used").Set(float64(used))
+	logPullerMemoryQuota.WithLabelValues("scan_estimated").Set(float64(scanUsed))
+	logPullerMemoryQuotaEventWaiterCount.Set(
 		float64(c.eventNotifier.waiters.Load()))
-	metrics.LogPullerMemoryQuotaScanWaiterCount.Set(
+	logPullerMemoryQuotaScanWaiterCount.Set(
 		float64(c.scanWaiters.Load()))
 }
 

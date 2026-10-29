@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/encryption"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -1659,7 +1658,7 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		callback: func() {},
 	}}
 
-	beforeMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+	beforeMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
 
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
@@ -1668,7 +1667,7 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	var rawValueBuf []byte
 	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
-	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+	afterMetric := testutil.ToFloat64(eventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
 
 	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -1733,9 +1732,9 @@ func TestEventStoreKVEntryCount(t *testing.T) {
 	}}
 
 	entryMetrics := []prometheus.Counter{
-		metrics.EventStoreKVEntryCount.WithLabelValues("insert"),
-		metrics.EventStoreKVEntryCount.WithLabelValues("update"),
-		metrics.EventStoreKVEntryCount.WithLabelValues("delete"),
+		eventStoreKVEntryCount.WithLabelValues("insert"),
+		eventStoreKVEntryCount.WithLabelValues("update"),
+		eventStoreKVEntryCount.WithLabelValues("delete"),
 	}
 	before := make([]float64, len(entryMetrics))
 	for i, metric := range entryMetrics {
