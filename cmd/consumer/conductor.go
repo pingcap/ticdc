@@ -19,6 +19,7 @@ import (
 	"context"
 	"math"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/pingcap/log"
@@ -92,12 +93,7 @@ func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) e
 		case <-c.decoder.completed:
 		case <-w.completed:
 		}
-		for task := c.next(); task != nil; task = c.next() {
-			c.decoding = append(c.decoding, task)
-		}
-		c.deliver(c.collectDecoded(), w)
-		c.updateWatermark(w)
-		if err := w.flushDML(ctx); err != nil {
+		if err := c.flush(ctx, w); err != nil {
 			if ctx.Err() == nil {
 				log.Error("consumer DML submission failed", zap.Error(err))
 			}
@@ -116,65 +112,60 @@ func (c *conductor) close() {
 	c.decoder.close()
 }
 
-// Join conversions in table order without making independent tables wait.
-func (c *conductor) collectDecoded() []pendingTask {
-	var items []pendingTask
-	var blockedRows []*decodeTask
-	var blockedControls []pendingTask
-	blockedTables := make(map[int64]bool)
-	remaining := c.decoding[:0]
-	for _, item := range c.decoding {
-		ready := true
-		row, isRow := item.(*decodeTask)
-		if isRow {
-			select {
-			case <-row.done:
-			default:
-				ready = false
-			}
-			ready = ready && !blockedTables[row.tableID]
+// Resolve only a bounded, converted prefix into the writer. Unselected work
+// stays in its input/table group and contributes its head to progress.
+func (c *conductor) flush(ctx context.Context, w *writer) error {
+	for {
+		c.updateWatermark(w)
+		if err := w.flushDML(ctx); err != nil {
+			return err
 		}
-		for _, prior := range blockedControls {
-			switch prior := prior.(type) {
-			case *ddlTask:
-				ready = ready && isRow && !ddlBlocksTask(prior.ddl, row)
-			case *watermark:
-				if _, progress := item.(*watermark); progress {
-					ready = false
-				}
+		if len(w.pendingDML) != 0 {
+			return nil
+		}
+		active := make(map[int64]*dmlWrite)
+		for _, batch := range w.inFlight {
+			for _, row := range batch.items {
+				active[row.dml.PhysicalTableID] = row
 			}
 		}
-		switch item := item.(type) {
-		case *ddlTask:
-			for _, prior := range blockedRows {
-				if ddlBlocksTask(item.ddl, prior) {
-					ready = false
-					break
-				}
+		tables := make(map[int64]*dmlWrite)
+		var items []pendingTask
+		var rows, events int
+		var bytes int64
+		canWrite := func(task *decodeTask) bool {
+			if w.inFlightEvents+events != 0 &&
+				(w.inFlightEvents+events+1 > maxInFlightEvents || w.inFlightBytes+bytes+task.bytes > maxInFlightBytes) {
+				return false
 			}
-		case *watermark:
-			for _, prior := range blockedRows {
-				if prior.commitTs <= item.watermark {
-					ready = false
-					break
-				}
+			row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: c.mergeRows}
+			if !w.canWrite(row, active, tables) {
+				return false
+			}
+			tables[row.dml.PhysicalTableID] = row
+			rows += int(task.dml.Len())
+			events++
+			bytes += task.bytes
+			return true
+		}
+		for len(items) < batchRows && rows < batchRows && bytes < batchBytes {
+			item := c.next(canWrite)
+			if item == nil {
+				break
+			}
+			items = append(items, item)
+			if _, ddl := item.(*ddlTask); ddl {
+				break
 			}
 		}
-		if !ready {
-			remaining = append(remaining, item)
-			if isRow {
-				blockedTables[row.tableID] = true
-				blockedRows = append(blockedRows, row)
-			} else {
-				blockedControls = append(blockedControls, item)
-			}
-			continue
+		if len(items) == 0 {
+			// Selection can retire a covered DDL replica without delivering work.
+			c.updateWatermark(w)
+			return w.flushDML(ctx)
 		}
-		items = append(items, item)
+		// Register the resolved prefix in the writer before updating progress.
+		c.deliver(items, w)
 	}
-	clear(c.decoding[len(remaining):])
-	c.decoding = remaining
-	return items
 }
 
 func (c *conductor) deliver(items []pendingTask, w *writer) {
@@ -315,22 +306,12 @@ type conductor struct {
 	watermark         uint64
 	mergeRows         bool
 	sortCSVRows       bool
-	decoding          []pendingTask
-	pendingDML        []*decodeTask
+	pendingDML        map[int64]map[int32][]*decodeTask
+	pendingDMLCount   int
+	orderedDML        bool
 	pendingDDL        []*ddlTask
 	controlTs         uint64
-	scanIndex         int
-	priorityIndex     int
-	scanWatermark     uint64
-	scanDDL           *ddlTask
-	scanDDLReady      bool
-	scanInvalid       bool
-	scanBlocked       map[int64]uint64
-	scanBoundaries    map[*readBoundary]uint64
-	holes             int
-	waitingWatermark  uint64
-	waitingCount      int
-	waitingKnown      bool
+	blockedBoundaries map[*readBoundary]uint64
 }
 
 type ddlInput struct {
@@ -340,13 +321,36 @@ type ddlInput struct {
 
 // queueDML takes the input lease transferred by the source parser.
 func (c *conductor) queueDML(item *decodeTask) {
-	if len(c.pendingDML) == 0 {
-		c.scanInvalid = true
+	if c.pendingDML == nil {
+		c.pendingDML = make(map[int64]map[int32][]*decodeTask)
 	}
-	c.pendingDML = append(c.pendingDML, item)
-	if c.waitingKnown && item.commitTs <= c.waitingWatermark {
-		c.waitingCount++
+	groups := c.pendingDML[item.tableID]
+	if groups == nil {
+		groups = make(map[int32][]*decodeTask)
+		c.pendingDML[item.tableID] = groups
 	}
+	rows := append(groups[item.stream], item)
+	// Kafka preserves commit order within a table/partition. Other sources
+	// retain the ability to receive an earlier timestamp before resolution.
+	if !c.orderedDML && len(rows) > 1 && item.commitTs < rows[len(rows)-2].commitTs {
+		slices.SortStableFunc(rows, func(a, b *decodeTask) int {
+			return cmp.Compare(a.commitTs, b.commitTs)
+		})
+	}
+	groups[item.stream] = rows
+	c.pendingDMLCount++
+}
+
+// The earliest head across inputs preserves table order while conversions run
+// concurrently. Within each group, consuming a prefix just shortens the slice.
+func firstDML(groups map[int32][]*decodeTask) *decodeTask {
+	var first *decodeTask
+	for _, rows := range groups {
+		if first == nil || rows[0].commitTs < first.commitTs {
+			first = rows[0]
+		}
+	}
+	return first
 }
 
 func setDDLTableNames(ddl *event.DDLEvent) error {
@@ -398,10 +402,6 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 }
 
 func (c *conductor) queueDDL(ddl *event.DDLEvent, record *ack) *ddlInput {
-	c.scanInvalid = true
-	if c.waitingKnown && ddl.GetCommitTs() <= c.waitingWatermark {
-		c.waitingCount++
-	}
 	record.retain()
 	c.pendingDDL = append(c.pendingDDL, &ddlTask{
 		ddl:     ddl,
@@ -423,7 +423,9 @@ func (c *conductor) queueDDL(ddl *event.DDLEvent, record *ack) *ddlInput {
 	return input
 }
 
-func (c *conductor) nextReady(watermark uint64) pendingTask {
+func (c *conductor) nextReady(watermark uint64, canWrite func(*decodeTask) bool) pendingTask {
+	c.controlTs = 0
+	clear(c.blockedBoundaries)
 	var head *ddlTask
 	for len(c.pendingDDL) != 0 {
 		head = c.pendingDDL[0]
@@ -442,17 +444,15 @@ func (c *conductor) nextReady(watermark uint64) pendingTask {
 		head.awaitingDDL = false
 		head.onFlush()
 		c.popDDL()
-		c.scanInvalid = true
 		head = nil
 	}
 	headReady := head != nil && ddlReady(head, watermark)
-	c.prepareScan(watermark, head, headReady)
 	if headReady {
-		if result := c.drainDDL(head, watermark); result != nil {
+		if result := c.drainDDL(head, watermark, canWrite); result != nil {
 			return result
 		}
 	}
-	if row := c.nextDML(watermark); row != nil {
+	if row := c.nextDML(watermark, canWrite); row != nil {
 		return row
 	}
 	return nil
@@ -478,46 +478,22 @@ func ddlReady(item *ddlTask, watermark uint64) bool {
 	}
 }
 
-func (c *conductor) prepareScan(watermark uint64, head *ddlTask, headReady bool) {
-	reset := c.scanInvalid || c.scanWatermark != watermark || c.scanDDL != head || c.scanDDLReady != headReady || c.scanIndex > len(c.pendingDML)
-	for boundary, before := range c.scanBoundaries {
-		reset = reset || boundary.reached || (boundary.watermark != nil && *boundary.watermark != before)
-	}
-	c.scanWatermark, c.scanDDL, c.scanDDLReady = watermark, head, headReady
-	if !reset {
-		return
-	}
-	c.scanIndex, c.priorityIndex, c.scanBlocked = 0, 0, nil
-	c.controlTs = 0
-	clear(c.scanBoundaries)
-	c.scanInvalid = false
-}
-
-// Drain the first preceding row in the DDL scope, or emit the DDL when no such
-// row remains. Independent tables can still progress through nextDML.
-func (c *conductor) drainDDL(head *ddlTask, watermark uint64) pendingTask {
-	for index := c.priorityIndex; index < len(c.pendingDML); index++ {
-		pending := c.pendingDML[index]
-		if pending == nil || pending.commitTs > head.ddl.GetCommitTs() || !ddlBlocksTask(head.ddl, pending) {
+// Emit a ready preceding row from the DDL scope, or the DDL once all such
+// rows have moved to writer batches. The writer waits for their flush callbacks.
+func (c *conductor) drainDDL(head *ddlTask, watermark uint64, canWrite func(*decodeTask) bool) pendingTask {
+	preceding := false
+	for _, groups := range c.pendingDML {
+		row := firstDML(groups)
+		if row.commitTs > head.ddl.GetCommitTs() || !ddlBlocksTask(head.ddl, row) {
 			continue
 		}
-		c.priorityIndex = index
-		if pending.boundary != nil && !pending.boundary.reached {
-			if c.scanBoundaries == nil {
-				c.scanBoundaries = make(map[*readBoundary]uint64)
-			}
-			var through uint64
-			if pending.boundary.watermark != nil {
-				through = *pending.boundary.watermark
-			}
-			c.scanBoundaries[pending.boundary] = through
+		preceding = true
+		if c.rowReady(row, watermark) && canWrite(row) {
+			return c.popDML(row)
 		}
-		if c.dmlReady(pending, watermark) && !slices.ContainsFunc(c.pendingDDL, func(ddl *ddlTask) bool {
-			return pending.commitTs > ddl.ddl.GetCommitTs() && ddlBlocksTask(ddl.ddl, pending)
-		}) {
-			c.priorityIndex = max(c.priorityIndex, index+1)
-			return c.popDML(index)
-		}
+		c.trackDMLWait(row, watermark)
+	}
+	if preceding {
 		return nil
 	}
 	return c.popDDL()
@@ -525,9 +501,6 @@ func (c *conductor) drainDDL(head *ddlTask, watermark uint64) pendingTask {
 
 func (c *conductor) popDDL() *ddlTask {
 	item := c.pendingDDL[0]
-	if c.waitingKnown && item.ddl.GetCommitTs() <= c.waitingWatermark {
-		c.waitingCount--
-	}
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
 	key := ddlKey{
@@ -542,50 +515,44 @@ func (c *conductor) popDDL() *ddlTask {
 	return item
 }
 
-func (c *conductor) nextDML(watermark uint64) *decodeTask {
-	for c.scanIndex < len(c.pendingDML) {
-		index := c.scanIndex
-		c.scanIndex++
-		result := c.pendingDML[index]
-		if result == nil {
-			continue
+func (c *conductor) nextDML(watermark uint64, canWrite func(*decodeTask) bool) *decodeTask {
+	for _, groups := range c.pendingDML {
+		row := firstDML(groups)
+		if c.rowReady(row, watermark) && canWrite(row) {
+			return c.popDML(row)
 		}
-		tableID := result.tableID
-		if ts, ok := c.scanBlocked[tableID]; ok && ts <= result.commitTs {
-			continue
-		}
-		// Every queued DDL fences its own post-DDL rows.
-		known := c.dmlReady(result, watermark)
-		ready := known && !slices.ContainsFunc(c.pendingDDL, func(ddl *ddlTask) bool {
-			return result.commitTs > ddl.ddl.GetCommitTs() && ddlBlocksTask(ddl.ddl, result)
-		})
-		if ready {
-			return c.popDML(index)
-		}
-		// A later row must not overtake an earlier row waiting for its proof.
-		if result.boundary != nil && !result.boundary.reached {
-			if c.scanBoundaries == nil {
-				c.scanBoundaries = make(map[*readBoundary]uint64)
-			}
-			var through uint64
-			if result.boundary.watermark != nil {
-				through = *result.boundary.watermark
-			}
-			c.scanBoundaries[result.boundary] = through
-		}
-		if !known && (result.boundary == nil || result.boundary.watermark != nil) {
-			if c.controlTs == 0 || result.commitTs < c.controlTs {
-				c.controlTs = result.commitTs
-			}
-		}
-		if c.scanBlocked == nil {
-			c.scanBlocked = make(map[int64]uint64)
-		}
-		if ts, ok := c.scanBlocked[tableID]; !ok || result.commitTs < ts {
-			c.scanBlocked[tableID] = result.commitTs
-		}
+		c.trackDMLWait(row, watermark)
 	}
 	return nil
+}
+
+func (c *conductor) rowReady(row *decodeTask, watermark uint64) bool {
+	select {
+	case <-row.done:
+	default:
+		return false
+	}
+	return c.dmlReady(row, watermark) && !slices.ContainsFunc(c.pendingDDL, func(ddl *ddlTask) bool {
+		return row.commitTs > ddl.ddl.GetCommitTs() && ddlBlocksTask(ddl.ddl, row)
+	})
+}
+
+func (c *conductor) trackDMLWait(row *decodeTask, watermark uint64) {
+	if boundary := row.boundary; boundary != nil && !boundary.reached {
+		if c.blockedBoundaries == nil {
+			c.blockedBoundaries = make(map[*readBoundary]uint64)
+		}
+		var through uint64
+		if boundary.watermark != nil {
+			through = *boundary.watermark
+		}
+		c.blockedBoundaries[boundary] = through
+	}
+	if !c.dmlReady(row, watermark) && (row.boundary == nil || row.boundary.watermark != nil) {
+		if c.controlTs == 0 || row.commitTs < c.controlTs {
+			c.controlTs = row.commitTs
+		}
+	}
 }
 
 func (c *conductor) dmlReady(item *decodeTask, watermark uint64) bool {
@@ -606,44 +573,31 @@ func (c *conductor) dmlReady(item *decodeTask, watermark uint64) bool {
 	})
 }
 
-func (c *conductor) popDML(index int) *decodeTask {
-	result := c.pendingDML[index]
-	if c.waitingKnown && result.commitTs <= c.waitingWatermark {
-		c.waitingCount--
+func (c *conductor) popDML(row *decodeTask) *decodeTask {
+	groups := c.pendingDML[row.tableID]
+	rows := groups[row.stream]
+	rows[0] = nil
+	if len(rows) == 1 {
+		delete(groups, row.stream)
+		if len(groups) == 0 {
+			delete(c.pendingDML, row.tableID)
+		}
+	} else {
+		groups[row.stream] = rows[1:]
 	}
-	c.pendingDML[index] = nil
-	c.holes++
-	for len(c.pendingDML) != 0 && c.pendingDML[0] == nil {
-		c.pendingDML = c.pendingDML[1:]
-		c.scanIndex = max(0, c.scanIndex-1)
-		c.priorityIndex = max(0, c.priorityIndex-1)
-		c.holes--
-	}
-	if c.holes <= 256 || c.holes*2 <= len(c.pendingDML) {
-		return result
-	}
-	c.pendingDML = slices.DeleteFunc(c.pendingDML, func(item *decodeTask) bool {
-		return item == nil
-	})
-	c.holes, c.scanInvalid = 0, true
-	return result
+	c.pendingDMLCount--
+	return row
 }
 
 func (c *conductor) hasPendingThrough(watermark uint64) bool {
-	if !c.waitingKnown || c.waitingWatermark != watermark {
-		c.waitingWatermark, c.waitingCount, c.waitingKnown = watermark, 0, true
-		for _, pending := range c.pendingDML {
-			if pending != nil && pending.commitTs <= watermark {
-				c.waitingCount++
-			}
-		}
-		for _, pending := range c.pendingDDL {
-			if pending.ddl.GetCommitTs() <= watermark {
-				c.waitingCount++
-			}
+	for _, groups := range c.pendingDML {
+		if firstDML(groups).commitTs <= watermark {
+			return true
 		}
 	}
-	return c.waitingCount != 0
+	return slices.ContainsFunc(c.pendingDDL, func(ddl *ddlTask) bool {
+		return ddl.ddl.GetCommitTs() <= watermark
+	})
 }
 
 func ddlBlocksTask(ddl *event.DDLEvent, task *decodeTask) bool {
@@ -690,9 +644,11 @@ func newConductor(memory *memoryUsage, reader Reader, parsing *inputParser) *con
 	for id := range parsing.streams {
 		streams[id] = &streamWatermark{}
 	}
+	_, orderedDML := reader.(*kafkaReader)
 	c := &conductor{
-		reader: reader,
-		memory: memory, streams: streams,
+		orderedDML: orderedDML,
+		reader:     reader,
+		memory:     memory, streams: streams,
 		decoder:     newDecoderGroup(memory, make(chan struct{}, 1)),
 		mergeRows:   parsing.codecConfig.Protocol == config.ProtocolCsv,
 		sortCSVRows: parsing.codecConfig.Protocol == config.ProtocolCsv && parsing.codecConfig.OutputOldValue && parsing.codecConfig.IncludeCommitTs,
@@ -701,8 +657,8 @@ func newConductor(memory *memoryUsage, reader Reader, parsing *inputParser) *con
 	return c
 }
 
-func (c *conductor) next() pendingTask {
-	if result := c.nextReady(c.watermark); result != nil {
+func (c *conductor) next(canWrite func(*decodeTask) bool) pendingTask {
+	if result := c.nextReady(c.watermark, canWrite); result != nil {
 		return result
 	}
 	if len(c.pendingWatermarks) == 0 || c.hasPendingThrough(c.pendingWatermarks[0].watermark) {
@@ -796,7 +752,6 @@ func (c *conductor) advanceReading() {
 	if pending != nil && c.boundary != nil {
 		pending.boundary = c.boundary
 		c.boundaryDDL = pending
-		c.scanInvalid = true
 		key := ddlKey{
 			commitTs: pending.ddl.GetCommitTs(),
 			schema:   pending.ddl.SchemaName,
@@ -810,14 +765,18 @@ func (c *conductor) advanceReading() {
 				boundary: c.boundary,
 			})
 		}
-		for _, item := range c.pendingDML {
-			if item == nil || item.commitTs <= pending.ddl.GetCommitTs() || !ddlBlocksTask(pending.ddl, item) {
-				continue
+		for _, groups := range c.pendingDML {
+			for stream, rows := range groups {
+				index := sort.Search(len(rows), func(i int) bool {
+					return rows[i].commitTs > pending.ddl.GetCommitTs()
+				})
+				for _, item := range rows[index:] {
+					if ddlBlocksTask(pending.ddl, item) {
+						updates = append(updates, readUpdate{stream: stream, boundary: c.boundary})
+						break
+					}
+				}
 			}
-			updates = append(updates, readUpdate{
-				stream:   item.stream,
-				boundary: c.boundary,
-			})
 		}
 		c.reader.Advance(updates)
 	}
@@ -831,7 +790,7 @@ func (c *conductor) needsMoreInput() bool {
 	if len(c.controls) != 0 || len(c.ddlCopies) != 0 || c.controlTs != 0 {
 		return true
 	}
-	for boundary := range c.scanBoundaries {
+	for boundary := range c.blockedBoundaries {
 		if !boundary.reached {
 			return true
 		}
@@ -911,22 +870,13 @@ func (c *conductor) updateWatermark(w *writer) {
 			w.unsubmittedTables[row.tableID] = row.commitTs
 		}
 	}
-	for _, row := range c.pendingDML {
-		if row != nil {
-			trackDML(row)
-		}
+	for _, groups := range c.pendingDML {
+		trackDML(firstDML(groups))
 	}
 	for _, ddl := range c.pendingDDL {
 		track(ddl.ddl.GetCommitTs())
 	}
-	for _, work := range c.decoding {
-		switch work := work.(type) {
-		case *decodeTask:
-			trackDML(work)
-		case *ddlTask:
-			track(work.ddl.GetCommitTs())
-		}
-	}
+
 	w.progressChanged = true
 }
 
@@ -1025,7 +975,6 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 				onFlush()
 				result.scope.record.release()
 			}
-			c.scanInvalid = true
 			return nil
 		}
 		if exists {

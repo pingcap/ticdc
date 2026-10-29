@@ -103,8 +103,8 @@ func (d *consumerDiagnostics) fields(now time.Time) []zap.Field {
 func (c *conductor) publishDiagnostics(w *writer) {
 	c.memory.diagnostics.state.Store(&consumerSnapshot{
 		At: time.Now(), Watermark: c.watermark, Checkpoint: w.checkpoint,
-		WaitingSchema: c.waitingMetadata, PendingDML: len(c.pendingDML) - c.holes,
-		PendingDDL: len(c.pendingDDL) + len(w.pendingDDL), PendingDelivery: len(c.decoding),
+		WaitingSchema: c.waitingMetadata, PendingDML: c.pendingDMLCount,
+		PendingDDL: len(c.pendingDDL) + len(w.pendingDDL), PendingDelivery: 0,
 		PendingWrite: len(w.pendingDML), DDLInFlight: w.ddlInFlight != nil,
 		InFlightEvents: w.inFlightEvents, InFlightBytes: w.inFlightBytes,
 		PendingControls: len(c.controls) + len(c.pendingWatermarks) + len(w.pendingWatermarks),

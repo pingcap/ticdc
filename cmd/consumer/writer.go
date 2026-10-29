@@ -326,19 +326,7 @@ func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool,
 		if blocked[id] {
 			continue
 		}
-		fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
-		if fenced || slices.ContainsFunc(w.pendingDDL, func(control *ddlWrite) bool {
-			return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
-		}) {
-			blocked[id] = true
-			continue
-		}
-		if earlier := active[id]; earlier != nil && (earlier.sequential || item.sequential || !sameTableSchema(earlier.dml.TableInfo, item.dml.TableInfo)) {
-			blocked[id] = true
-			continue
-		}
-		if previous := tables[id]; previous != nil &&
-			(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
+		if !w.canWrite(item, active, tables) {
 			blocked[id] = true
 			continue
 		}
@@ -360,6 +348,24 @@ func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool,
 		bytes:  bytes,
 		done:   make(chan struct{}),
 	}, end
+}
+
+func (w *writer) canWrite(item *dmlWrite, active, tables map[int64]*dmlWrite) bool {
+	id := item.dml.PhysicalTableID
+	fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
+	if fenced || slices.ContainsFunc(w.pendingDDL, func(control *ddlWrite) bool {
+		return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
+	}) {
+		return false
+	}
+	if earlier := active[id]; earlier != nil && (earlier.sequential || item.sequential || !sameTableSchema(earlier.dml.TableInfo, item.dml.TableInfo)) {
+		return false
+	}
+	if previous := tables[id]; previous != nil &&
+		(!sameTableSchema(previous.dml.TableInfo, item.dml.TableInfo) || ((previous.sequential || item.sequential) && previous.dml.CommitTs != item.dml.CommitTs)) {
+		return false
+	}
+	return true
 }
 
 func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
