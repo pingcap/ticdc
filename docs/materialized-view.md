@@ -1,0 +1,46 @@
+# Materialized view behavior
+
+This document describes how TiCDC handles TiDB materialized views (MVs) in the
+8.5.8 materialized-view branch. TiCDC treats an MV as a physical table for
+changefeed routing. It does not reproduce the MV definition or refresh
+schedule downstream.
+
+## DDL and table routing
+
+| Source event | TiCDC behavior | Downstream behavior |
+| --- | --- | --- |
+| `CREATE MATERIALIZED VIEW` | Records the MV's table metadata and adds its physical table to the changefeed when it matches the table filter and eligibility rules. | Sends `CREATE TABLE` for the MV name. The generated statement contains visible columns, their types, `NOT NULL` where applicable, and the primary key. It does not contain the MV query, refresh settings, or secondary indexes. |
+| `DROP MATERIALIZED VIEW` | Handles TiDB's `ActionDropTable` event and removes the MV's physical table. | Sends `DROP TABLE` for the MV name. |
+| `CREATE MATERIALIZED VIEW LOG` | Tracks the log table in schema metadata, but excludes it from physical table dispatchers. Its create and drop events do not reach the downstream sink. | No log table is created or dropped. |
+| Create an MV shadow table | Tracks the shadow table in schema metadata, but excludes it from physical table dispatchers while it is a shadow table. | The shadow table's create event is not sent. |
+| `REFRESH MATERIALIZED VIEW ... COMPLETE OUT OF PLACE` cutover | Replaces the old MV physical table ID with the shadow table ID under the MV name. For a partitioned MV, it replaces the old partition IDs with the new ones. | The cutover DDL is marked `NotSync` and is not sent to the sink. |
+
+The current physical MV table follows the same table filter and eligibility
+rules as an ordinary table. Without `force-replicate`, it needs a primary key or
+a non-null unique key. On restart or changefeed bootstrap, TiCDC reconstructs
+the current MV table ID from schema history and continues to exclude MV log
+and shadow tables from the physical table list.
+
+This change has a dedicated refresh handler for the complete out-of-place
+cutover. Shadow-table rows are not dispatched while the table is a shadow.
+
+## Refresh data boundary
+
+The cutover adds a dispatcher for the new physical table at the cutover commit
+timestamp. It does not snapshot or backfill rows written to the shadow table
+before that timestamp, and it does not run a refresh on the downstream. The
+generated `CREATE TABLE` likewise does not copy any rows already present when
+the MV is created. If the downstream needs the initial MV contents or the full
+result of an out-of-place refresh, those contents require a separate load.
+
+MV log table drops are suppressed. A standalone shadow-table drop is currently
+handled by the general `DROP TABLE` path, so it can produce a downstream drop
+event even though shadow-table creation is suppressed.
+
+## Event filters
+
+`CREATE MATERIALIZED VIEW` uses the `create table` event type for filtering.
+The out-of-place cutover has the TiCDC-local event type
+`mview refresh out of place cutover`; it can be named in an `ignore-event` rule,
+and `ignore-sql` can match its SQL. The cutover is never written to the sink,
+regardless of these rules, because TiCDC uses it to update table routing only.
