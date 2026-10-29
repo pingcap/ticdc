@@ -9,10 +9,12 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/snapshot/bootstrap"
 	"github.com/pingcap/ticdc/pkg/snapshot/protocol"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 )
 
@@ -63,22 +65,27 @@ func (m *Maintainer) snapshotBeforeBootstrap(responses map[node.ID]*heartbeatpb.
 		m.handleError(protocol.Invalid("capture snapshot capability unavailable"))
 		return false
 	}
+	f, err := filter.NewFilter(m.controller.replicaConfig.Filter, "", util.GetOrZero(m.controller.replicaConfig.CaseSensitive), util.GetOrZero(m.controller.replicaConfig.ForceReplicate))
+	if err != nil {
+		m.handleError(err)
+		return false
+	}
 	controller := bootstrap.Controller{ID: m.changefeedID, Epoch: m.info.Epoch, TS: m.info.StartTs, Keyspace: m.controller.keyspaceMeta.ID, Config: cfg, ArtifactDir: artifactDir, CSEBinary: serverCfg.SnapshotCSEBinary, ExportWorkers: serverCfg.SnapshotExportWorkers, MinFreeBytes: serverCfg.SnapshotMinFreeBytes, Repository: repo, Capture: capture, Freeze: func() (bootstrap.SchemaBundle, []protocol.Span, error) {
 		bundle := bootstrap.SchemaBundle{SnapshotTS: m.info.StartTs}
-		tables, err := m.controller.loadTables(m.info.StartTs)
+		schemas := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+		tables, err := m.controller.loadTables(m.snapshotContext, m.info.StartTs, schemas, f)
 		if err != nil {
 			return bundle, nil, protocol.Wrap(err)
 		}
 		sort.Slice(tables, func(i, j int) bool { return tables[i].TableID < tables[j].TableID })
-		schemas := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 		var spans []protocol.Span
 		for _, t := range tables {
 			// Snapshot mounting precedes incremental dispatcher registration. Pin
 			// this version explicitly while copying its frozen schema.
-			if err := schemas.RegisterTable(m.controller.keyspaceMeta, t.TableID, m.info.StartTs); err != nil {
+			if err := schemas.RegisterTable(m.snapshotContext, m.controller.keyspaceMeta, t.TableID, m.info.StartTs); err != nil {
 				return bundle, nil, protocol.Wrap(err)
 			}
-			table, err := schemas.GetTableInfo(m.controller.keyspaceMeta, t.TableID, m.info.StartTs)
+			table, err := schemas.GetTableInfo(m.snapshotContext, m.controller.keyspaceMeta, t.TableID, m.info.StartTs)
 			unregisterErr := schemas.UnregisterTable(m.controller.keyspaceMeta, t.TableID)
 			if err != nil {
 				return bundle, nil, protocol.Wrap(err)
