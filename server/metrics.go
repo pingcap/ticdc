@@ -24,7 +24,7 @@ import (
 
 var registry = prometheus.NewRegistry()
 
-func init() {
+func registerMetrics() {
 	metrics.InitMetrics(registry)
 	cloudstorage.InitMetrics(registry)
 	mysql.InitMetrics(registry)

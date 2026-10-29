@@ -340,6 +340,8 @@ func (c *server) Run(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	registerMetrics()
+
 	err := c.initialize(ctx)
 	if err != nil {
 		log.Error("init server failed", zap.Error(err))
