@@ -15,44 +15,14 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-var (
-	CoordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "operator_created_count",
-			Help:      "number of created operators",
-		}, []string{"type"})
-
-	CoordinatorFinishedOperatorCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "operator_finished_count",
-			Help:      "number of finished operators",
-		}, []string{"type"})
-
-	CoordinatorOperatorDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "finish_operators_duration_seconds",
-			Help:      "Bucketed histogram of processing time (s) of finished operator.",
-			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
-		}, []string{"type"})
-
-	ChangefeedStateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "changefeed_state",
-			Help:      "The total number of changefeed in different replication states",
-		}, []string{"state"})
-)
+var ChangefeedStateGauge = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "coordinator",
+		Name:      "changefeed_state",
+		Help:      "The total number of changefeed in different replication states",
+	}, []string{"state"})
 
 func initCoordinatorMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CoordinatorCreatedOperatorCount)
-	registry.MustRegister(CoordinatorFinishedOperatorCount)
-	registry.MustRegister(CoordinatorOperatorDuration)
 	registry.MustRegister(ChangefeedStateGauge)
 }

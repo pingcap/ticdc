@@ -72,13 +72,6 @@ var (
 			Name:      "capture_lease_response_total",
 			Help:      "Number of capture write lease responses by handling result.",
 		}, []string{"result"})
-	CaptureSafeToRescheduleDelaySeconds = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "capture_safe_to_reschedule_delay_seconds",
-			Help:      "Conservative fallback delay after capture lease-key deletion before removal is published.",
-		})
 	CaptureP2PWitnessAvailable = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -97,6 +90,5 @@ func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CaptureLeaseResponseRejectedCounter)
 	registry.MustRegister(CaptureLeaseHeartbeatCounter)
 	registry.MustRegister(CaptureLeaseResponseCounter)
-	registry.MustRegister(CaptureSafeToRescheduleDelaySeconds)
 	registry.MustRegister(CaptureP2PWitnessAvailable)
 }

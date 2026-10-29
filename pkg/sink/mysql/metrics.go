@@ -38,16 +38,6 @@ var (
 			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
-	// ConflictDetectDuration records the duration of detecting conflict.
-	ConflictDetectDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "txn_conflict_detect_duration",
-			Help:      "Bucketed histogram of conflict detect time (s) for single DML statement.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
 	WorkerBatchFlushDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -97,7 +87,6 @@ var (
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execDMLEventRowsAffectedCounter)
 	registry.MustRegister(activeActiveConflictSkipRowsCounter)
-	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(WorkerBatchFlushDuration)
 	registry.MustRegister(WorkerFlushDuration)
 	registry.MustRegister(WorkerTotalDuration)
