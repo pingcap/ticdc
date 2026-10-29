@@ -15,8 +15,6 @@ package kafka
 
 import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -88,8 +86,7 @@ var (
 		}, []string{getKeyspaceLabel(), "changefeed", "broker"})
 )
 
-// Keep this aligned with pkg/metrics.GetKeyspaceLabel; importing that package
-// here would create an import cycle.
+// Keep this aligned with pkg/metrics.GetKeyspaceLabel.
 func getKeyspaceLabel() string {
 	if kerneltype.IsNextGen() {
 		return "keyspace_name"
@@ -97,8 +94,8 @@ func getKeyspaceLabel() string {
 	return "namespace"
 }
 
-// InitMetrics registers all metrics in this file.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers all metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(
 		outgoingBytesTotal,
 		requestsTotal,
@@ -115,7 +112,4 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RequestLatencyGauge)
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
-
-	claimcheck.InitMetrics(registry)
-	codec.InitMetrics(registry)
 }

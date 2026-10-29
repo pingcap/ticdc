@@ -35,7 +35,8 @@ var (
 		})
 )
 
-func InitEventMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DMLDecodeDuration)
 	registry.MustRegister(DMLIgnoreComputeDuration)
 }

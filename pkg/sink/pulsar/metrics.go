@@ -28,8 +28,8 @@ var (
 	metricRegistry *prometheus.Registry
 )
 
-// InitMetrics configures the shared registry for Pulsar client metrics.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics configures the shared registry for Pulsar client metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	metricRegistryMu.Lock()
 	metricRegistry = registry
 	metricRegistryMu.Unlock()

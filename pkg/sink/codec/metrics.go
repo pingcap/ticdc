@@ -14,7 +14,6 @@
 package codec
 
 import (
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -36,9 +35,8 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-// InitMetrics registers all metrics in this file
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers all metrics in this file.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(encoderGroupInputChanSizeGauge)
 	registry.MustRegister(encoderGroupOutputChanSizeGauge)
-	common.InitMetrics(registry)
 }

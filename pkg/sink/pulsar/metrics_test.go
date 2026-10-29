@@ -52,7 +52,7 @@ func TestGetMetricRegistryReturnsSharedRegistryConcurrently(t *testing.T) {
 func TestGetMetricRegistryReturnsPreconfiguredRegistry(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	restoreMetricRegistryForTest(t, nil)
-	InitMetrics(registry)
+	RegisterMetrics(registry)
 
 	require.Same(t, registry, getMetricRegistry())
 }

@@ -27,8 +27,8 @@ var compressionRatio = prometheus.NewHistogramVec(
 		Buckets:   prometheus.LinearBuckets(0, 1, 20),
 	}, []string{"namespace", "changefeed"})
 
-// InitMetrics registers all metrics in this file
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers all metrics in this file.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(compressionRatio)
 }
 

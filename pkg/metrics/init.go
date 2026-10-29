@@ -14,34 +14,25 @@
 package metrics
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics defined in this package.
+func RegisterMetrics(registry *prometheus.Registry) {
 	initServerMetrics(registry)
-	initLoggerMetrics(registry)
 	initSchedulerMetrics(registry)
 	initChangefeedMetrics(registry)
 	initDispatcherMetrics(registry)
-	initMessagingMetrics(registry)
 	initSinkMetrics(registry)
-	statistics.InitMetrics(registry)
 	initEventStoreMetrics(registry)
 	initEventServiceMetrics(registry)
 	initMaintainerMetrics(registry)
 	initCoordinatorMetrics(registry)
 	initLogPullerMetrics(registry)
-	common.InitCommonMetrics(registry)
 	initDynamicStreamMetrics(registry)
 	initCaptureWriteLeaseMetrics(registry)
 
-	kafka.InitMetrics(registry)
-	gc.InitMetrics(registry)
 	initRedoMetrics(registry)
 	initDDLMetrics(registry)
 }

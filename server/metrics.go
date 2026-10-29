@@ -15,23 +15,41 @@ package server
 
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/logservice/schemastore"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var registry = prometheus.NewRegistry()
 
 func registerMetrics() {
-	metrics.InitMetrics(registry)
+	metrics.RegisterMetrics(registry)
+	logger.RegisterMetrics(registry)
+	messaging.RegisterMetrics(registry)
 	logcoordinator.RegisterMetrics(registry)
 	schemastore.RegisterMetrics(registry)
-	cloudstorage.InitMetrics(registry)
-	mysql.InitMetrics(registry)
-	pulsar.InitMetrics(registry)
-	event.InitEventMetrics(registry)
+	statistics.RegisterMetrics(registry)
+	cloudstorage.RegisterMetrics(registry)
+	common.RegisterMetrics(registry)
+	event.RegisterMetrics(registry)
+	codec.RegisterMetrics(registry)
+	codecCommon.RegisterMetrics(registry)
+	kafka.RegisterMetrics(registry)
+	claimcheck.RegisterMetrics(registry)
+	mysql.RegisterMetrics(registry)
+	pulsar.RegisterMetrics(registry)
+	gc.RegisterMetrics(registry)
 }
