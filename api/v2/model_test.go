@@ -103,6 +103,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 				SpoolDiskQuota:   util.AddressOf(int64(1024)),
 				SpoolBaseDir:     util.AddressOf("/tmp/ticdc-spool"),
 			},
+			SimpleConfig: &SimpleConfig{
+				IncludeStartTs: util.AddressOf(true),
+			},
 			DebeziumConfig: &DebeziumConfig{
 				DecimalHandlingMode:        util.AddressOf("string"),
 				BigintUnsignedHandlingMode: util.AddressOf("string"),
@@ -142,6 +145,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, int64(1024), util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolDiskQuota))
 	require.Equal(t, "/tmp/ticdc-spool", util.GetOrZero(internalCfg.Sink.CloudStorageConfig.SpoolBaseDir))
+	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.DecimalHandlingMode))
 	require.Equal(t, "string", util.GetOrZero(internalCfg.Sink.Debezium.BigintUnsignedHandlingMode))
 	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
@@ -190,6 +194,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, int64(1024), *apiCfgBack.Sink.CloudStorageConfig.SpoolDiskQuota)
 	require.Equal(t, "/tmp/ticdc-spool", *apiCfgBack.Sink.CloudStorageConfig.SpoolBaseDir)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.DecimalHandlingMode))
 	require.Equal(t, "string", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BigintUnsignedHandlingMode))
 	require.Equal(t, "hex", util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.BinaryHandlingMode))
