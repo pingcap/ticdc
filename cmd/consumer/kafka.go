@@ -346,9 +346,6 @@ func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 			size += bytes
 		}
 		if len(batch) != 0 {
-			if d := c.memory.diagnostics; d != nil {
-				d.readBytes.Add(uint64(size))
-			}
 			return batch, nil
 		}
 		// Drain SDK buffers before waiting; those bytes are already admitted.

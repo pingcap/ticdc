@@ -64,7 +64,6 @@ func TestConductorGroupsWaitForConversion(t *testing.T) {
 	for _, row := range []*decodeTask{slow, later, otherInput} {
 		require.Same(t, row, c.next(allow))
 	}
-	require.Zero(t, c.pendingDMLCount)
 	require.Empty(t, c.pendingDML)
 }
 
@@ -74,7 +73,7 @@ func TestConductorOtherSourceCommitOrder(t *testing.T) {
 		c.queueDML(&decodeTask{tableID: 1, commitTs: ts})
 	}
 	var timestamps []uint64
-	for c.pendingDMLCount != 0 {
+	for len(c.pendingDML) != 0 {
 		row := firstDML(c.pendingDML[1])
 		timestamps = append(timestamps, c.popDML(row).commitTs)
 	}
@@ -100,7 +99,7 @@ func TestConductorFlushBoundsBacklogAndCheckpoint(t *testing.T) {
 	w := &writer{downstream: downstream, memory: memory}
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Len(t, submitted, maxInFlightEvents)
-	require.Equal(t, count-maxInFlightEvents, c.pendingDMLCount)
+	require.Len(t, c.pendingDML[1][0], count-maxInFlightEvents)
 	require.Empty(t, w.pendingDML)
 	require.Equal(t, uint64(149), w.checkpoint)
 	require.False(t, rows[0].record.ready())
@@ -117,7 +116,7 @@ func TestConductorFlushBoundsBacklogAndCheckpoint(t *testing.T) {
 	}
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Len(t, submitted, count)
-	require.Zero(t, c.pendingDMLCount)
+	require.Empty(t, c.pendingDML)
 	require.Empty(t, w.pendingDML)
 	require.Equal(t, uint64(149), w.checkpoint)
 	for _, row := range submitted[maxInFlightEvents:] {
@@ -190,7 +189,7 @@ func TestConductorFlushUsesSourceBoundaryBeforeGlobalWatermark(t *testing.T) {
 	downstream.EXPECT().AddDMLEvent(row.dml).Do(func(dml *event.DMLEvent) { dml.PostFlush() })
 	w := &writer{downstream: downstream, memory: memory}
 	require.NoError(t, c.flush(t.Context(), w))
-	require.Zero(t, c.pendingDMLCount)
+	require.Empty(t, c.pendingDML)
 	require.Equal(t, uint64(100), w.checkpoint)
 	require.True(t, row.record.ready())
 	require.Zero(t, memory.used())
@@ -219,7 +218,7 @@ func TestConductorFlushByteBudget(t *testing.T) {
 				expected = 1 // An oversized event can run alone, as before.
 			}
 			require.Len(t, submitted, expected)
-			require.Equal(t, 3-expected, c.pendingDMLCount)
+			require.Len(t, c.pendingDML[1][0], 3-expected)
 			require.Equal(t, int64(expected)*size, w.inFlightBytes)
 			for completed := 0; completed < 3; {
 				end := len(submitted)
@@ -247,5 +246,18 @@ func TestConductorFlushRetiresCoveredDDLReplica(t *testing.T) {
 	require.True(t, record.ready())
 	require.Empty(t, c.pendingDDL)
 	require.Equal(t, uint64(200), w.checkpoint)
+	require.Zero(t, memory.used())
+}
+
+func TestConductorFiltersCoveredInput(t *testing.T) {
+	memory := newMemoryUsage()
+	c := &conductor{memory: memory}
+	c.checkpoint.Store(150)
+	record := newAck(memory, 10, nil)
+	// The captured schema permits filtering before any row conversion runs.
+	row := &decodeTask{commitTs: 150, table: &common.TableInfo{}, record: record}
+	require.NoError(t, c.accept(t.Context(), row))
+	require.Empty(t, c.pendingDML)
+	require.True(t, record.ready())
 	require.Zero(t, memory.used())
 }

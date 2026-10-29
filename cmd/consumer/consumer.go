@@ -48,7 +48,6 @@ const (
 )
 
 type consumer struct {
-	diagnostics   *consumerDiagnostics
 	g             *errgroup.Group
 	reader        *reader
 	conductor     *conductor
@@ -111,7 +110,6 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
 	memory := newMemoryUsage()
-	diagnostics := newConsumerDiagnostics(sourceType, consumerID, memory)
 	confirmable := make(chan struct{}, 1)
 	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	if sourceType == sourceStorage {
@@ -152,7 +150,6 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	conductor := newConductor(memory, reader.client, parsing)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
-		diagnostics:   diagnostics,
 		reader:        reader,
 		parser:        parsing,
 		conductor:     conductor,
@@ -317,7 +314,6 @@ func newProfileServer(enabled bool) *http.Server {
 
 func (c *consumer) consume(ctx context.Context) error {
 	c.g, ctx = errgroup.WithContext(ctx)
-	c.g.Go(func() error { return c.diagnostics.run(ctx) })
 	if c.profileServer != nil {
 		c.g.Go(func() error {
 			if err := c.profileServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

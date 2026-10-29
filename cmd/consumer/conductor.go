@@ -20,7 +20,6 @@ import (
 	"math"
 	"slices"
 	"sort"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -64,16 +63,8 @@ type watermark struct {
 func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) error {
 	c.g, ctx = errgroup.WithContext(ctx)
 	c.g.Go(func() error { return c.decoder.start(ctx) })
-	var diagnosticTick <-chan time.Time
-	if c.memory.diagnostics != nil {
-		diagnosticTick = time.Tick(time.Second)
-		c.publishDiagnostics(w)
-	}
 	for {
 		select {
-		case <-diagnosticTick:
-			c.publishDiagnostics(w)
-			continue
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case batch, ok := <-tasks:
@@ -307,7 +298,6 @@ type conductor struct {
 	mergeRows         bool
 	sortCSVRows       bool
 	pendingDML        map[int64]map[int32][]*decodeTask
-	pendingDMLCount   int
 	orderedDML        bool
 	pendingDDL        []*ddlTask
 	controlTs         uint64
@@ -338,7 +328,6 @@ func (c *conductor) queueDML(item *decodeTask) {
 		})
 	}
 	groups[item.stream] = rows
-	c.pendingDMLCount++
 }
 
 // The earliest head across inputs preserves table order while conversions run
@@ -585,7 +574,6 @@ func (c *conductor) popDML(row *decodeTask) *decodeTask {
 	} else {
 		groups[row.stream] = rows[1:]
 	}
-	c.pendingDMLCount--
 	return row
 }
 
