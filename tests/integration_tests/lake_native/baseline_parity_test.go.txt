@@ -1,0 +1,120 @@
+package tidb
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	_ "github.com/datafuselabs/databend-go"
+	"github.com/stretchr/testify/require"
+	"os"
+	"testing"
+	"time"
+)
+
+// Temporary test overlay against the untouched fixed bend-cdc checkout.
+func TestBendParityBaselineLive(t *testing.T) {
+	dsn := os.Getenv("TIDB_DDL_INTEGRATION_DSN")
+	if dsn == "" {
+		t.Skip("requires authorized Lake")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	db, err := sql.Open("databend", dsn)
+	require.NoError(t, err)
+	defer db.Close()
+	name := fmt.Sprintf("bend_parity_%d", time.Now().UnixNano())
+	_, err = db.ExecContext(ctx, "CREATE DATABASE "+name)
+	require.NoError(t, err)
+	defer func() {
+		_, err := db.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+name)
+		require.NoError(t, err)
+	}()
+	t.Log("owned baseline database", name)
+	sink, err := NewDatabendMergeSink(&DatabendMergeSinkConfig{DSN: dsn, TargetDatabase: name, AllowDelete: true, MergeInterval: time.Hour})
+	require.NoError(t, err)
+	defer sink.Close()
+	id := TableID{Database: "source", Table: "partitioned"}
+	columns := []ColumnSchema{{Name: "id", Type: "INT", IsPk: "true", Nullable: "false"}, {Name: "v", Type: "INT", Nullable: "true"}}
+	apply := func(t *testing.T, epoch int64, query string) {
+		require.NoError(t, sink.ApplySchema(ctx, id, &SchemaMetaFile{TableVersion: epoch, Query: query, Columns: columns}))
+	}
+	t.Run("logical_partition_metadata_and_DML", func(t *testing.T) {
+		apply(t, 100, "CREATE TABLE partitioned(id INT PRIMARY KEY,v INT) PARTITION BY HASH(id) PARTITIONS 2")
+		_, err := sink.WriteBatch(ctx, id, []*CanalJSONMessage{{Type: "INSERT", PKNames: []string{"id"}, Data: []map[string]interface{}{{"id": "1", "v": "12"}}, TiDBExtension: &CanalJSONTiDBExtension{CommitTS: 110}}})
+		require.NoError(t, err)
+		require.NoError(t, sink.Flush(ctx, id))
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+name+".partitioned").Scan(&count))
+		require.Equal(t, 1, count)
+	})
+	t.Run("rename_is_skipped_not_projected", func(t *testing.T) {
+		apply(t, 120, "RENAME TABLE partitioned TO renamed")
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM system.tables WHERE database=? AND name='renamed'", name).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+name+".partitioned").Scan(&count))
+		require.Equal(t, 1, count)
+	})
+	t.Run("drop_database_is_skipped_not_projected", func(t *testing.T) {
+		apply(t, 130, "DROP DATABASE source")
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+name+".partitioned").Scan(&count))
+		require.Equal(t, 1, count)
+	})
+	t.Run("default_and_nullability", func(t *testing.T) {
+		columns[1].Nullable = "false"
+		v := "7"
+		columns[1].Default = &v
+		apply(t, 140, "ALTER TABLE partitioned MODIFY COLUMN v INT NOT NULL DEFAULT 7")
+		columns[1].Nullable = "true"
+		columns[1].Default = nil
+		apply(t, 150, "ALTER TABLE partitioned MODIFY COLUMN v INT NULL DEFAULT NULL")
+		rows, err := db.QueryContext(ctx, "DESCRIBE "+name+".partitioned")
+		require.NoError(t, err)
+		defer rows.Close()
+		var observed bool
+		for rows.Next() {
+			var col, typ, nullable, def, extra string
+			require.NoError(t, rows.Scan(&col, &typ, &nullable, &def, &extra))
+			if col == "v" {
+				t.Log("baseline default/nullability", typ, nullable, def)
+				require.Equal(t, "YES", nullable)
+				require.Equal(t, "NULL", def)
+				observed = true
+			}
+		}
+		require.NoError(t, rows.Err())
+		require.True(t, observed)
+	})
+	t.Run("int_to_parameterized_varchar", func(t *testing.T) {
+		columns[1].Type = "VARCHAR(200)"
+		v := "7"
+		columns[1].Default = &v
+		apply(t, 160, "ALTER TABLE partitioned MODIFY COLUMN v VARCHAR(200) NULL DEFAULT '7'")
+		var value string
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT v FROM "+name+".partitioned").Scan(&value))
+		require.Equal(t, "12", value)
+	})
+	t.Run("no_PK_requires_explicit_conflictKey", func(t *testing.T) {
+		plain, err := NewDatabendMergeSink(&DatabendMergeSinkConfig{DSN: dsn, TargetDatabase: name})
+		require.NoError(t, err)
+		defer plain.Close()
+		table := TableID{Database: "source", Table: "no_pk"}
+		meta := &SchemaMetaFile{TableVersion: 100, Query: "CREATE TABLE no_pk(id INT,v INT)", Columns: []ColumnSchema{{Name: "id", Type: "INT"}, {Name: "v", Type: "INT"}}}
+		require.Error(t, plain.ApplySchema(ctx, table, meta))
+		explicit, err := NewDatabendMergeSink(&DatabendMergeSinkConfig{DSN: dsn, TargetDatabase: name, ConflictKey: "id", AllowDelete: true, MergeInterval: time.Hour})
+		require.NoError(t, err)
+		defer explicit.Close()
+		require.NoError(t, explicit.ApplySchema(ctx, table, meta))
+		_, err = explicit.WriteBatch(ctx, table, []*CanalJSONMessage{{Type: "INSERT", Data: []map[string]interface{}{{"id": "1", "v": "22"}}, TiDBExtension: &CanalJSONTiDBExtension{CommitTS: 110}}})
+		require.NoError(t, err)
+		require.NoError(t, explicit.Flush(ctx, table))
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+name+".no_pk").Scan(&count))
+		require.Equal(t, 1, count)
+	})
+	t.Run("multi_column_is_rejected_before_execution", func(t *testing.T) {
+		_, err := SchemaChanges(&SchemaMetaFile{Query: "ALTER TABLE partitioned ADD COLUMN a INT,ADD COLUMN b INT", Columns: []ColumnSchema{{Name: "a", Type: "INT"}, {Name: "b", Type: "INT"}}})
+		require.ErrorContains(t, err, "multi-operation")
+	})
+}

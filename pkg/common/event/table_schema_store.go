@@ -91,7 +91,7 @@ func newTableSchemaStoreRequirements(
 			updateTableIDs: false,
 			needTableNames: true,
 		}
-	case commonType.CloudStorageSinkType, commonType.BlackHoleSinkType:
+	case commonType.CloudStorageSinkType, commonType.BlackHoleSinkType, commonType.LakeSinkType:
 		return tableSchemaStoreRequirements{
 			needTableIDs:   false,
 			updateTableIDs: false,

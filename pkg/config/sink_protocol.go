@@ -114,6 +114,10 @@ func (p Protocol) String() string {
 const (
 	// KafkaScheme indicates the scheme is kafka.
 	KafkaScheme = "kafka"
+	// LakeScheme is the native Lake HTTPS warehouse sink.
+	LakeScheme = "lake"
+	// LakeHTTPScheme is the explicit plaintext local/test warehouse sink.
+	LakeHTTPScheme = "lake+http"
 	// KafkaSSLScheme indicates the scheme is kafka+ssl.
 	KafkaSSLScheme = "kafka+ssl"
 	// BlackHoleScheme indicates the scheme is blackhole.

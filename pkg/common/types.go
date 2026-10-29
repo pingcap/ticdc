@@ -344,6 +344,7 @@ const (
 	CloudStorageSinkType
 	BlackHoleSinkType
 	RedoSinkType
+	LakeSinkType
 )
 
 type RowType byte

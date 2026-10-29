@@ -5,7 +5,7 @@
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper kafka_auth_server \
 	prepare_test_binaries \
-	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar integration_test_lake \
 	generate-next-gen-grafana check-next-gen-grafana
 
 
@@ -254,6 +254,11 @@ failpoint-disable: check_failpoint_ctl
 check_failpoint_ctl: tools/bin/failpoint-ctl
 
 integration_test: integration_test_mysql
+
+# Self-contained local source/capture/Lake; does not require unrelated Kafka,
+# Pulsar, MinIO, diff-inspector or downstream TiDB test binaries.
+integration_test_lake:
+	python3 tests/integration_tests/lake_native/local.py
 
 integration_test_mysql: check_third_party_binary
 	tests/integration_tests/run.sh mysql "$(CASE)" "$(START_AT)"

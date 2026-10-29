@@ -1031,3 +1031,9 @@ func TestTryEnqueueReturnsOversizedActionWithInMemoryEntry(t *testing.T) {
 	require.True(t, entry.InMemory())
 	require.False(t, entry.IsSpilled())
 }
+
+func TestAccountingBytesMatchesAdmissionEncoding(t *testing.T) {
+	messages := []*common.Message{{Key: []byte("key"), Value: []byte("value")}, {Value: []byte("second")}}
+	require.EqualValues(t, len(serializeMessages(messages)), AccountingBytes(messages))
+	require.Zero(t, AccountingBytes(nil))
+}

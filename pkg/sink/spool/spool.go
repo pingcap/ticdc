@@ -1010,3 +1010,9 @@ func calculateEntrySize(msgs []*common.Message) entrySize {
 	}
 	return size
 }
+
+// AccountingBytes returns the encoded size charged by TryEnqueue. Callers may
+// reject oversized entries before the optional in-memory bypass is considered.
+func AccountingBytes(msgs []*common.Message) int64 {
+	return calculateEntrySize(msgs).accountingBytes
+}
