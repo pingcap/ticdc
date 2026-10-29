@@ -16,14 +16,6 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	DispatcherManagerGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "dispatchermanagermanager",
-			Name:      "event_dispatcher_manager_count",
-			Help:      "The number of event dispatcher managers",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
 	TableTriggerEventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -144,7 +136,6 @@ var (
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DispatcherManagerGauge)
 	registry.MustRegister(TableTriggerEventDispatcherGauge)
 	registry.MustRegister(EventDispatcherGauge)
 	registry.MustRegister(CreateDispatcherDuration)

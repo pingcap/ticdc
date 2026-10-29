@@ -16,12 +16,16 @@ package server
 import (
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	maintainerOperator "github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/logger"
@@ -44,12 +48,16 @@ func registerMetrics() {
 	metrics.RegisterMetrics(registry)
 	middleware.RegisterMetrics(registry)
 	operator.RegisterMetrics(registry)
+	dispatcher.RegisterMetrics(registry)
+	dispatcherorchestrator.RegisterMetrics(registry)
 	causality.RegisterMetrics(registry)
 	logger.RegisterMetrics(registry)
 	messaging.RegisterMetrics(registry)
 	logcoordinator.RegisterMetrics(registry)
 	schemastore.RegisterMetrics(registry)
 	txnutil.RegisterMetrics(registry)
+	maintainerOperator.RegisterMetrics(registry)
+	replica.RegisterMetrics(registry)
 	statistics.RegisterMetrics(registry)
 	cloudstorage.RegisterMetrics(registry)
 	common.RegisterMetrics(registry)

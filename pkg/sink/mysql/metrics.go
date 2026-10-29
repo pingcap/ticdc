@@ -21,6 +21,14 @@ import (
 )
 
 var (
+	captureLastWriteAdmissionTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_last_write_admission_timestamp_seconds",
+			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
+		})
+
 	execDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -85,6 +93,7 @@ var (
 
 // RegisterMetrics registers MySQL sink metrics.
 func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(captureLastWriteAdmissionTimestamp)
 	registry.MustRegister(execDMLEventRowsAffectedCounter)
 	registry.MustRegister(activeActiveConflictSkipRowsCounter)
 	registry.MustRegister(WorkerBatchFlushDuration)

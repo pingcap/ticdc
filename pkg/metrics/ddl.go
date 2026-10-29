@@ -17,29 +17,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var (
-	// HandleDDLHistogram records the handling time of a DDL,
-	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
-	HandleDDLHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "handle_duration",
-			Help:      "Bucketed histogram of handling time (s) of a ddl.",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	// ExecDDLBlockingGauge records the count of blocking DDL.
-	ExecDDLBlockingGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_blocking",
-			Help:      "Total count of blocking ddl.",
-		}, []string{GetKeyspaceLabel(), "changefeed", "mode"})
-)
+// ExecDDLBlockingGauge records the count of blocking DDL.
+var ExecDDLBlockingGauge = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "ddl",
+		Name:      "exec_blocking",
+		Help:      "Total count of blocking ddl.",
+	}, []string{GetKeyspaceLabel(), "changefeed", "mode"})
 
 func initDDLMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(HandleDDLHistogram)
 	registry.MustRegister(ExecDDLBlockingGauge)
 }
