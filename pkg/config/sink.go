@@ -1087,7 +1087,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 ) error {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err))
 	}
 
 	var useTableIDAsPathFromURI *bool

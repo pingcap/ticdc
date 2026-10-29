@@ -27,6 +27,7 @@ import (
 	mysqlSink "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -68,6 +69,7 @@ func registerMetrics() {
 	dispatcherorchestrator.RegisterMetrics(registry)
 	eventcollector.RegisterMetrics(registry)
 	metrics.RegisterMetrics(registry)
+	statistics.RegisterMetrics(registry)
 	cloudstorage.RegisterMetrics(registry)
 	mysqlSink.RegisterMetrics(registry)
 	causality.RegisterMetrics(registry)

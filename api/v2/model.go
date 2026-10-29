@@ -1354,7 +1354,6 @@ type ConsistentConfig struct {
 	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
 	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
 	SpoolDiskQuota        *int64                 `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
-	SpoolBaseDir          *string                `json:"spool_base_dir,omitempty" toml:"spool-base-dir,omitempty"`
 	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
 	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`

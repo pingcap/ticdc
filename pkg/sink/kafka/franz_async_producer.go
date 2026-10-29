@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -28,6 +29,7 @@ import (
 type asyncProducer struct {
 	client       *kgo.Client
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 
 	closed   atomic.Bool
 	resultCh chan asyncProduceResult
@@ -96,6 +98,9 @@ func (p *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 			return context.Cause(p.client.Context())
 		case result := <-p.resultCh:
 			if result.err != nil {
+				if p.statistics != nil {
+					p.statistics.RecordDMLError()
+				}
 				log.Error("kafka message send failed",
 					zap.String("keyspace", p.changefeedID.Keyspace()),
 					zap.String("changefeed", p.changefeedID.Name()),

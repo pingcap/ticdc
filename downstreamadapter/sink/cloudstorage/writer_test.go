@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -60,10 +60,10 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", statistics, spoolBuffer)
+		cfg, ".json", stats, spoolBuffer)
 	return d
 }
 
@@ -480,11 +480,11 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tidbTableInfo := &model.TableInfo{
 		ID:   100,
@@ -702,10 +702,11 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
+	t.Cleanup(stats.Close)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
 		ID:   100,
@@ -731,8 +732,12 @@ func TestWriterIndexWriteError(t *testing.T) {
 		},
 		nil,
 	)
+	var callbackCount atomic.Int64
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		callbackCount.Add(1)
+	}
 	task.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, task))
 	require.NoError(t, d.enqueueTask(ctx, newFlushTask(dispatcherID, 100)))
@@ -744,6 +749,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 
 	err = <-done
 	require.ErrorContains(t, err, "index write failed")
+	require.Zero(t, callbackCount.Load())
 }
 
 func TestWriterDataFileCloseError(t *testing.T) {
@@ -768,10 +774,10 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	stats := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", stats, spoolBuffer)
 
 	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
 		ID:   100,

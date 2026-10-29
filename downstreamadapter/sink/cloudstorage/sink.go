@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -66,7 +67,7 @@ type sink struct {
 	lastSendCheckpointTsTime time.Time
 
 	cron       *cron.Cron
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -137,14 +138,14 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
-			statistics.Close()
+			stats.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, stats, columnSelectors)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +159,7 @@ func New(
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
+		statistics:               stats,
 		isNormal:                 atomic.NewBool(true),
 
 		ctx: ctx,
@@ -310,12 +311,8 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 		return err
 	}
-	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
-		if err != nil {
-			return "", err
-		}
-		return v.GetDDLType().String(), nil
+	return s.statistics.RecordDDLExecution(v.GetDDLType().String(), func() error {
+		return s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 	})
 }
 

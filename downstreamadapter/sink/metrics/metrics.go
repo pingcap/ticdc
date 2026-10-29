@@ -22,89 +22,6 @@ import (
 const LargeRowSizeLowBound = 2 * 1024
 
 var (
-	// execDDLHistogram records the execution time of a DDL.
-	execDDLHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_duration",
-			Help:      "Bucketed histogram of processing time (s) of a ddl.",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	// execDDLRunningGauge records the count of running DDL.
-	execDDLRunningGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_running",
-			Help:      "Total count of running ddl.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	// execDDLCounter records the execution count of different DDL types
-	execDDLCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "execution",
-			Help:      "Total execution count of different DDL types.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "ddl_type"})
-
-	// execBatchHistogram records batch size of a txn.
-	execBatchHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "batch_row_count",
-			Help:      "Row count number for a given batch.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type", "keyspace_id"}) // type is for `sinkType`
-
-	// execBatchWriteBytesHistogram records bytes written for each batch.
-	execBatchWriteBytesHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "batch_write_bytes",
-			Help:      "Bytes number for a given batch.",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
-	// ExecWriteBytesGauge records the total number of bytes written by sink.
-	totalWriteBytesCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "write_bytes_total",
-			Help:      "Total number of bytes written by sink",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
-	eventSizeHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "event_size",
-			Help:      "The size of changed events (in bytes).",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 30), // 0~32M
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	execDMLEventCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "dml_event_count",
-			Help:      "Total count of DML events.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	// executionErrorCounter is the counter of execution errors.
-	executionErrorCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "execution_error",
-			Help:      "Total count of execution errors.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "event_type"})
-
 	// queueDuration = ConflictDetectDuration + (queue time in txn workers).
 	queueDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -191,19 +108,6 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	mqServerRegistryMu.Lock()
-	mqServerRegistry = registry
-	mqServerRegistryMu.Unlock()
-
-	registry.MustRegister(execDDLHistogram)
-	registry.MustRegister(execDDLRunningGauge)
-	registry.MustRegister(execDDLCounter)
-	registry.MustRegister(execBatchHistogram)
-	registry.MustRegister(execBatchWriteBytesHistogram)
-	registry.MustRegister(totalWriteBytesCounter)
-	registry.MustRegister(eventSizeHistogram)
-	registry.MustRegister(execDMLEventCounter)
-	registry.MustRegister(executionErrorCounter)
 	registry.MustRegister(queueDuration)
 	registry.MustRegister(sinkDMLBatchCommit)
 	registry.MustRegister(sinkDMLBatchCallback)

@@ -14,9 +14,35 @@
 package pulsar
 
 import (
+	"sync"
+
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+var (
+	metricRegistryMu sync.RWMutex
+	// metricRegistry is shared by all Pulsar clients on the node. Bootstrap can
+	// create multiple changefeeds concurrently, so access must be synchronized.
+	metricRegistry *prometheus.Registry
+)
+
+func getMetricRegistry() *prometheus.Registry {
+	metricRegistryMu.RLock()
+	registry := metricRegistry
+	metricRegistryMu.RUnlock()
+	if registry != nil {
+		return registry
+	}
+
+	metricRegistryMu.Lock()
+	defer metricRegistryMu.Unlock()
+	// Use the default registry when clients are created before server bootstrap.
+	if metricRegistry == nil {
+		metricRegistry = prometheus.DefaultRegisterer.(*prometheus.Registry)
+	}
+	return metricRegistry
+}
 
 // IncPublishedDDLCount DDL
 func IncPublishedDDLCount(topic, changefeed string, messageType common.MessageType) {
@@ -101,6 +127,10 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
+	metricRegistryMu.Lock()
+	metricRegistry = registry
+	metricRegistryMu.Unlock()
+
 	registry.MustRegister(publishedDDLSchemaTableCount)
 	registry.MustRegister(publishedDMLSchemaTableCount)
 	registry.MustRegister(publishedMessageTypeResolvedCount)

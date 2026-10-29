@@ -1370,6 +1370,8 @@ func TestSyncPointBlock(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
+	// the syncpoint is not written to the downstream yet
+	require.Equal(t, uint64(0), barrier.GetLastSyncPointTs())
 
 	// selected node write done
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1386,6 +1388,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	})
+	require.Equal(t, uint64(10), barrier.GetLastSyncPointTs())
 	resendMsgs := barrier.Resend()
 	// 2 pass action messages to one node
 	require.Len(t, resendMsgs, 2)
@@ -1429,6 +1432,18 @@ func TestSyncPointBlock(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 0)
+	require.Equal(t, uint64(10), barrier.GetLastSyncPointTs())
+}
+
+func TestUpdateLastSyncPointTs(t *testing.T) {
+	b := &Barrier{}
+	b.updateLastSyncPointTs(20)
+	require.Equal(t, uint64(20), b.GetLastSyncPointTs())
+	// a resent DONE for an older syncpoint must not move it backwards
+	b.updateLastSyncPointTs(10)
+	require.Equal(t, uint64(20), b.GetLastSyncPointTs())
+	b.updateLastSyncPointTs(30)
+	require.Equal(t, uint64(30), b.GetLastSyncPointTs())
 }
 
 func TestNonBlocked(t *testing.T) {

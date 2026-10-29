@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -37,8 +37,6 @@ const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	statistics   *metrics.Statistics
-
 	// msgCh is the only unbounded queue in the storage sink pipeline.
 	// External callers push tasks into it, addTasks consumes it, and
 	// dmlWriters.close is the only place allowed to close it.
@@ -64,7 +62,7 @@ func newDMLWriters(
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
-	statistics *metrics.Statistics,
+	stats *statistics.Statistics,
 	columnSelector *columnselector.ColumnSelectors,
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
@@ -89,12 +87,11 @@ func newDMLWriters(
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spool)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, stats, spool)
 	}
 
 	return &dmlWriters{
 		changefeedID:   changefeedID,
-		statistics:     statistics,
 		msgCh:          messageCh,
 		encodeGroup:    encoderGroup,
 		spool:          spool,

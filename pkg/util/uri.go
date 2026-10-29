@@ -16,7 +16,10 @@ package util
 import (
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
+
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // IsValidIPv6AddressFormatInURI reports whether hostPort is a valid IPv6 address in URI.
@@ -89,6 +92,7 @@ var sensitiveQueryParameterNames = []string{
 	"credential",
 	"private",
 	"client",
+	"authorization",
 }
 
 func isSensitiveQueryParameter(name string) bool {
@@ -103,6 +107,43 @@ func isSensitiveQueryParameter(name string) bool {
 	}
 	return false
 }
+
+// maskSensitiveDataInQueryLikeText handles fragment-like request target text
+// without rewriting ordinary URI fragments.
+func maskSensitiveDataInQueryLikeText(text string) (string, bool) {
+	prefix := ""
+	queryText := text
+	if question := strings.IndexByte(text, '?'); question >= 0 {
+		if equals := strings.IndexByte(text, '='); equals == -1 || question < equals {
+			prefix = text[:question+1]
+			queryText = text[question+1:]
+		}
+	}
+	parts := strings.Split(queryText, "&")
+	masked := false
+	for i, part := range parts {
+		name, _, hasValue := strings.Cut(part, "=")
+		if !hasValue {
+			continue
+		}
+		decodedName, err := url.QueryUnescape(name)
+		if err != nil || !isSensitiveQueryParameter(decodedName) {
+			continue
+		}
+		parts[i] = name + "=xxxxx"
+		masked = true
+	}
+	return prefix + strings.Join(parts, "&"), masked
+}
+
+type maskedWrappedURLError struct {
+	err     error
+	message string
+}
+
+func (e *maskedWrappedURLError) Error() string { return e.message }
+
+func (e *maskedWrappedURLError) Unwrap() error { return e.err }
 
 // ContainsSensitiveDataInURI reports whether a URI includes credential fields.
 // Invalid URIs are treated as sensitive because they cannot be safely inspected.
@@ -125,6 +166,9 @@ func ContainsSensitiveDataInURI(uri string) bool {
 			return true
 		}
 	}
+	if _, sensitive := maskSensitiveDataInQueryLikeText(parsed.Fragment); sensitive {
+		return true
+	}
 	return false
 }
 
@@ -141,6 +185,10 @@ func MaskSensitiveDataInURI(uri string) string {
 		}
 	}
 	uriParsed.RawQuery = queries.Encode()
+	if fragment, masked := maskSensitiveDataInQueryLikeText(uriParsed.Fragment); masked {
+		uriParsed.Fragment = fragment
+		uriParsed.RawFragment = ""
+	}
 	return uriParsed.Redacted()
 }
 
@@ -158,13 +206,18 @@ func MaskSensitiveDataInURLError(err error) error {
 	if err == nil {
 		return nil
 	}
-	urlErr, ok := err.(*url.Error)
-	if !ok {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
 		return err
 	}
-	return &url.Error{
-		Op:  urlErr.Op,
-		URL: MaskSensitiveDataInURIForError(urlErr.URL),
-		Err: urlErr.Err,
+	if urlErr.URL == "" {
+		return err
+	}
+	maskedURL := MaskSensitiveDataInURIForError(urlErr.URL)
+	message := strings.ReplaceAll(err.Error(), strconv.Quote(urlErr.URL), strconv.Quote(maskedURL))
+	message = strings.ReplaceAll(message, urlErr.URL, maskedURL)
+	return &maskedWrappedURLError{
+		err:     err,
+		message: message,
 	}
 }
