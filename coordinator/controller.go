@@ -267,7 +267,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				keyspace := displayName.Keyspace
 				name := displayName.Name
 
-				downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
+				_, downstreamType := config.ParseSinkURI(info.SinkURI)
 				if oldType, ok := changefeedDownstreamTypeCache[displayName]; ok && oldType != downstreamType {
 					metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
 				}

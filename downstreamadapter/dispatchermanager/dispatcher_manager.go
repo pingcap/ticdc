@@ -310,9 +310,10 @@ func NewDispatcherManager(
 	if sinkType != common.KafkaSinkType {
 		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
 		if ignoreUpdateOnlyColumnsRuleCount > 0 {
+			_, downstreamType := config.ParseSinkURI(manager.config.SinkURI)
 			log.Warn("ignore update only columns is configured but does not take effect for this sink",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.String("sinkType", metrics.DownstreamTypeFromSinkURI(manager.config.SinkURI)),
+				zap.String("sinkType", downstreamType),
 				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
 		}
 	}

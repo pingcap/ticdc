@@ -59,7 +59,7 @@ func TestResetOwnerChangefeedMetrics(t *testing.T) {
 	ChangefeedErrorInfoGauge.WithLabelValues(keyspace, changefeed, "failed", "1000", "CDC:ErrTest", "test").Set(1)
 	ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, changefeed).Set(100)
 	ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, changefeed, keyspaceID).Set(10)
-	ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, changefeed, "mysql/tidb").Set(1)
+	ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, changefeed, "mysql").Set(1)
 
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedStatusGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedErrorInfoGauge))

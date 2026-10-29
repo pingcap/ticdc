@@ -148,7 +148,7 @@ var (
 	// This metric is only set when the sink can positively identify TiDB (for
 	// example by executing `SELECT tidb_version()`), and is intentionally absent
 	// for MySQL or unknown downstreams. Dashboards can use it to override the
-	// generic "mysql/tidb" label value with "tidb" for running changefeeds.
+	// scheme-derived "mysql" label value with "tidb" for running changefeeds.
 	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
