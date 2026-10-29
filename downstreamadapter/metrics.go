@@ -16,6 +16,7 @@ package downstreamadapter
 
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -25,6 +26,7 @@ import (
 // RegisterMetrics registers metrics for the downstream adapter components.
 func RegisterMetrics(registry *prometheus.Registry) {
 	dispatcher.RegisterMetrics(registry)
+	dispatchermanager.RegisterMetrics(registry)
 	dispatcherorchestrator.RegisterMetrics(registry)
 	eventcollector.RegisterMetrics(registry)
 	sink.RegisterMetrics(registry)

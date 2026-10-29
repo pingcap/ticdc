@@ -32,7 +32,45 @@ import (
 
 var registry = prometheus.NewRegistry()
 
+var (
+	captureWriteGateState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_write_gate_state",
+			Help:      "Whether the capture write gate is in the labeled state.",
+		}, []string{"state"})
+
+	captureP2PLeaseRemainingSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_p2p_lease_remaining_seconds",
+			Help:      "Remaining lifetime of the capture P2P write lease.",
+		})
+
+	captureEtcdProofRemainingSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_etcd_proof_remaining_seconds",
+			Help:      "Remaining lifetime of the capture etcd write proof.",
+		})
+
+	captureWriteBlockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_write_block_total",
+			Help:      "Number of capture write gate transitions from writable to blocked.",
+		}, []string{"reason"})
+)
+
 func registerMetrics() {
+	registry.MustRegister(captureWriteGateState)
+	registry.MustRegister(captureP2PLeaseRemainingSeconds)
+	registry.MustRegister(captureEtcdProofRemainingSeconds)
+	registry.MustRegister(captureWriteBlockCounter)
 	metrics.RegisterMetrics(registry)
 	coordinator.RegisterMetrics(registry)
 	maintainer.RegisterMetrics(registry)

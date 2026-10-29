@@ -22,6 +22,64 @@ import (
 )
 
 var (
+	maintainerCheckpointTsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "checkpoint_ts",
+			Help:      "checkpoint ts of maintainer",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	maintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "checkpoint_ts_lag",
+			Help:      "checkpoint ts lag of maintainer in seconds",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	maintainerResolvedTsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "resolved_ts",
+			Help:      "resolved ts of maintainer",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	maintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "resolved_ts_lag",
+			Help:      "resolved ts lag of maintainer in seconds",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	// maintainerSyncPointTsGauge and maintainerSyncPointTsLagGauge are only reported once the
+	// maintainer has seen a syncpoint written to the downstream.
+	maintainerSyncPointTsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "syncpoint_ts",
+			Help:      "upstream timestamp (physical time in ms) of the latest syncpoint written to the downstream",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	maintainerSyncPointTsLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "syncpoint_ts_lag",
+			Help:      "age in seconds of the latest syncpoint's upstream timestamp, measured against current upstream PD time",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
+	maintainerGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "changefeed",
+			Name:      "maintainer_counter",
+			Help:      "The counter of changefeed maintainer",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
 	maintainerHandleEventDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -67,6 +125,13 @@ var (
 
 // RegisterMetrics registers maintainer, operator, and replica metrics.
 func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(maintainerCheckpointTsGauge)
+	registry.MustRegister(maintainerCheckpointTsLagGauge)
+	registry.MustRegister(maintainerResolvedTsGauge)
+	registry.MustRegister(maintainerResolvedTsLagGauge)
+	registry.MustRegister(maintainerSyncPointTsGauge)
+	registry.MustRegister(maintainerSyncPointTsLagGauge)
+	registry.MustRegister(maintainerGauge)
 	registry.MustRegister(maintainerHandleEventDuration)
 	registry.MustRegister(maintainerEventChLenGauge)
 	registry.MustRegister(captureLeaseResponseCounter)

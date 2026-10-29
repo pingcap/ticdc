@@ -17,6 +17,7 @@ package sink
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
@@ -27,6 +28,7 @@ import (
 func RegisterMetrics(registry *prometheus.Registry) {
 	cloudstorage.RegisterMetrics(registry)
 	mysql.RegisterMetrics(registry)
+	redo.RegisterMetrics(registry)
 	kafka.RegisterMetrics(registry)
 	pulsar.RegisterMetrics(registry)
 	statistics.RegisterMetrics(registry)

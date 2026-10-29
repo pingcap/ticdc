@@ -23,13 +23,11 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	initServerMetrics(registry)
 	initSchedulerMetrics(registry)
 	initChangefeedMetrics(registry)
-	initDispatcherMetrics(registry)
 	initSinkMetrics(registry)
 	initEventStoreMetrics(registry)
 	initEventServiceMetrics(registry)
 	initLogPullerMetrics(registry)
 	initDynamicStreamMetrics(registry)
-	initCaptureWriteLeaseMetrics(registry)
 
 	initRedoMetrics(registry)
 }
