@@ -27,8 +27,8 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/stretchr/testify/require"
 )
 
