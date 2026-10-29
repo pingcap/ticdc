@@ -4823,6 +4823,66 @@ func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 }
 
 func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
+	t.Run("drop snapshot view and reuse name", func(t *testing.T) {
+		view := newEligibleTableInfoForTest(500, "v")
+		view.View = &model.ViewInfo{}
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
+			dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+			tables: []*model.TableInfo{view},
+		}})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		drop := buildDropViewJobForTest(10, 1000)
+		drop.TableID, drop.TableName = view.ID, "v"
+		require.NoError(t, storage.handleDDLJob(drop))
+		require.NotContains(t, storage.tableMap, view.ID)
+		require.NotContains(t, storage.databaseMap[10].Tables, view.ID)
+		require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(10, 600, "v", 1100)))
+		job := buildCreateTableJobForTest(10, 700, "copy", 1200)
+		job.Query = "CREATE TABLE `test`.`copy` LIKE `test`.`v`"
+		event, err := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+			job: job, databaseMap: storage.databaseMap, tableMap: storage.tableMap,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(600), event.ExtraTableID)
+	})
+	t.Run("replace snapshot view", func(t *testing.T) {
+		helper := commonEvent.NewEventTestHelper(t)
+		t.Cleanup(helper.Close)
+		helper.DDL2Job("CREATE DATABASE view_lifecycle")
+		create := helper.DDL2Job("CREATE VIEW view_lifecycle.v AS SELECT 1 AS id")
+		replace := helper.DDL2Job("CREATE OR REPLACE VIEW view_lifecycle.v AS SELECT 2 AS id")
+		path := t.TempDir()
+		storage := newPersistentStorageForTest(path, []mockDBInfo{{
+			dbInfo: &model.DBInfo{ID: create.SchemaID, Name: ast.NewCIStr("view_lifecycle")},
+			tables: []*model.TableInfo{create.BinlogInfo.TableInfo},
+		}})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		storage.kvStorage = helper.Storage()
+		require.NoError(t, storage.handleDDLJob(replace))
+		require.NotContains(t, storage.tableMap, create.TableID)
+		require.NotContains(t, storage.databaseMap[create.SchemaID].Tables, create.TableID)
+		require.NoError(t, storage.close())
+		storage = loadPersistentStorageFromPathForTest(path, replace.BinlogInfo.FinishedTS+1)
+		require.NotContains(t, storage.tableMap, create.TableID)
+		assertPhysicalTableIDs(t, storage, replace.BinlogInfo.FinishedTS, nil)
+	})
+	t.Run("recover schema with view", func(t *testing.T) {
+		view := newEligibleTableInfoForTest(500, "v")
+		view.View = &model.ViewInfo{}
+		storage := newPersistentStorageForTest(t.TempDir(), nil)
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		job := buildRecoverSchemaJobForTest(10, "test", []*model.TableInfo{
+			newEligibleTableInfoForTest(200, "t"), view,
+		}, 1000)
+		require.NoError(t, storage.handleDDLJob(job))
+		events, err := storage.fetchTableTriggerDDLEvents(nil, 999, 10)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Len(t, events[0].MultipleTableInfos, 2)
+		require.Equal(t, []commonEvent.Table{{SchemaID: 10, TableID: 200, Splitable: true}}, events[0].NeedAddedTables)
+		require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t"}}, events[0].TableNameChange.AddName)
+		assertPhysicalTableIDs(t, storage, 1000, []int64{200})
+	})
 	testCases := []struct {
 		name                 string
 		raw                  PersistedDDLEvent
