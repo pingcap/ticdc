@@ -187,6 +187,22 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) b
 	return newStatus.CheckpointTs != oldStatus.CheckpointTs
 }
 
+// UpdateRemovedStatus stores the terminal status reported by the dispatcher
+// being removed, even when its checkpointTs is behind the stored one. The
+// barrier forwards the stored checkpointTs to blockTs-1 when a dispatcher
+// reports a block event, so a dispatcher closed while blocked reports a lower
+// checkpointTs. UpdateStatus would drop that status and leave the span
+// Working forever. The stored checkpointTs never moves backwards.
+func (r *SpanReplication) UpdateRemovedStatus(newStatus *heartbeatpb.TableSpanStatus) {
+	oldStatus := r.status.Load()
+	if newStatus.CheckpointTs < oldStatus.CheckpointTs {
+		status := *newStatus
+		status.CheckpointTs = oldStatus.CheckpointTs
+		newStatus = &status
+	}
+	r.status.Store(newStatus)
+}
+
 // ShouldRun always returns true.
 func (r *SpanReplication) ShouldRun() bool {
 	return true
