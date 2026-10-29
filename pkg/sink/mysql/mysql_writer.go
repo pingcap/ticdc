@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -71,7 +72,7 @@ type Writer struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
-	statistics           *metrics.Statistics
+	statistics           *statistics.Statistics
 	rowsAffectedCounters sync.Map
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
@@ -107,7 +108,7 @@ func NewWriter(
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
-	statistics *metrics.Statistics,
+	statistics *statistics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	writerCtx, cancel := context.WithCancel(ctx)
@@ -283,9 +284,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 
 	} else {
 		w.tryDryRunBlock()
-		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-			return dmls.rowCount, dmls.approximateSize, nil
-		})
+		w.statistics.RecordDMLResult(dmls.rowCount, nil)
 	}
 
 	if err != nil {

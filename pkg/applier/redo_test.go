@@ -30,10 +30,10 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
@@ -250,7 +250,7 @@ func TestApplyReplicationKeyLossRecovery(t *testing.T) {
 			// omits their repetition, to keep that control case focused on replay.
 			mysqlCfg.EnableDDLTs = completed
 			mysqlCfg.IsTiDB = false
-			stat := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
+			stat := statistics.New(changefeedID, common.DefaultKeyspaceID)
 			metadataWriter := pkgMysql.NewWriter(ctx, 0, db, mysqlCfg, changefeedID, stat, nil)
 			defer metadataWriter.Close()
 			ddl := &commonEvent.DDLEvent{

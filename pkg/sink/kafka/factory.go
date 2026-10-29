@@ -18,14 +18,15 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/statistics"
 )
 
 // NewFactory selects the Kafka client for one changefeed without automatic fallback.
-func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
+func NewFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stat *statistics.Statistics) (Factory, error) {
 	if o.Client == KafkaClientSarama {
-		return newSaramaFactory(ctx, o, changefeedID)
+		return newSaramaFactory(ctx, o, changefeedID, stat)
 	}
-	return newFranzFactory(ctx, o, changefeedID)
+	return newFranzFactory(ctx, o, changefeedID, stat)
 }
 
 // Factory creates Kafka components for one changefeed.

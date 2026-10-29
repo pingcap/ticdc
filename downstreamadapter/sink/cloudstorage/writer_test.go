@@ -30,10 +30,10 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -60,7 +60,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -480,7 +480,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
@@ -702,7 +702,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -768,7 +768,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
-	statistics := metrics.NewStatistics(changefeedID, commonType.DefaultKeyspaceID, t.Name())
+	statistics := statistics.New(changefeedID, commonType.DefaultKeyspaceID)
 	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)

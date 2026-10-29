@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/statistics"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -63,6 +64,7 @@ func newKafkaSinkComponent(
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	caseSensitive bool,
+	stat *statistics.Statistics,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -90,7 +92,7 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID, stat)
 	if err != nil {
 		return comp, protocol, err
 	}
