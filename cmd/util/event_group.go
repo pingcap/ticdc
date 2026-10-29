@@ -29,6 +29,7 @@ type EventsGroup struct {
 	tableID   int64
 
 	messages      []*codeccommon.DMLMessage
+	outOfOrder    bool
 	HighWatermark uint64
 }
 
@@ -44,6 +45,9 @@ func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
 // AppendMessage appends a message to event groups.
 func (g *EventsGroup) AppendMessage(message *codeccommon.DMLMessage) {
 	commitTs := message.GetCommitTs()
+	if len(g.messages) > 0 && commitTs < g.messages[len(g.messages)-1].GetCommitTs() {
+		g.outOfOrder = true
+	}
 	if commitTs > g.HighWatermark {
 		g.HighWatermark = commitTs
 	}
@@ -58,55 +62,37 @@ func (g *EventsGroup) ResolveInto(resolve uint64, dst []*codeccommon.DMLMessage)
 		return dst
 	}
 
-	original := g.messages
-	remaining := g.messages[:0]
-	resolved := make([]*codeccommon.DMLMessage, 0, len(g.messages))
-
-	var (
-		lastCommitTs       uint64
-		outOfOrder         bool
-		outOfOrderLastTs   uint64
-		outOfOrderCommitTs uint64
-	)
-	for _, message := range g.messages {
-		commitTs := message.GetCommitTs()
-		if commitTs > resolve {
-			remaining = append(remaining, message)
-			continue
-		}
-		if len(resolved) > 0 && commitTs < lastCommitTs && !outOfOrder {
-			outOfOrder = true
-			outOfOrderLastTs = lastCommitTs
-			outOfOrderCommitTs = commitTs
-		}
-		lastCommitTs = commitTs
-		resolved = append(resolved, message)
-	}
-	if len(resolved) == 0 {
-		return dst
+	if g.outOfOrder {
+		sort.SliceStable(g.messages, func(i, j int) bool {
+			return g.messages[i].GetCommitTs() < g.messages[j].GetCommitTs()
+		})
 	}
 
-	if outOfOrder {
+	resolvedCount := sort.Search(len(g.messages), func(i int) bool {
+		return g.messages[i].GetCommitTs() > resolve
+	})
+	if g.outOfOrder {
 		log.Warn("DML events are out of order before flush, sort them",
 			zap.Int32("partition", g.Partition),
 			zap.Int64("tableID", g.tableID),
 			zap.Uint64("resolveTs", resolve),
-			zap.Int("resolved", len(resolved)),
-			zap.Uint64("lastCommitTs", outOfOrderLastTs),
-			zap.Uint64("commitTs", outOfOrderCommitTs))
-		sort.SliceStable(resolved, func(i, j int) bool {
-			return resolved[i].GetCommitTs() < resolved[j].GetCommitTs()
-		})
+			zap.Int("resolved", resolvedCount))
+		g.outOfOrder = false
+	}
+	if resolvedCount == 0 {
+		return dst
 	}
 
-	dst = append(dst, resolved...)
-	clear(original[len(remaining):])
-	g.messages = remaining
+	dst = append(dst, g.messages[:resolvedCount]...)
+	remainingCount := len(g.messages) - resolvedCount
+	copy(g.messages, g.messages[resolvedCount:])
+	clear(g.messages[remainingCount:])
+	g.messages = g.messages[:remainingCount]
 	if len(g.messages) != 0 {
 		firstCommitTs := g.messages[0].GetCommitTs()
 		log.Debug("not all events resolved",
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int("resolved", len(resolved)), zap.Int("remained", len(g.messages)),
+			zap.Int("resolved", resolvedCount), zap.Int("remained", len(g.messages)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", firstCommitTs))
 	}
 	return dst
@@ -130,8 +116,12 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 	}
 
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastRowTypeCount := len(lastDMLEvent.RowTypes)
 		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
 		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.RowKeys = appendOptionalDMLValues(lastDMLEvent.RowKeys, row.RowKeys, lastRowTypeCount, len(row.RowTypes))
+		// Checksums follow logical rows; updates occupy two physical row slots.
+		lastDMLEvent.Checksum = appendOptionalDMLValues(lastDMLEvent.Checksum, row.Checksum, int(lastDMLEvent.Length), int(row.Length))
 		lastDMLEvent.Length += row.Length
 		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
 		return events
@@ -141,4 +131,13 @@ func AppendOrMergeDMLEvent(events []*commonEvent.DMLEvent, row *commonEvent.DMLE
 		zap.Int64("tableID", row.GetTableID()),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 	return events
+}
+
+func appendOptionalDMLValues[T any](last, row []T, lastRowTypeCount, rowRowTypeCount int) []T {
+	if len(last) == 0 && len(row) != 0 {
+		last = make([]T, lastRowTypeCount)
+	} else if len(last) != 0 && len(row) == 0 {
+		row = make([]T, rowRowTypeCount)
+	}
+	return append(last, row...)
 }

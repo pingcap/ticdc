@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -228,6 +229,148 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			}
 			if tt.deleteVersion != 0 {
 				require.Equal(t, tt.deleteVersion, store.deleteVersion)
+			}
+		})
+	}
+}
+
+func TestPartitionDDLUpdatesSurvivingPartitionTableInfo(t *testing.T) {
+	const (
+		logicalTableID = int64(100)
+		survivorID     = int64(201)
+		oldUpdateTS    = uint64(1000)
+		newUpdateTS    = uint64(2000)
+		ddlFinishedTS  = uint64(3000)
+	)
+
+	testCases := []struct {
+		name                string
+		ddlType             model.ActionType
+		previousIDs         []int64
+		currentIDs          []int64
+		expectedAffectedIDs []int64
+		expectedUpdateTS    uint64
+		droppedID           int64
+	}{
+		{
+			name:                "add partition",
+			ddlType:             model.ActionAddTablePartition,
+			previousIDs:         []int64{201, 202},
+			currentIDs:          []int64{201, 202, 203},
+			expectedAffectedIDs: []int64{201, 202, 203},
+			expectedUpdateTS:    newUpdateTS,
+		},
+		{
+			name:                "drop partition",
+			ddlType:             model.ActionDropTablePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 202},
+			expectedAffectedIDs: []int64{201, 202, 203},
+			expectedUpdateTS:    newUpdateTS,
+			droppedID:           203,
+		},
+		{
+			name:                "reorganize partition",
+			ddlType:             model.ActionReorganizePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 204, 205},
+			expectedAffectedIDs: []int64{201, 202, 203, 204, 205},
+			expectedUpdateTS:    newUpdateTS,
+			droppedID:           202,
+		},
+		{
+			name:                "truncate partition",
+			ddlType:             model.ActionTruncateTablePartition,
+			previousIDs:         []int64{201, 202, 203},
+			currentIDs:          []int64{201, 202, 204},
+			expectedAffectedIDs: []int64{201, 202, 203, 204},
+			expectedUpdateTS:    oldUpdateTS,
+			droppedID:           203,
+		},
+	}
+
+	newPartitionTableInfo := func(partitionIDs []int64, updateTS uint64) *model.TableInfo {
+		tableInfo := newEligibleTableInfoForTest(logicalTableID, "t")
+		tableInfo.Partition = buildPartitionDefinitionsForTest(partitionIDs)
+		tableInfo.UpdateTS = updateTS
+		return tableInfo
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &PersistedDDLEvent{
+				Type:           byte(tc.ddlType),
+				SchemaID:       10,
+				TableID:        logicalTableID,
+				SchemaName:     "test",
+				TableName:      "t",
+				TableInfo:      newPartitionTableInfo(tc.currentIDs, tc.expectedUpdateTS),
+				PrevPartitions: tc.previousIDs,
+				FinishedTs:     ddlFinishedTS,
+			}
+			handler := allDDLHandlers[tc.ddlType]
+
+			newStore := func(initialized bool) *versionedTableInfoStore {
+				store := newEmptyVersionedTableInfoStore(survivorID)
+				store.addInitialTableInfo(
+					common.WrapTableInfo("test", newPartitionTableInfo(tc.previousIDs, oldUpdateTS)),
+					oldUpdateTS,
+				)
+				if initialized {
+					store.setTableInfoInitialized()
+				}
+				return store
+			}
+			assertUpdated := func(store *versionedTableInfoStore) {
+				tableInfo, err := store.getTableInfo(ddlFinishedTS)
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedUpdateTS, tableInfo.GetUpdateTS())
+				require.Len(t, store.infos, 2)
+				require.Equal(t, ddlFinishedTS, store.infos[1].Version)
+			}
+
+			// Verify that the online path applies the DDL to a registered surviving partition.
+			liveStore := newStore(true)
+			affectedIDs := make([]int64, 0, len(tc.expectedAffectedIDs))
+			handler.iterateEventTablesFunc(iterateEventTablesFuncArgs{
+				event: event,
+				apply: func(tableIDs ...int64) {
+					affectedIDs = append(affectedIDs, tableIDs...)
+					for _, tableID := range tableIDs {
+						if tableID == survivorID {
+							liveStore.applyDDL(event)
+						}
+					}
+				},
+			})
+			require.ElementsMatch(t, tc.expectedAffectedIDs, affectedIDs)
+			assertUpdated(liveStore)
+
+			// Verify that the history path records and extracts the same update.
+			tablesDDLHistory := make(map[int64][]uint64)
+			handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+				ddlEvent:         event,
+				tablesDDLHistory: tablesDDLHistory,
+			})
+			require.Len(t, tablesDDLHistory, len(tc.expectedAffectedIDs))
+			for _, tableID := range tc.expectedAffectedIDs {
+				require.Equal(t, []uint64{ddlFinishedTS}, tablesDDLHistory[tableID])
+			}
+			historyStore := newStore(false)
+			historyStore.applyDDLFromPersistStorage(event)
+			historyStore.setTableInfoInitialized()
+			assertUpdated(historyStore)
+
+			for _, tableID := range tc.currentIDs {
+				tableInfo, deleted := handler.extractTableInfoFunc(event, tableID)
+				require.NotNil(t, tableInfo)
+				require.False(t, deleted)
+				require.Equal(t, tc.expectedUpdateTS, tableInfo.GetUpdateTS())
+			}
+			if tc.droppedID != 0 {
+				tableInfo, deleted := handler.extractTableInfoFunc(event, tc.droppedID)
+				require.Nil(t, tableInfo)
+				require.True(t, deleted)
 			}
 		})
 	}

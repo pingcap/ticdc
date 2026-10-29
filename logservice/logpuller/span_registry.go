@@ -73,6 +73,9 @@ type subscribedSpan struct {
 	initializationTracker spanInitializationTracker
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
+	// baseScanPriority is the minimum priority for every Region in this subscription.
+	baseScanPriority ScanPriorityLevel
+	priorityPolicy   scanPriorityPolicy
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -95,6 +98,8 @@ func newSubscribedSpan(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 	filterLoop bool,
+	pdClock pdutil.Clock,
+	priorityLagThreshold time.Duration,
 ) *subscribedSpan {
 	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
 
@@ -108,6 +113,7 @@ func newSubscribedSpan(
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   advanceInterval,
+		priorityPolicy:    newScanPriorityPolicy(pdClock, priorityLagThreshold),
 	}
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
@@ -138,6 +144,18 @@ func newSubscribedSpan(
 		}
 	}
 	return rt
+}
+
+// recordResolvedTs updates span progress and its priority policy together.
+func (span *subscribedSpan) recordResolvedTs(resolvedTs uint64) {
+	span.resolvedTs.Store(resolvedTs)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
+	if span.priorityPolicy.observeSpanResolved(resolvedTs) {
+		log.Info("subscription catches up for the first time",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Duration("threshold", span.priorityPolicy.lagThreshold))
+	}
 }
 
 func (span *subscribedSpan) clearKVEventsCache() {
@@ -233,24 +251,26 @@ type spanAndTargetTs struct {
 	targetTs uint64
 }
 
+// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no
+// need to resolve.
+func getResolvedTargetTs(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
+	resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+	if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+		return 0
+	}
+	resolvedTs := subSpan.resolvedTs.Load()
+	resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+	if currentTime.Sub(resolvedTime) < resolveLockFence {
+		return 0
+	}
+	return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
+}
+
 func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
 	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
 	defer resolveLockTicker.Stop()
 	maxCacheSize := 1024
 	spanAndTsCache := make([]spanAndTargetTs, 0, maxCacheSize)
-	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
 
 	for {
 		select {

@@ -169,7 +169,7 @@ func TestCloudStorageSinkWithColumnSelector(t *testing.T) {
 	}
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -760,7 +760,13 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), true, nil, common.DefaultKeyspaceID)
 	require.NoError(t, err)
 
-	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	spoolDir := filepath.Join(
+		spoolBaseDir,
+		cloudStorageSpoolDirectory,
+		config.GetGlobalServerConfig().AdvertiseAddr,
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+	)
 	_, err = os.Stat(spoolDir)
 	require.NoError(t, err)
 
@@ -805,7 +811,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	cloudStorageSink := &sink{
 		changefeedID: common.NewChangefeedID4Test("test", "test"),
 		cfg: &cloudstorage.Config{
-			DateSeparator:       config.DateSeparatorDay.String(),
+			DateSeparator:       config.DateSeparatorDay,
 			FileExpirationDays:  1,
 			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
 		},

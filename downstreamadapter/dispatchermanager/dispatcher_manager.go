@@ -327,7 +327,6 @@ func NewDispatcherManager(
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.IsLowLatencyMode(),
-		manager.config.TimeZone,
 		manager.config.BDRMode,
 		outputRawChangeEvent,
 		integrityCfg,
@@ -502,7 +501,7 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return newWritePathClosedError()
 	}
 	// before bootstrap finished, cannot send any event.
-	success := tableTriggerDispatcher.EmitBootstrap(e.writePathClosed.Load)
+	success := tableTriggerDispatcher.EmitBootstrap(e.ctx, e.writePathClosed.Load)
 	if e.writePathClosed.Load() {
 		return newWritePathClosedError()
 	}

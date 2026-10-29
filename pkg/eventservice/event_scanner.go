@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -42,7 +43,7 @@ type eventGetter interface {
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
 	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	GetTableInfo(ctx context.Context, keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -271,7 +272,7 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
+			tableInfo, err := s.getTableInfo4Txn(session.ctx, dispatcher, tableID, rawEvent.CRTs-1)
 			if err != nil {
 				return false, err
 			}
@@ -348,12 +349,12 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	return session.dispatcherStat.isRemoved.Load(), nil
 }
 
-func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
+func (s *eventScanner) getTableInfo4Txn(ctx context.Context, dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   dispatcher.info.GetTableSpan().KeyspaceID,
 		Name: dispatcher.info.GetChangefeedID().Keyspace(),
 	}
-	tableInfo, err := s.schemaGetter.GetTableInfo(keyspaceMeta, tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}
@@ -834,6 +835,12 @@ func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
 	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
 	return &dmlProcessor{
 		ctx:                  context.Background(),
 		mounter:              mounter,

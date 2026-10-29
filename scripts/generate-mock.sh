@@ -47,6 +47,9 @@ run_mockgen() {
 run_mockgen -source coordinator/changefeed/changefeed_db_backend.go -destination coordinator/changefeed/mock/changefeed_db_backend.go
 run_mockgen -source pkg/etcd/etcd.go -destination pkg/etcd/etcd_mock.go -package etcd
 run_mockgen -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -package etcd
+
+# Server mock generation queries pkg/etcd, whose mocks must be complete.
+wait_for_batch
 run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock
 run_mockgen -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 run_mockgen -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
@@ -55,11 +58,13 @@ run_mockgen -source pkg/api/v2/capture.go -destination pkg/api/v2/mock/capture_m
 run_mockgen -source pkg/api/v2/processor.go -destination pkg/api/v2/mock/processor_mock.go -package mock
 run_mockgen -source pkg/api/v2/changefeed.go -destination pkg/api/v2/mock/changefeed_mock.go -package mock
 run_mockgen -source pkg/api/v2/api_client.go -destination pkg/api/v2/mock/api_client_mock.go -package mock
+run_mockgen -source logservice/logpuller/debug.go -destination logservice/logpuller/mock/debug_info_provider.go -package mock
 run_mockgen -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 run_mockgen -source pkg/sink/kafka/admin_client.go -destination pkg/sink/kafka/admin_client_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/factory.go -destination pkg/sink/kafka/factory_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/admin.go -destination pkg/sink/kafka/sarama_admin_mock.go -package kafka
 run_mockgen -source pkg/sink/kafka/sarama_sync_producer.go -destination pkg/sink/kafka/sarama_sync_producer_mock.go -package kafka
+run_mockgen -destination pkg/sink/mysql/mock/mysql_result.go -package mock github.com/go-sql-driver/mysql Result
 run_mockgen -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 run_mockgen -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
 run_mockgen -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/gc_client_mock.go -package gc

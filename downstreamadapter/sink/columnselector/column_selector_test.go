@@ -16,6 +16,7 @@ package columnselector
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -205,6 +206,98 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 		for _, col := range columns {
 			require.True(t, selector.Select(col))
 		}
+	}
+}
+
+func TestVerifyTablesUsesFirstMatchingSelector(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name             string
+		firstColumns     []string
+		fallbackColumns  []string
+		partitionColumns []string
+		tables           []string
+		wantError        string
+	}{
+		{
+			name:            "later rule filters primary key",
+			firstColumns:    []string{"id", "payload"},
+			fallbackColumns: []string{"payload"},
+			tables:          []string{"t"},
+		},
+		{
+			name:             "later rule filters partition column",
+			firstColumns:     []string{"id", "payload"},
+			fallbackColumns:  []string{"id"},
+			partitionColumns: []string{"payload"},
+			tables:           []string{"t"},
+		},
+		{
+			name:            "first rule filters primary key",
+			firstColumns:    []string{"payload"},
+			fallbackColumns: []string{"id", "payload"},
+			tables:          []string{"t"},
+			wantError:       "no primary key columns or unique key columns obtained after filter out",
+		},
+		{
+			name:             "first rule filters partition column",
+			firstColumns:     []string{"id"},
+			fallbackColumns:  []string{"id", "payload"},
+			partitionColumns: []string{"payload"},
+			tables:           []string{"t"},
+			wantError:        "the filtered out column is used in the column dispatcher",
+		},
+		{
+			name:            "next table uses fallback rule",
+			firstColumns:    []string{"id", "payload"},
+			fallbackColumns: []string{"payload"},
+			tables:          []string{"t", "t2"},
+			wantError:       "test.t2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sinkConfig := &config.SinkConfig{
+				ColumnSelectors: []*config.ColumnSelector{
+					{Matcher: []string{"test.t"}, Columns: tc.firstColumns},
+					{Matcher: []string{"test.*"}, Columns: tc.fallbackColumns},
+				},
+			}
+			selectors, err := New(sinkConfig, false)
+			require.NoError(t, err)
+
+			var router *eventrouter.EventRouter
+			if len(tc.partitionColumns) > 0 {
+				sinkConfig.DispatchRules = []*config.DispatchRule{{
+					Matcher:       []string{"test.*"},
+					PartitionRule: "columns",
+					Columns:       tc.partitionColumns,
+				}}
+				router, err = eventrouter.NewEventRouter(sinkConfig, false, "topic", false, false)
+				require.NoError(t, err)
+			}
+
+			tables := make([]*commonType.TableInfo, 0, len(tc.tables))
+			for _, name := range tc.tables {
+				tables = append(tables, commonType.WrapTableInfo("test", &model.TableInfo{
+					Name:       parser_model.NewCIStr(name),
+					PKIsHandle: true,
+					Columns: []*model.ColumnInfo{
+						newColumnInfoForSelectorTest(1, "id", mysql.PriKeyFlag|mysql.NotNullFlag),
+						newColumnInfoForSelectorTest(2, "payload", 0),
+					},
+				}))
+			}
+
+			err = selectors.VerifyTables(tables, router)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.True(t, errors.ErrColumnSelectorFailed.Equal(err))
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
 	}
 }
 

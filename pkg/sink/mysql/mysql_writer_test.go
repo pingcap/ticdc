@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
+	"github.com/golang/mock/gomock"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -32,12 +33,21 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
+	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestMysqlResult(t *testing.T, rowsAffected ...int64) *mysqlmock.MockResult {
+	t.Helper()
+	result := mysqlmock.NewMockResult(gomock.NewController(t))
+	result.EXPECT().AllRowsAffected().Return(rowsAffected)
+	return result
+}
 
 func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
@@ -108,10 +118,13 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2", 3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 3, 0))
 
+	actualRowsAffected := metrics.ExecDMLEventRowsAffectedCounter.WithLabelValues(writer.ChangefeedID.Keyspace(), writer.ChangefeedID.Name(), "actual", "total")
+	before := testutil.ToFloat64(actualRowsAffected)
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(actualRowsAffected))
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -138,7 +151,7 @@ func TestMysqlWriterWaitsForWriteGrantBeforeExecute(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	done := make(chan error, 1)
 	go func() {
@@ -199,10 +212,12 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 		WithArgs(1, "test").
 		WillReturnError(fmt.Errorf("Error 1062: Duplicate entry '1' for key 'PRIMARY'"))
 
+	mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
+
 	// Second execution should use REPLACE (safe mode) and succeed
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(1, "test").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
 	require.NoError(t, err)
@@ -236,7 +251,7 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -373,6 +388,26 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLReturnsStatusQueryError(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = true
+
+	event := &commonEvent.DDLEvent{
+		Type:          byte(timodel.ActionExchangeTablePartition),
+		FinishedTs:    2,
+		BlockedTables: &commonEvent.InfluencedTables{TableIDs: []int64{1}},
+	}
+	query := fmt.Sprintf("SELECT * FROM tidb_cdc.ddl_ts_v1 "+
+		"WHERE (ticdc_cluster_id, changefeed, table_id, ddl_ts, finished) "+
+		"IN (('%s', '%s', 1, 2, 1))",
+		config.GetGlobalServerConfig().ClusterID, writer.ChangefeedID.String())
+	mock.ExpectQuery(query).WillReturnError(context.DeadlineExceeded)
+
+	require.ErrorIs(t, writer.execDDL(event), context.DeadlineExceeded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
 	router, err := routing.NewRouter(
 		common.NewChangefeedID4Test("test", "test"),
@@ -416,6 +451,25 @@ func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
 	mock.ExpectExec(routedCreateTableDDL.Query).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	require.NoError(t, writer.execDDL(routedCreateTableDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriterExecRecoverSchemaDDL(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionRecoverSchema),
+		SchemaName: "test",
+		Query:      "FLASHBACK DATABASE `test`",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("FLASHBACK DATABASE `test`").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(ddlEvent))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -570,6 +624,79 @@ func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *tes
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestExecDDLUsesControlAsyncDBOnlyForTiDBAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriterForTiDB(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlAsyncMock.ExpectBegin()
+	controlAsyncMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "30m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+	require.NoError(t, controlMock.ExpectationsWereMet())
+
+	addColumnEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddColumn),
+		Query:      "alter table t add column age int;",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addColumnEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addColumnEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+}
+
+func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
+	writer, controlDB, controlMock := newTestMysqlWriter(t)
+	defer controlDB.Close()
+
+	controlAsyncDB, controlAsyncMock := newTestMockDB(t)
+	defer controlAsyncDB.Close()
+	writer.SetControlAsyncDB(controlAsyncDB)
+	writer.cfg.ReadTimeout = "2m"
+	writer.cfg.AsyncDDLTimeout = "30m"
+
+	addIndexEvent := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+	}
+	controlMock.ExpectBegin()
+	controlMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlMock.ExpectCommit()
+
+	require.NoError(t, writer.execDDL(addIndexEvent))
+	require.Equal(t, "2m", writer.getDDLReadTimeout(addIndexEvent))
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
+}
+
 // Test the async ddl can be write successfully
 func TestWriterAsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
@@ -657,7 +784,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 	// for dml event, it is a replace since we set it's commitTs less than replicatingTs
 	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(3, "test3").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 1, 0))
 
 	// for ddl job for table t1
 	mock.ExpectBegin()
