@@ -14,6 +14,8 @@
 package codec
 
 import (
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -35,8 +37,10 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-// RegisterMetrics registers all metrics in this file.
+// RegisterMetrics registers codec metrics, including compression and claim check.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(encoderGroupInputChanSizeGauge)
 	registry.MustRegister(encoderGroupOutputChanSizeGauge)
+	common.RegisterMetrics(registry)
+	claimcheck.RegisterMetrics(registry)
 }

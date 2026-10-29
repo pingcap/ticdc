@@ -15,6 +15,8 @@
 package maintainer
 
 import (
+	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -63,11 +65,13 @@ var (
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 )
 
-// RegisterMetrics registers the metrics owned by this package.
+// RegisterMetrics registers maintainer, operator, and replica metrics.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(maintainerHandleEventDuration)
 	registry.MustRegister(maintainerEventChLenGauge)
 	registry.MustRegister(captureLeaseResponseCounter)
 	registry.MustRegister(captureLeaseResponseRejectedCounter)
 	registry.MustRegister(execDDLBlockingGauge)
+	operator.RegisterMetrics(registry)
+	replica.RegisterMetrics(registry)
 }

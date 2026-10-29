@@ -14,7 +14,10 @@
 
 package coordinator
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	coordinatorCounter = prometheus.NewCounter(
@@ -50,10 +53,11 @@ var (
 		})
 )
 
-// RegisterMetrics registers the metrics owned by this package.
+// RegisterMetrics registers metrics for the coordinator and its operators.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(coordinatorCounter)
 	registry.MustRegister(changefeedStateGauge)
 	registry.MustRegister(captureLeaseHeartbeatCounter)
 	registry.MustRegister(captureP2PWitnessAvailable)
+	operator.RegisterMetrics(registry)
 }
