@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -146,9 +148,36 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
+	model.ActionCreateMaterializedView: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateMaterializedView,
+		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForCreateMaterializedView,
+	},
+	model.ActionCreateMaterializedViewShadow: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
+	model.ActionCreateMaterializedViewLog: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateMaterializedViewLog,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForDropTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
@@ -316,6 +345,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionMViewRefreshOutOfPlaceCutover: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForMViewRefreshOutOfPlaceCutover,
+		updateDDLHistoryFunc:       updateDDLHistoryForMViewRefreshOutOfPlaceCutover,
+		updateFullTableInfoFunc:    updateFullTableInfoForTruncateTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
+		iterateEventTablesFunc:     iterateEventTablesForTruncateTable,
+		extractTableInfoFunc:       extractTableInfoFuncForTruncateTable,
+		buildDDLEventFunc:          buildDDLEventForMViewRefreshOutOfPlaceCutover,
 	},
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
@@ -559,8 +597,9 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		query = job.Query
 	}
 
-	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
-	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
+	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID.
+	// For some upstream DDLs like ActionCreateMaterializedView, BinlogInfo.TableInfo may even point to
+	// a related base table, so callers must override TableInfo when needed.
 	event := PersistedDDLEvent{
 		ID:             job.ID,
 		Type:           byte(job.Type),
@@ -763,10 +802,77 @@ func resolveCreateTableLikeReferSchema(
 	}, true
 }
 
+func buildPersistedDDLEventForCreateMaterializedView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableInfo = getCreateMaterializedViewTableInfo(args.job)
+	event.TableID = event.TableInfo.ID
+	event.TableName = event.TableInfo.Name.O
+	return event
+}
+
+func getCreateMaterializedViewTableInfo(job *model.Job) *model.TableInfo {
+	args, err := model.GetCreateMaterializedViewArgs(job)
+	if err == nil && args != nil && args.TableInfo != nil {
+		return args.TableInfo
+	}
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		log.Warn("fallback to binlog table info for create materialized view",
+			zap.Error(err),
+			zap.Int64("jobID", job.ID),
+			zap.Int64("tableID", job.TableID),
+			zap.String("tableName", job.TableName))
+		return job.BinlogInfo.TableInfo
+	}
+	log.Panic("table info not found for create materialized view",
+		zap.Error(err),
+		zap.Int64("jobID", job.ID),
+		zap.Int64("tableID", job.TableID),
+		zap.String("tableName", job.TableName))
+	return nil
+}
+
+func buildPersistedDDLEventForCreateMaterializedViewLog(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableInfo = getCreateMaterializedViewLogTableInfo(args.job)
+	event.TableID = event.TableInfo.ID
+	event.TableName = event.TableInfo.Name.O
+	return event
+}
+
+func getCreateMaterializedViewLogTableInfo(job *model.Job) *model.TableInfo {
+	args, err := model.GetCreateMaterializedViewLogArgs(job)
+	if err == nil && args != nil && args.TableInfo != nil {
+		return args.TableInfo
+	}
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		log.Warn("fallback to binlog table info for create materialized view log",
+			zap.Error(err),
+			zap.Int64("jobID", job.ID),
+			zap.Int64("tableID", job.TableID),
+			zap.String("tableName", job.TableName))
+		return job.BinlogInfo.TableInfo
+	}
+	log.Panic("table info not found for create materialized view log",
+		zap.Error(err),
+		zap.Int64("jobID", job.ID),
+		zap.Int64("tableID", job.TableID),
+		zap.String("tableName", job.TableName))
+	return nil
+}
+
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
+	if isMaterializedViewLogBasicTable(args.tableMap[event.TableID]) {
+		event.TableInfo = &model.TableInfo{
+			ID:                  event.TableID,
+			Name:                parser_model.NewCIStr(event.TableName),
+			MaterializedViewLog: &model.MaterializedViewLogInfo{},
+		}
+	}
 	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP TABLE %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
@@ -800,6 +906,37 @@ func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs)
 	// schema/table name remains the same, so it is ok to get them using old table/schema id
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
+	if isPartitionTable(event.TableInfo) {
+		for id := range args.partitionMap[event.TableID] {
+			event.PrevPartitions = append(event.PrevPartitions, id)
+		}
+	}
+	return event
+}
+
+func buildPersistedDDLEventForMViewRefreshOutOfPlaceCutover(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	cutoverArgs, err := model.GetRefreshMaterializedViewCompleteOutOfPlaceCutoverArgs(args.job)
+	if err != nil {
+		log.Panic("GetRefreshMaterializedViewCompleteOutOfPlaceCutoverArgs failed",
+			zap.String("query", args.job.Query),
+			zap.Error(err))
+	}
+	if event.TableInfo == nil {
+		log.Panic("table info should not be nil for materialized view cutover",
+			zap.Int64("jobID", event.ID),
+			zap.String("query", event.Query))
+	}
+	if event.TableInfo.ID != cutoverArgs.ShadowTableID {
+		log.Panic("shadow table id mismatch for materialized view cutover",
+			zap.Int64("jobID", event.ID),
+			zap.Int64("oldMViewID", cutoverArgs.OldMViewID),
+			zap.Int64("shadowTableID", cutoverArgs.ShadowTableID),
+			zap.Int64("tableInfoID", event.TableInfo.ID))
+	}
+	event.ExtraTableID = cutoverArgs.ShadowTableID
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableName = event.TableInfo.Name.O
 	if isPartitionTable(event.TableInfo) {
 		for id := range args.partitionMap[event.TableID] {
 			event.PrevPartitions = append(event.PrevPartitions, id)
@@ -1016,10 +1153,90 @@ func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
 	return queryInfos, true
 }
 
+func getRenameTablesArgsCompat(job *model.Job) (renameArgs *model.RenameTablesArgs, err error) {
+	defer func() {
+		if recoverValue := recover(); recoverValue != nil {
+			renameArgs, err = decodeRenameTablesArgsV1Compat(job)
+			if err != nil {
+				err = fmt.Errorf("GetRenameTablesArgs panic: %v, fallback decode failed: %w", recoverValue, err)
+			}
+		}
+	}()
+	return model.GetRenameTablesArgs(job)
+}
+
+func decodeRenameTablesArgsV1Compat(job *model.Job) (*model.RenameTablesArgs, error) {
+	if job.Version != model.JobVersion1 {
+		return nil, fmt.Errorf("unexpected job version %d", job.Version)
+	}
+	var rawArgs []json.RawMessage
+	if err := json.Unmarshal(job.RawArgs, &rawArgs); err != nil {
+		return nil, err
+	}
+	if len(rawArgs) != 5 && len(rawArgs) != 6 {
+		return nil, fmt.Errorf("unexpected raw args length %d", len(rawArgs))
+	}
+
+	var (
+		oldSchemaIDs   []int64
+		newSchemaIDs   []int64
+		newTableNames  []parser_model.CIStr
+		tableIDs       []int64
+		oldSchemaNames []parser_model.CIStr
+		oldTableNames  []parser_model.CIStr
+	)
+	decode := func(index int, target any) error {
+		return json.Unmarshal(rawArgs[index], target)
+	}
+	for _, item := range []struct {
+		index  int
+		target any
+	}{
+		{0, &oldSchemaIDs},
+		{1, &newSchemaIDs},
+		{2, &newTableNames},
+		{3, &tableIDs},
+		{4, &oldSchemaNames},
+	} {
+		if err := decode(item.index, item.target); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) == 6 {
+		if err := decode(5, &oldTableNames); err != nil {
+			return nil, err
+		}
+	} else {
+		oldTableNames = make([]parser_model.CIStr, len(oldSchemaIDs))
+	}
+	if len(oldSchemaIDs) != len(newSchemaIDs) ||
+		len(oldSchemaIDs) != len(newTableNames) ||
+		len(oldSchemaIDs) != len(tableIDs) ||
+		len(oldSchemaIDs) != len(oldSchemaNames) ||
+		len(oldSchemaIDs) != len(oldTableNames) {
+		return nil, fmt.Errorf("inconsistent raw args lengths")
+	}
+
+	renameArgs := &model.RenameTablesArgs{
+		RenameTableInfos: make([]*model.RenameTableArgs, 0, len(oldSchemaIDs)),
+	}
+	for i, oldSchemaID := range oldSchemaIDs {
+		renameArgs.RenameTableInfos = append(renameArgs.RenameTableInfos, &model.RenameTableArgs{
+			OldSchemaID:   oldSchemaID,
+			OldSchemaName: oldSchemaNames[i],
+			OldTableName:  oldTableNames[i],
+			NewSchemaID:   newSchemaIDs[i],
+			NewTableName:  newTableNames[i],
+			TableID:       tableIDs[i],
+		})
+	}
+	return renameArgs, nil
+}
+
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
-	renameArgs, err := model.GetRenameTablesArgs(args.job)
+	renameArgs, err := getRenameTablesArgsCompat(args.job)
 	if err != nil {
 		log.Panic("GetRenameTablesArgs failed",
 			zap.String("query", args.job.Query),
@@ -1220,6 +1437,13 @@ func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 	return args.tableTriggerDDLHistory
 }
 
+func updateDDLHistoryForDropTable(args updateDDLHistoryFuncArgs) []uint64 {
+	if isMaterializedViewLogTable(args.ddlEvent.TableInfo) {
+		return updateDDLHistoryForNormalDDLOnSingleTable(args)
+	}
+	return updateDDLHistoryForAddDropTable(args)
+}
+
 func updateDDLHistoryForNormalDDLOnSingleTable(args updateDDLHistoryFuncArgs) []uint64 {
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
@@ -1232,6 +1456,17 @@ func updateDDLHistoryForNormalDDLOnSingleTable(args updateDDLHistoryFuncArgs) []
 }
 
 func updateDDLHistoryForTruncateTable(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	if isPartitionTable(args.ddlEvent.TableInfo) {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	} else {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.TableID, args.ddlEvent.ExtraTableID)
+	}
+	return args.tableTriggerDDLHistory
+}
+
+func updateDDLHistoryForMViewRefreshOutOfPlaceCutover(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
@@ -1426,8 +1661,9 @@ func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
 	schemaID := args.event.SchemaID
 	args.addTableToDB(tableID, schemaID)
 	args.tableMap[tableID] = &BasicTableInfo{
-		SchemaID: schemaID,
-		Name:     args.event.TableInfo.Name.O,
+		SchemaID:              schemaID,
+		Name:                  args.event.TableInfo.Name.O,
+		IsMaterializedViewLog: isMaterializedViewLogTable(args.event.TableInfo),
 	}
 	if isPartitionTable(args.event.TableInfo) {
 		partitionInfo := make(BasicPartitionInfo)
@@ -1927,6 +2163,14 @@ func extractTableInfoFuncForRemovePartitioning(event *PersistedDDLEvent, tableID
 // =======
 
 func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tiDBOnly bool) (commonEvent.DDLEvent, bool, error) {
+	tableID := int64(0)
+	if rawEvent.TableInfo != nil {
+		tableID = rawEvent.TableInfo.ID
+	}
+	return buildDDLEventCommonWithTableID(rawEvent, tableID, tableFilter, tiDBOnly)
+}
+
+func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, tableFilter filter.Filter, tiDBOnly bool) (commonEvent.DDLEvent, bool, error) {
 	var wrapTableInfo *common.TableInfo
 	// Note: not all ddl types will respect the `filtered` result: create tables, rename tables, rename table, exchange table partition.
 	filtered, notSync := false, false
@@ -1987,7 +2231,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	}
 
 	if rawEvent.TableInfo != nil {
-		wrapTableInfo = common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo)
+		wrapTableInfo = common.WrapTableInfoWithTableID(rawEvent.SchemaName, rawEvent.TableInfo, tableID)
 	}
 
 	return commonEvent.DDLEvent{
@@ -2008,6 +2252,18 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		NotSync:  notSync,
 		IndexIDs: rawEvent.IndexIDs,
 	}, !filtered, nil
+}
+
+func buildDDLEventIgnore(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	return commonEvent.DDLEvent{}, false, nil
+}
+
+func isMaterializedViewLogTable(tableInfo *model.TableInfo) bool {
+	return tableInfo != nil && tableInfo.MaterializedViewLog != nil
+}
+
+func isMaterializedViewLogBasicTable(tableInfo *BasicTableInfo) bool {
+	return tableInfo != nil && tableInfo.IsMaterializedViewLog
 }
 
 func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
@@ -2196,7 +2452,63 @@ func shouldBlockCreateTableLikeReferTable(rawEvent *PersistedDDLEvent, tableFilt
 	return !tableFilter.ShouldIgnoreTable(referSchema, referTable)
 }
 
+func buildDDLEventForCreateMaterializedView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	ddlEvent.Type = byte(model.ActionCreateTable)
+	ddlEvent.Query = buildCreateTableQueryForMaterializedView(rawEvent)
+	return ddlEvent, true, nil
+}
+
+func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) string {
+	tableName := common.QuoteSchema(rawEvent.SchemaName, rawEvent.TableName)
+	if rawEvent.TableInfo == nil {
+		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
+	}
+
+	definitions := make([]string, 0, len(rawEvent.TableInfo.Columns)+1)
+	for _, col := range rawEvent.TableInfo.Columns {
+		if col.Hidden {
+			continue
+		}
+		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.CompactStr())
+		if mysql.HasNotNullFlag(col.GetFlag()) || mysql.HasPriKeyFlag(col.GetFlag()) {
+			definition += " NOT NULL"
+		}
+		definitions = append(definitions, definition)
+	}
+	if pkColumns := getPrimaryKeyColumnNames(rawEvent.TableInfo); len(pkColumns) > 0 {
+		definitions = append(definitions, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(pkColumns, ", ")))
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(definitions, ", "))
+}
+
+func getPrimaryKeyColumnNames(tableInfo *model.TableInfo) []string {
+	for _, index := range tableInfo.Indices {
+		if !index.Primary {
+			continue
+		}
+		columnNames := make([]string, 0, len(index.Columns))
+		for _, indexColumn := range index.Columns {
+			columnNames = append(columnNames, common.QuoteName(indexColumn.Name.O))
+		}
+		return columnNames
+	}
+
+	for _, col := range tableInfo.Columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			return []string{common.QuoteName(col.Name.O)}
+		}
+	}
+	return nil
+}
+
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	if isMaterializedViewLogTable(rawEvent.TableInfo) {
+		return buildDDLEventIgnore(rawEvent, tableFilter, tableID)
+	}
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2268,6 +2580,58 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	}
 	ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{{SchemaName: rawEvent.SchemaName, TableName: rawEvent.TableName}}
 	return ddlEvent, true, err
+}
+
+func buildDDLEventForMViewRefreshOutOfPlaceCutover(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	if tableID == 0 {
+		tableID = rawEvent.ExtraTableID
+	}
+	ddlEvent, ok, err := buildDDLEventCommonWithTableID(rawEvent, tableID, tableFilter, WithoutTiDBOnly)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	if isPartitionTable(rawEvent.TableInfo) {
+		prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
+		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
+		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, common.DDLSpanTableID)
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      prevPartitionsAndDDLSpanID,
+		}
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      rawEvent.PrevPartitions,
+		}
+		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
+		splitable := isSplitable(rawEvent.TableInfo)
+		for _, id := range physicalIDs {
+			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   id,
+				Splitable: splitable,
+			})
+		}
+	} else {
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
+		ddlEvent.NeedAddedTables = []commonEvent.Table{
+			{
+				SchemaID:  rawEvent.SchemaID,
+				TableID:   rawEvent.ExtraTableID,
+				Splitable: isSplitable(rawEvent.TableInfo),
+			},
+		}
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID, common.DDLSpanTableID},
+		}
+	}
+	ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{{SchemaName: rawEvent.SchemaName, TableName: rawEvent.TableName}}
+	ddlEvent.NotSync = true
+	return ddlEvent, true, nil
 }
 
 func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {

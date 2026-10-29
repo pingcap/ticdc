@@ -497,6 +497,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RLock()
 		if allTargetTs[0] < p.gcTs {
 			p.mu.RUnlock()
+			storageSnap.Close()
 			return nil, fmt.Errorf("startTs %d is smaller than gcTs %d", allTargetTs[0], p.gcTs)
 		}
 		p.mu.RUnlock()
@@ -505,6 +506,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
+				storageSnap.Close()
 				return nil, errors.Trace(err)
 			}
 			if ok {
@@ -763,7 +765,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
 				// do some safety check
 				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
+				case model.ActionCreateTable, model.ActionCreateMaterializedView, model.ActionCreateTables:
 					// newly created tables should not be registered before this ddl are handled
 					log.Panic("should not be registered", zap.Int64("tableID", tableID))
 				default:
@@ -778,17 +780,27 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	switch model.ActionType(job.Type) {
-	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
+	// Skipping create-table-like actions when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
 	//    (SchemaVersion checks are unreliable because versions might not be strictly ordered in some cases.)
-	// 2. ActionCreateTable and ActionCreateTables for the same table may have different commit ts.
+	// 2. Those create-table-like actions for the same table may have different commit ts.
 	//    One of these actions could be garbage collected, leaving the table present in the snapshot.
 	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
 	//    is by verifying whether the table already exists.
-	case model.ActionCreateTable:
+	case model.ActionCreateTable,
+		model.ActionCreateMaterializedView,
+		model.ActionCreateMaterializedViewShadow,
+		model.ActionCreateMaterializedViewLog:
+		tableInfo := job.BinlogInfo.TableInfo
+		switch model.ActionType(job.Type) {
+		case model.ActionCreateMaterializedView:
+			tableInfo = getCreateMaterializedViewTableInfo(job)
+		case model.ActionCreateMaterializedViewLog:
+			tableInfo = getCreateMaterializedViewLogTableInfo(job)
+		}
 		// Note: partition table's logical table id is also in tableMap
-		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
+		if _, ok := tableMap[tableInfo.ID]; ok {
 			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
 				zap.String("schemaName", job.SchemaName),

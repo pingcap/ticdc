@@ -775,12 +775,16 @@ github.com/pingcap/sarama v1.41.2-pingcap-20251202-x h1:9Vi3qqyDNZxG6fnXQhpeTsnw
 github.com/pingcap/sarama v1.41.2-pingcap-20251202-x/go.mod h1:xdpu7sd6OE1uxNdjYTSKUfY8FaKkJES9/+EyjSgiGQk=
 github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 h1:T4pXRhBflzDeAhmOQHNPRRogMYxP13V7BkYw3ZsoSfE=
 github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5/go.mod h1:rlimy0GcTvjiJqvD5mXTRr8O2eNZPBrcUgiWVYp9530=
+github.com/pingcap/tidb v0.0.0-20261027081356-66b72974d073 h1:IUJUGJibqVz6M+PnoEDDAroVJLwb7TgUnEqJPc8sraM=
+github.com/pingcap/tidb v0.0.0-20261027081356-66b72974d073/go.mod h1:SbvXiLIr3ig0dMdrjz3144ZOGkd5O/MUjKAmHdZUwek=
 github.com/pingcap/tidb v1.1.0-beta.0.20260730162841-dc0024f088cb h1:8mu+yabTeOOl/ByLSlXhOr1hQ/p05LTT/mSLvW9/1mY=
 github.com/pingcap/tidb v1.1.0-beta.0.20260730162841-dc0024f088cb/go.mod h1:r3gbKqhxEXdVuWc2wFQqM5OjdvcPl2HatPPgSKkJ4Ho=
 github.com/pingcap/tidb-dashboard v0.0.0-20260603054940-9e92195886c3 h1:q7K62HENlnMTFi6ZfP1Xs3YD697J6agNGXYh42mMGlI=
 github.com/pingcap/tidb-dashboard v0.0.0-20260603054940-9e92195886c3/go.mod h1:dZXZ7smJd5ZkwDMHnPfrhnzUFNbL5kMU5MpFxRfKr0U=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260730162841-dc0024f088cb h1:7ovupcL2Mlcj31aZBJPw5q3ejgNzUuVWKZau9zRQung=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260730162841-dc0024f088cb/go.mod h1:pLY0Q8Syr2G/zjvs14CbwOTtYIkAj8szGuC0L0PG7JM=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20261027081356-66b72974d073 h1:QyGRbP0RrsVMNCQQcrVqYbEtCnyzN6stwsHN1EvTOdc=
+github.com/pingcap/tidb/pkg/parser v0.0.0-20261027081356-66b72974d073/go.mod h1:Hju1TEWZvrctQKbztTRwXH7rd41Yq0Pgmq4PrEKcq7o=
 github.com/pingcap/tiflow v0.0.0-20260731065716-b558e06929bf h1:Xh1fFaob6PrKdLFDt8VbKGuueV2GdvsSmlnH4VFp6zc=
 github.com/pingcap/tiflow v0.0.0-20260731065716-b558e06929bf/go.mod h1:r33o9XVPg0oS49m5TUmNtmmYto/8k6DxRpec8wCWoSg=
 github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc h1:wxolKysltFSu8gxWJBdUdWuTBoSuY3MjNIIZI5S9JLY=
