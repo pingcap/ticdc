@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"testing"
 	"time"
@@ -41,6 +42,7 @@ import (
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -282,6 +284,168 @@ func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriterFlushFilteredEvents(t *testing.T) {
+	for _, multiStmtEnable := range []bool{false, true} {
+		for _, failRetry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("multiStmtEnable=%t/failRetry=%t", multiStmtEnable, failRetry), func(t *testing.T) {
+				writer, db, mock := newTestMysqlWriter(t)
+				defer db.Close()
+				writer.cfg.SafeMode = false
+				writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+				writer.cfg.MultiStmtEnable = multiStmtEnable
+				writer.cfg.CachePrepStmts = false
+				writer.cfg.DMLMaxRetry = 0
+
+				helper := commonEvent.NewEventTestHelper(t)
+				defer helper.Close()
+				helper.Tk().MustExec("use test")
+				require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32), unique key uk_name (name));"))
+				updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'updated' where id = 1")
+				// DELETE filtering leaves an update followed by a same-key insert.
+				helper.ExecuteDeleteDml("test", "t", "delete from t where id = 1")
+				insertEvent := helper.DML2Event("test", "t", "insert into t values (1, 'last')", "insert into t values (2, 'other')")
+				events := []*commonEvent.DMLEvent{updateEvent, insertEvent}
+				flushedEvents := 0
+				for i, event := range events {
+					event.CommitTs = uint64(i + 2)
+					event.ReplicatingTs = 1
+					event.AddPostFlushFunc(func() { flushedEvents++ })
+				}
+
+				const (
+					updateSQL     = "UPDATE `test`.`t` SET `id` = ?,`name` = ? WHERE `id` = ? LIMIT 1"
+					deleteSQL     = "DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1"
+					replaceRowSQL = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)"
+					insertSQL     = "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+					replaceSQL    = "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)"
+				)
+				duplicateErr := &mysql.MySQLError{Number: 1062, Message: "Duplicate entry '1' for key 'PRIMARY'"}
+				retryErr := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
+
+				for attempt, insert := range []string{insertSQL, replaceSQL} {
+					update := updateSQL
+					updateArgs := []driver.Value{1, "updated", 1, 1, "last", 2, "other"}
+					if attempt == 1 {
+						update = deleteSQL + ";" + replaceRowSQL
+						updateArgs = []driver.Value{1, 1, "updated", 1, "last", 2, "other"}
+					}
+					var execErr error
+					if attempt == 0 {
+						execErr = duplicateErr
+					} else if failRetry {
+						execErr = retryErr
+					}
+					if multiStmtEnable {
+						expectation := mock.ExpectExec("BEGIN;" + update + ";" + insert + ";COMMIT;").
+							WithArgs(updateArgs...)
+						if execErr != nil {
+							expectation.WillReturnError(execErr)
+							mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
+						} else {
+							expectation.WillReturnResult(sqlmock.NewResult(1, 3))
+						}
+					} else {
+						mock.ExpectBegin()
+						if attempt == 0 {
+							mock.ExpectExec(updateSQL).WithArgs(1, "updated", 1).
+								WillReturnResult(sqlmock.NewResult(0, 1))
+						} else {
+							mock.ExpectExec(deleteSQL).WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+							mock.ExpectExec(replaceRowSQL).WithArgs(1, "updated").WillReturnResult(sqlmock.NewResult(1, 1))
+						}
+						expectation := mock.ExpectExec(insert).WithArgs(1, "last", 2, "other")
+						if execErr != nil {
+							expectation.WillReturnError(execErr)
+							mock.ExpectRollback()
+						} else {
+							expectation.WillReturnResult(sqlmock.NewResult(1, 2))
+							mock.ExpectCommit()
+						}
+					}
+				}
+
+				var err error
+				require.NotPanics(t, func() { err = writer.Flush(events) })
+				if failRetry {
+					require.ErrorContains(t, err, retryErr.Message)
+					require.ErrorIs(t, err, retryErr)
+					require.Zero(t, flushedEvents)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, len(events), flushedEvents)
+				}
+				require.True(t, writer.isInErrorCausedSafeMode)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	}
+}
+
+func TestMysqlWriterFlushFilteredUpdatesInSafeMode(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+	first, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'after' where id = 1")
+	second, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (2, 'before')", "update t set name = 'after' where id = 2")
+
+	for _, mode := range []string{"configured", "recovery", "duplicate key retry"} {
+		for _, batchEnabled := range []bool{false, true} {
+			for _, rowCount := range []int{1, 2} {
+				t.Run(fmt.Sprintf("%s/batch=%t/rows=%d", mode, batchEnabled, rowCount), func(t *testing.T) {
+					writer, db, mock := newTestMysqlWriter(t)
+					defer db.Close()
+					writer.cfg.SafeMode = mode == "configured"
+					writer.cfg.DMLMaxRetry = 0
+					writer.cfg.BatchDMLEnable = batchEnabled
+					writer.cfg.MultiStmtEnable = false
+					writer.cfg.CachePrepStmts = false
+					writer.cfg.deleteEventFilters = []tfilter.Filter{tfilter.All()}
+					writer.isInErrorCausedSafeMode = mode == "duplicate key retry"
+					writer.lastErrorCausedSafeModeTime = time.Now()
+
+					event := commonEvent.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, 1, 2, first.TableInfo)
+					event.Rows = first.Rows.CopyConstruct()
+					event.RowTypes = append(event.RowTypes, first.RowTypes...)
+					event.Length = 1
+					if rowCount == 2 {
+						for i := range second.Rows.NumRows() {
+							event.Rows.AppendRow(second.Rows.GetRow(i))
+						}
+						event.RowTypes = append(event.RowTypes, second.RowTypes...)
+						event.Length++
+					}
+					event.ReplicatingTs = 1
+					if mode == "recovery" {
+						event.ReplicatingTs = 3
+					}
+					flushed := false
+					event.AddPostFlushFunc(func() { flushed = true })
+
+					mock.ExpectBegin()
+					if batchEnabled && rowCount == 2 {
+						mock.ExpectExec("DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))").WithArgs(1, 2).
+							WillReturnResult(sqlmock.NewResult(0, 0))
+						mock.ExpectExec("REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").WithArgs(1, "after", 2, "after").
+							WillReturnResult(sqlmock.NewResult(1, 2))
+					} else {
+						for id := 1; id <= rowCount; id++ {
+							mock.ExpectExec("DELETE FROM `test`.`t` WHERE `id` = ? LIMIT 1").WithArgs(id).
+								WillReturnResult(sqlmock.NewResult(0, 0))
+							mock.ExpectExec("REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)").WithArgs(id, "after").
+								WillReturnResult(sqlmock.NewResult(1, 1))
+						}
+					}
+					mock.ExpectCommit()
+					require.NoError(t, writer.Flush([]*commonEvent.DMLEvent{event}))
+					require.True(t, flushed)
+					require.NoError(t, mock.ExpectationsWereMet())
+				})
+			}
+		}
+	}
 }
 
 func TestMysqlWriter_FlushMultiDML(t *testing.T) {
