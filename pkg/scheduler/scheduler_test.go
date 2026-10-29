@@ -14,11 +14,76 @@
 package scheduler
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/stretchr/testify/require"
 )
+
+type testReplicationID string
+
+func (id testReplicationID) String() string { return string(id) }
+
+type testReplication struct {
+	id     testReplicationID
+	nodeID node.ID
+}
+
+func (r *testReplication) GetID() testReplicationID    { return r.id }
+func (r *testReplication) GetGroupID() replica.GroupID { return replica.DefaultGroupID }
+func (r *testReplication) GetNodeID() node.ID          { return r.nodeID }
+func (r *testReplication) SetNodeID(nodeID node.ID)    { r.nodeID = nodeID }
+func (r *testReplication) ShouldRun() bool             { return true }
+
+func TestBalanceStopsWhenMoveIsRejected(t *testing.T) {
+	nodes := map[node.ID]*node.Info{
+		"node1": {ID: "node1"},
+		"node2": {ID: "node2"},
+		"node3": {ID: "node3"},
+	}
+	var replicating []*testReplication
+	for i, nodeID := range []node.ID{"node1", "node1", "node2", "node2"} {
+		replicating = append(replicating, &testReplication{
+			id:     testReplicationID(rune('a' + i)),
+			nodeID: nodeID,
+		})
+	}
+
+	// Simulates a quiescing operator controller that rejects every move.
+	calls := 0
+	moved := Balance(10, rand.New(rand.NewSource(1)), nodes, replicating,
+		func(*testReplication, node.ID) bool {
+			calls++
+			require.Equal(t, 1, calls, "rejected move was retried")
+			return false
+		})
+	require.Equal(t, 0, moved)
+	require.Equal(t, 1, calls)
+}
+
+func TestBalanceMovesTasksToEmptyNode(t *testing.T) {
+	nodes := map[node.ID]*node.Info{
+		"node1": {ID: "node1"},
+		"node2": {ID: "node2"},
+		"node3": {ID: "node3"},
+	}
+	var replicating []*testReplication
+	for i, nodeID := range []node.ID{"node1", "node1", "node1", "node2", "node2", "node2"} {
+		replicating = append(replicating, &testReplication{
+			id:     testReplicationID(rune('a' + i)),
+			nodeID: nodeID,
+		})
+	}
+
+	moved := Balance(10, rand.New(rand.NewSource(1)), nodes, replicating,
+		func(r *testReplication, target node.ID) bool {
+			require.Equal(t, node.ID("node3"), target)
+			return true
+		})
+	require.Equal(t, 2, moved)
+}
 
 func TestCheckBalanceStatus(t *testing.T) {
 	require.Equal(t, 0, CheckBalanceStatus(map[node.ID]int{
