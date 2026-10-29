@@ -44,34 +44,6 @@ var (
 			Name:      "capture_write_block_total",
 			Help:      "Number of capture write gate transitions from writable to blocked.",
 		}, []string{"reason"})
-	CaptureLeaseResponseRejectedCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "capture_lease_response_rejected_total",
-			Help:      "Number of rejected P2P write lease responses.",
-		}, []string{"reason"})
-	CaptureLeaseHeartbeatCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "capture_lease_heartbeat_total",
-			Help:      "Number of capture write lease heartbeats by handling result.",
-		}, []string{"result"})
-	CaptureLeaseResponseCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "capture_lease_response_total",
-			Help:      "Number of capture write lease responses by handling result.",
-		}, []string{"result"})
-	CaptureP2PWitnessAvailable = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "capture_p2p_witness_available",
-			Help:      "Whether a remote capture is available to witness the coordinator capture.",
-		})
 )
 
 func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
@@ -79,8 +51,4 @@ func initCaptureWriteLeaseMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CaptureP2PLeaseRemainingSeconds)
 	registry.MustRegister(CaptureEtcdProofRemainingSeconds)
 	registry.MustRegister(CaptureWriteBlockCounter)
-	registry.MustRegister(CaptureLeaseResponseRejectedCounter)
-	registry.MustRegister(CaptureLeaseHeartbeatCounter)
-	registry.MustRegister(CaptureLeaseResponseCounter)
-	registry.MustRegister(CaptureP2PWitnessAvailable)
 }

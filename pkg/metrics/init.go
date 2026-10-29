@@ -27,14 +27,11 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	initSinkMetrics(registry)
 	initEventStoreMetrics(registry)
 	initEventServiceMetrics(registry)
-	initMaintainerMetrics(registry)
-	initCoordinatorMetrics(registry)
 	initLogPullerMetrics(registry)
 	initDynamicStreamMetrics(registry)
 	initCaptureWriteLeaseMetrics(registry)
 
 	initRedoMetrics(registry)
-	initDDLMetrics(registry)
 }
 
 // GetKeyspaceLabel returns the keyspace label name used by TiCDC metrics.

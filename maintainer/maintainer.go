@@ -233,12 +233,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
-		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:      maintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
 		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
-		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
+		handleEventDuration: maintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
 
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
@@ -487,8 +487,8 @@ func (m *Maintainer) cleanupMetrics() {
 	name := m.changefeedID.Name()
 	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+	maintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	maintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(keyspace, name)
@@ -1392,7 +1392,7 @@ func (m *Maintainer) collectMetrics() {
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
 			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
-		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
+		execDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}

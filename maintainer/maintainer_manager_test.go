@@ -211,8 +211,8 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 		metrics.MaintainerGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+		maintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+		maintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 		metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 

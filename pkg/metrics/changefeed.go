@@ -68,14 +68,6 @@ var (
 			Help:      "age in seconds of the latest syncpoint's upstream timestamp, measured against current upstream PD time",
 		}, []string{GetKeyspaceLabel(), "changefeed"})
 
-	CoordinatorCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "ownership_counter",
-			Help:      "The counter of ownership increases every 5 seconds on a owner capture",
-		})
-
 	MaintainerGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -131,21 +123,6 @@ var (
 			Name:      "changefeed_downstream_info",
 			Help:      "Downstream type information of changefeeds exposed as labels.",
 		}, []string{GetKeyspaceLabel(), "changefeed", "downstream_type"})
-
-	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
-	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
-	//
-	// This metric is only set when the sink can positively identify TiDB (for
-	// example by executing `SELECT tidb_version()`), and is intentionally absent
-	// for MySQL or unknown downstreams. Dashboards can use it to override the
-	// scheme-derived "mysql" label value with "tidb" for running changefeeds.
-	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "changefeed_downstream_is_tidb",
-			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
@@ -173,12 +150,10 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerResolvedTsLagGauge)
 	registry.MustRegister(MaintainerSyncPointTsGauge)
 	registry.MustRegister(MaintainerSyncPointTsLagGauge)
-	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedErrorInfoGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedDownstreamInfoGauge)
-	registry.MustRegister(ChangefeedDownstreamIsTiDBGauge)
 }

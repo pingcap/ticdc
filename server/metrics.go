@@ -15,15 +15,19 @@ package server
 
 import (
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
+	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
+	mysqlSink "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	"github.com/pingcap/ticdc/maintainer"
 	maintainerOperator "github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -46,6 +50,10 @@ var registry = prometheus.NewRegistry()
 
 func registerMetrics() {
 	metrics.RegisterMetrics(registry)
+	coordinator.RegisterMetrics(registry)
+	maintainer.RegisterMetrics(registry)
+	mysqlSink.RegisterMetrics(registry)
+	eventcollector.RegisterMetrics(registry)
 	middleware.RegisterMetrics(registry)
 	operator.RegisterMetrics(registry)
 	dispatcher.RegisterMetrics(registry)

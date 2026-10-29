@@ -16,12 +16,6 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	DynamicStreamMemoryUsage = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "dynamic_stream",
-			Name:      "memory_usage",
-		}, []string{"module", "type", GetKeyspaceLabel(), "area"})
 	DynamicStreamEventChanSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -76,7 +70,6 @@ var (
 )
 
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(DynamicStreamMemoryUsage)
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
