@@ -334,6 +334,10 @@ func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
 
 func TestUpdateChangefeedStates(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 
 	cfID1 := common.NewChangefeedID4Test("default", "test1")
 	cfID2 := common.NewChangefeedID4Test("default", "test2")
@@ -426,8 +430,55 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestResolvedTsMetricsAfterDelayedReportFromRemovedNode(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	clock := pdutil.NewClock4Test()
+	clock.(*pdutil.Clock4Test).SetTS(oracle.ComposeTS(400_000, 0))
+	c.pdClock = clock
+
+	cfID := common.NewChangefeedID4Test("default", "delayed-node-report")
+	t.Cleanup(func() {
+		changefeedResolvedTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+		changefeedResolvedTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	})
+	removedNode := node.ID("removed-node")
+	liveNode := node.ID("live-node")
+	c.handleNodeChange(map[node.ID]*node.Info{
+		removedNode: {ID: removedNode},
+		liveNode:    {ID: liveNode},
+	})
+	report := func(from node.ID, physicalTs int64) {
+		c.updateChangefeedStates(from, &logservicepb.ChangefeedStates{
+			States: []*logservicepb.ChangefeedStateEntry{
+				{ChangefeedID: cfID.ToPB(), ResolvedTs: oracle.ComposeTS(physicalTs, 0)},
+			},
+		})
+	}
+	report(removedNode, 100_000)
+	report(liveNode, 200_000)
+	require.Equal(t, oracle.ComposeTS(100_000, 0), c.getMinLogServiceResolvedTs(cfID))
+
+	c.handleNodeChange(map[node.ID]*node.Info{liveNode: {ID: liveNode}})
+	require.NotContains(t, c.changefeedStates.m[cfID.ID()].nodeStates, removedNode)
+	// Deliver an in-flight report after node removal to reproduce the race.
+	report(removedNode, 100_000)
+	report(liveNode, 300_000)
+
+	// A departed node must not pin resolved TS or inflate its lag.
+	state := c.changefeedStates.m[cfID.ID()]
+	assert.NotContains(t, state.nodeStates, removedNode)
+	assert.Equal(t, float64(300_000), testutil.ToFloat64(state.resolvedTsGauge),
+		"resolved TS must follow the live node")
+	assert.Equal(t, float64(100), testutil.ToFloat64(state.resolvedTsLagGauge),
+		"lag must be PD time (400s) minus the live resolved TS (300s)")
+}
+
 func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -460,6 +511,11 @@ func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 
 func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+		"node-3": {ID: "node-3"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -509,6 +565,10 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 
 func TestPartialReportingRoundKeepsLastPublishedMetrics(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))

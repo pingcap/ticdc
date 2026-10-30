@@ -20,19 +20,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const (
-	pulsarPublishedDDLSchemaTableCount      = "published_DDL_schema_table_count"
-	pulsarPublishedDMLSchemaTableCount      = "published_DML_schema_table_count"
-	pulsarPublishedMessageTypeResolvedCount = "published_message_type_resolved_count"
-)
-
 var (
 	// pulsar producer DDL scheme, type: count/success/fail, May there are too many tables
 	publishedDDLSchemaTableCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedDDLSchemaTableCount,
+			Name:      "published_DDL_schema_table_count",
 			Help:      "pulsar published schema count",
 		}, []string{"topic", "changefeed", "type"})
 
@@ -41,7 +35,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedDMLSchemaTableCount,
+			Name:      "published_DML_schema_table_count",
 			Help:      "pulsar published dml message count",
 		}, []string{"topic", "changefeed", "type"})
 
@@ -50,7 +44,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedMessageTypeResolvedCount,
+			Name:      "published_message_type_resolved_count",
 			Help:      "pulsar published message type resolved count ",
 		}, []string{"topic", "changefeed", "type"})
 )
