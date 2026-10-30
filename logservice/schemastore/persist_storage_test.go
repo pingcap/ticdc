@@ -2684,8 +2684,9 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 
 		require.Equal(t, map[int64]*BasicTableInfo{
 			mviewID: {
-				SchemaID: schemaID,
-				Name:     mviewName,
+				SchemaID:           schemaID,
+				Name:               mviewName,
+				IsMaterializedView: true,
 			},
 		}, pStorage.tableMap)
 		require.Equal(t, map[int64]*BasicDatabaseInfo{
@@ -2725,6 +2726,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.Len(t, events, 1)
 		require.Equal(t, byte(model.ActionCreateTable), events[0].Type)
 		require.Equal(t, expectedCreateTableQuery, events[0].Query)
+		require.True(t, events[0].TableInfo.IsMaterializedView())
 		require.Equal(t, []commonEvent.Table{
 			{
 				SchemaID:  schemaID,
@@ -2747,6 +2749,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
 		require.Equal(t, byte(model.ActionCreateTable), triggerEvents[1].Type)
 		require.Equal(t, expectedCreateTableQuery, triggerEvents[1].Query)
+		require.True(t, triggerEvents[1].TableInfo.IsMaterializedView())
 	}
 
 	checkDroppedState := func(t *testing.T, pStorage *persistentStorage) {
@@ -2779,6 +2782,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.Equal(t, expectedCreateTableQuery, events[0].Query)
 		require.Equal(t, byte(model.ActionDropTable), events[1].Type)
 		require.Equal(t, expectedDropTableQuery, events[1].Query)
+		require.True(t, events[1].TableInfo.IsMaterializedView())
 		require.NotNil(t, events[1].NeedDroppedTables)
 		require.Equal(t, []int64{mviewID}, events[1].NeedDroppedTables.TableIDs)
 		require.Equal(t, &commonEvent.TableNameChange{
@@ -2798,6 +2802,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.Equal(t, expectedCreateTableQuery, triggerEvents[1].Query)
 		require.Equal(t, byte(model.ActionDropTable), triggerEvents[2].Type)
 		require.Equal(t, expectedDropTableQuery, triggerEvents[2].Query)
+		require.True(t, triggerEvents[2].TableInfo.IsMaterializedView())
 	}
 
 	pStorage := newPersistentStorageForTest(dbPath, nil)
@@ -3085,6 +3090,7 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 		checkPhysicalTables(t, pStorage, 1035, map[int64]string{
 			shadowTableID: mviewName,
 		})
+		require.True(t, pStorage.tableMap[shadowTableID].IsMaterializedView)
 
 		createShadowDDL := readDDLEventForTest(t, pStorage, 1020)
 		require.NotNil(t, createShadowDDL.TableInfo.MaterializedViewShadow)

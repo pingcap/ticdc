@@ -117,6 +117,9 @@ type BasicDatabaseInfo struct {
 type BasicTableInfo struct {
 	SchemaID int64
 	Name     string
+	// IsMaterializedView is used to recognize DROP MATERIALIZED VIEW, which
+	// TiDB emits as ActionDropTable without full TableInfo.
+	IsMaterializedView bool
 	// IsMaterializedViewLog is a narrow marker used to recognize DROP MATERIALIZED VIEW LOG,
 	// which TiDB emits as ActionDropTable without full TableInfo.
 	// TODO: replace this with a generic internal table kind when more internal-table types need

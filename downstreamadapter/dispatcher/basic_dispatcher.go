@@ -336,9 +336,25 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 			d.PassBlockEventToSink(event)
 			return nil
 		}
+		// Materialized view DDLs are exposed as generated CREATE TABLE and DROP TABLE
+		// events. Only Kafka consumers need these schema messages. Other downstreams,
+		// including redo, still process the block event locally but do not persist or
+		// execute the DDL.
+		if !shouldSyncMaterializedViewDDL(ddl.TableInfo, d.sink.SinkType()) {
+			log.Info("ignore materialized view DDL for non kafka sink",
+				zap.Stringer("dispatcher", d.id),
+				zap.Int("sinkType", int(d.sink.SinkType())),
+				zap.String("ddl", ddl.GetDDLQuery()))
+			d.PassBlockEventToSink(event)
+			return nil
+		}
 	}
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
+}
+
+func shouldSyncMaterializedViewDDL(tableInfo *common.TableInfo, sinkType common.SinkType) bool {
+	return tableInfo == nil || !tableInfo.IsMaterializedView() || sinkType == common.KafkaSinkType
 }
 
 // PassBlockEventToSink advances local progress for a block event without writing it downstream.

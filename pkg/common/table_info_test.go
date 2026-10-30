@@ -44,6 +44,7 @@ func TestCloneWithRouting(t *testing.T) {
 			Collate:          "utf8mb4_bin",
 			Comment:          "test table",
 			HasPKOrNotNullUK: true,
+			MaterializedView: true,
 			UpdateTS:         1000,
 		}
 
@@ -70,6 +71,7 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "utf8mb4_bin", cloned.Collate)
 		require.Equal(t, "test table", cloned.Comment)
 		require.Equal(t, true, cloned.HasPKOrNotNullUK)
+		require.True(t, cloned.IsMaterializedView())
 		require.Equal(t, uint64(1000), cloned.UpdateTS)
 
 		// Verify original is NOT modified
@@ -135,8 +137,11 @@ func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	source := WrapTableInfo("test", newPreSQLTestModelTableInfo("t_roundtrip"))
+	modelTableInfo := newPreSQLTestModelTableInfo("t_roundtrip")
+	modelTableInfo.MaterializedView = &model.MaterializedViewInfo{}
+	source := WrapTableInfo("test", modelTableInfo)
 	require.NotNil(t, source)
+	require.True(t, source.IsMaterializedView())
 	require.Contains(t, source.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
 
 	routed := source.CloneWithRouting("target_db", "target_table")
@@ -152,6 +157,8 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	require.Equal(t, source.TableName.Schema, decoded.TableName.Schema)
 	require.Equal(t, source.TableName.Table, decoded.TableName.Table)
 	require.Equal(t, source.TableName.TableID, decoded.TableName.TableID)
+	require.True(t, decoded.IsMaterializedView())
+	require.NotNil(t, decoded.ToTiDBTableInfo().MaterializedView)
 	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
 	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
 	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)

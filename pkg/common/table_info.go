@@ -101,6 +101,12 @@ type TableInfo struct {
 
 	Sequence *model.SequenceInfo `json:"sequence"`
 
+	// MaterializedView indicates whether this table is a materialized view.
+	// TiCDC exposes materialized views as physical tables, so this marker is
+	// needed to distinguish their generated CREATE TABLE and DROP TABLE events
+	// from events for ordinary tables.
+	MaterializedView bool `json:"materialized-view,omitempty"`
+
 	// UpdateTS is used to record the timestamp of updating the table's schema information.
 	// These changing schema operations don't include 'truncate table', 'rename table',
 	// 'truncate partition' and 'exchange partition'.
@@ -177,6 +183,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		HasPKOrNotNullUK: ti.HasPKOrNotNullUK,
 		View:             ti.View,     // Share the pointer (read-only)
 		Sequence:         ti.Sequence, // Share the pointer (read-only)
+		MaterializedView: ti.MaterializedView,
 		UpdateTS:         ti.UpdateTS,
 		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
@@ -422,6 +429,11 @@ func (t *TableInfo) IsSequence() bool {
 	return t.Sequence != nil
 }
 
+// IsMaterializedView checks if TableInfo is a materialized view.
+func (t *TableInfo) IsMaterializedView() bool {
+	return t != nil && t.MaterializedView
+}
+
 // GetRowColInfos returns all column infos for rowcodec
 func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*types.FieldType, []rowcodec.ColInfo) {
 	return ti.columnSchema.HandleColID, ti.columnSchema.RowColFieldTps, ti.columnSchema.RowColInfos
@@ -617,7 +629,7 @@ func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
-	return &model.TableInfo{
+	tableInfo := &model.TableInfo{
 		ID:         ti.TableName.TableID,
 		Name:       parser_model.NewCIStr(ti.TableName.Table),
 		Charset:    ti.Charset,
@@ -629,6 +641,10 @@ func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
 		Indices:    ti.columnSchema.Indices,
 		PKIsHandle: ti.columnSchema.PKIsHandle,
 	}
+	if ti.MaterializedView {
+		tableInfo.MaterializedView = &model.MaterializedViewInfo{}
+	}
+	return tableInfo
 }
 
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
@@ -643,6 +659,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		HasPKOrNotNullUK: OriginalHasPKOrNotNullUK(tableInfo),
 		View:             tableInfo.View,
 		Sequence:         tableInfo.Sequence,
+		MaterializedView: tableInfo.MaterializedView != nil,
 		Charset:          tableInfo.Charset,
 		Collate:          tableInfo.Collate,
 		Comment:          tableInfo.Comment,

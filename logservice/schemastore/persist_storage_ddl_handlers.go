@@ -866,12 +866,24 @@ func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) Per
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
-	if isMaterializedViewLogBasicTable(args.tableMap[event.TableID]) {
+	basicTableInfo := args.tableMap[event.TableID]
+	if isMaterializedViewLogBasicTable(basicTableInfo) {
 		event.TableInfo = &model.TableInfo{
 			ID:                  event.TableID,
 			Name:                parser_model.NewCIStr(event.TableName),
 			MaterializedViewLog: &model.MaterializedViewLogInfo{},
 		}
+	} else if isMaterializedViewBasicTable(basicTableInfo) && !isMaterializedViewTable(event.TableInfo) {
+		if event.TableInfo == nil {
+			event.TableInfo = &model.TableInfo{
+				ID:   event.TableID,
+				Name: parser_model.NewCIStr(event.TableName),
+			}
+		} else {
+			tableInfo := *event.TableInfo
+			event.TableInfo = &tableInfo
+		}
+		event.TableInfo.MaterializedView = &model.MaterializedViewInfo{}
 	}
 	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP TABLE %s", common.QuoteSchema(event.SchemaName, event.TableName))
@@ -1663,6 +1675,7 @@ func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
 	args.tableMap[tableID] = &BasicTableInfo{
 		SchemaID:              schemaID,
 		Name:                  args.event.TableInfo.Name.O,
+		IsMaterializedView:    isMaterializedViewTable(args.event.TableInfo),
 		IsMaterializedViewLog: isMaterializedViewLogTable(args.event.TableInfo),
 	}
 	if isPartitionTable(args.event.TableInfo) {
@@ -1692,8 +1705,10 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 	delete(args.tableMap, oldTableID)
 	args.addTableToDB(newTableID, schemaID)
 	args.tableMap[newTableID] = &BasicTableInfo{
-		SchemaID: schemaID,
-		Name:     args.event.TableInfo.Name.O,
+		SchemaID:              schemaID,
+		Name:                  args.event.TableInfo.Name.O,
+		IsMaterializedView:    isMaterializedViewTable(args.event.TableInfo),
+		IsMaterializedViewLog: isMaterializedViewLogTable(args.event.TableInfo),
 	}
 	if isPartitionTable(args.event.TableInfo) {
 		delete(args.partitionMap, oldTableID)
@@ -2260,6 +2275,14 @@ func buildDDLEventIgnore(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 
 func isMaterializedViewLogTable(tableInfo *model.TableInfo) bool {
 	return tableInfo != nil && tableInfo.MaterializedViewLog != nil
+}
+
+func isMaterializedViewTable(tableInfo *model.TableInfo) bool {
+	return tableInfo != nil && tableInfo.MaterializedView != nil
+}
+
+func isMaterializedViewBasicTable(tableInfo *BasicTableInfo) bool {
+	return tableInfo != nil && tableInfo.IsMaterializedView
 }
 
 func isMaterializedViewLogBasicTable(tableInfo *BasicTableInfo) bool {

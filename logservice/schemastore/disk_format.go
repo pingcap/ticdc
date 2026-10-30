@@ -243,6 +243,7 @@ func loadTablesInKVSnap(
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
 			SchemaID:              table_info_entry.SchemaID,
 			Name:                  tableInfo.Name.O,
+			IsMaterializedView:    isMaterializedViewTable(&tableInfo),
 			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
@@ -304,6 +305,7 @@ func loadFullTablesInKVSnap(
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
 			SchemaID:              table_info_entry.SchemaID,
 			Name:                  tableInfo.Name.O,
+			IsMaterializedView:    isMaterializedViewTable(&tableInfo),
 			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
@@ -544,7 +546,7 @@ func addTableInfoToBatch(
 	ts uint64,
 	dbInfo *model.DBInfo,
 	tableInfoValue []byte,
-) (int64, string, bool, []int64) {
+) (int64, string, bool, bool, []int64) {
 	tableInfo := model.TableInfo{}
 	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
@@ -581,7 +583,8 @@ func addTableInfoToBatch(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, isMaterializedViewLogTable(&tableInfo), partitionIDs
+	return tableInfo.ID, tableInfo.Name.O, isMaterializedViewTable(&tableInfo),
+		isMaterializedViewLogTable(&tableInfo), partitionIDs
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
@@ -631,11 +634,12 @@ func persistSchemaSnapshot(
 						if !isTableRawKey(rawTable.Field) {
 							continue
 						}
-						tableID, tableName, isMaterializedViewLog, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+						tableID, tableName, isMaterializedView, isMaterializedViewLog, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
 						if collectMetaInfo {
 							tableMap[tableID] = &BasicTableInfo{
 								SchemaID:              dbInfo.ID,
 								Name:                  tableName,
+								IsMaterializedView:    isMaterializedView,
 								IsMaterializedViewLog: isMaterializedViewLog,
 							}
 							tablesInDB[tableID] = true
