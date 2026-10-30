@@ -37,7 +37,7 @@ func NewCreatorFactory(config *config.PulsarConfig, changefeedID commonType.Chan
 		ConnectionTimeout: config.ConnectionTimeout.Duration(),
 		OperationTimeout:  config.OperationTimeout.Duration(),
 		// add pulsar default metrics
-		MetricsRegisterer: getMetricRegistry(),
+		MetricsRegisterer: metricRegistry,
 		Logger:            NewPulsarLogger(log.L()),
 	}
 	log.Info("pulsar client factory created",

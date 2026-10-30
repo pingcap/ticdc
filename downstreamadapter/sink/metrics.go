@@ -17,10 +17,10 @@ package sink
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
