@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
@@ -439,8 +438,8 @@ func TestResolvedTsMetricsAfterDelayedReportFromRemovedNode(t *testing.T) {
 
 	cfID := common.NewChangefeedID4Test("default", "delayed-node-report")
 	t.Cleanup(func() {
-		metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
-		metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+		changefeedResolvedTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+		changefeedResolvedTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
 	})
 	removedNode := node.ID("removed-node")
 	liveNode := node.ID("live-node")

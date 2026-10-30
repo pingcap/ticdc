@@ -229,16 +229,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
-		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
-		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsGauge:    maintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsLagGauge: maintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsGauge:      maintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsLagGauge:   maintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:      maintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
 		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
-		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
+		handleEventDuration: maintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
 
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
@@ -265,7 +265,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
+	maintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctx = ctx
 	m.cancel = cancel
@@ -485,14 +485,14 @@ func (m *Maintainer) initialize() error {
 func (m *Maintainer) cleanupMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	name := m.changefeedID.Name()
-	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(keyspace, name)
-	metrics.MaintainerSyncPointTsLagGauge.DeleteLabelValues(keyspace, name)
+	maintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+	maintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+	maintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	maintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+	maintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+	maintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+	maintainerSyncPointTsGauge.DeleteLabelValues(keyspace, name)
+	maintainerSyncPointTsLagGauge.DeleteLabelValues(keyspace, name)
 
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
 	metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
@@ -511,7 +511,7 @@ func (m *Maintainer) markRemoved() {
 	if !m.removed.CompareAndSwap(false, true) {
 		return
 	}
-	metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
+	maintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 }
 
 func (m *Maintainer) onInit() bool {
@@ -894,8 +894,8 @@ func (m *Maintainer) updateMetrics() {
 	}
 	if m.syncPointTsGauge == nil {
 		keyspace, name := m.changefeedID.Keyspace(), m.changefeedID.Name()
-		m.syncPointTsGauge = metrics.MaintainerSyncPointTsGauge.WithLabelValues(keyspace, name)
-		m.syncPointTsLagGauge = metrics.MaintainerSyncPointTsLagGauge.WithLabelValues(keyspace, name)
+		m.syncPointTsGauge = maintainerSyncPointTsGauge.WithLabelValues(keyspace, name)
+		m.syncPointTsLagGauge = maintainerSyncPointTsLagGauge.WithLabelValues(keyspace, name)
 	}
 	phySyncPointTs := oracle.ExtractPhysical(syncPointTs)
 	m.syncPointTsGauge.Set(float64(phySyncPointTs))
@@ -1392,7 +1392,7 @@ func (m *Maintainer) collectMetrics() {
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
 			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
-		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
+		execDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}

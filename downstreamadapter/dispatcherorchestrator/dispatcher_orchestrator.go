@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -210,7 +209,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		closedEpoch, closed = m.closedMaintainerEpochs[cfId]
 		m.mutex.Unlock()
 		manager.MaintainerFenceMu.Unlock()
-		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+		dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 		exists = false
 	}
 
@@ -280,7 +279,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		delete(m.closedMaintainerEpochs, cfId)
 		m.mutex.Unlock()
-		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
+		dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	}
 
 	manager.MaintainerFenceMu.Lock()
@@ -711,7 +710,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		}
 		manager.MaintainerFenceMu.Unlock()
 		if decGauge {
-			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+			dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 		}
 	}
 

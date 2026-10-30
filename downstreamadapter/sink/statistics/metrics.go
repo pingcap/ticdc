@@ -80,8 +80,8 @@ var (
 		}, []string{getKeyspaceLabel(), "changefeed", "ddl_type"})
 )
 
-// InitMetrics registers the metrics maintained by Statistics.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics maintained by Statistics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execBatchHistogram)
 	registry.MustRegister(execBatchWriteBytesHistogram)
 	registry.MustRegister(executionErrorCounter)
