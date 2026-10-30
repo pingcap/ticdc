@@ -14,7 +14,7 @@
 package kafka
 
 import (
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -26,7 +26,7 @@ var (
 			Name:      "kafka_producer_in_flight_requests",
 			Help: "The current number of in-flight requests" +
 				" awaiting a response for all brokers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker"})
 	// outgoingByteRateGauge for outgoing events.
 	// Meter mark for each request's size in bytes.
 	outgoingByteRateGauge = prometheus.NewGaugeVec(
@@ -35,7 +35,7 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_outgoing_byte_rate",
 			Help:      "Bytes/second written off all brokers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker"})
 	// requestRateGauge Meter mark by 1 for each request.
 	requestRateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -43,7 +43,7 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_request_rate",
 			Help:      "Requests/second sent to all brokers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker"})
 	// requestLatencyGauge Histogram update by `requestLatency`.
 	requestLatencyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -51,7 +51,7 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_request_latency",
 			Help:      "The request latency for all brokers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker", "type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker", "type"})
 	// Histogram update by `compression-ratio`.
 	compressionRatioGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -59,7 +59,7 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_compression_ratio",
 			Help:      "The compression ratio times 100 of record batches for all topics.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 	// updated by `records-per-request`.
 	recordsPerRequestGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -67,14 +67,14 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_records_per_request",
 			Help:      "The number of records per request for all topics.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 	throttleTimeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
 			Name:      "kafka_producer_throttle_time",
 			Help:      "Kafka broker throttle time in seconds.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker", "type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker", "type"})
 
 	// Meter mark by 1 once a response received.
 	responseRateGauge = prometheus.NewGaugeVec(
@@ -83,16 +83,8 @@ var (
 			Subsystem: "sink",
 			Name:      "kafka_producer_response_rate",
 			Help:      "Responses/second received from all brokers.",
-		}, []string{getKeyspaceLabel(), "changefeed", "broker"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker"})
 )
-
-// Keep this aligned with pkg/metrics.GetKeyspaceLabel.
-func getKeyspaceLabel() string {
-	if kerneltype.IsNextGen() {
-		return "keyspace_name"
-	}
-	return "namespace"
-}
 
 // RegisterMetrics registers all metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
