@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,22 @@ func (f *countingDMLTypeFilter) ShouldIgnoreDMLByEventType(
 type stubEventGetter struct {
 	iter eventstore.EventIterator
 	err  error
+}
+
+type closeOnceEventGetter struct {
+	store *mockEventStore
+	err   error
+}
+
+func (g *closeOnceEventGetter) GetIterator(
+	dispatcherID common.DispatcherID, request eventstore.ScanRequest,
+) (eventstore.EventIterator, error) {
+	iter, err := g.store.GetIterator(dispatcherID, request)
+	if err == nil && iter != nil && g.err != nil {
+		iter.(*mockEventIterator).closeErr = g.err
+		g.err = nil
+	}
+	return iter, err
 }
 
 func (g *stubEventGetter) GetIterator(
@@ -678,6 +695,112 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 	require.Nil(t, disp.getLargeTxnState())
 	require.Equal(t, insertCount, testutil.ToFloat64(
 		metrics.EventServiceSendDMLTypeCount.WithLabelValues(common.StringMode(0), "insert")))
+}
+
+func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
+	for _, failure := range []string{"append", "iterator close"} {
+		t.Run(failure, func(t *testing.T) {
+			setLargeTxnThresholdForTest(t, 0)
+			helper := event.NewEventTestHelper(t)
+			defer helper.Close()
+			helper.Tk().MustExec("use test")
+			ddl := helper.DDL2Event("create table t_retry_uk (id int primary key, uk int, unique key uk_idx(uk))")
+			updates := make([]*common.RawKVEntry, 0, 3)
+			for id := 1; id <= 3; id++ {
+				_, update := helper.DML2UpdateEvent("test", "t_retry_uk",
+					fmt.Sprintf("insert into test.t_retry_uk values (%d, %d)", id, id),
+					fmt.Sprintf("update test.t_retry_uk set uk = %d where id = %d", id+100, id))
+				updates = append(updates, update)
+			}
+			for _, update := range updates[1:] {
+				update.StartTs = updates[0].StartTs
+				update.CRTs = updates[0].CRTs
+			}
+
+			broker, _, _, _ := newEventBrokerForTest()
+			broker.close()
+			store := broker.eventStore.(*mockEventStore)
+			info := newMockDispatcherInfoForTest(t)
+			info.startTs = updates[0].StartTs
+			status := broker.getOrSetChangefeedStatus(info)
+			disp := newDispatcherStat(info, 1, 1, nil, status)
+			makeDispatcherReady(disp)
+			require.NoError(t, broker.addDispatcher(info))
+			broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(info.GetTableSpan().TableID, *ddl)
+			require.NoError(t, store.AppendEvents(info.GetID(), updates[0].CRTs, updates...))
+			disp.receivedResolvedTs.Store(updates[0].CRTs)
+			disp.eventStoreCommitTs.Store(updates[0].CRTs)
+
+			scanner := newEventScanner(store, broker.schemaStore,
+				event.NewMounter(time.UTC, &integrity.Config{}), 0)
+			limit := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
+			deleted := make(map[int64]int)
+			inserted := make(map[int64]int)
+			scan := func() (scanProgress, bool, error) {
+				request, ok := disp.getScanRequest()
+				require.True(t, ok)
+				_, events, progress, interrupted, err := scanner.scan(
+					context.Background(), disp, request, limit)
+				if err == nil {
+					for _, e := range events {
+						batch, ok := e.(*event.BatchDMLEvent)
+						if !ok {
+							continue
+						}
+						for _, dml := range batch.DMLEvents {
+							for {
+								row, ok := dml.GetNextRow()
+								if !ok {
+									break
+								}
+								if row.RowType == common.RowTypeDelete {
+									deleted[row.PreRow.GetInt64(0)]++
+								} else if row.RowType == common.RowTypeInsert {
+									inserted[row.Row.GetInt64(0)]++
+								}
+							}
+						}
+					}
+					if progress.valid {
+						disp.updateScanRangeWithPosition(progress.txnCommitTs,
+							progress.txnStartTs, progress.rowLevelScanPosition)
+					}
+				}
+				return progress, interrupted, err
+			}
+
+			progress, interrupted, err := scan()
+			require.NoError(t, err)
+			require.True(t, interrupted)
+			require.NotEmpty(t, progress.rowLevelScanPosition)
+			require.Equal(t, map[int64]int{1: 1}, deleted)
+			state := disp.getLargeTxnState()
+			require.NotNil(t, state)
+			originalSize, err := state.spill.file.Size()
+			require.NoError(t, err)
+
+			if failure == "append" {
+				require.NoError(t, state.spill.Close())
+			} else {
+				scanner.eventGetter = &closeOnceEventGetter{store: store,
+					err: errors.New("injected iterator close error")}
+			}
+			_, _, err = scan()
+			require.Error(t, err)
+			require.Same(t, state, disp.getLargeTxnState())
+			size, err := state.spill.file.Size()
+			require.NoError(t, err)
+			require.Equal(t, originalSize, size)
+
+			for attempt := 0; attempt < 10 && disp.getLargeTxnState() != nil; attempt++ {
+				_, _, err = scan()
+				require.NoError(t, err)
+			}
+			require.Nil(t, disp.getLargeTxnState())
+			require.Equal(t, map[int64]int{1: 1, 2: 1, 3: 1}, deleted)
+			require.Equal(t, map[int64]int{1: 1, 2: 1, 3: 1}, inserted)
+		})
+	}
 }
 
 func TestEventScannerFlushesSpilledUKUpdateBeforeSameCommitDDL(t *testing.T) {
