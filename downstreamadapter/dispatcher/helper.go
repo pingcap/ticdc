@@ -340,7 +340,7 @@ type HeartBeatInfo struct {
 // Keeping it narrow avoids reintroducing a broader unified block-status API.
 type blockStatusOfferer interface {
 	GetId() common.DispatcherID
-	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
+	tryOfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool
 }
 
 // ResendTask is responsible for periodically resending the block status to the maintainer.
@@ -372,7 +372,9 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 // WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.offerBlockStatus(t.message)
+	if !t.dispatcher.tryOfferBlockStatus(t.message) {
+		return time.Now().Add(resendTimeInterval)
+	}
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {

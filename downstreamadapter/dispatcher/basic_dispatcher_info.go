@@ -252,6 +252,10 @@ func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockSta
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
+func (d *BasicDispatcher) tryOfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+	return d.sharedInfo.blockStatusBuffer.tryOfferStatus(status)
+}
+
 // offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
 // duplicate completions are filtered before another protobuf allocation.
 func (d *BasicDispatcher) offerDoneBlockStatus(blockTs uint64, isSyncPoint bool) {

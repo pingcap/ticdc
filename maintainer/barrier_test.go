@@ -2306,3 +2306,68 @@ func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T
 	require.Equal(t, 0, barrier.blockedEvents.Len())
 	require.Nil(t, stm.GetBlockState())
 }
+
+func TestDBBarrierRecoversIgnoredWaitingStatusAfterDispatcherMove(t *testing.T) {
+	testutil.SetUpTestServices(t)
+
+	ddlDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	tableDispatcher := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", tableDispatcher)
+	require.False(t, spanController.IsReplicating(tableDispatcher))
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	blockState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_DB,
+			SchemaID:      1,
+		},
+	}
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: ddlDispatcherID.ToPB(), State: blockState},
+			{ID: tableDispatcher.ID.ToPB(), State: blockState},
+		},
+	})
+	require.Len(t, msgs, 1)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 2)
+	require.Equal(t, uint64(10), resp.DispatcherStatuses[0].IgnoredBlockStatus.CommitTs)
+	require.Nil(t, resp.DispatcherStatuses[0].Ack)
+	event := barrier.blockedEvents.m[getEventKey(10, false)]
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.NotContains(t, event.reportedDispatchers, tableDispatcher.ID)
+
+	spanController.MarkSpanReplicating(tableDispatcher)
+	event.lastResendTime = time.Now().Add(-2 * time.Second)
+	require.Empty(t, barrier.Resend())
+	require.False(t, event.selected.Load())
+
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: tableDispatcher.ID.ToPB(), State: blockState},
+		},
+	})
+	require.True(t, event.selected.Load())
+	require.Equal(t, ddlDispatcherID, event.writerDispatcher)
+	require.Len(t, msgs, 1)
+	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 2)
+	require.Equal(t, heartbeatpb.Action_Write, resp.DispatcherStatuses[1].Action.Action)
+}
