@@ -20,8 +20,17 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
+
+// metricRegistry is set during server startup, before any Pulsar clients are created.
+var metricRegistry *prometheus.Registry
+
+// RegisterMetrics configures the shared registry for Pulsar client metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
+	metricRegistry = registry
+}
 
 // FactoryCreator defines the type of factory creator.
 type FactoryCreator func(config *config.PulsarConfig, changefeedID commonType.ChangeFeedID, sinkConfig *config.SinkConfig) (pulsar.Client, error)
