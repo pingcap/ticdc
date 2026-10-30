@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +95,86 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	require.Equal(t, heartbeatpb.BlockStage_WAITING, second.State.Stage)
 
 	requireNoBlockStatus(t, buffer)
+}
+
+func TestBlockStatusBufferRetryWhenFull(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+
+	require.False(t, buffer.tryOfferStatus(retry))
+	require.Equal(t, 1, buffer.Len())
+	first, ok := buffer.TryTake()
+	require.True(t, ok)
+	require.Equal(t, uint64(100), first.State.BlockTs)
+
+	require.True(t, buffer.tryOfferStatus(retry))
+	require.True(t, buffer.tryOfferStatus(retry))
+	require.Equal(t, 1, buffer.Len())
+	second, ok := buffer.TryTake()
+	require.True(t, ok)
+	require.Same(t, retry, second)
+	requireNoBlockStatus(t, buffer)
+
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 300, common.DefaultMode))
+	none := &heartbeatpb.TableSpanBlockStatus{
+		ID:    dispatcherID.ToPB(),
+		State: &heartbeatpb.State{BlockTs: 400, Stage: heartbeatpb.BlockStage_NONE},
+		Mode:  common.DefaultMode,
+	}
+	require.False(t, buffer.tryOfferStatus(none))
+	_, ok = buffer.TryTake()
+	require.True(t, ok)
+	require.True(t, buffer.tryOfferStatus(none))
+	third, ok := buffer.TryTake()
+	require.True(t, ok)
+	require.Same(t, none, third)
+}
+
+func TestResendTaskDoesNotBlockWorkerWhenBufferFull(t *testing.T) {
+	buffer := NewBlockStatusBuffer(1)
+	dispatcherID := common.NewDispatcherID()
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 100, common.DefaultMode))
+	dispatcher := &BasicDispatcher{
+		id:         dispatcherID,
+		sharedInfo: &SharedInfo{blockStatusBuffer: buffer},
+	}
+	retry := newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode)
+	task := &ResendTask{dispatcher: dispatcher, message: retry}
+	pool := threadpool.NewThreadPool(1)
+	defer func() {
+		// Drain the buffer before Stop so a blocked worker cannot leak if this
+		// regression fails.
+		buffer.TryTake()
+		pool.Stop()
+	}()
+
+	started := make(chan struct{})
+	handle := pool.SubmitFunc(func() time.Time {
+		close(started)
+		task.Execute()
+		return time.Time{}
+	}, time.Now())
+	<-started
+	handle.Cancel()
+	workerAvailable := make(chan struct{})
+	pool.SubmitFunc(func() time.Time {
+		close(workerAvailable)
+		return time.Time{}
+	}, time.Now())
+	select {
+	case <-workerAvailable:
+	case <-time.After(time.Second):
+		require.FailNow(t, "full block status buffer held the resend worker")
+	}
+
+	_, ok := buffer.TryTake()
+	require.True(t, ok)
+	task.Execute()
+	status, ok := buffer.TryTake()
+	require.True(t, ok)
+	require.Same(t, retry, status)
 }
 
 func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
