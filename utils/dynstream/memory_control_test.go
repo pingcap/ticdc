@@ -52,8 +52,13 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	require.Equal(t, int64(1), path.areaMemStat.pathCount.Load())
 
 	// Test removing path
+	path.removed.Store(true)
 	mc.removePathFromArea(path)
 	require.Equal(t, int64(0), path.areaMemStat.pathCount.Load())
+	require.Len(t, mc.areaStatMap, 1, "the owner has not cleared the path yet")
+	handler := &mockHandler{}
+	eq := newEventQueue(handler, newTestBatchConfigRegistry())
+	eq.releasePath(path, true)
 	require.Empty(t, mc.areaStatMap)
 }
 

@@ -56,6 +56,7 @@ type DispatcherService interface {
 	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
+	ShouldPauseScan() bool
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
 	EnableIgnoreUpdateOnlyColumns() bool
@@ -1339,6 +1340,17 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,
 		Stage:                blockStage,
 	}
+}
+
+// ShouldPauseScan reports a syncpoint already being handled by this dispatcher.
+// Redo dispatchers must keep scanning to advance the redo watermark.
+func (d *BasicDispatcher) ShouldPauseScan() bool {
+	if common.IsRedoMode(d.GetMode()) {
+		return false
+	}
+	pending, stage := d.blockEventStatus.getEventAndStage()
+	return pending != nil && pending.GetType() == commonEvent.TypeSyncPointEvent &&
+		(stage == heartbeatpb.BlockStage_WAITING || stage == heartbeatpb.BlockStage_WRITING)
 }
 
 func (d *BasicDispatcher) Remove() {
