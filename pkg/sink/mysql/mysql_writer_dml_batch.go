@@ -586,6 +586,12 @@ func (w *Writer) groupRowsByType(
 				args,
 				eventTableInfo,
 				nil, nil)
+			// Include both row images in the size estimate used to limit batch updates.
+			var approximateSize int64
+			for i := 0; i < row.Row.Len(); i++ {
+				approximateSize += int64(len(row.PreRow.GetRaw(i)) + len(row.Row.GetRaw(i)))
+			}
+			newUpdateRow.SetApproximateDataSize(approximateSize)
 			updateRow = append(updateRow, newUpdateRow)
 			if len(updateRow) >= w.cfg.MaxMultiUpdateRowCount {
 				updateRows = append(updateRows, updateRow)
