@@ -12,8 +12,15 @@ schedule downstream.
 | `CREATE MATERIALIZED VIEW` | Records the MV's table metadata and adds its physical table to the changefeed when it matches the table filter and eligibility rules. | Sends `CREATE TABLE` for the MV name. The generated statement contains visible columns, their types, `NOT NULL` where applicable, and the primary key. It does not contain the MV query, refresh settings, or secondary indexes. |
 | `DROP MATERIALIZED VIEW` | Handles TiDB's `ActionDropTable` event and removes the MV's physical table. | Sends `DROP TABLE` for the MV name. |
 | `CREATE MATERIALIZED VIEW LOG` | Tracks the log table in schema metadata, but excludes it from physical table dispatchers. Its create and drop events do not reach the downstream sink. | No log table is created or dropped. |
-| Create an MV shadow table | Tracks the shadow table in schema metadata, but excludes it from physical table dispatchers while it is a shadow table. | The shadow table's create event is not sent. |
+| TiDB internal `ActionCreateMaterializedViewShadow` | Tracks the shadow table in schema metadata, but excludes it from physical table dispatchers while it is a shadow table. | The shadow table's create event is not sent. |
 | `REFRESH MATERIALIZED VIEW ... COMPLETE OUT OF PLACE` cutover | Replaces the old MV physical table ID with the shadow table ID under the MV name. For a partitioned MV, it replaces the old partition IDs with the new ones. | The cutover DDL is marked `NotSync` and is not sent to the sink. |
+
+`ActionCreateMaterializedViewShadow` is not a standalone, user-facing DDL.
+TiDB generates this internal action while executing
+`REFRESH MATERIALIZED VIEW ... COMPLETE OUT OF PLACE`: it creates a temporary
+physical table, loads the refreshed MV result into it, and then performs the
+cutover in the following row. Users only issue the `REFRESH MATERIALIZED VIEW`
+statement; there is no separate SQL statement for creating the shadow table.
 
 The current physical MV table follows the same table filter and eligibility
 rules as an ordinary table. Without `force-replicate`, it needs a primary key or
