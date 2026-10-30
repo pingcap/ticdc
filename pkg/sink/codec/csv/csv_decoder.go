@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -224,25 +225,37 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	msg := *b.msg
 	msg.columns = append([]any(nil), b.msg.columns...)
 	msg.preColumns = append([]any(nil), b.msg.preColumns...)
+	msg.schemaName, msg.tableName = strings.Clone(msg.schemaName), strings.Clone(msg.tableName)
+	for _, columns := range [][]any{msg.columns, msg.preColumns} {
+		for i, value := range columns {
+			if text, ok := value.(string); ok {
+				columns[i] = strings.Clone(text)
+			}
+		}
+	}
 
 	rowType := commonType.RowTypeInsert
 	if msg.opType == operationDelete {
 		rowType = commonType.RowTypeDelete
 	}
+	codecConfig, tableInfo := b.codecConfig, b.tableInfo
 
-	return common.NewDMLMessage(
+	message := common.NewDMLMessage(
 		b.tableInfo.TableName.TableID,
 		msg.schemaName,
 		msg.tableName,
 		msg.commitTs,
 		rowType,
 		func() *commonEvent.DMLEvent {
-			e, err := csvMsg2RowChangedEvent(b.codecConfig, &msg, b.tableInfo)
+			e, err := csvMsg2RowChangedEvent(codecConfig, &msg, tableInfo)
 			if err != nil {
 				log.Panic("convert message to event failed", zap.Error(err))
 			}
 			return e
 		})
+	message.ApproximateSize = int64(len(msg.schemaName)+len(msg.tableName)) +
+		common.DecodedDataSize(msg.columns) + common.DecodedDataSize(msg.preColumns)
+	return message
 }
 
 // NextDDLEvent implements the Decoder interface.

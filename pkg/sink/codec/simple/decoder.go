@@ -175,6 +175,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 			zap.String("table", msg.Table),
 			zap.Uint64("version", msg.SchemaVersion))
 		pending := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), nil)
+		pending.ApproximateSize = msg.approximateSize()
 		d.cachedMessages.PushBack(&cachedDMLMessage{message: msg, decoded: pending})
 		d.PendingDMLMessage = pending
 		return nil
@@ -185,9 +186,16 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
 	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
-	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
 		return d.assembleDMLEvent(msg, tableInfo)
 	})
+	message.ApproximateSize = msg.approximateSize()
+	return message
+}
+
+func (m *message) approximateSize() int64 {
+	return int64(len(m.Schema)+len(m.Table)+len(m.ClaimCheckLocation)) +
+		common.DecodedDataSize(m.Data) + common.DecodedDataSize(m.Old)
 }
 
 func rowTypeFromMessageType(tp MessageType) commonType.RowType {
@@ -343,6 +351,9 @@ func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
+			if d.PendingDMLMessage == cached.decoded {
+				d.PendingDMLMessage = nil
+			}
 			*cached.decoded = *d.newDMLMessage(msg, tableInfo)
 			d.CachedDMLMessages = append(d.CachedDMLMessages, cached.decoded)
 			d.cachedMessages.Remove(ele)

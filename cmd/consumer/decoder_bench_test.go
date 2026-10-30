@@ -90,12 +90,10 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 			tasks := make([]*decodeTask, batchRows)
 			b.ReportAllocs()
 			for b.Loop() {
-				record := newAck(memory, 128, nil)
 				for i := range tasks {
 					id := i % tables
 					task := &decodeTask{
 						message: messages[id],
-						record:  record,
 						done:    make(chan struct{}),
 						table:   metadata[id],
 						tableID: int64(id + 1),
@@ -105,7 +103,6 @@ func BenchmarkDecoderGroupCSV(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				record.release()
 				for _, task := range tasks {
 					select {
 					case <-task.done:
@@ -206,7 +203,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 					tasks := make([]*decodeTask, batchRows)
 					b.ReportAllocs()
 					for b.Loop() {
-						record := newAck(memory, 128, nil)
 						for i := range tasks {
 							id := i % len(values)
 							if workload == "skewed" {
@@ -222,7 +218,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 							message := decoder.NextDMLMessage()
 							task := &decodeTask{
 								message: message,
-								record:  record,
 								done:    make(chan struct{}),
 							}
 							tasks[i] = task
@@ -230,7 +225,6 @@ func BenchmarkDecoderGroupCanalJSON(b *testing.B) {
 								b.Fatal(err)
 							}
 						}
-						record.release()
 						for _, task := range tasks {
 							select {
 							case <-task.done:

@@ -32,8 +32,8 @@ func conductorTestRow(memory *memoryUsage, tableID int64, stream int32, ts uint6
 	table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{ID: tableID, Name: ast.NewCIStr(name)})
 	row := &decodeTask{
 		tableID: tableID, stream: stream, commitTs: ts,
-		name:   event.SchemaTableName{SchemaName: "test", TableName: name},
-		record: newAck(memory, 10, nil), done: make(chan struct{}), bytes: 64,
+		name: event.SchemaTableName{SchemaName: "test", TableName: name},
+		done: make(chan struct{}), bytes: 64,
 		dml: &event.DMLEvent{PhysicalTableID: tableID, CommitTs: ts, Length: 1, TableInfo: table},
 	}
 	memory.reserve(row.bytes)
@@ -45,7 +45,7 @@ func conductorTestRow(memory *memoryUsage, tableID int64, stream int32, ts uint6
 
 func TestConductorGroupsWaitForConversion(t *testing.T) {
 	memory := newMemoryUsage()
-	c := &conductor{orderedDML: true, watermark: 200}
+	c := &conductor{memory: memory, orderedDML: true, watermark: 200}
 	slow := conductorTestRow(memory, 1, 0, 150, false)
 	later := conductorTestRow(memory, 1, 0, 160, true)
 	otherInput := conductorTestRow(memory, 1, 1, 170, true)
@@ -82,15 +82,13 @@ func TestConductorOtherSourceCommitOrder(t *testing.T) {
 
 func TestConductorFlushBoundsBacklogAndCheckpoint(t *testing.T) {
 	memory := newMemoryUsage()
-	c := &conductor{orderedDML: true, watermark: 200}
+	c := &conductor{memory: memory, orderedDML: true, watermark: 200}
 	count := maxInFlightEvents + batchRows + 1
 	rows := make([]*decodeTask, count)
 	for i := range rows {
 		rows[i] = conductorTestRow(memory, 1, 0, 150, true)
 		c.queueDML(rows[i])
 	}
-	marker := newAck(memory, 10, nil)
-	c.addWatermark(200, []*ack{marker})
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	var submitted []*event.DMLEvent
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(row *event.DMLEvent) {
@@ -102,15 +100,11 @@ func TestConductorFlushBoundsBacklogAndCheckpoint(t *testing.T) {
 	require.Len(t, c.pendingDML[1][0], count-maxInFlightEvents)
 	require.Empty(t, w.pendingDML)
 	require.Equal(t, uint64(149), w.checkpoint)
-	require.False(t, rows[0].record.ready())
-	require.False(t, marker.ready())
 
-	// A later completion must not release the earlier timestamp or its ack.
+	// A later completion must not advance past the earlier timestamp.
 	submitted[len(submitted)-1].PostFlush()
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, uint64(149), w.checkpoint)
-	require.False(t, rows[0].record.ready())
-	require.True(t, rows[maxInFlightEvents-1].record.ready())
 	for _, row := range submitted[:maxInFlightEvents-1] {
 		row.PostFlush()
 	}
@@ -124,14 +118,13 @@ func TestConductorFlushBoundsBacklogAndCheckpoint(t *testing.T) {
 	}
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, uint64(200), w.checkpoint)
-	require.True(t, marker.ready())
 	require.Empty(t, w.inFlight)
 	require.Zero(t, memory.used())
 }
 
 func TestConductorFlushKeepsDDLBarrier(t *testing.T) {
 	memory := newMemoryUsage()
-	c := &conductor{orderedDML: true, watermark: 200}
+	c := &conductor{memory: memory, orderedDML: true, watermark: 200}
 	before := conductorTestRow(memory, 1, 0, 150, true)
 	after := conductorTestRow(memory, 1, 0, 160, true)
 	independent := conductorTestRow(memory, 2, 0, 170, true)
@@ -139,9 +132,7 @@ func TestConductorFlushKeepsDDLBarrier(t *testing.T) {
 		c.queueDML(row)
 	}
 	ddl := &event.DDLEvent{FinishedTs: 155, SchemaName: "test", TableName: "t1", Type: byte(timodel.ActionAddColumn)}
-	record := newAck(memory, 10, nil)
-	c.queueDDL(ddl, record)
-	record.release()
+	c.queueDDL(ddl)
 	downstream := mock.NewMockSink(gomock.NewController(t))
 	var submitted []*event.DMLEvent
 	downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(row *event.DMLEvent) {
@@ -164,7 +155,6 @@ func TestConductorFlushKeepsDDLBarrier(t *testing.T) {
 	require.Len(t, w.ddlJobs, 1)
 	require.Equal(t, uint64(154), w.checkpoint)
 	require.Len(t, submitted, 2)
-	require.False(t, record.ready())
 	job := <-w.ddlJobs
 	require.NoError(t, w.writeDDL(t.Context(), job))
 	w.ddlDone <- struct{}{}
@@ -175,7 +165,6 @@ func TestConductorFlushKeepsDDLBarrier(t *testing.T) {
 	submitted[2].PostFlush()
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Equal(t, uint64(200), w.checkpoint)
-	require.True(t, record.ready())
 	require.Zero(t, memory.used())
 }
 
@@ -191,7 +180,6 @@ func TestConductorFlushUsesSourceBoundaryBeforeGlobalWatermark(t *testing.T) {
 	require.NoError(t, c.flush(t.Context(), w))
 	require.Empty(t, c.pendingDML)
 	require.Equal(t, uint64(100), w.checkpoint)
-	require.True(t, row.record.ready())
 	require.Zero(t, memory.used())
 }
 
@@ -199,7 +187,7 @@ func TestConductorFlushByteBudget(t *testing.T) {
 	for _, size := range []int64{maxInFlightBytes / 2, maxInFlightBytes + 1} {
 		t.Run(strconv.FormatInt(size, 10), func(t *testing.T) {
 			memory := newMemoryUsage()
-			c := &conductor{orderedDML: true, watermark: 200}
+			c := &conductor{memory: memory, orderedDML: true, watermark: 200}
 			for range 3 {
 				row := conductorTestRow(memory, 1, 0, 150, true)
 				memory.reserve(size - row.bytes)
@@ -236,14 +224,11 @@ func TestConductorFlushByteBudget(t *testing.T) {
 
 func TestConductorFlushRetiresCoveredDDLReplica(t *testing.T) {
 	memory := newMemoryUsage()
-	c := &conductor{watermark: 200}
-	record := newAck(memory, 10, nil)
-	input := c.queueDDL(&event.DDLEvent{FinishedTs: 150}, record)
+	c := &conductor{memory: memory, watermark: 200}
+	input := c.queueDDL(&event.DDLEvent{FinishedTs: 150})
 	input.event.awaitingDDL = true
-	record.release()
 	w := &writer{memory: memory}
 	require.NoError(t, c.flush(t.Context(), w))
-	require.True(t, record.ready())
 	require.Empty(t, c.pendingDDL)
 	require.Equal(t, uint64(200), w.checkpoint)
 	require.Zero(t, memory.used())
@@ -253,11 +238,10 @@ func TestConductorFiltersCoveredInput(t *testing.T) {
 	memory := newMemoryUsage()
 	c := &conductor{memory: memory}
 	c.checkpoint.Store(150)
-	record := newAck(memory, 10, nil)
 	// The captured schema permits filtering before any row conversion runs.
-	row := &decodeTask{commitTs: 150, table: &common.TableInfo{}, record: record}
+	memory.reserve(10)
+	row := &decodeTask{commitTs: 150, table: &common.TableInfo{}, bytes: 10}
 	require.NoError(t, c.accept(t.Context(), row))
 	require.Empty(t, c.pendingDML)
-	require.True(t, record.ready())
 	require.Zero(t, memory.used())
 }

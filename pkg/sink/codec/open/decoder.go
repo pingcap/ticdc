@@ -139,6 +139,7 @@ func (b *decoder) hasNext() bool {
 // HasNext implements the Decoder interface
 func (b *decoder) HasNext() (common.MessageType, bool) {
 	if !b.hasNext() {
+		b.keyBytes, b.valueBytes = nil, nil
 		return common.MessageTypeUnknown, false
 	}
 
@@ -235,9 +236,11 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 		rowType = b.rowTypeFromDMLValue(value)
 	}
 	tableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
 		return b.decodeDMLMessage(&key, value)
 	})
+	message.ApproximateSize = int64(len(value) + len(key.Schema) + len(key.Table) + len(key.ClaimCheckLocation))
+	return message
 }
 
 func (b *decoder) nextDMLValue() []byte {

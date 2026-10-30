@@ -137,7 +137,6 @@ type writer struct {
 	unsubmittedTables map[int64]uint64
 	inFlightBytes     int64
 	inFlightEvents    int
-	pendingWatermarks []*watermark
 	watermark         uint64
 	progressChanged   bool
 }
@@ -178,6 +177,7 @@ type ddlWrite struct {
 }
 
 func (w *writer) addDML(row *dmlWrite) {
+	row.dml.AddPostFlushFunc(func() { w.memory.release(row.bytes) })
 	w.pendingDML = append(w.pendingDML, row)
 	w.progressChanged = true
 }
@@ -185,17 +185,6 @@ func (w *writer) addDML(row *dmlWrite) {
 func (w *writer) addDDL(ddl *ddlWrite) {
 	w.pendingDDL = append(w.pendingDDL, ddl)
 	w.progressChanged = true
-}
-
-func (w *writer) addWatermark(progress *watermark) {
-	if progress.watermark > w.watermark {
-		w.watermark = progress.watermark
-		w.progressChanged = true
-	}
-	if progress.onFlush != nil {
-		w.pendingWatermarks = append(w.pendingWatermarks, progress)
-		w.progressChanged = true
-	}
 }
 
 func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
@@ -387,6 +376,7 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 			// The original chunk stays alive through its decoder callbacks.
 			copyBytes := filtered.Rows.MemoryUsage()
 			w.memory.reserve(copyBytes)
+			filtered.AddPostFlushFunc(func() { w.memory.release(copyBytes) })
 			batch.bytes += copyBytes
 		}
 		batch.events = append(batch.events, filtered)
@@ -415,7 +405,6 @@ func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 		dml.AddPostFlushFunc(func() {
 			if batch.finished[index].CAS(false, true) {
 				if batch.flushed.Add(1) == int64(len(batch.events)) {
-					w.memory.release(batch.bytes)
 					close(batch.done)
 				}
 				select {
@@ -479,10 +468,6 @@ func (w *writer) finishBatches() {
 				w.mutations[key] = nil
 			}
 		}
-		// Nonempty batches release memory in their final flush callback.
-		if len(batch.events) == 0 {
-			w.memory.release(batch.bytes)
-		}
 		w.inFlightBytes -= batch.bytes
 		w.inFlightEvents -= len(batch.items)
 		w.progressChanged = true
@@ -497,7 +482,7 @@ func (w *writer) advanceCheckpoint() {
 		return
 	}
 	w.progressChanged = false
-	if w.watermark == 0 && len(w.pendingWatermarks) == 0 {
+	if w.watermark == 0 {
 		return
 	}
 	// A watermark covers every input through its timestamp. Checkpoints also
@@ -550,16 +535,6 @@ func (w *writer) advanceCheckpoint() {
 		}
 	}
 	w.checkpoint = max(w.checkpoint, through)
-	remaining := w.pendingWatermarks[:0]
-	for _, control := range w.pendingWatermarks {
-		if control.watermark > w.checkpoint {
-			remaining = append(remaining, control)
-			continue
-		}
-		control.onFlush()
-	}
-	clear(w.pendingWatermarks[len(remaining):])
-	w.pendingWatermarks = remaining
 	// Reclaim each table after input progress and its own earlier DML pass.
 	// Keep a table boundary to reject replays while unrelated writes still
 	// hold back the global checkpoint and DDL history.

@@ -43,7 +43,6 @@ type decodeTask struct {
 	waiting  bool
 	message  *codecCommon.DMLMessage
 	name     event.SchemaTableName
-	record   *ack
 	dml      *event.DMLEvent
 	bytes    int64
 	done     chan struct{}
@@ -62,7 +61,6 @@ func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup
 }
 
 func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
-	task.record.retain()
 	// Conversion can finish out of order. The conductor joins results in table
 	// order before allowing controls or writes to pass them.
 	select {
@@ -74,7 +72,6 @@ func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	case d.input <- task:
 		return nil
 	case <-ctx.Done():
-		task.record.release()
 		return context.Cause(ctx)
 	}
 }
@@ -129,9 +126,10 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 		}
 		bytes := dml.Rows.MemoryUsage()
 		d.memory.reserve(bytes)
+		capturedBytes := task.bytes
 		task.dml, task.bytes = dml, bytes
-		task.record.release()
 		task.message, task.table = nil, nil
+		d.memory.release(capturedBytes)
 		close(task.done)
 		select {
 		case d.completed <- struct{}{}:

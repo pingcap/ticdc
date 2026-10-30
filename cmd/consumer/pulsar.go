@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
@@ -35,16 +36,19 @@ import (
 )
 
 type pulsarRecord struct {
-	ack       *ack
+	through   uint64
 	messageID pulsar.MessageID
 }
+
+const pulsarRecordBytes = int64(unsafe.Sizeof(pulsarRecord{}))
 
 type pulsarPartition struct {
 	stream    int32
 	watermark uint64           // Parser-owned inclusive read boundary for this partition.
 	parsed    pulsar.MessageID // End of the partition prefix parsed in this run.
+	parsedTs  uint64           // Parser-owned maximum event timestamp in that prefix.
 	records   []pulsarRecord
-	mu        sync.Mutex // Protects records, shared by Read and Confirm.
+	mu        sync.Mutex // Protects parsed positions, shared by the parser and Confirm.
 }
 
 type pulsarReadBoundary struct {
@@ -201,15 +205,19 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 
 type pulsarInput struct {
 	message pulsar.ConsumerMessage
-	record  *ack
 }
 
 func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
 	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[task, error] {
 		partition := c.partitions[input.message.Topic()]
-		scope := inputScope{stream: partition.stream, record: input.record, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
+		scope := inputScope{stream: partition.stream, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
 		return func(yield func(task, error) bool) {
+			defer c.memory.release(int64(len(input.message.Key()) + len(input.message.Payload())))
 			for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
+				if err == nil {
+					through := taskTimestamp(work)
+					partition.parsedTs = max(partition.parsedTs, through)
+				}
 				if progress, ok := work.(*inputWatermark); ok && err == nil {
 					partition.watermark = max(partition.watermark, progress.watermark)
 					c.candidate = max(c.candidate, progress.watermark)
@@ -231,8 +239,15 @@ func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<
 				return
 			}
 			if through != 0 {
-				yield(&watermark{watermark: through}, nil)
+				if !yield(&watermark{watermark: through}, nil) {
+					return
+				}
 			}
+			partition.mu.Lock()
+			c.memory.reserve(pulsarRecordBytes)
+			partition.records = append(partition.records, pulsarRecord{through: partition.parsedTs, messageID: input.message.ID()})
+			partition.mu.Unlock()
+			notifyConfirmation(c.confirmable)
 		}
 	}, tasks)
 }
@@ -359,16 +374,9 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 		if partition == nil {
 			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 		}
-		messageID := message.ID()
 		size := int64(len(message.Key()) + len(message.Payload()))
-		record := newAck(c.memory, size, c.confirmable)
-		partition.mu.Lock()
-		partition.records = append(partition.records, pulsarRecord{
-			ack:       record,
-			messageID: messageID,
-		})
-		partition.mu.Unlock()
-		batch = append(batch, pulsarInput{message: message, record: record})
+		c.memory.reserve(size)
+		batch = append(batch, pulsarInput{message: message})
 		bytes += size
 		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
 			return batch, nil
@@ -391,12 +399,15 @@ func (c *pulsarReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBounda
 	return nil
 }
 
-func (c *pulsarReader) Confirm(ctx context.Context) error {
+func (c *pulsarReader) Confirm(ctx context.Context, checkpoint uint64) error {
+	if checkpoint == 0 {
+		return nil
+	}
 	for _, partition := range c.partitions {
 		partition.mu.Lock()
 		var count int
 		for _, record := range partition.records {
-			if !record.ack.ready() {
+			if record.through > checkpoint {
 				break
 			}
 			count++
@@ -417,6 +428,7 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 		records := partition.records
 		clear(records[:count])
 		partition.records = records[count:]
+		c.memory.release(int64(count) * pulsarRecordBytes)
 		partition.mu.Unlock()
 	}
 	return nil
@@ -425,4 +437,8 @@ func (c *pulsarReader) Confirm(ctx context.Context) error {
 func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
+	for _, partition := range c.partitions {
+		c.memory.release(int64(len(partition.records)) * pulsarRecordBytes)
+		partition.records = nil
+	}
 }

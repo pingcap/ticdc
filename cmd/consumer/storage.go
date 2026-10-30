@@ -78,7 +78,6 @@ type storageReader struct {
 	nextTableID      int64
 	storage          storeapi.Storage
 	memory           *memoryUsage
-	confirmable      chan<- struct{}
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -90,12 +89,11 @@ type storageReader struct {
 	ddlWatermarks    map[string]uint64
 	pendingSchema    chan struct{} // Header decoding determines the next file groups.
 	mu               sync.Mutex
-	records          []*ack
 	inputs           []storageInput
 	scanned          bool
 }
 
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) *storageReader {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}
@@ -121,7 +119,6 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		readLimit:      newReadLimit(memory),
 		storage:        storage,
 		memory:         memory,
-		confirmable:    confirmable,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
@@ -278,14 +275,12 @@ type (
 		contents []byte
 		schema   *readSchema
 		tableID  int64
-		record   *ack
 	}
 )
 
 type storageDDL struct {
 	schema     *readSchema
 	ddl        *event.DDLEvent
-	record     *ack
 	registered chan struct{}
 }
 type storageWatermark uint64
@@ -308,11 +303,9 @@ func (c *storageReader) parse(ctx context.Context, parser *inputParser, input st
 		switch input := input.(type) {
 		case *storageDDL:
 			input.ddl.TableInfo = input.schema.tableInfo()
-			input.record.retain()
-			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{record: input.record, ddlBoundary: &readBoundary{reached: true}}, registered: func() { c.registerDDL(input) }}, nil) {
+			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{ddlBoundary: &readBoundary{reached: true}}, registered: func() { c.registerDDL(input) }}, nil) {
 				return
 			}
-			input.record.release()
 		case storageWatermark:
 			yield(&watermark{watermark: uint64(input)}, nil)
 		}
@@ -445,11 +438,6 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 
 func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *storageDDL {
 	c.pendingSchema = make(chan struct{})
-	size := int64(len(schema.file.Query) + len(key.Schema) + len(key.Table))
-	record := newAck(c.memory, size, c.confirmable)
-	c.mu.Lock()
-	c.records = append(c.records, record)
-	c.mu.Unlock()
 	scope := event.InfluenceTypeNormal
 	switch {
 	case schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView:
@@ -465,7 +453,7 @@ func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema)
 		TableName:     schema.file.Table,
 		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 	}
-	return &storageDDL{schema: schema, ddl: ddl, record: record, registered: c.pendingSchema}
+	return &storageDDL{schema: schema, ddl: ddl, registered: c.pendingSchema}
 }
 
 func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema, tableID int64) (*storageFile, error) {
@@ -483,17 +471,14 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
-	record := newAck(c.memory, size, c.confirmable)
+	c.memory.reserve(size)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(file, data); err != nil {
-		record.release()
+		c.memory.release(size)
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
-	c.mu.Lock()
-	c.records = append(c.records, record)
-	c.mu.Unlock()
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &storageFile{contents: data, schema: schema, tableID: tableID, record: record}, nil
+	return &storageFile{contents: data, schema: schema, tableID: tableID}, nil
 }
 
 func (c *storageReader) Advance(_ []readUpdate) {}
@@ -518,18 +503,7 @@ func (c *storageReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBound
 	return nil
 }
 
-func (c *storageReader) Confirm(_ context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var count int
-	for _, record := range c.records {
-		if !record.ready() {
-			break
-		}
-		count++
-	}
-	clear(c.records[:count])
-	c.records = c.records[count:]
+func (c *storageReader) Confirm(_ context.Context, _ uint64) error {
 	return nil
 }
 
@@ -554,6 +528,7 @@ func (s *readSchema) tableInfo() *common.TableInfo {
 
 func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *storageFile) iter.Seq2[task, error] {
 	return func(yield func(task, error) bool) {
+		defer c.memory.release(int64(len(file.contents)))
 		table := file.schema.tableInfo()
 		var decoder codecCommon.Decoder
 		switch p.codecConfig.Protocol {
@@ -568,7 +543,7 @@ func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *sto
 			decoder = canal.NewTxnDecoder(p.codecConfig)
 			decoder.AddKeyValue(nil, file.contents)
 		}
-		scope := inputScope{record: file.record, dmlBoundary: &readBoundary{reached: true}}
+		scope := inputScope{dmlBoundary: &readBoundary{reached: true}}
 		for {
 			if err := context.Cause(ctx); err != nil {
 				yield(nil, err)
@@ -587,6 +562,5 @@ func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *sto
 				return
 			}
 		}
-		file.record.release()
 	}
 }

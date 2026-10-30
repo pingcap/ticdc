@@ -24,7 +24,8 @@ import (
 
 const maxMemoryBytes = 1 << 30
 
-// memoryUsage is a soft backpressure budget for input contents and decoded rows.
+// memoryUsage is a soft budget for raw input, captured data, decoded rows and
+// pending transport positions. Each owner releases its own allocation.
 // It uses existing data sizes; it does not model process or object overhead.
 type memoryUsage struct {
 	limit   int64

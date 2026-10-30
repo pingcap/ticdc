@@ -328,6 +328,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 
 	msg := d.msg
 	row := d.row
+	d.msg, d.row = nil, nil
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
@@ -345,7 +346,7 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 
-	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
 		if row != nil {
 			for _, field := range []jsonColumnField{
 				{data: row.MySQLType, target: &row.JSONMessage.MySQLType},
@@ -362,6 +363,11 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 		}
 		return d.decodeDMLMessage(msg)
 	})
+	message.ApproximateSize = int64(len(schemaName) + len(tableName))
+	if row != nil {
+		message.ApproximateSize += int64(len(row.SQLType) + len(row.MySQLType) + len(row.Data) + len(row.Old))
+	}
+	return message
 }
 
 type jsonColumnField struct {
@@ -422,6 +428,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
 	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
+	d.msg, d.row = nil, nil
 	return result
 }
 
@@ -437,6 +444,7 @@ func (d *decoder) NextResolvedEvent() uint64 {
 		log.Panic("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", d.msg))
 	}
+	d.msg, d.row = nil, nil
 	return withExtensionEvent.Extensions.WatermarkTs
 }
 

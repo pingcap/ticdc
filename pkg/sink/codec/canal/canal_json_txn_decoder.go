@@ -84,6 +84,7 @@ func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 	}
 
 	if len(encodedData) == 0 {
+		d.data = nil
 		return common.MessageTypeUnknown, false
 	}
 
@@ -124,9 +125,12 @@ func (d *txnDecoder) NextDMLMessage() *common.DMLMessage {
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 
-	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
 		return d.canalJSONMessage2RowChange(msg)
 	})
+	message.ApproximateSize = int64(len(schemaName)+len(tableName)) +
+		common.DecodedDataSize(msg.getData()) + common.DecodedDataSize(msg.getOld()) + common.DecodedDataSize(msg.getMySQLType())
+	return message
 }
 
 func (d *txnDecoder) canalJSONMessage2RowChange(msg canalJSONMessageInterface) *commonEvent.DMLEvent {

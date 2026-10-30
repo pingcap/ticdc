@@ -18,6 +18,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -399,4 +401,26 @@ func TestUpdateWithoutBeforeValueRequiresKey(t *testing.T) {
 		_, err := assembleEvent(key, map[string]any{"id": int64(1), tidbOp: updateOperation, tidbCommitTs: int64(100)}, schema, false, true)
 		require.ErrorContains(t, err, "handle")
 	}
+}
+
+func TestDecodedBytesOwnTheirPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+	manager, err := schemamanager.NewConfluentSchemaManager(t.Context(), server.URL, nil)
+	require.NoError(t, err)
+	codec, err := GenCodec(`{"type":"record","name":"t","fields":[{"name":"blob","type":"bytes"},{"name":"items","type":{"type":"array","items":"bytes"}}]}`)
+	require.NoError(t, err)
+	raw, err := codec.BinaryFromNative([]byte{0, 0, 0, 0, 1}, map[string]any{
+		"blob": []byte("hello"), "items": []any{[]byte("world")},
+	})
+	require.NoError(t, err)
+	decoder := NewDecoder(common.NewConfig(config.ProtocolAvro), 0, manager, "topic", nil).(*decoder)
+	decoder.codecs.Add(schemamanager.NewConfluentSchemaID(1), codec)
+	decoded, _, err := decoder.decodeRawBytes(t.Context(), raw)
+	require.NoError(t, err)
+	clear(raw)
+	require.Equal(t, []byte("hello"), decoded["blob"])
+	require.Equal(t, []byte("world"), decoded["items"].([]any)[0])
 }

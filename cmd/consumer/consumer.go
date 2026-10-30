@@ -148,6 +148,8 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	}
 	parsing := newInputParser(ctx, decoding, upstreamDB, replicaConfig, streams, tables)
 	conductor := newConductor(memory, reader.client, parsing)
+	reader.checkpoint = &conductor.checkpoint
+	conductor.confirmable = confirmable
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,

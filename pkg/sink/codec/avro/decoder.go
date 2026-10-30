@@ -14,6 +14,7 @@
 package avro
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -143,9 +144,14 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 		rowType = commonType.RowTypeUpdate
 	}
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
 		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	})
+	message.ApproximateSize = common.DecodedDataSize(keyMap)
+	if hasValue {
+		message.ApproximateSize += common.DecodedDataSize(valueMap)
+	}
+	return message
 }
 
 func (d *decoder) decodeDMLPayload() (
@@ -774,6 +780,9 @@ func (d *decoder) decodeRawBytes(
 	if !ok {
 		return nil, nil, errors.ErrCodecDecode.GenWithStack("raw avro message is not a map")
 	}
+	// goavro byte values can alias the encoded input. Detach them before the
+	// consumer releases the raw input and transfers quota to this message.
+	detachAvroBytes(result)
 
 	schema := make(map[string]any)
 	if err := json.Unmarshal([]byte(codec.Schema()), &schema); err != nil {
@@ -781,6 +790,22 @@ func (d *decoder) decodeRawBytes(
 	}
 
 	return result, schema, nil
+}
+
+func detachAvroBytes(value any) any {
+	switch value := value.(type) {
+	case []byte:
+		return bytes.Clone(value)
+	case map[string]any:
+		for key, item := range value {
+			value[key] = detachAvroBytes(item)
+		}
+	case []any:
+		for i, item := range value {
+			value[i] = detachAvroBytes(item)
+		}
+	}
+	return value
 }
 
 func (d *decoder) lookupCodec(

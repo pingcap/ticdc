@@ -111,6 +111,9 @@ type DMLMessage struct {
 	Schema  string
 	Table   string
 	RowType commonType.RowType
+	// ApproximateSize counts captured payload data until ToDMLEvent completes.
+	// Shared schema/configuration and Go container overhead are excluded.
+	ApproximateSize int64
 
 	commitTs uint64
 	// toDMLEvent may be called after the decoder has consumed later messages.
@@ -118,6 +121,39 @@ type DMLMessage struct {
 	toDMLEvent func() *commonEvent.DMLEvent
 	spillData  *DMLMessageData
 	dmlIndex   uint64
+}
+
+// DecodedDataSize estimates payload sizes in decoded JSON/Avro values. It is a
+// soft admission estimate, independent of the original encoded input's lifetime.
+func DecodedDataSize(value any) int64 {
+	switch value := value.(type) {
+	case nil:
+		return 0
+	case string:
+		return int64(len(value))
+	case []byte:
+		return int64(cap(value))
+	case []any:
+		var size int64
+		for _, item := range value {
+			size += DecodedDataSize(item)
+		}
+		return size
+	case map[string]any:
+		var size int64
+		for key, item := range value {
+			size += int64(len(key)) + DecodedDataSize(item)
+		}
+		return size
+	case map[string]string:
+		var size int64
+		for key, item := range value {
+			size += int64(len(key) + len(item))
+		}
+		return size
+	default:
+		return 8 // Numeric and boolean payload values.
+	}
 }
 
 func NewDMLMessage(

@@ -37,7 +37,7 @@ type Reader interface {
 	// an empty, nonnil selection covers the control stream. Zero clears the request.
 	Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary
 	ContinueReading(bool)
-	Confirm(ctx context.Context) error
+	Confirm(ctx context.Context, checkpoint uint64) error
 	Close()
 }
 
@@ -46,6 +46,7 @@ type reader struct {
 	g           *errgroup.Group
 	client      Reader
 	confirmable <-chan struct{}
+	checkpoint  *atomic.Uint64
 }
 
 // readLimit admits new input against the shared soft budget. An unfinished
@@ -104,7 +105,7 @@ func newReader(
 	case sourcePulsar:
 		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
-		client = newStorageReader(ctx, upstreamURI, replicaConfig, memory, confirmable)
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, memory)
 	}
 	return &reader{
 		client:      client,
@@ -167,7 +168,10 @@ func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, e
 				if !ok {
 					return flush()
 				}
-				for _, data := range batch {
+				for index := range batch {
+					data := batch[index]
+					var zero T
+					batch[index] = zero
 					for work, err := range parse(ctx, data) {
 						if err != nil {
 							return err
@@ -196,13 +200,20 @@ func (r *reader) confirm(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-r.confirmable:
-			if err := r.client.Confirm(ctx); err != nil {
+			if err := r.client.Confirm(ctx, r.checkpoint.Load()); err != nil {
 				if ctx.Err() == nil {
 					log.Error("consumer input confirmation failed", zap.Error(err))
 				}
 				return err
 			}
 		}
+	}
+}
+
+func notifyConfirmation(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
 	}
 }
 
@@ -225,12 +236,6 @@ type readUpdate struct {
 	stream    int32
 	watermark uint64
 	boundary  *readBoundary
-}
-
-// Controls retain their input references until the downstream checkpoint covers them.
-type readControl struct {
-	watermark uint64
-	records   []*ack
 }
 
 // A boundary either completes a finite input scope or exposes a shared control

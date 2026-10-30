@@ -44,15 +44,28 @@ type decodeConfig struct {
 	topic  string
 }
 
-// Input references and ordering facts accompany parsed work. Encoded contents
-// and transport positions remain in the source implementation.
+// inputScope carries source-provided identity and ordering facts into parsed work.
+// The parser copies these facts into tasks. The conductor advances shared
+// boundaries through Reader.Advance and Reader.Boundary.
+// Encoded contents and transport positions remain in the source implementation.
 type inputScope struct {
-	record      *ack
-	stream      int32
+	// Kafka partition ID, Pulsar partition-topic index, or zero for storage.
+	// Selects the decoder and distinguishes per-table input groups.
+	stream int32
+	// Proof that preceding DDLs for a row are known: reached grants source-side
+	// admission, or watermark covers the row's commitTs. Nil adds no proof;
+	// the conductor can still use global progress or a later scoped DDL.
 	dmlBoundary *readBoundary
+	// Proof that the affected inputs have been read through this DDL. Nil adds
+	// no proof; the conductor uses global progress or requests a scoped boundary.
+	// Both boundaries describe reading; downstream DDL fences still apply.
 	ddlBoundary *readBoundary
-	ddlCopy     bool
-	ddlOrder    readOrder
+	// Kafka marks non-P0 DDLs as copies. They wait for the canonical P0 DDL;
+	// its arrival lets the conductor replace the copy.
+	ddlCopy bool
+	// inputOrder preserves DDL arrival order. Pulsar uses commitOrder to stably
+	// sort pending DDLs by commitTs across partition topics.
+	ddlOrder readOrder
 }
 
 type task interface{ isTask() }
@@ -72,7 +85,6 @@ type inputDDL struct {
 type inputWatermark struct {
 	watermark        uint64
 	stream           int32
-	record           *ack
 	sourceCheckpoint bool // Production progress whose read coverage is published separately.
 }
 
@@ -81,6 +93,7 @@ type resumeTask struct{ task *decodeTask }
 // A source owns its codec cursors and schema-dependent row cache. Parallel
 // conversion workers receive captured messages, never these cursors.
 type inputParser struct {
+	memory            *memoryUsage
 	codecConfig       *codecCommon.Config
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
@@ -105,11 +118,11 @@ func newInputParser(ctx context.Context, decoding *decodeConfig, upstreamDB *sql
 }
 
 func (p *inputParser) messageTask(scope inputScope, message *codecCommon.DMLMessage) *decodeTask {
-	scope.record.retain() // Transferred to the conductor before the parser releases its lease.
+	p.memory.reserve(message.ApproximateSize)
 	return &decodeTask{
 		message: message, name: event.SchemaTableName{SchemaName: message.Schema, TableName: message.Table},
 		commitTs: message.GetCommitTs(), tableID: message.TableID, stream: scope.stream,
-		boundary: scope.dmlBoundary, record: scope.record, done: make(chan struct{}),
+		boundary: scope.dmlBoundary, bytes: message.ApproximateSize, done: make(chan struct{}),
 	}
 }
 
@@ -137,7 +150,6 @@ func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, v
 				task := p.messageTask(scope, message)
 				task.waiting = waiting
 				if waiting {
-					scope.record.retain()
 					if stream.cachedRecords == nil {
 						stream.cachedRecords = make(map[*codecCommon.DMLMessage]*decodeTask)
 					}
@@ -165,19 +177,34 @@ func (p *inputParser) parseMessage(ctx context.Context, scope inputScope, key, v
 						continue
 					}
 				}
-				scope.record.retain()
 				if !yield(&inputDDL{ddl: ddl, scope: scope}, nil) {
 					return
 				}
 			case codecCommon.MessageTypeResolved:
-				scope.record.retain()
-				if !yield(&inputWatermark{watermark: stream.decoder.NextResolvedEvent(), stream: scope.stream, record: scope.record}, nil) {
+				if !yield(&inputWatermark{watermark: stream.decoder.NextResolvedEvent(), stream: scope.stream}, nil) {
 					return
 				}
 			}
 		}
-		scope.record.release()
 	}
+}
+
+// Sources associate a fully parsed transport position with the maximum timestamp
+// observed in its prefix. Checkpoint coverage then proves the entire prefix done.
+func taskTimestamp(work task) uint64 {
+	switch work := work.(type) {
+	case *decodeTask:
+		return work.commitTs
+	case *resumeTask:
+		return work.task.commitTs
+	case *inputDDL:
+		return work.ddl.GetCommitTs()
+	case *inputWatermark:
+		return work.watermark
+	case *watermark:
+		return work.watermark
+	}
+	return 0
 }
 
 // Cache access and reclamation stay on the parser goroutine. The conductor publishes
