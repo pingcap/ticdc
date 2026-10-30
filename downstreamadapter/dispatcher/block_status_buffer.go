@@ -86,6 +86,37 @@ func (b *BlockStatusBuffer) OfferStatus(status *heartbeatpb.TableSpanBlockStatus
 	b.queue <- blockStatusQueueEntry{status: status}
 }
 
+// tryOfferStatus lets a periodic WAITING/NONE retry skip a full buffer. The
+// resend task will try again later, without occupying a shared pool worker.
+func (b *BlockStatusBuffer) tryOfferStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+	if status == nil {
+		return true
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if isWaitingBlockStatus(status) {
+		key := newBlockStatusKey(status)
+		if _, ok := b.pending[key]; ok {
+			return true
+		}
+		select {
+		case b.queue <- blockStatusQueueEntry{status: status}:
+			b.pending[key] = struct{}{}
+			return true
+		default:
+			return false
+		}
+	}
+
+	select {
+	case b.queue <- blockStatusQueueEntry{status: status}:
+		return true
+	default:
+		return false
+	}
+}
+
 // OfferDone enqueues a DONE status via the dedicated minimal-key path. Duplicate
 // DONE statuses are suppressed before protobuf allocation.
 func (b *BlockStatusBuffer) OfferDone(
