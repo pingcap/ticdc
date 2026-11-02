@@ -124,7 +124,7 @@ var (
 	}, []string{"namespace", "changefeed", "reason"})
 )
 
-// RegisterMetrics registers cloud storage sink metrics.
+// RegisterMetrics registers all cloud storage sink metrics.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(cloudStorageFlushBytesHist)
 	registry.MustRegister(cloudStorageFlushDurationHistogram)

@@ -35,6 +35,7 @@ var (
 		})
 )
 
+// RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(dmlDecodeDuration)
 	registry.MustRegister(dmlIgnoreComputeDuration)

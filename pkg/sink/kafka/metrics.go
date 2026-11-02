@@ -86,7 +86,7 @@ var (
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "broker"})
 )
 
-// RegisterMetrics registers all metrics in this file.
+// RegisterMetrics registers all metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(
 		outgoingBytesTotal,

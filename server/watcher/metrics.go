@@ -14,9 +14,7 @@
 
 package watcher
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var captureSafeToRescheduleDelaySeconds = prometheus.NewGauge(
 	prometheus.GaugeOpts{

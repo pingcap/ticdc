@@ -63,7 +63,7 @@ var (
 	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
 )
 
-// RegisterMetrics registers the metrics owned by this package.
+// RegisterMetrics registers metrics owned by the redo sink.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(redoResolvedTsGauge)
 	registry.MustRegister(redoCheckpointTsGauge)

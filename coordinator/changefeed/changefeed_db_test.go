@@ -144,7 +144,7 @@ func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
 		ChangefeedID: cfID,
 		KeyspaceID:   123,
 		Config:       config.GetDefaultReplicaConfig(),
-		SinkURI:      "blackhole://",
+		SinkURI:      "mysql://127.0.0.1:3306/",
 		State:        config.StateNormal,
 	}, 100, false)
 	db.AddReplicatingMaintainer(cf, "node1")
@@ -152,15 +152,18 @@ func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
 	ChangefeedStatusGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(1)
 	ChangefeedCheckpointTsGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(100)
 	ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(10)
+	ChangefeedDownstreamInfoGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "mysql").Set(1)
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedStatusGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsLagGauge))
+	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedDownstreamInfoGauge))
 
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf.ID, true))
 
 	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedStatusGauge))
 	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedCheckpointTsGauge))
 	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedCheckpointTsLagGauge))
+	require.Equal(t, 0, testutil.CollectAndCount(ChangefeedDownstreamInfoGauge))
 }
 
 func TestGetByID(t *testing.T) {

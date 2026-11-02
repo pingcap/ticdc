@@ -53,7 +53,7 @@ var (
 	)
 )
 
-// RegisterMetrics registers all metrics used gc manager
+// RegisterMetrics registers all metrics used by the GC manager.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(minServiceGCSafePointGauge)
 	registry.MustRegister(cdcGCSafePointGauge)

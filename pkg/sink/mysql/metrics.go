@@ -21,6 +21,14 @@ import (
 )
 
 var (
+	captureLastWriteAdmissionTimestamp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_last_write_admission_timestamp_seconds",
+			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
+		})
+
 	execDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -37,14 +45,6 @@ var (
 			Name:      "active_active_conflict_skip_rows_total",
 			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	captureLastWriteAdmissionTimestamp = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "capture_last_write_admission_timestamp_seconds",
-			Help:      "Unix timestamp of the most recent downstream write admitted by this capture.",
-		})
 )
 
 // RegisterMetrics registers MySQL sink metrics.

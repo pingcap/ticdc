@@ -49,7 +49,6 @@ var (
 			Name:      "error_counter",
 			Help:      "The counter of errors occurred in a message center",
 		}, []string{"type", "message"}) // type: event, command, message: error info
-
 	messagingStreamGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -82,5 +81,6 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(messagingDropMsgCounter)
 	registry.MustRegister(messagingErrorCounter)
 	registry.MustRegister(messagingStreamGauge)
+	registry.MustRegister(messagingReceiveChannelLength)
 	registry.MustRegister(messagingSlowHandleCounter)
 }

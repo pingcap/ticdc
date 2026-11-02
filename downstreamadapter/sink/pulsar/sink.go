@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -308,9 +309,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case ts, ok := <-s.checkpointTsChan:
 			if !ok {
-				log.Info("pulsar sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 
@@ -407,9 +405,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
-				log.Info("pulsar sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			schema := event.TableInfo.GetSchemaName()
@@ -488,9 +483,6 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
-			log.Info("pulsar sink row event channel closed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
 		buffer = buffer[:0]
@@ -519,9 +511,6 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
-				log.Info("pulsar sink row event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
@@ -543,9 +532,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case future, ok := <-outCh:
 			if !ok {
-				log.Info("pulsar sink encoder group output channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
@@ -583,6 +569,11 @@ func (s *sink) Close() {
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+
+	labels := prometheus.Labels{"changefeed": s.changefeedID.String()}
+	publishedDDLSchemaTableCount.DeletePartialMatch(labels)
+	publishedDMLSchemaTableCount.DeletePartialMatch(labels)
+	publishedMessageTypeResolvedCount.DeletePartialMatch(labels)
 }
 
 func (s *sink) BatchCount() int {

@@ -23,7 +23,7 @@ var sharedColumnSchemaCountGauge = prometheus.NewGauge(
 		Help:      "the count of shared column schema in the cluster",
 	})
 
-// RegisterMetrics registers the etcd request counter.
+// RegisterMetrics registers the shared column schema count gauge.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(sharedColumnSchemaCountGauge)
 }
