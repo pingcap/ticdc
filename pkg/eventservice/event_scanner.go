@@ -140,9 +140,15 @@ func (s *eventScanner) scan(
 		return sess.eventBytes, sess.events, sess.progress, interrupted, err
 	}
 
+	// A transaction-boundary resume can still have an unprocessed DDL at the
+	// cursor commit-ts after a completed spill stopped the previous scan.
+	ddlRange := dataRange
+	if request.Cursor.TxnStartTs != 0 && len(request.Cursor.Position) == 0 && ddlRange.CommitTsStart > 0 {
+		ddlRange.CommitTsStart--
+	}
 	// Fetch DDL events
 	start := time.Now()
-	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
+	events, err := s.fetchDDLEvents(dispatcherStat, ddlRange)
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}

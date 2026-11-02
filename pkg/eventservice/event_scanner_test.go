@@ -782,8 +782,10 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 			if failure == "append" {
 				require.NoError(t, state.spill.Close())
 			} else {
-				scanner.eventGetter = &closeOnceEventGetter{store: store,
-					err: errors.New("injected iterator close error")}
+				scanner.eventGetter = &closeOnceEventGetter{
+					store: store,
+					err:   errors.New("injected iterator close error"),
+				}
 			}
 			_, _, err = scan()
 			require.Error(t, err)
@@ -871,6 +873,146 @@ func TestEventScannerFlushesSpilledUKUpdateBeforeSameCommitDDL(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, resolvedTs, resolved.ResolvedTs)
 	require.Nil(t, disp.getLargeTxnState())
+}
+
+func TestEventScannerCleansSameCommitDDLSpillBeforeFollowingTxn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sameCommit bool
+		closeOnce  bool
+	}{
+		{name: "same commit", sameCommit: true},
+		{name: "same commit close retry", sameCommit: true, closeOnce: true},
+		{name: "later commit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setLargeTxnThresholdForTest(t, 0)
+			helper := event.NewEventTestHelper(t)
+			defer helper.Close()
+			helper.Tk().MustExec("use test")
+			ddl := helper.DDL2Event("create table t_uk_next (id int primary key, a int, unique key uk_a(a))")
+			_, first := helper.DML2UpdateEvent("test", "t_uk_next",
+				"insert into test.t_uk_next values (1, 10)",
+				"update test.t_uk_next set a = 11 where id = 1")
+			_, second := helper.DML2UpdateEvent("test", "t_uk_next",
+				"insert into test.t_uk_next values (2, 20)",
+				"update test.t_uk_next set a = 21 where id = 2")
+			if tc.sameCommit {
+				second.StartTs = first.StartTs + 1
+				second.CRTs = first.CRTs
+			} else {
+				second.StartTs = first.CRTs + 1
+				second.CRTs = first.CRTs + 2
+			}
+
+			broker, _, _, _ := newEventBrokerForTest()
+			broker.close()
+			store := broker.eventStore.(*mockEventStore)
+			schemaStore := broker.schemaStore.(*mockSchemaStore)
+			info := newMockDispatcherInfoForTest(t)
+			info.startTs = first.StartTs
+			status := broker.getOrSetChangefeedStatus(info)
+			disp := newDispatcherStat(info, 1, 1, nil, status)
+			makeDispatcherReady(disp)
+			require.NoError(t, broker.addDispatcher(info))
+			createDDL := *ddl
+			createDDL.FinishedTs = first.StartTs
+			schemaStore.AppendDDLEvent(info.GetTableSpan().TableID, createDDL,
+				event.DDLEvent{FinishedTs: first.CRTs, TableInfo: ddl.TableInfo})
+			require.NoError(t, store.AppendEvents(info.GetID(), second.CRTs, first, second))
+			disp.receivedResolvedTs.Store(second.CRTs)
+			disp.eventStoreCommitTs.Store(second.CRTs)
+
+			scanner := newEventScanner(store, schemaStore,
+				event.NewMounter(time.UTC, &integrity.Config{}), 0)
+			limit := scanLimit{maxDMLBytes: 1 << 30, isInUnitTest: true}
+			if tc.closeOnce {
+				scanner.eventGetter = &closeOnceEventGetter{
+					store: store,
+					err:   errors.New("injected iterator close error"),
+				}
+				ok, request := broker.getScanTaskRequest(disp)
+				require.True(t, ok)
+				_, _, _, _, err := scanner.scan(context.Background(), disp, request, limit)
+				require.ErrorContains(t, err, "injected iterator close error")
+				require.Nil(t, disp.getLargeTxnState())
+			}
+			var allEvents []event.Event
+			completed := false
+			for attempt := 0; attempt < 10; attempt++ {
+				ok, request := broker.getScanTaskRequest(disp)
+				require.True(t, ok)
+				_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, request, limit)
+				require.NoError(t, err)
+				require.True(t, progress.valid)
+				allEvents = append(allEvents, events...)
+				disp.updateScanRangeWithPosition(progress.txnCommitTs,
+					progress.txnStartTs, progress.rowLevelScanPosition)
+				if attempt == 0 {
+					require.True(t, interrupted)
+					require.Equal(t, first.CRTs, progress.txnCommitTs)
+					if tc.sameCommit {
+						require.Equal(t, first.StartTs, progress.txnStartTs)
+					} else {
+						require.Zero(t, progress.txnStartTs)
+					}
+					require.Nil(t, disp.getLargeTxnState())
+				}
+				if !interrupted {
+					completed = true
+					break
+				}
+			}
+			require.True(t, completed)
+			require.Nil(t, disp.getLargeTxnState())
+
+			deleted := make(map[int64]int)
+			inserted := make(map[int64]int)
+			var order []string
+			for _, e := range allEvents {
+				switch e.GetType() {
+				case event.TypeBatchDMLEvent:
+					order = append(order, fmt.Sprintf("DML:%d", e.GetCommitTs()))
+					for _, dml := range e.(*event.BatchDMLEvent).DMLEvents {
+						for {
+							row, ok := dml.GetNextRow()
+							if !ok {
+								break
+							}
+							if row.RowType == common.RowTypeDelete {
+								deleted[row.PreRow.GetInt64(0)]++
+							} else if row.RowType == common.RowTypeInsert {
+								inserted[row.Row.GetInt64(0)]++
+							}
+						}
+					}
+				case event.TypeDDLEvent:
+					order = append(order, fmt.Sprintf("DDL:%d", e.GetCommitTs()))
+				case event.TypeResolvedEvent:
+					order = append(order, fmt.Sprintf("resolved:%d", e.GetCommitTs()))
+				}
+			}
+			require.Equal(t, map[int64]int{1: 1, 2: 1}, deleted)
+			require.Equal(t, map[int64]int{1: 1, 2: 1}, inserted)
+			expectedOrder := []string{
+				fmt.Sprintf("DML:%d", first.CRTs),
+				fmt.Sprintf("DDL:%d", first.CRTs),
+				fmt.Sprintf("resolved:%d", first.CRTs),
+				fmt.Sprintf("DML:%d", second.CRTs),
+			}
+			if tc.sameCommit {
+				expectedOrder = []string{
+					fmt.Sprintf("DML:%d", first.CRTs),
+					fmt.Sprintf("DML:%d", second.CRTs),
+					fmt.Sprintf("DDL:%d", first.CRTs),
+				}
+			} else {
+				expectedOrder = append(expectedOrder, fmt.Sprintf("DML:%d", second.CRTs))
+			}
+			expectedOrder = append(expectedOrder, fmt.Sprintf("resolved:%d", second.CRTs))
+			require.Equal(t, expectedOrder, order)
+		})
+	}
 }
 
 func TestEventScannerDrainsSpillBeforeFollowingSameCommitTxn(t *testing.T) {
