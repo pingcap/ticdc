@@ -603,22 +603,23 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case targetMessage := <-inCh:
+			// Queued events must not keep the message and its payload alive via From.
+			from := targetMessage.From
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
-						from := &targetMessage.From
 						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
-							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(&from, resolvedEvent))
 							resolvedTsCount += resolvedEvent.Len()
 						}
 						metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					default:
 						metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						dispatcherEvent := dispatcher.NewDispatcherEvent(&targetMessage.From, e)
+						dispatcherEvent := dispatcher.NewDispatcherEvent(&from, e)
 						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
