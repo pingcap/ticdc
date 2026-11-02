@@ -259,8 +259,12 @@ func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockSta
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
-func (d *BasicDispatcher) tryOfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
-	return d.sharedInfo.blockStatusBuffer.tryOfferStatus(status)
+func (d *BasicDispatcher) offerRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus, canceled <-chan struct{}) bool {
+	return d.sharedInfo.blockStatusBuffer.offerRetryStatus(status, canceled)
+}
+
+func (d *BasicDispatcher) cancelRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	d.sharedInfo.blockStatusBuffer.cancelRetryStatus(status)
 }
 
 // offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
@@ -356,6 +360,7 @@ func (s *SharedInfo) Close() {
 	if s.blockExecutor != nil {
 		s.blockExecutor.Close()
 	}
+	s.blockStatusBuffer.Close()
 	keyspace := s.changefeedID.Keyspace()
 	changefeedID := s.changefeedID.Name()
 	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
