@@ -69,7 +69,7 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 	return region
 }
 
-func TestCreateRegionRequestScanPriority(t *testing.T) {
+func TestConvertScanPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		priority ScanPriorityLevel
@@ -92,11 +92,7 @@ func TestCreateRegionRequestScanPriority(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-			region.scanPriority = tc.priority
-
-			req := createRegionRequest(1, region)
-			require.Equal(t, tc.expected, req.GetScanPriority())
+			require.Equal(t, tc.expected, convertScanPriority(tc.priority))
 		})
 	}
 }
