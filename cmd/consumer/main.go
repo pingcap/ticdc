@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -47,7 +46,6 @@ type options struct {
 	authTLSCertificatePath string
 	authTLSPrivateKeyPath  string
 	fileIndexWidth         int
-	flushInterval          time.Duration
 }
 
 func main() {
@@ -96,7 +94,6 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.authTLSCertificatePath, "auth-tls-certificate-path", "", "Pulsar authentication certificate path")
 	flags.StringVar(&options.authTLSPrivateKeyPath, "auth-tls-private-key-path", "", "Pulsar authentication private key path")
 	flags.IntVar(&options.fileIndexWidth, "file-index-width", config.DefaultFileIndexWidth, "Storage file index width")
-	flags.DurationVar(&options.flushInterval, "flush-interval", storageScanInterval, "Storage scan interval")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
 	return command
 }

@@ -81,7 +81,6 @@ type storageReader struct {
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
-	scanInterval     time.Duration
 	sourceCheckpoint uint64
 	watermark        uint64
 	schemas          map[cloudstorage.SchemaPathKey]*readSchema
@@ -93,15 +92,13 @@ type storageReader struct {
 	scanned          bool
 }
 
+// newConsumer validates and adjusts replicaConfig before opening the source.
 func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}
 	if upstreamURI.Scheme != config.FileScheme && upstreamURI.Host == "" {
 		log.Panic("object storage upstream URI must include a bucket")
-	}
-	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
-		log.Panic("Storage configuration is invalid", zap.Error(err))
 	}
 	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
 	if err != nil {
@@ -122,7 +119,6 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
-		scanInterval:   storageScanInterval,
 		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
@@ -393,7 +389,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-time.After(c.scanInterval):
+		case <-time.After(storageScanInterval):
 		}
 	}
 	c.scanned = true

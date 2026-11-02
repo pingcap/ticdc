@@ -102,21 +102,18 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	}
 	replicaConfig := loadReplicaConfig(options.configFile)
 	if sourceType == sourceStorage {
-		if options.flushInterval <= 0 {
-			log.Panic("Storage scan interval must be positive", zap.Duration("flushInterval", options.flushInterval))
-		}
 		replicaConfig.Sink.FileIndexWidth = new(options.fileIndexWidth)
+		if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
+			log.Panic("Storage configuration is invalid", zap.Error(err))
+		}
 	}
+	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
 	memory := newMemoryUsage()
 	confirmable := make(chan struct{}, 1)
+	var upstreamDB *sql.DB
 	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
-	if sourceType == sourceStorage {
-		reader.client.(*storageReader).scanInterval = options.flushInterval
-	}
-	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
-	upstreamDB := newUpstreamDB(ctx, upstreamURI)
 	defer func() {
 		if c != nil {
 			return
@@ -128,6 +125,7 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			}
 		}
 	}()
+	upstreamDB = newUpstreamDB(ctx, upstreamURI)
 	var streams map[int32]*decodeStream
 	tables := simple.NewTableInfoCache()
 	if sourceType == sourceKafka {
