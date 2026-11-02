@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -8,15 +8,16 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package operator
 
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	CoordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
+	coordinatorCreatedOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -24,7 +25,7 @@ var (
 			Help:      "number of created operators",
 		}, []string{"type"})
 
-	CoordinatorFinishedOperatorCount = prometheus.NewGaugeVec(
+	coordinatorFinishedOperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -32,7 +33,7 @@ var (
 			Help:      "number of finished operators",
 		}, []string{"type"})
 
-	CoordinatorOperatorDuration = prometheus.NewHistogramVec(
+	coordinatorOperatorDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "coordinator",
@@ -40,19 +41,11 @@ var (
 			Help:      "Bucketed histogram of processing time (s) of finished operator.",
 			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
 		}, []string{"type"})
-
-	ChangefeedStateGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "coordinator",
-			Name:      "changefeed_state",
-			Help:      "The total number of changefeed in different replication states",
-		}, []string{"state"})
 )
 
-func initCoordinatorMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CoordinatorCreatedOperatorCount)
-	registry.MustRegister(CoordinatorFinishedOperatorCount)
-	registry.MustRegister(CoordinatorOperatorDuration)
-	registry.MustRegister(ChangefeedStateGauge)
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(coordinatorCreatedOperatorCount)
+	registry.MustRegister(coordinatorFinishedOperatorCount)
+	registry.MustRegister(coordinatorOperatorDuration)
 }

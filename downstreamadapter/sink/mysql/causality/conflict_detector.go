@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,7 +60,7 @@ func New(
 		resolvedTxnCaches:            make([]txnCache, opt.Count),
 		slots:                        NewSlots(numSlots),
 		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
-		metricConflictDetectDuration: mysql.ConflictDetectDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricConflictDetectDuration: conflictDetectDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		changefeedID: changefeedID,
 	}
@@ -75,7 +74,7 @@ func New(
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
 	defer func() {
-		mysql.ConflictDetectDuration.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.Name())
+		conflictDetectDuration.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.Name())
 		d.closeCache()
 	}()
 

@@ -71,7 +71,7 @@ func TestMetricsHook(t *testing.T) {
 	require.Equal(t, float64(200), compressionHistogram.GetHistogram().GetSampleSum())
 
 	registry := prometheus.NewRegistry()
-	InitMetrics(registry)
+	RegisterMetrics(registry)
 
 	hook.OnBrokerWrite(meta, 0, 0, 0, 0, nil)
 	hook.OnBrokerE2E(meta, 0, kgo.BrokerE2E{

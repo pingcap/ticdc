@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -936,8 +935,8 @@ func TestUpdateMetricsSyncPoint(t *testing.T) {
 	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 1, ResolvedTs: 1}
 
 	// The vecs are global, so compare against the series count left by other tests.
-	tsSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsGauge) }
-	lagSeries := func() int { return promtestutil.CollectAndCount(metrics.MaintainerSyncPointTsLagGauge) }
+	tsSeries := func() int { return promtestutil.CollectAndCount(maintainerSyncPointTsGauge) }
+	lagSeries := func() int { return promtestutil.CollectAndCount(maintainerSyncPointTsLagGauge) }
 	baseTs, baseLag := tsSeries(), lagSeries()
 
 	// no syncpoint written by this maintainer yet: no series
@@ -961,6 +960,6 @@ func TestUpdateMetricsSyncPoint(t *testing.T) {
 	m.cleanupMetrics()
 	require.Equal(t, baseTs, tsSeries())
 	require.Equal(t, baseLag, lagSeries())
-	require.False(t, metrics.MaintainerSyncPointTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
-	require.False(t, metrics.MaintainerSyncPointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
+	require.False(t, maintainerSyncPointTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
+	require.False(t, maintainerSyncPointTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name()))
 }

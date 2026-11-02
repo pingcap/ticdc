@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -177,7 +176,7 @@ func (p *dmlProducers) asyncSendMessage(
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
 					zap.Error(err))
-				pulsar.IncPublishedDMLFail(topic, p.changefeedID.String())
+				publishedDMLSchemaTableCount.WithLabelValues(topic, p.changefeedID.String(), "fail").Inc()
 				// use this select to avoid send error to a closed channel
 				// the ctx will always be called before the errChan is closed
 				select {
@@ -192,11 +191,11 @@ func (p *dmlProducers) asyncSendMessage(
 			}
 			if message.Callback != nil {
 				message.Callback()
-				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
+				publishedDMLSchemaTableCount.WithLabelValues(topic, p.changefeedID.String(), "success").Inc()
 			}
 		})
 
-	pulsar.IncPublishedDMLCount(topic, p.changefeedID.String())
+	publishedDMLSchemaTableCount.WithLabelValues(topic, p.changefeedID.String(), "count").Inc()
 
 	return nil
 }
