@@ -234,6 +234,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	defer changefeed.ResetOwnerChangefeedMetrics()
+	defer changefeedErrorInfoGauge.Reset()
 
 	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
 	// label value when a changefeed's sink-uri is updated.
@@ -299,11 +300,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				}
 				// If there was an old metric, delete it, as the state has changed.
 				if exists {
-					changefeed.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+					changefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
 				}
 				if hasError {
 					// An error exists (either new or changed). Set the new metric and update cache.
-					changefeed.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					changefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
 					errorMetricLabels[cf.ID] = newLabels
 				} else {
 					// The error has disappeared, remove from cache.
@@ -327,7 +328,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				if _, ok := currentChangefeeds[changefeedID]; ok {
 					continue
 				}
-				changefeed.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				changefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
 				delete(errorMetricLabels, changefeedID)
 			}
 		}

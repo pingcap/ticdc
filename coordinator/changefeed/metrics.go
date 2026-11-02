@@ -27,16 +27,6 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
-	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
-	// for each changefeed.
-	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "changefeed_error_info",
-			Help:      "The current warning or failed reason and occurrence time of changefeeds",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
-
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -75,7 +65,6 @@ func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID u
 
 func ResetOwnerChangefeedMetrics() {
 	ChangefeedStatusGauge.Reset()
-	ChangefeedErrorInfoGauge.Reset()
 	ChangefeedCheckpointTsGauge.Reset()
 	ChangefeedCheckpointTsLagGauge.Reset()
 	ChangefeedDownstreamInfoGauge.Reset()
@@ -84,7 +73,6 @@ func ResetOwnerChangefeedMetrics() {
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedStatusGauge)
-	registry.MustRegister(ChangefeedErrorInfoGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedDownstreamInfoGauge)

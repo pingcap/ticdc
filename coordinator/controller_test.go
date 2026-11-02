@@ -38,6 +38,7 @@ import (
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -52,6 +53,30 @@ func (noopScheduler) Execute() time.Time {
 
 func (noopScheduler) Name() string {
 	return pkgscheduler.BasicScheduler
+}
+
+func TestCollectMetricsResetsChangefeedErrorInfo(t *testing.T) {
+	changefeedErrorInfoGauge.Reset()
+	t.Cleanup(changefeedErrorInfoGauge.Reset)
+
+	registry := prometheus.NewPedanticRegistry()
+	RegisterMetrics(registry)
+	changefeed.RegisterMetrics(registry)
+	changefeedErrorInfoGauge.WithLabelValues(
+		common.DefaultKeyspaceName, "test-error-metrics", "failed", "1000", "CDC:ErrTest", "test",
+	).Set(1)
+	count, err := testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	controller := &Controller{}
+	require.ErrorIs(t, controller.collectMetrics(ctx), context.Canceled)
+
+	count, err = testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Zero(t, count)
 }
 
 func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
