@@ -28,7 +28,6 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -730,7 +729,7 @@ func (e *eventStore) RegisterDispatcher(
 		advanceResolvedTs,
 		resolvedTsAdvanceInterval,
 		subStat.config.bdrMode,
-		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		logpuller.ScanPriorityLow,
 	)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),

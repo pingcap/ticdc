@@ -72,22 +72,22 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 func TestCreateRegionRequestScanPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		priority cdcpb.ScanPriority
+		priority ScanPriorityLevel
 		expected cdcpb.ScanPriority
 	}{
 		{
 			name:     "high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: ScanPriorityHigh,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: ScanPriorityLow,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:     "unknown defaults to low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN,
+			priority: ScanPriorityUnknown,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 	} {

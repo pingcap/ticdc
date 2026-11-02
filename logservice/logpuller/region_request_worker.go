@@ -518,6 +518,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 }
 
 func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataRequest {
+	scanPriority := cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	if isHighScanPriority(region.scanPriority) {
+		scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	}
 	return &cdcpb.ChangeDataRequest{
 		Header:       &cdcpb.Header{ClusterId: clusterID, TicdcVersion: version.ReleaseSemver()},
 		RegionId:     region.verID.GetID(),
@@ -528,6 +532,6 @@ func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataR
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
-		ScanPriority: normalizeScanPriority(region.scanPriority),
+		ScanPriority: scanPriority,
 	}
 }
