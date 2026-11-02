@@ -68,10 +68,10 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(dynamicStreamMemoryUsage)
 	registry.MustRegister(dispatcherReceivedEventCount)
 	registry.MustRegister(eventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(eventCollectorReceivedEventLagDuration)
 	registry.MustRegister(eventCollectorHandleEventDuration)
 	registry.MustRegister(eventCollectorDroppedEventCount)
+	registry.MustRegister(dynamicStreamMemoryUsage)
 }

@@ -87,13 +87,10 @@ var (
 		}, []string{"reason"})
 )
 
-// RecordBuildInfo records the server build metadata.
-func RecordBuildInfo() {
+// RegisterMetrics registers server metrics and runtime collectors.
+func RegisterMetrics(registry *prometheus.Registry) {
 	buildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
-}
 
-// RecordGoRuntimeSettings records GOGC settings.
-func RecordGoRuntimeSettings() {
 	// The default GOGC value is 100. See debug.SetGCPercent.
 	gogcValue := 100
 	if val, err := strconv.Atoi(os.Getenv("GOGC")); err == nil {
@@ -103,10 +100,7 @@ func RecordGoRuntimeSettings() {
 
 	maxProcs := runtime.GOMAXPROCS(0)
 	goMaxProcs.Set(float64(maxProcs))
-}
 
-// RegisterMetrics registers server metrics and runtime collectors.
-func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(captureWriteGateState)
 	registry.MustRegister(captureP2PLeaseRemainingSeconds)
 	registry.MustRegister(captureEtcdProofRemainingSeconds)

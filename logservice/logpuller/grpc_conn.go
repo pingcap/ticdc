@@ -84,7 +84,6 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 		grpc.WithSharedWriteBuffer(true),
 	}
 
-	grpcMetrics := GetGlobalGrpcMetrics()
 	if grpcMetrics != nil {
 		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(grpcMetrics.UnaryClientInterceptor()))
 		dialOptions = append(dialOptions, grpc.WithStreamInterceptor(grpcMetrics.StreamClientInterceptor()))

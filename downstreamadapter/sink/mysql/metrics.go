@@ -19,22 +19,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// changefeedDownstreamIsTiDBGauge indicates whether the downstream of a
-// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
-//
-// This metric is only set when the sink can positively identify TiDB (for
-// example by executing `SELECT tidb_version()`), and is intentionally absent
-// for MySQL or unknown downstreams. Dashboards can use it to override the
-// scheme-derived "mysql" label value with "tidb" for running changefeeds.
-var changefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
-	prometheus.GaugeOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "changefeed_downstream_is_tidb",
-		Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
-	}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
 var (
+	// changefeedDownstreamIsTiDBGauge indicates whether the downstream of a
+	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
+	//
+	// This metric is only set when the sink can positively identify TiDB (for
+	// example by executing `SELECT tidb_version()`), and is intentionally absent
+	// for MySQL or unknown downstreams. Dashboards can use it to override the
+	// scheme-derived "mysql" label value with "tidb" for running changefeeds.
+	changefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "changefeed_downstream_is_tidb",
+			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
 	workerBatchFlushDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -82,10 +82,10 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(changefeedDownstreamIsTiDBGauge)
 	registry.MustRegister(workerBatchFlushDurationHistogram)
 	registry.MustRegister(workerFlushDurationHistogram)
 	registry.MustRegister(workerTotalDurationHistogram)
 	registry.MustRegister(workerHandledRowsCounter)
 	registry.MustRegister(workerEventRowCountHistogram)
-	registry.MustRegister(changefeedDownstreamIsTiDBGauge)
 }

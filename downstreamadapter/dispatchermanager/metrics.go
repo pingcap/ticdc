@@ -1,4 +1,4 @@
-// Copyright 2026 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -101,7 +101,7 @@ var (
 		})
 )
 
-// RegisterMetrics registers the metrics owned by this package.
+// RegisterMetrics registers metrics owned by the dispatcher manager.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(tableTriggerEventDispatcherGauge)
 	registry.MustRegister(eventDispatcherGauge)

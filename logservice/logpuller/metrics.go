@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -179,10 +179,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		}, []string{"type"})
 )
-
-func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {
-	return grpcMetrics
-}
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {

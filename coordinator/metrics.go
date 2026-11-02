@@ -65,9 +65,9 @@ var (
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(captureLeaseHeartbeatCounter)
-	registry.MustRegister(captureP2PWitnessAvailable)
 	registry.MustRegister(coordinatorCounter)
 	registry.MustRegister(changefeedStateGauge)
+	registry.MustRegister(captureLeaseHeartbeatCounter)
+	registry.MustRegister(captureP2PWitnessAvailable)
 	registry.MustRegister(changefeedErrorInfoGauge)
 }

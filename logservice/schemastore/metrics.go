@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "The resolved ts lag of schema store in seconds",
 		})
-
 	schemaStoreResolvedRegisterTableGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -33,7 +32,6 @@ var (
 			Name:      "register_table_num",
 			Help:      "The number of registered tables in schema store",
 		})
-
 	schemaStoreGetTableInfoCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -41,7 +39,6 @@ var (
 			Name:      "get_table_info_count",
 			Help:      "The number of GetTableInfo requests",
 		})
-
 	schemaStoreGetTableInfoLagHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -50,7 +47,6 @@ var (
 			Help:      "The duration of GetTableInfo requests",
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 28), // 10us to 1.5h
 		})
-
 	// schemaStoreWaitResolvedTsDurationHist is the histogram of waiting duration for resolved ts in schema store.
 	schemaStoreWaitResolvedTsDurationHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

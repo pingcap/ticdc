@@ -44,8 +44,8 @@ var (
 		})
 )
 
-// RegisterMetrics registers all metrics in this file
-func RegisterMetrics(registry *prometheus.Registry) {
+// InitMetrics registers all metrics in this file
+func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(etcdTxnSize)
 	registry.MustRegister(etcdTxnExecDuration)
 	registry.MustRegister(etcdWorkerTickDuration)

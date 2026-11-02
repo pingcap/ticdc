@@ -61,6 +61,7 @@ var (
 			Name:      "syncpoint_ts",
 			Help:      "upstream timestamp (physical time in ms) of the latest syncpoint written to the downstream",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
+
 	maintainerSyncPointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -76,15 +77,6 @@ var (
 			Name:      "maintainer_counter",
 			Help:      "The counter of changefeed maintainer",
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
-
-	// execDDLBlockingGauge records the count of blocking DDL.
-	execDDLBlockingGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "ddl",
-			Name:      "exec_blocking",
-			Help:      "Total count of blocking ddl.",
-		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 
 	maintainerHandleEventDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -248,12 +240,19 @@ var (
 			Name:      "capture_lease_response_rejected_total",
 			Help:      "Number of rejected P2P write lease responses.",
 		}, []string{"reason"})
+
+	// execDDLBlockingGauge records the count of blocking DDL.
+	execDDLBlockingGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "ddl",
+			Name:      "exec_blocking",
+			Help:      "Total count of blocking ddl.",
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "mode"})
 )
 
 // RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(captureLeaseResponseCounter)
-	registry.MustRegister(captureLeaseResponseRejectedCounter)
 	registry.MustRegister(maintainerCheckpointTsGauge)
 	registry.MustRegister(maintainerCheckpointTsLagGauge)
 	registry.MustRegister(maintainerResolvedTsGauge)
@@ -261,9 +260,11 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(maintainerSyncPointTsGauge)
 	registry.MustRegister(maintainerSyncPointTsLagGauge)
 	registry.MustRegister(maintainerGauge)
-	registry.MustRegister(execDDLBlockingGauge)
 	registry.MustRegister(maintainerHandleEventDuration)
 	registry.MustRegister(maintainerEventChLenGauge)
+	registry.MustRegister(captureLeaseResponseCounter)
+	registry.MustRegister(captureLeaseResponseRejectedCounter)
+	registry.MustRegister(execDDLBlockingGauge)
 	registry.MustRegister(scheduleTaskGauge)
 	registry.MustRegister(spanCountGauge)
 	registry.MustRegister(tableCountGauge)

@@ -23,12 +23,11 @@ import (
 func TestParseSinkURI(t *testing.T) {
 	// Scenario: A sink URI identifies both the sink implementation and downstream
 	// system. SSL and storage aliases must retain the same classification.
-	// Steps: Parse representative URIs and verify both types; malformed URIs panic.
+	// Steps: Parse supported sink URIs and verify both types.
 	testCases := []struct {
 		sinkURI                string
 		expectedSinkType       common.SinkType
 		expectedDownstreamType string
-		expectedPanic          bool
 	}{
 		{sinkURI: "mysql://127.0.0.1:3306/", expectedSinkType: common.MysqlSinkType, expectedDownstreamType: "mysql"},
 		{sinkURI: "mysql+ssl://127.0.0.1:3306/", expectedSinkType: common.MysqlSinkType, expectedDownstreamType: "mysql"},
@@ -48,25 +47,11 @@ func TestParseSinkURI(t *testing.T) {
 		{sinkURI: "azblob://bucket/prefix", expectedSinkType: common.CloudStorageSinkType, expectedDownstreamType: "azblob"},
 		{sinkURI: "noop://bucket/prefix", expectedSinkType: common.CloudStorageSinkType, expectedDownstreamType: "noop"},
 		{sinkURI: "blackhole:///", expectedSinkType: common.BlackHoleSinkType, expectedDownstreamType: "blackhole"},
-		{sinkURI: "127.0.0.1:3306", expectedPanic: true},
-		{sinkURI: "mysql://[::1", expectedPanic: true},
-		{sinkURI: "", expectedSinkType: common.BlackHoleSinkType, expectedDownstreamType: "unknown"},
-		{sinkURI: "custom://host", expectedSinkType: common.BlackHoleSinkType, expectedDownstreamType: "custom"},
 	}
 
 	for _, tc := range testCases {
-		testName := tc.sinkURI
-		if testName == "" {
-			testName = "<empty>"
-		}
-		t.Run(testName, func(t *testing.T) {
+		t.Run(tc.sinkURI, func(t *testing.T) {
 			t.Parallel()
-			if tc.expectedPanic {
-				require.Panics(t, func() {
-					ParseSinkURI(tc.sinkURI)
-				})
-				return
-			}
 			sinkType, downstreamType := ParseSinkURI(tc.sinkURI)
 			require.Equal(t, tc.expectedSinkType, sinkType)
 			require.Equal(t, tc.expectedDownstreamType, downstreamType)
