@@ -50,8 +50,7 @@ type memoryBudget struct {
 func newMemoryBudget() *memoryBudget {
 	limit, err := putil.GetMemoryLimit()
 	if err != nil || limit == 0 {
-		log.Warn("consumer memory quota falls back to the default",
-			zap.Int64("quotaBytes", defaultMemoryBudget), zap.Error(err))
+		log.Info("consumer memory quota", zap.Int64("quotaBytes", defaultMemoryBudget))
 		return &memoryBudget{
 			limit: defaultMemoryBudget,
 		}
