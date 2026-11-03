@@ -22,12 +22,11 @@ physical table, loads the refreshed MV result into it, and then performs the
 cutover in the following row. Users only issue the `REFRESH MATERIALIZED VIEW`
 statement; there is no separate SQL statement for creating the shadow table.
 
-MV create and drop DDLs are emitted only to Kafka. Other downstream sinks,
-including the redo sink, advance the DDL event locally without writing it. The
-events therefore continue to update TiCDC's schema metadata, table routing,
-barriers, and checkpoints, but they are not executed or persisted by those
-sinks. MV DML replication is unchanged; a non-Kafka downstream that receives
-MV DML must already have a compatible target table.
+MV create and drop DDLs and MV DMLs are emitted only to Kafka. Other downstream
+sinks, including the redo sink, advance these events locally without writing
+them. The DDL events still update TiCDC's schema metadata, table routing, and
+barriers. Ignored DML events are marked as flushed locally so callbacks, table
+progress, and checkpoints continue to advance.
 
 The current physical MV table follows the same table filter and eligibility
 rules as an ordinary table. Without `force-replicate`, it needs a primary key or

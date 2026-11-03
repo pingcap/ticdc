@@ -207,7 +207,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		if table.IsView() {
 			continue
 		}
-		if !shouldSyncMaterializedViewDDL(table, d.sink.SinkType()) {
+		if !shouldSyncMaterializedView(table, d.sink.SinkType()) {
 			continue
 		}
 		if shouldStop() {

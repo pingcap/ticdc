@@ -289,14 +289,21 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 		})
 	}
 
-	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// to avoid checkpoint jumping while events are being enqueued/flushed.
+	// For one batch of events, update table progress for all of them before adding
+	// any event to the sink to avoid checkpoint jumping while events are being
+	// enqueued or flushed. Materialized view DMLs are only sent to Kafka. Other
+	// sinks consume them locally and advance progress without writing downstream.
+	sinkType := d.sink.SinkType()
 	for _, event := range events {
 		d.tableProgress.Add(event)
 	}
 	for _, event := range events {
-		d.sink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
+		if shouldSyncMaterializedView(event.TableInfo, sinkType) {
+			d.sink.AddDMLEvent(event)
+			failpoint.Inject("BlockAddDMLEvents", nil)
+		} else {
+			event.PostFlush()
+		}
 	}
 }
 
@@ -340,7 +347,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// events. Only Kafka consumers need these schema messages. Other downstreams,
 		// including redo, still process the block event locally but do not persist or
 		// execute the DDL.
-		if !shouldSyncMaterializedViewDDL(ddl.TableInfo, d.sink.SinkType()) {
+		if !shouldSyncMaterializedView(ddl.TableInfo, d.sink.SinkType()) {
 			log.Info("ignore materialized view DDL for non kafka sink",
 				zap.Stringer("dispatcher", d.id),
 				zap.Int("sinkType", int(d.sink.SinkType())),
@@ -353,7 +360,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	return d.sink.WriteBlockEvent(event)
 }
 
-func shouldSyncMaterializedViewDDL(tableInfo *common.TableInfo, sinkType common.SinkType) bool {
+func shouldSyncMaterializedView(tableInfo *common.TableInfo, sinkType common.SinkType) bool {
 	return tableInfo == nil || !tableInfo.IsMaterializedView() || sinkType == common.KafkaSinkType
 }
 
