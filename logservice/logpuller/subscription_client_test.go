@@ -578,7 +578,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		advanceResolvedTs,
 		0,
 		false,
-		cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+		ScanPriorityLow,
 	)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
@@ -669,7 +669,7 @@ func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 		func(ts uint64) { resolvedTsCh <- ts },
 		0,
 		true,
-		cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+		ScanPriorityHigh,
 	)
 
 	var subscribeRequest *cdcpb.ChangeDataRequest

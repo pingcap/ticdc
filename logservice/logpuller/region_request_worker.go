@@ -528,6 +528,17 @@ func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataR
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
-		ScanPriority: normalizeScanPriority(region.scanPriority),
+		ScanPriority: convertScanPriority(region.scanPriority),
+	}
+}
+
+func convertScanPriority(priority ScanPriorityLevel) cdcpb.ScanPriority {
+	switch priority {
+	case ScanPriorityHigh:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	case ScanPriorityLow:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	default:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 	}
 }
