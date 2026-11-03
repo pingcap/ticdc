@@ -89,12 +89,13 @@ func TestGetDDLActionType(t *testing.T) {
 		"create table t (a int primary key) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20))": timodel.ActionCreateTable,
 		"alter table t add partition (partition p2 values less than (30))":                                                                  timodel.ActionAddTablePartition,
 		"alter table t reorganize partition p0, p1 into (partition p0 values less than (20))":                                               timodel.ActionReorganizePartition,
-		"alter table t truncate partition p2":                                                                                               timodel.ActionTruncateTablePartition,
-		"create table t1 (a int primary key)":                                                                                               timodel.ActionCreateTable,
-		"alter table t exchange partition p0 with table t1":                                                                                 timodel.ActionExchangeTablePartition,
-		"alter table t drop partition p0":                                                                                                   timodel.ActionDropTablePartition,
-		"alter table t1 partition by hash(a) partitions 4":                                                                                  timodel.ActionAlterTablePartitioning,
-		"alter table t1 remove partitioning":                                                                                                timodel.ActionRemovePartitioning,
+
+		"alter table t truncate partition p2":               timodel.ActionTruncateTablePartition,
+		"create table t1 (a int primary key)":               timodel.ActionCreateTable,
+		"alter table t exchange partition p0 with table t1": timodel.ActionExchangeTablePartition,
+		"alter table t drop partition p0":                   timodel.ActionDropTablePartition,
+		"alter table t1 partition by hash(a) partitions 4":  timodel.ActionAlterTablePartitioning,
+		"alter table t1 remove partitioning":                timodel.ActionRemovePartitioning,
 	} {
 		t.Run(query, func(t *testing.T) {
 			require.Equal(t, expected, GetDDLActionType(query))
