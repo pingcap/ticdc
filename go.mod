@@ -409,4 +409,6 @@ require (
 replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 
 // etcd 3.5 uses interceptors removed in otelgrpc v0.61.0.
+// Remove this replacement after upgrading etcd to use otelgrpc.NewServerHandler
+// and verifying compatibility with the selected otelgrpc version.
 replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.60.0
