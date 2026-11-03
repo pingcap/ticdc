@@ -19,12 +19,9 @@ import (
 	"strconv"
 	"strings"
 
-<<<<<<< HEAD
 	"github.com/pingcap/log"
-	"go.uber.org/zap"
-=======
 	"github.com/pingcap/ticdc/pkg/errors"
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
+	"go.uber.org/zap"
 )
 
 // IsValidIPv6AddressFormatInURI reports whether hostPort is a valid IPv6 address in URI.
@@ -101,8 +98,6 @@ var sensitiveQueryParameterNames = []string{
 	"authorization",
 }
 
-<<<<<<< HEAD
-=======
 func isSensitiveQueryParameter(name string) bool {
 	name = strings.ToLower(name)
 	if name == "kafka-client" {
@@ -180,7 +175,6 @@ func ContainsSensitiveDataInURI(uri string) bool {
 	return false
 }
 
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 // MaskSensitiveDataInURI returns an uri that sensitive infos has been masked.
 func MaskSensitiveDataInURI(uri string) string {
 	uriParsed, err := url.Parse(uri)
@@ -204,8 +198,6 @@ func MaskSensitiveDataInURI(uri string) string {
 	}
 	return uriParsed.Redacted()
 }
-<<<<<<< HEAD
-=======
 
 // MaskSensitiveDataInURIForError masks sensitive data in a URI for error messages.
 func MaskSensitiveDataInURIForError(uri string) string {
@@ -236,4 +228,3 @@ func MaskSensitiveDataInURLError(err error) error {
 		message: message,
 	}
 }
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))

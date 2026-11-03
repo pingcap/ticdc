@@ -37,7 +37,7 @@ func RegisterRoutes(
 	// Open API V1
 	v1.RegisterOpenAPIV1Routes(router, v1.NewOpenAPIV1(server))
 	router.GET("/config", func(c *gin.Context) {
-		c.JSON(http.StatusOK, config.GetGlobalServerConfig().MaskedForDisplay())
+		c.JSON(http.StatusOK, config.GetGlobalServerConfig())
 	})
 	// pprof debug API
 	pprofGroup := router.Group("/debug/pprof/")

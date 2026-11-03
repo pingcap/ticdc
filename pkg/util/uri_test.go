@@ -14,11 +14,8 @@
 package util
 
 import (
-<<<<<<< HEAD
-=======
 	"fmt"
 	"net/url"
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -101,8 +98,6 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		masked string
 	}{
 		{
-<<<<<<< HEAD
-=======
 			"kafka://127.0.0.1:9092/topic?kafka-client=franz&sasl-password=secret",
 			"kafka://127.0.0.1:9092/topic?kafka-client=franz&sasl-password=xxxxx",
 		},
@@ -127,7 +122,6 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 			"kafka+ssl://127.0.0.1:9092/topic?key=xxxxx",
 		},
 		{
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 			"mysql://root:123456@127.0.0.1:3306/?time-zone=c",
 			"mysql://root:xxxxx@127.0.0.1:3306/?time-zone=c",
 		},
@@ -202,8 +196,6 @@ func TestMaskSensitiveDataInURI(t *testing.T) {
 		require.Equal(t, tt.masked, maskedURI)
 	}
 }
-<<<<<<< HEAD
-=======
 
 func TestContainsSensitiveDataInURI(t *testing.T) {
 	for _, tc := range []struct {
@@ -298,4 +290,3 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	require.NotContains(t, maskedErr.Error(), "secret-token")
 	require.ErrorIs(t, maskedErr, cause)
 }
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))

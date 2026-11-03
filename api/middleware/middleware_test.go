@@ -24,11 +24,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
-<<<<<<< HEAD
-=======
 	plog "github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
