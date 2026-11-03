@@ -26,20 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-=======
-func TestServerConfigMarshal(t *testing.T) {
-	t.Parallel()
-	conf := GetDefaultServerConfig()
-	conf.Addr = "192.155.22.33:8887"
-	b, err := conf.Marshal()
-	require.NoError(t, err)
-	conf2 := new(ServerConfig)
-	err = conf2.Unmarshal([]byte(b))
-	require.NoError(t, err)
-	require.Equal(t, conf, conf2)
-}
-
 func TestServerConfigStringMasksKMSCredentials(t *testing.T) {
 	originalMode := errors.RedactLogEnabled.Load()
 	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
@@ -68,25 +54,6 @@ func TestServerConfigStringMasksKMSCredentials(t *testing.T) {
 	require.Equal(t, `{"private_key":"gcp-private-secret"}`, conf.Encryption.KMS.GCP.CredentialsJSON)
 }
 
-func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
-	t.Parallel()
-
-	configPath := filepath.Join(t.TempDir(), "server.toml")
-	configContent := strings.TrimSpace(`
-enable-legacy-safepoint = true
-`)
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
-
-	cfg := GetDefaultServerConfig()
-	require.False(t, cfg.EnableLegacySafePoint)
-
-	metaData, err := toml.DecodeFile(configPath, cfg)
-	require.NoError(t, err)
-	require.Empty(t, metaData.Undecoded())
-	require.True(t, cfg.EnableLegacySafePoint)
-}
-
->>>>>>> 6ed23c60f (*: keep credentials out of logs (#6716))
 func TestServerConfigDecodeEnableKafkaFranzGo(t *testing.T) {
 	t.Parallel()
 
