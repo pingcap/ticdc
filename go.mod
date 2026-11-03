@@ -51,12 +51,12 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20260803062813-07aa8c6a46fa
+	github.com/pingcap/kvproto v0.0.0-20261026041219-2c5f843b9827
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20261019041305-83cf9e865a81
+	github.com/pingcap/tidb v1.1.0-beta.0.20261102045021-ca7ce06e6014
 	github.com/pingcap/tidb-dashboard v0.0.0-20260603054940-9e92195886c3
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20260730162841-dc0024f088cb
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20261102045021-ca7ce06e6014
 	github.com/pingcap/tiflow v0.0.0-20260731065716-b558e06929bf
 	github.com/prometheus/client_golang v1.23.2
 	github.com/r3labs/diff v1.1.0
