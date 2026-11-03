@@ -76,8 +76,6 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.downstreamURI, "downstream-uri", "", "downstream sink URI")
 	flags.StringVar(&options.configFile, "config", "", "consumer configuration file")
 	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID (random if omitted) or Pulsar subscription name (default pulsar-test-subscription)")
-	flags.StringVar(&options.consumerID, "consumer-group-id", "", "Kafka consumer group ID")
-	flags.StringVar(&options.consumerID, "subscription-name", "", "Pulsar subscription name (default pulsar-test-subscription)")
 	flags.StringVar(&options.schemaRegistryURI, "schema-registry-uri", "", "Avro schema registry URI")
 	flags.StringVar(&options.upstreamTiDBDSN, "upstream-tidb-dsn", "", "upstream TiDB DSN")
 	flags.StringVar(&options.timezone, "tz", "System", "consumer time zone")
