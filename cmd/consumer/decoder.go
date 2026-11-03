@@ -48,6 +48,7 @@ type decodeTask struct {
 	done     chan struct{}
 	table    *common.TableInfo
 	tableID  int64
+	validate func(*event.DMLEvent) // Source-side check that runs after conversion.
 }
 
 func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup {
@@ -63,11 +64,6 @@ func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup
 func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 	// Conversion can finish out of order. The conductor joins results in table
 	// order before allowing controls or writes to pass them.
-	select {
-	case d.input <- task:
-		return nil
-	default:
-	}
 	select {
 	case d.input <- task:
 		return nil
@@ -98,15 +94,9 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 	for {
 		var task *decodeTask
 		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
 		case task = <-d.input:
-		default:
-			// Buffered work only takes the input-channel lock. A blocking
-			// receive also listens for cancellation when the queue is idle.
-			select {
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			case task = <-d.input:
-			}
 		}
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -123,6 +113,9 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 				dml.TableInfo = dml.TableInfo.CloneWithRouting(dml.TableInfo.GetTargetSchemaName(), dml.TableInfo.GetTargetTableName())
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
+		}
+		if task.validate != nil {
+			task.validate(dml)
 		}
 		bytes := dml.Rows.MemoryUsage()
 		d.memory.reserve(bytes)

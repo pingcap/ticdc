@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -240,14 +239,10 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > c.maxMessageBytes {
 					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
-				message := task.message
-				skipKeyOnlyDelete := parser.codecConfig.Protocol == config.ProtocolAvro && message.RowType == common.RowTypeUpdate
-				task.message = codecCommon.NewDMLMessage(message.TableID, message.Schema, message.Table, message.GetCommitTs(), message.RowType, func() *event.DMLEvent {
-					dml := message.ToDMLEvent()
+				skipKeyOnlyDelete := parser.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
+				task.validate = func(dml *event.DMLEvent) {
 					c.checkPartition(dml, id, offset, skipKeyOnlyDelete)
-					return dml
-				})
-				task.message.ApproximateSize = message.ApproximateSize
+				}
 			}
 			if rows == 0 {
 				if !yield(result, nil) {
