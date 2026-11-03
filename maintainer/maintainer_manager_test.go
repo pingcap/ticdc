@@ -74,6 +74,100 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	})
 }
 
+func TestManagerIgnoresInvalidMessages(t *testing.T) {
+	manager := &Manager{}
+	tests := []struct {
+		name    string
+		handler messaging.MessageHandler
+		msgType messaging.IOType
+		message []messaging.IOTypeT
+	}{
+		{
+			name:    "missing maintainer manager payload",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCoordinatorBootstrapRequest,
+		},
+		{
+			name:    "missing maintainer payload",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+		},
+		{
+			name:    "add maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeAddMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.AddMaintainerRequest{}},
+		},
+		{
+			name:    "remove maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRemoveMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.RemoveMaintainerRequest{}},
+		},
+		{
+			name:    "bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerBootstrapResponse{}},
+		},
+		{
+			name:    "post bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerPostBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerPostBootstrapResponse{}},
+		},
+		{
+			name:    "heartbeat request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeHeartBeatRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.HeartBeatRequest{}},
+		},
+		{
+			name:    "nil block status request",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{(*heartbeatpb.BlockStatusRequest)(nil)},
+		},
+		{
+			name:    "block status request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{}},
+		},
+		{
+			name:    "checkpoint message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCheckpointTsMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.CheckpointTsMessage{}},
+		},
+		{
+			name:    "redo progress message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRedoResolvedTsProgressMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.RedoResolvedTsProgressMessage{}},
+		},
+		{
+			name:    "close response without changefeed ID",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerCloseResponse{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &messaging.TargetMessage{
+				From:    "node1",
+				Type:    tt.msgType,
+				Message: tt.message,
+			}
+			require.NotPanics(t, func() {
+				require.NoError(t, tt.handler(context.Background(), msg))
+			})
+		})
+	}
+}
+
 func newAddMaintainerRequestForEpoch(
 	t *testing.T,
 	cfID common.ChangeFeedID,
