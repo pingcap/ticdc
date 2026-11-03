@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -149,7 +150,7 @@ type EventCollector struct {
 	metricDSPendingQueueRedo  prometheus.Gauge
 }
 
-func New(serverId node.ID) *EventCollector {
+func New(serverId node.ID, electionClient etcd.OwnerCaptureInfoClient) *EventCollector {
 	receiveChannels := make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency)
 	redoReceiveChannels := make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency)
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
@@ -176,7 +177,7 @@ func New(serverId node.ID) *EventCollector {
 		metricDSPendingQueueRedo:  metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
 	}
 
-	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
+	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector, electionClient)
 	eventCollector.ds = NewEventDynamicStream(false)
 	eventCollector.redoDs = NewEventDynamicStream(true)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)

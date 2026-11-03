@@ -140,7 +140,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	nodeID := node.NewID()
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
-	ec := eventcollector.New(nodeID)
+	ec := eventcollector.New(nodeID, nil)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
 }

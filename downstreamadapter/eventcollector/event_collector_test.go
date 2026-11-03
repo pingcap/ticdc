@@ -167,7 +167,7 @@ func TestProcessMessage(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	c := New(node.ID)
+	c := New(node.ID, nil)
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
 	go func() {
@@ -237,7 +237,7 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	c := New(nodeInfo.ID)
+	c := New(nodeInfo.ID, nil)
 	c.Run(ctx)
 	defer c.Close()
 
@@ -280,7 +280,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
-	c := New(serverInfo.ID)
+	c := New(serverInfo.ID, nil)
 
 	localDispatcher := &mockEventDispatcher{
 		id:           common.NewDispatcherID(),
@@ -441,7 +441,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
-	c := New(serverInfo.ID)
+	c := New(serverInfo.ID, nil)
 
 	dispatcherID := common.NewDispatcherID()
 	mockDisp := &mockEventDispatcher{
@@ -472,6 +472,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	// collector-observed progress.
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
 	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		From:  &serverInfo.ID,
 		Event: &handshake,
 	})
 

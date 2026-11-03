@@ -283,7 +283,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	c.preServices = append(c.preServices, messageCenter)
 
 	// Set EventCollector to Global Context
-	ec := eventcollector.New(c.info.ID)
+	ec := eventcollector.New(c.info.ID, c.EtcdClient)
 	ec.Run(ctx)
 	appctx.SetService(appctx.EventCollector, ec)
 	c.preServices = append(c.preServices, ec)
