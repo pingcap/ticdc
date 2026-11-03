@@ -112,14 +112,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 24),
 		})
 
-	subscriptionClientResolvedTsLagGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "resolved_ts_lag",
-			Help:      "The resolved ts lag of subscription client.",
-		})
-
 	subscriptionClientRequestedRegionCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
