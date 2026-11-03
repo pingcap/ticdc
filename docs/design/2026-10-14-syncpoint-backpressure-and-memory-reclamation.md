@@ -3,8 +3,7 @@
 ## Scope
 
 This design addresses the memory starvation described in
-[#4605](https://github.com/pingcap/ticdc/issues/4605). The implementation baseline
-is master `7c8599a91b5e88aa778faae7425f97039637430d`.
+[#4605](https://github.com/pingcap/ticdc/issues/4605).
 
 Two changes work together:
 
@@ -292,54 +291,3 @@ make unit_test_pkg PKG=./downstreamadapter/eventcollector/...
 make unit_test_pkg PKG=./pkg/eventservice/...
 make cdc
 ```
-
-### Development-machine comparison
-
-Use isolated TiUP-managed upstream/downstream clusters with at least two CDC
-nodes and Prometheus/Grafana on the development host. Inventory existing tasks,
-ports and resources first; do not overwrite unrelated deployments. Pin binary
-hashes, topology, configuration, data, resource limits and workload for master
-and patched variants. Record upstream TiDB-to-TiKV write throughput separately
-from internal scanned-DML bytes.
-
-Use many fast paths and a slower path sharing collector quota, with real large
-transaction cursors and 32–64 MiB quota as an initial calibration range. Cover
-same-broker and cross-broker senders. Match the incident's ten-minute sync-point
-interval for the formal comparison; identify shorter debug intervals explicitly.
-Create skew through bounded scheduling or downstream delays, then remove all
-injected faults and stop extra input before assessing the resource cycle.
-
-A baseline stall must persist for at least fifteen minutes and at least three
-configured sync-point intervals without meaningful target barrier, slow cursor
-or checkpoint progress, while required upstream/schema progress, sink and
-control delivery remain healthy. Combine observations with dependency evidence;
-a finite timeout alone is not proof of an irreversible deadlock.
-
-The patched run must demonstrate the entire check -> reclaim -> quota -> scan ->
-barrier -> replay chain without restart, manual resume, larger quota or disabling
-sync-points. The initial small-reproducer target is completion within 120 seconds
-after faults are removed; calibrate any revised bound before comparison. Run at
-least three comparisons, then complete three further sync-points and checksums
-of all test tables. Include insert/update/delete, normal load, redo, DDL,
-move/scale, reset and maintainer failover as subsequent regressions.
-
-For the redo-wait case, first disable sync-points and enable redo. Use a bounded
-delay on one redo participant while fast ordinary paths cache batches above
-the global redo watermark. After removing the delay and stopping input, verify
-pending-memory reclamation, the slow redo participant's scan/checkpoint,
-durable redo meta progress, ordinary cache retry and checkpoint-correct replay.
-Repeat with sync-points enabled and same-broker/cross-broker placements. This
-validates the watermark dependency cycle, not fairness among continuously
-runnable redo paths competing for scan-rate tokens.
-
-Identical bounded test hooks may establish otherwise rare legal interleavings,
-but must not disable baseline reclamation or alter quota/barrier outcomes. Label
-such builds as master plus test instrumentation and separately attempt an
-unmodified-master workload reproduction. If master only shows latency, the stall
-acceptance criterion remains unmet and investigation continues.
-
-Preserve per-run manifests, SHA/diff/binary hashes, topology/config, fault and
-observation windows, logs, metrics, checksums and a factual summary in the
-external development notebook. Changes requiring a new broker coordination
-phase, barrier completion semantics, wire protocol or general quota scheduler
-need an updated design review before implementation.
