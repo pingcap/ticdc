@@ -32,9 +32,8 @@ func BenchmarkKafkaReadScheduling(b *testing.B) {
 			}
 			for id := range count {
 				c.partitions[int32(id)] = &kafkaPartition{
-					hasWatermark: true,
-					watermark:    10,
-					polled:       []*kgo.Record{{Partition: int32(id)}},
+					watermark: 10,
+					polled:    []*kgo.Record{{Partition: int32(id)}},
 				}
 			}
 			update := readUpdate{}

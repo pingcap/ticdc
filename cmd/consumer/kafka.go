@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"iter"
-	"math"
 	"net/url"
 	"os"
 	"slices"
@@ -54,15 +53,14 @@ type kafkaRecord struct {
 const kafkaRecordBytes = int64(unsafe.Sizeof(kafkaRecord{}))
 
 type kafkaPartition struct {
-	watermark    uint64
-	hasWatermark bool
-	polled       []*kgo.Record
-	fetchPaused  bool
-	sequence     uint64
-	targetTs     uint64 // Event progress still needed for the current boundary; zero means complete.
-	records      []kafkaRecord
-	parsedTs     uint64     // Parser-owned maximum event timestamp in the parsed prefix.
-	mu           sync.Mutex // Protects parsed positions, shared by the parser and Confirm.
+	watermark   uint64
+	polled      []*kgo.Record
+	fetchPaused bool
+	sequence    uint64 // Last batch selected from this partition.
+	targetTs    uint64 // Event progress still needed for the current boundary; zero means complete.
+	records     []kafkaRecord
+	parsedTs    uint64     // Parser-owned maximum event timestamp in the parsed prefix.
+	mu          sync.Mutex // Protects parsed positions, shared by the parser and Confirm.
 }
 
 type kafkaReader struct {
@@ -78,6 +76,7 @@ type kafkaReader struct {
 	watermark        uint64
 	readSequence     uint64
 	pausedPartitions int
+	pollCancel       context.CancelFunc // Wake a poll when admission pauses every partition.
 	boundary         *readBoundary
 	control          *readBoundary
 	progressMu       sync.Mutex // Protects event progress and scheduling shared with the conductor.
@@ -184,6 +183,9 @@ type kafkaInput struct {
 }
 
 func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+	// Initially only SDK buffers can hold data. The conductor takes over
+	// admission once parsed work can release memory through downstream writes.
+	c.ContinueReading(true)
 	return readAndParse(ctx, c.Read, func(ctx context.Context, input kafkaInput) iter.Seq2[task, error] {
 		return c.parse(ctx, parser, input)
 	}, tasks)
@@ -327,48 +329,53 @@ func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 		}
 		c.prefetchedBytes = prefetched
 		c.limitReads()
-		var (
-			batch []kafkaInput
-			size  int64
-		)
-		for len(batch) < batchRows && size < batchBytes {
-			partitionID := c.nextPartition()
-			if partitionID < 0 {
-				break
-			}
+		if partitionID := c.nextPartition(); partitionID >= 0 {
 			partition := c.partitions[partitionID]
 			queue := partition.polled
-			record := queue[0]
-			queue[0] = nil
-			partition.polled = queue[1:]
+			var batch []kafkaInput
+			var size int64
+			for _, record := range queue {
+				batch = append(batch, kafkaInput{message: record})
+				size += int64(len(record.Key) + len(record.Value))
+				if len(batch) == batchRows || size >= batchBytes {
+					break
+				}
+			}
+			clear(queue[:len(batch)])
+			partition.polled = queue[len(batch):]
 			if len(partition.polled) == 0 {
 				partition.polled = nil
 			}
 			c.readSequence++
 			partition.sequence = c.readSequence
-			bytes := int64(len(record.Key) + len(record.Value))
-			batch = append(batch, kafkaInput{message: record})
-			size += bytes
-		}
-		if len(batch) != 0 {
 			return batch, nil
 		}
-		// Drain SDK buffers before waiting; those bytes are already admitted.
-		// Buffered leading partitions may need a fetch from a slower one.
-		buffered := c.client.BufferedFetchRecords() != 0
-		for _, partition := range c.partitions {
-			buffered = buffered || len(partition.polled) != 0
+		if err := c.wait(ctx); err != nil {
+			return nil, err
 		}
-		if !buffered {
-			if err := c.wait(ctx); err != nil {
-				return nil, err
-			}
+		// Budget releases can wake this reader without a conductor update.
+		c.limitReads()
+		pollCtx, cancel := context.WithCancel(ctx)
+		c.progressMu.Lock()
+		c.pollCancel = cancel
+		if c.pausedPartitions == len(c.partitions) {
+			cancel()
 		}
-		fetches := c.client.PollRecords(ctx, batchRows)
+		c.progressMu.Unlock()
+		fetches := c.client.PollRecords(pollCtx, batchRows)
+		c.progressMu.Lock()
+		c.pollCancel = nil
+		c.progressMu.Unlock()
+		interrupted := pollCtx.Err() != nil
+		cancel()
 		if fetches.IsClientClosed() {
 			return nil, errors.ErrKafkaSinkClosed.GenWithStackByArgs()
 		}
-		for _, fetchError := range fetches.Errors() {
+		fetchErrors := fetches.Errors()
+		if interrupted && ctx.Err() == nil && len(fetchErrors) == 1 && errors.Is(fetchErrors[0].Err, context.Canceled) {
+			continue
+		}
+		for _, fetchError := range fetchErrors {
 			return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
 		}
 		var bytes int64
@@ -391,7 +398,6 @@ func (c *kafkaReader) Advance(updates []readUpdate) {
 		partition := c.partitions[update.stream]
 		if update.watermark != 0 {
 			partition.watermark = max(partition.watermark, update.watermark)
-			partition.hasWatermark = true
 		}
 		if update.boundary != nil && update.boundary == c.boundary {
 			partition.targetTs = 0
@@ -530,29 +536,11 @@ func (c *kafkaReader) limitReads() {
 	defer c.progressMu.Unlock()
 	boundaryPending := c.boundary != nil && !c.boundary.reached
 	underPressure := c.memory.used() >= c.memory.limit
-	if !boundaryPending && !underPressure && c.pausedPartitions == 0 {
+	if !underPressure && c.pausedPartitions == 0 {
 		return
 	}
-	slowest := uint64(math.MaxUint64)
-	if underPressure {
-		for _, partition := range c.partitions {
-			if !partition.hasWatermark {
-				slowest = 0
-				break
-			}
-			slowest = min(slowest, partition.watermark)
-		}
-	}
 	for partitionID, partition := range c.partitions {
-		pause := false
-		if boundaryPending {
-			pause = underPressure && partition.targetTs == 0
-		}
-		if underPressure && !boundaryPending {
-			// Retained controls still need slow partitions to advance before
-			// they can release memory. Do not fetch ahead of that progress.
-			pause = partition.hasWatermark && partition.watermark > slowest && !c.continuing.Load()
-		}
+		pause := underPressure && (!c.continuing.Load() || (boundaryPending && partition.targetTs == 0))
 		if pause == partition.fetchPaused {
 			continue
 		}
@@ -567,6 +555,9 @@ func (c *kafkaReader) limitReads() {
 		}
 		partition.fetchPaused = pause
 	}
+	if c.pausedPartitions == len(c.partitions) && c.pollCancel != nil {
+		c.pollCancel()
+	}
 }
 
 func (c *kafkaReader) nextPartition() int32 {
@@ -574,43 +565,25 @@ func (c *kafkaReader) nextPartition() int32 {
 	defer c.progressMu.Unlock()
 	selected := int32(-1)
 	var progress, sequence uint64
-	boundaryPending := c.boundary != nil && !c.boundary.reached
-	underPressure := c.memory.used() >= c.memory.limit
+	var selectedNeeded bool
+	// Alternate dependency-priority batches with fair batches. Already buffered
+	// inputs remain eligible under pressure; limitReads controls new fetching.
+	// Priority turns favor the least advanced required partition.
+	preferNeeded := c.boundary != nil && !c.boundary.reached && c.readSequence%2 == 0
 	for partitionID, partition := range c.partitions {
 		if len(partition.polled) == 0 {
 			continue
 		}
-		if boundaryPending && underPressure && partition.targetTs == 0 {
-			continue
-		}
-		watermark := partition.watermark
-		if !partition.hasWatermark {
-			watermark = 0
-		}
-		if c.continuing.Load() {
-			// Missing dependencies can be satisfied by any input. Fair rotation
-			// lets a nearby control pass a backlog in another partition.
-			watermark = 0
-		}
-		needed := boundaryPending && partition.targetTs != 0
-		selectedNeeded := selected >= 0 && boundaryPending && c.partitions[selected].targetTs != 0
-		// A busy dependency must still let other buffered streams make progress.
-		// Under pressure, admission remains restricted to the unfinished scope.
-		overdue := !underPressure && c.readSequence-partition.sequence >= batchRows
-		selectedOverdue := selected >= 0 && !underPressure && c.readSequence-c.partitions[selected].sequence >= batchRows
-		if selectedOverdue && !overdue {
-			continue
-		}
-		if overdue && !selectedOverdue {
-			selected, progress, sequence = partitionID, watermark, partition.sequence
-			continue
-		}
+		needed := preferNeeded && partition.targetTs != 0
 		if selectedNeeded && !needed {
 			continue
 		}
-		earlier := watermark < progress || (watermark == progress && (partition.sequence < sequence || (partition.sequence == sequence && partitionID < selected)))
+		earlier := partition.sequence < sequence || (partition.sequence == sequence && partitionID < selected)
+		if needed && selectedNeeded && partition.watermark != progress {
+			earlier = partition.watermark < progress
+		}
 		if selected < 0 || (needed && !selectedNeeded) || earlier {
-			selected, progress, sequence = partitionID, watermark, partition.sequence
+			selected, progress, sequence, selectedNeeded = partitionID, partition.watermark, partition.sequence, needed
 		}
 	}
 	return selected

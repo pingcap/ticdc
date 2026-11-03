@@ -29,7 +29,8 @@ import (
 
 // Run owns source reading and parsing. Advance and Confirm may run concurrently.
 // Boundary is conductor-owned. Close runs after all callers have stopped.
-// ContinueReading lets an unfinished dependency advance past the soft budget.
+// ContinueReading permits progress past the soft budget for missing input
+// dependencies or an empty pipeline holding source buffers and positions.
 type Reader interface {
 	Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error
 	Advance(updates []readUpdate)

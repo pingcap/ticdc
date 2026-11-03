@@ -91,7 +91,7 @@ func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) e
 			notifyConfirmation(c.confirmable)
 		}
 		c.cleanHistory()
-		c.advanceReading()
+		c.advanceReading(w)
 	}
 }
 
@@ -295,7 +295,6 @@ type conductor struct {
 	orderedDML        bool
 	pendingDDL        []*ddlTask
 	controlTs         uint64
-	blockedBoundaries map[*readBoundary]uint64
 }
 
 type ddlInput struct {
@@ -409,7 +408,6 @@ func (c *conductor) queueDDL(ddl *event.DDLEvent) *ddlInput {
 
 func (c *conductor) nextReady(watermark uint64, canWrite func(*decodeTask) bool) pendingTask {
 	c.controlTs = 0
-	clear(c.blockedBoundaries)
 	var head *ddlTask
 	for len(c.pendingDDL) != 0 {
 		head = c.pendingDDL[0]
@@ -522,17 +520,10 @@ func (c *conductor) rowReady(row *decodeTask, watermark uint64) bool {
 }
 
 func (c *conductor) trackDMLWait(row *decodeTask, watermark uint64) {
-	if boundary := row.boundary; boundary != nil && !boundary.reached {
-		if c.blockedBoundaries == nil {
-			c.blockedBoundaries = make(map[*readBoundary]uint64)
-		}
-		var through uint64
-		if boundary.watermark != nil {
-			through = *boundary.watermark
-		}
-		c.blockedBoundaries[boundary] = through
+	if c.dmlReady(row, watermark) {
+		return
 	}
-	if !c.dmlReady(row, watermark) && (row.boundary == nil || row.boundary.watermark != nil) {
+	if row.boundary == nil || row.boundary.watermark != nil {
 		if c.controlTs == 0 || row.commitTs < c.controlTs {
 			c.controlTs = row.commitTs
 		}
@@ -662,7 +653,7 @@ func ddlScope(ddl *event.DDLEvent) []event.SchemaTableName {
 	return names
 }
 
-func (c *conductor) advanceReading() {
+func (c *conductor) advanceReading(w *writer) {
 	if c.waitingMetadata != 0 {
 		c.boundary, c.boundaryDDL = nil, nil
 		c.reader.Boundary([]event.SchemaTableName{}, 0)
@@ -688,15 +679,20 @@ func (c *conductor) advanceReading() {
 	}
 	if through == 0 && c.readThrough > c.watermark {
 		through, tables = c.readThrough, nil
+		// Finish the current request before starting another global catch-up.
+		// The DDL and control dependencies above can still replace this target.
+		if c.boundary != nil && !c.boundary.reached && c.boundaryDDL == nil {
+			through = c.boundaryTs
+		}
 	}
 	if through == 0 {
 		c.boundary, c.boundaryDDL = nil, nil
 		c.reader.Boundary([]event.SchemaTableName{}, 0)
-		c.reader.ContinueReading(c.needsMoreInput())
+		c.reader.ContinueReading(c.needsMoreInput(w))
 		return
 	}
 	if c.boundary != nil && !c.boundary.reached && c.boundaryTs == through && c.boundaryDDL == pending {
-		c.reader.ContinueReading(true)
+		c.reader.ContinueReading(c.needsMoreInput(w))
 		return
 	}
 	c.boundary = c.reader.Boundary(tables, through)
@@ -732,18 +728,12 @@ func (c *conductor) advanceReading() {
 		}
 		c.reader.Advance(updates)
 	}
-	c.reader.ContinueReading(c.needsMoreInput())
+	c.reader.ContinueReading(c.needsMoreInput(w))
 }
 
-func (c *conductor) needsMoreInput() bool {
-	if c.boundary != nil && !c.boundary.reached {
-		return true
-	}
-	if c.readThrough > c.watermark || c.controlTs != 0 {
-		return true
-	}
-	for boundary := range c.blockedBoundaries {
-		if !boundary.reached {
+func (c *conductor) needsMoreInput(w *writer) bool {
+	for _, groups := range c.pendingDML {
+		if !c.dmlReady(firstDML(groups), c.watermark) {
 			return true
 		}
 	}
@@ -755,7 +745,12 @@ func (c *conductor) needsMoreInput() bool {
 	if c.waitingMetadata != 0 {
 		return true
 	}
-	return false
+	// Let conversions and writes release memory before reading solely to catch
+	// up global progress. An empty pipeline must still drain source buffers and
+	// reach markers that release retained transport positions.
+	return len(c.pendingDML) == 0 && len(c.pendingDDL) == 0 &&
+		len(w.pendingDML) == 0 && len(w.inFlight) == 0 &&
+		len(w.pendingDDL) == 0 && w.ddlInFlight == nil
 }
 
 // Partition markers establish a global watermark when every stream is covered.
