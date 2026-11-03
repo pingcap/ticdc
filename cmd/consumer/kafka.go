@@ -69,7 +69,7 @@ type kafkaReader struct {
 	router           *eventrouter.EventRouter
 	client           *kgo.Client
 	topic            string
-	memory           *memoryUsage
+	memory           *memoryBudget
 	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
 	confirmable      chan<- struct{}
 	partitions       map[int32]*kafkaPartition
@@ -85,7 +85,7 @@ type kafkaReader struct {
 	maxBatchSize    int
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
+func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryBudget, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
 		log.Panic("Kafka upstream URI must include an endpoint")
 	}

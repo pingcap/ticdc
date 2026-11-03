@@ -289,7 +289,7 @@ type conductor struct {
 	checkpoint        atomic.Uint64
 	cleanedCheckpoint uint64
 	g                 *errgroup.Group
-	memory            *memoryUsage
+	memory            *memoryBudget
 	streams           map[int32]*streamWatermark
 	waitingMetadata   int
 	decoder           *decoderGroup
@@ -607,7 +607,7 @@ func ddlBlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string)
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newConductor(memory *memoryUsage, reader Reader, parsing *inputParser) *conductor {
+func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *conductor {
 	streams := make(map[int32]*streamWatermark, len(parsing.streams))
 	for id := range parsing.streams {
 		streams[id] = &streamWatermark{}

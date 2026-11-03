@@ -53,12 +53,12 @@ type reader struct {
 // readLimit admits new input against the shared soft budget. An unfinished
 // dependency can request more input without exposing its protocol to the reader.
 type readLimit struct {
-	memory     *memoryUsage
+	memory     *memoryBudget
 	continuing atomic.Bool
 	changed    chan struct{}
 }
 
-func newReadLimit(memory *memoryUsage) *readLimit {
+func newReadLimit(memory *memoryBudget) *readLimit {
 	return &readLimit{
 		memory:  memory,
 		changed: make(chan struct{}, 1),
@@ -96,7 +96,7 @@ func newReader(
 	upstreamURI *url.URL,
 	consumerID string,
 	replicaConfig *config.ReplicaConfig,
-	memory *memoryUsage,
+	memory *memoryBudget,
 	confirmable chan struct{},
 ) *reader {
 	var client Reader

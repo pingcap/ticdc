@@ -53,12 +53,12 @@ type pulsarReader struct {
 	*readLimit
 	client      pulsar.Client
 	consumer    pulsar.Consumer
-	memory      *memoryUsage
+	memory      *memoryBudget
 	partitions  map[string]*pulsarPartition
 	confirmable chan<- struct{}
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryUsage, confirmable chan<- struct{}) (reader *pulsarReader) {
+func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryBudget, confirmable chan<- struct{}) (reader *pulsarReader) {
 	if err := context.Cause(ctx); err != nil {
 		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
 	}

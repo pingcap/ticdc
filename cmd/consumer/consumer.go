@@ -68,29 +68,6 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
 	sourceType := sourceTypeFromURI(upstreamURI)
-	if sourceType == sourceKafka || sourceType == sourcePulsar {
-		query := upstreamURI.Query()
-		changed := false
-		for name, value := range map[string]string{
-			"ca": options.ca, "cert": options.cert, "key": options.key,
-			"schema-registry": options.schemaRegistryURI, "upstream-tidb-dsn": options.upstreamTiDBDSN,
-			"oauth2-private-key": options.oauth2.OAuth2PrivateKey, "oauth2-issuer-url": options.oauth2.OAuth2IssuerURL,
-			"oauth2-client-id": options.oauth2.OAuth2ClientID, "oauth2-scope": options.oauth2.OAuth2Scope,
-			"oauth2-audience":           options.oauth2.OAuth2Audience,
-			"auth-tls-certificate-path": options.authTLSCertificatePath, "auth-tls-private-key-path": options.authTLSPrivateKeyPath,
-		} {
-			if value != "" {
-				query.Set(name, value)
-				changed = true
-			}
-		}
-		if changed {
-			upstreamURI.RawQuery = query.Encode()
-		}
-		if sourceType == sourcePulsar && options.ca != "" && upstreamURI.Scheme == config.PulsarScheme {
-			upstreamURI.Scheme = config.PulsarSSLScheme
-		}
-	}
 	consumerID := options.consumerID
 	if strings.TrimSpace(consumerID) == "" {
 		switch sourceType {
@@ -102,7 +79,6 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	}
 	replicaConfig := loadReplicaConfig(options.configFile)
 	if sourceType == sourceStorage {
-		replicaConfig.Sink.FileIndexWidth = new(options.fileIndexWidth)
 		if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
 			log.Panic("Storage configuration is invalid", zap.Error(err))
 		}
@@ -110,7 +86,7 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
-	memory := newMemoryUsage()
+	memory := newMemoryBudget()
 	confirmable := make(chan struct{}, 1)
 	var upstreamDB *sql.DB
 	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)

@@ -40,7 +40,7 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *writer {
+func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryBudget) *writer {
 	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
@@ -120,7 +120,7 @@ func (w *writer) executeDDL(ctx context.Context) error {
 type writer struct {
 	g                 *errgroup.Group
 	downstream        sink.Sink
-	memory            *memoryUsage
+	memory            *memoryBudget
 	completed         chan struct{}
 	pendingDML        []*dmlWrite
 	pendingDDL        []*ddlWrite

@@ -32,7 +32,7 @@ type decoderGroup struct {
 	g         *errgroup.Group
 	input     chan *decodeTask
 	workers   int
-	memory    *memoryUsage
+	memory    *memoryBudget
 	completed chan struct{}
 }
 
@@ -51,7 +51,7 @@ type decodeTask struct {
 	validate func(*event.DMLEvent) // Source-side check that runs after conversion.
 }
 
-func newDecoderGroup(memory *memoryUsage, completed chan struct{}) *decoderGroup {
+func newDecoderGroup(memory *memoryBudget, completed chan struct{}) *decoderGroup {
 	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
 		input:     make(chan *decodeTask, workers*64),

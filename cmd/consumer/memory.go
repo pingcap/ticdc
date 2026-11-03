@@ -15,19 +15,31 @@
 package main
 
 import (
+	"math"
+	"runtime/debug"
 	"sync"
 
 	"github.com/pingcap/log"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 )
 
-const maxMemoryBytes = 1 << 30
+const (
+	// defaultMemoryBudget applies when the process memory limit is unavailable.
+	defaultMemoryBudget = 1 << 30
+	// memoryBudgetRatio is the share of the process memory limit admitted as
+	// accounted data; the rest covers the Go runtime and unaccounted memory.
+	memoryBudgetRatio = 0.6
+	// goMemoryLimitRatio keeps the Go runtime below the process memory limit.
+	goMemoryLimitRatio = 0.9
+)
 
-// memoryUsage is a soft budget for raw input, captured data, decoded rows and
+// memoryBudget is a soft budget for raw input, captured data, decoded rows and
 // pending transport positions. Each owner releases its own allocation.
-// It uses existing data sizes; it does not model process or object overhead.
-type memoryUsage struct {
+// The limit scales with the process memory limit; it does not model process or
+// object overhead.
+type memoryBudget struct {
 	limit   int64
 	bytes   atomic.Int64
 	waiting atomic.Bool
@@ -35,18 +47,36 @@ type memoryUsage struct {
 	changed chan struct{}
 }
 
-func newMemoryUsage() *memoryUsage {
-	return &memoryUsage{
-		limit: maxMemoryBytes,
+func newMemoryBudget() *memoryBudget {
+	limit, err := putil.GetMemoryLimit()
+	if err != nil || limit == 0 {
+		log.Warn("consumer memory quota falls back to the default",
+			zap.Int64("quotaBytes", defaultMemoryBudget), zap.Error(err))
+		return &memoryBudget{
+			limit: defaultMemoryBudget,
+		}
+	}
+	goLimit := debug.SetMemoryLimit(-1)
+	if goLimit == math.MaxInt64 {
+		goLimit = int64(float64(limit) * goMemoryLimitRatio)
+		debug.SetMemoryLimit(goLimit)
+	}
+	quota := int64(float64(min(limit, uint64(goLimit))) * memoryBudgetRatio)
+	log.Info("consumer memory quota",
+		zap.Uint64("processLimitBytes", limit),
+		zap.Int64("goMemoryLimitBytes", goLimit),
+		zap.Int64("quotaBytes", quota))
+	return &memoryBudget{
+		limit: quota,
 	}
 }
 
-func (m *memoryUsage) used() int64 {
+func (m *memoryBudget) used() int64 {
 	return m.bytes.Load()
 }
 
 // Already admitted work can reserve space without waiting so it can finish.
-func (m *memoryUsage) reserve(bytes int64) {
+func (m *memoryBudget) reserve(bytes int64) {
 	if bytes < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))
 	}
@@ -55,7 +85,7 @@ func (m *memoryUsage) reserve(bytes int64) {
 
 // Subscribe before checking an admission condition to avoid missing a release.
 // A release wakes every subscriber; callers decide whether to wait again.
-func (m *memoryUsage) changes() <-chan struct{} {
+func (m *memoryBudget) changes() <-chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.changed == nil {
@@ -65,7 +95,7 @@ func (m *memoryUsage) changes() <-chan struct{} {
 	return m.changed
 }
 
-func (m *memoryUsage) release(bytes int64) {
+func (m *memoryBudget) release(bytes int64) {
 	if bytes == 0 {
 		return
 	}

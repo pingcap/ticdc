@@ -77,7 +77,7 @@ type storageReader struct {
 	tableIDs         map[storageTableKey]int64
 	nextTableID      int64
 	storage          storeapi.Storage
-	memory           *memoryUsage
+	memory           *memoryBudget
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -93,7 +93,7 @@ type storageReader struct {
 }
 
 // newConsumer validates and adjusts replicaConfig before opening the source.
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryUsage) *storageReader {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryBudget) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}

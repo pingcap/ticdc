@@ -93,7 +93,7 @@ type resumeTask struct{ task *decodeTask }
 // A source owns its codec cursors and schema-dependent row cache. Parallel
 // conversion workers receive captured messages, never these cursors.
 type inputParser struct {
-	memory            *memoryUsage
+	memory            *memoryBudget
 	codecConfig       *codecCommon.Config
 	selectors         *columnselector.ColumnSelectors
 	streams           map[int32]*decodeStream
