@@ -55,6 +55,29 @@ enable-legacy-safepoint = true
 	require.True(t, cfg.EnableLegacySafePoint)
 }
 
+func TestServerConfigDecodeEnableKafkaFranzGo(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		content string
+		enabled bool
+	}{
+		{name: "default"},
+		{name: "disabled", content: "[debug]\nenable-kafka-franz-go = false\n"},
+		{name: "enabled", content: "[debug]\nenable-kafka-franz-go = true\n", enabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := GetDefaultServerConfig()
+			metaData, err := toml.Decode(test.content, cfg)
+			require.NoError(t, err)
+			require.Empty(t, metaData.Undecoded())
+			require.Equal(t, test.enabled, cfg.Debug.EnableKafkaFranzGo)
+			require.Equal(t, test.enabled, cfg.Clone().Debug.EnableKafkaFranzGo)
+		})
+	}
+}
+
 func TestServerConfigClone(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig()
