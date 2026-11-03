@@ -241,8 +241,10 @@ func loadTablesInKVSnap(
 		// TODO: add a unit test for this case
 		databaseInfo.Tables[tableInfo.ID] = true
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
+			SchemaID:              table_info_entry.SchemaID,
+			Name:                  tableInfo.Name.O,
+			IsMaterializedView:    isMaterializedViewTable(&tableInfo),
+			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
@@ -301,8 +303,10 @@ func loadFullTablesInKVSnap(
 		tableInfosInKVSnap[tableInfo.ID] = &tableInfo
 		databaseInfo.Tables[tableInfo.ID] = true
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
+			SchemaID:              table_info_entry.SchemaID,
+			Name:                  tableInfo.Name.O,
+			IsMaterializedView:    isMaterializedViewTable(&tableInfo),
+			IsMaterializedViewLog: isMaterializedViewLogTable(&tableInfo),
 		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
@@ -542,7 +546,7 @@ func addTableInfoToBatch(
 	ts uint64,
 	dbInfo *model.DBInfo,
 	tableInfoValue []byte,
-) (int64, string, []int64) {
+) (int64, string, bool, bool, []int64) {
 	tableInfo := model.TableInfo{}
 	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
@@ -579,7 +583,8 @@ func addTableInfoToBatch(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, partitionIDs
+	return tableInfo.ID, tableInfo.Name.O, isMaterializedViewTable(&tableInfo),
+		isMaterializedViewLogTable(&tableInfo), partitionIDs
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
@@ -629,11 +634,13 @@ func persistSchemaSnapshot(
 						if !isTableRawKey(rawTable.Field) {
 							continue
 						}
-						tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+						tableID, tableName, isMaterializedView, isMaterializedViewLog, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
 						if collectMetaInfo {
 							tableMap[tableID] = &BasicTableInfo{
-								SchemaID: dbInfo.ID,
-								Name:     tableName,
+								SchemaID:              dbInfo.ID,
+								Name:                  tableName,
+								IsMaterializedView:    isMaterializedView,
+								IsMaterializedViewLog: isMaterializedViewLog,
 							}
 							tablesInDB[tableID] = true
 							if len(partitionIDs) > 0 {
@@ -733,13 +740,14 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 	}
 }
 
-func loadAllPhysicalTablesAtTs(
-	storageSnap *pebble.Snapshot,
-	gcTs uint64,
-	snapVersion uint64,
-	tableFilter filter.Filter,
-) ([]commonEvent.Table, error) {
-	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
+type tablesAtTsState struct {
+	databaseMap  map[int64]*BasicDatabaseInfo
+	tableInfoMap map[int64]*model.TableInfo
+	tableMap     map[int64]*BasicTableInfo
+	partitionMap map[int64]BasicPartitionInfo
+}
+
+func loadTablesAtTs(storageSnap *pebble.Snapshot, gcTs uint64, snapVersion uint64) (*tablesAtTsState, error) {
 	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
 	if err != nil {
 		return nil, err
@@ -754,7 +762,6 @@ func loadAllPhysicalTablesAtTs(
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 
-	// apply ddl jobs in range (gcTs, snapVersion]
 	startKey, err := ddlJobKey(gcTs + 1)
 	if err != nil {
 		log.Fatal("generate lower bound failed", zap.Error(err))
@@ -777,8 +784,6 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
-		// Note: updateFullTableInfoFunc must be called before updateSchemaMetadataFunc,
-		// because it depends on some info which may be updated by updateSchemaMetadataFunc.
 		handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
 			event:        &ddlEvent,
 			databaseMap:  databaseMap,
@@ -791,28 +796,46 @@ func loadAllPhysicalTablesAtTs(
 			partitionMap: partitionMap,
 		})
 	}
+	return &tablesAtTsState{
+		databaseMap:  databaseMap,
+		tableInfoMap: tableInfoMap,
+		tableMap:     tableMap,
+		partitionMap: partitionMap,
+	}, nil
+}
+
+func loadAllPhysicalTablesAtTs(
+	storageSnap *pebble.Snapshot,
+	gcTs uint64,
+	snapVersion uint64,
+	tableFilter filter.Filter,
+) ([]commonEvent.Table, error) {
+	state, err := loadTablesAtTs(storageSnap, gcTs, snapVersion)
+	if err != nil {
+		return nil, err
+	}
 	log.Info("after load tables from ddl",
-		zap.Int("tableInfoMapLen", len(tableInfoMap)),
-		zap.Int("tableMapLen", len(tableMap)),
-		zap.Int("partitionMapLen", len(partitionMap)))
+		zap.Int("tableInfoMapLen", len(state.tableInfoMap)),
+		zap.Int("tableMapLen", len(state.tableMap)),
+		zap.Int("partitionMapLen", len(state.partitionMap)))
 	tables := make([]commonEvent.Table, 0)
-	for tableID, tableInfo := range tableMap {
-		if _, ok := databaseMap[tableInfo.SchemaID]; !ok {
+	for tableID, tableInfo := range state.tableMap {
+		if _, ok := state.databaseMap[tableInfo.SchemaID]; !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", tableInfo.SchemaID),
 				zap.Int64("tableID", tableID),
 				zap.String("tableName", tableInfo.Name),
-				zap.Any("databaseMapLen", len(databaseMap)))
+				zap.Any("databaseMapLen", len(state.databaseMap)))
 		}
-		schemaName := databaseMap[tableInfo.SchemaID].Name
-		fullTableInfo, ok := tableInfoMap[tableID]
+		schemaName := state.databaseMap[tableInfo.SchemaID].Name
+		fullTableInfo, ok := state.tableInfoMap[tableID]
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
 		// Views have no physical KV events. Their DDLs are replicated by the
 		// table-trigger dispatcher, so creating a table dispatcher for a view can
 		// only leave an orphan after the view is dropped.
-		if fullTableInfo.View != nil {
+		if fullTableInfo.View != nil || isMaterializedViewLogTable(fullTableInfo) || fullTableInfo.MaterializedViewShadow != nil {
 			continue
 		}
 		if tableFilter != nil {
@@ -820,13 +843,18 @@ func loadAllPhysicalTablesAtTs(
 				continue
 			}
 			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {
-				log.Info("table is not eligible, should ignore this table", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
+				log.Info("table is not eligible, should ignore this table",
+					zap.String("schema", schemaName),
+					zap.String("table", tableInfo.Name),
+					zap.Int64("schemaID", tableInfo.SchemaID),
+					zap.Int64("tableID", tableID),
+					zap.Any("tableInfo", fullTableInfo))
 				continue
 			}
 		}
 
 		splitable := isSplitable(fullTableInfo)
-		if partitionInfo, ok := partitionMap[tableID]; ok {
+		if partitionInfo, ok := state.partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{
 					SchemaID:  tableInfo.SchemaID,

@@ -224,6 +224,25 @@ func newEligiblePartitionTableInfoForTest(tableID int64, tableName string, parti
 	return tableInfo
 }
 
+func newEligibleMaterializedViewTableInfoForTest(
+	tableID int64, tableName string, baseTableIDs []int64, sqlContent string,
+) *model.TableInfo {
+	tableInfo := newEligibleTableInfoForTest(tableID, tableName)
+	tableInfo.MaterializedView = &model.MaterializedViewInfo{
+		BaseTableIDs: append([]int64(nil), baseTableIDs...),
+		SQLContent:   sqlContent,
+	}
+	return tableInfo
+}
+
+func newEligibleMaterializedViewLogTableInfoForTest(tableID int64, tableName string, baseTableID int64) *model.TableInfo {
+	tableInfo := newEligibleTableInfoForTest(tableID, tableName)
+	tableInfo.MaterializedViewLog = &model.MaterializedViewLogInfo{
+		BaseTableID: baseTableID,
+	}
+	return tableInfo
+}
+
 func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateSchema,
@@ -261,6 +280,48 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 			FinishedTS: finishedTs,
 		},
 	}
+}
+
+func buildCreateMaterializedViewJobForTest(
+	schemaID, tableID int64, tableName string, baseTableIDs []int64, sqlContent string, finishedTs uint64,
+) *model.Job {
+	tableInfo := newEligibleMaterializedViewTableInfoForTest(tableID, tableName, baseTableIDs, sqlContent)
+	baseTableInfo := newEligibleTableInfoForTest(baseTableIDs[0], fmt.Sprintf("base_%d", baseTableIDs[0]))
+	job := &model.Job{
+		Type:      model.ActionCreateMaterializedView,
+		Version:   model.JobVersion2,
+		SchemaID:  schemaID,
+		TableID:   tableID,
+		TableName: tableName,
+		BinlogInfo: &model.HistoryInfo{
+			// This matches the real upstream job shape: BinlogInfo.TableInfo points to the base table,
+			// while the MV table info lives in the job args.
+			TableInfo:  baseTableInfo,
+			FinishedTS: finishedTs,
+		},
+	}
+	job.FillArgs(&model.CreateMaterializedViewArgs{
+		TableInfo: tableInfo,
+	})
+	return job
+}
+
+func buildCreateMaterializedViewLogJobForTest(
+	schemaID, tableID int64, tableName string, baseTableID int64, finishedTs uint64,
+) *model.Job {
+	job := &model.Job{
+		Type:      model.ActionCreateMaterializedViewLog,
+		Version:   model.JobVersion2,
+		SchemaID:  schemaID,
+		TableName: tableName,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+	job.FillArgs(&model.CreateMaterializedViewLogArgs{
+		TableInfo: newEligibleMaterializedViewLogTableInfoForTest(tableID, tableName, baseTableID),
+	})
+	return job
 }
 
 func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []string, finishedTs uint64) *model.Job {
