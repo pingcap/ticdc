@@ -85,3 +85,37 @@ func TestConsumerStorageConfigurationBeforeOpeningReader(t *testing.T) {
 	require.Equal(t, config.DateSeparatorDay, c.reader.client.(*storageReader).dateSeparator)
 	require.Equal(t, config.DefaultFileIndexWidth, c.reader.client.(*storageReader).fileIndexWidth)
 }
+
+func TestConsumerPulsarProtocolConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		uri        string
+		configured string
+		want       config.Protocol
+		reject     bool
+	}{
+		{name: "default", uri: "pulsar://localhost/topic?enable-tidb-extension=true", want: config.ProtocolCanalJSON},
+		{name: "configuration", uri: "pulsar://localhost/topic?enable-tidb-extension=true", configured: "canal-json", want: config.ProtocolCanalJSON},
+		{name: "URI overrides configuration", uri: "pulsar://localhost/topic?protocol=canal-json&enable-tidb-extension=true", configured: "simple", want: config.ProtocolCanalJSON},
+		{name: "unsupported URI", uri: "pulsar://localhost/topic?protocol=simple", reject: true},
+		{name: "unsupported configuration", uri: "pulsar://localhost/topic", configured: "avro", reject: true},
+		{name: "Kafka simple", uri: "kafka://localhost/topic?protocol=simple", want: config.ProtocolSimple},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replicaConfig := config.GetDefaultReplicaConfig()
+			if tc.configured != "" {
+				replicaConfig.Sink.Protocol = new(tc.configured)
+			}
+			upstream, err := url.Parse(tc.uri)
+			require.NoError(t, err)
+			if tc.reject {
+				require.PanicsWithValue(t, "Pulsar consumer protocol is unsupported", func() {
+					newDecodeConfig(upstream, "UTC", replicaConfig)
+				})
+				return
+			}
+			decoding := newDecodeConfig(upstream, "UTC", replicaConfig)
+			require.Equal(t, tc.want, decoding.codec.Protocol)
+		})
+	}
+}

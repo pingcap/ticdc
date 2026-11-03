@@ -360,10 +360,13 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		}
 	}
 
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
-	e.AddPostFlushFunc(func() {
-		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
-	})
+	rows := 1
+	if deleteData != nil {
+		rows++
+	}
+	// Each message has one or two rows. Its chunk can be released as soon as
+	// those rows are copied into a merged event, independently of downstream flush.
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), rows)
 	if deleteData != nil {
 		// Handle-key changes are split upstream. Keep the keyed delete and
 		// after-image insert in one event, as for Avro updates without before values.

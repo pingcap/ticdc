@@ -256,14 +256,19 @@ func (c *conductor) prepare(items []*dmlWrite) []*dmlWrite {
 			}
 			dml.Length += part.Length
 			dml.ApproximateSize += part.ApproximateSize
-			dml.AddPostEnqueueFunc(part.PostEnqueue)
-			dml.AddPostFlushFunc(part.PostFlush)
+			if len(part.PostTxnEnqueued) != 0 || len(part.PostTxnFlushed) != 0 {
+				postEnqueue, postFlush := part.DetachPostCallbacks()
+				dml.AddPostEnqueueFunc(postEnqueue)
+				dml.AddPostFlushFunc(postFlush)
+			}
+			part.Rows = nil
 		}
 		bytes := dml.Rows.MemoryUsage()
 		c.memory.reserve(bytes)
+		c.memory.release(retained)
 		prepared = append(prepared, &dmlWrite{
 			dml:        dml,
-			bytes:      retained + bytes,
+			bytes:      bytes,
 			sequential: true,
 		})
 		remaining = remaining[end:]

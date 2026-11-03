@@ -257,11 +257,7 @@ function run() {
 				SINK_URI="pulsar://127.0.0.1:6650/$topic?protocol=canal-json&enable-tidb-extension=true"
 			fi
 			cdc_cli_changefeed create -c=$changefeed --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$config"
-			if [ "$SINK_TYPE" == "storage" ]; then
-				run_storage_consumer $WORK_DIR "$SINK_URI" "$config" $index
-			else
-				log_suffix=$index run_pulsar_consumer --upstream-uri "$SINK_URI" --config "$config"
-			fi
+			run_consumer "$WORK_DIR" "$SINK_URI" "$config" $index
 		done
 		;;
 	*)

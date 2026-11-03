@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -37,6 +38,97 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+func TestCSVQuotaFollowsMergedRows(t *testing.T) {
+	for _, merge := range []bool{false, true} {
+		t.Run(fmt.Sprintf("merge=%t", merge), func(t *testing.T) {
+			memory := newMemoryUsage()
+			column := &timodel.ColumnInfo{
+				ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic,
+				FieldType: *types.NewFieldType(mysql.TypeLonglong),
+			}
+			column.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+			table := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+				ID: 1, Name: ast.NewCIStr("t"), PKIsHandle: true,
+				Columns: []*timodel.ColumnInfo{column},
+			})
+			cfg := codecCommon.NewConfig(config.ProtocolCsv)
+			cfg.Delimiter, cfg.Terminator, cfg.NullString = ",", "\n", "\\N"
+			cfg.IncludeCommitTs = true
+			decoder, err := csv.NewDecoder(t.Context(), cfg, table,
+				[]byte("I,t,test,150,1\nU,t,test,150,2\nD,t,test,150,3\n"))
+			require.NoError(t, err)
+			var items []*dmlWrite
+			var originals []*event.DMLEvent
+			var enqueued, flushed int
+			for {
+				_, more := decoder.HasNext()
+				if !more {
+					break
+				}
+				row := decoder.NextDMLMessage().ToDMLEvent()
+				row.PhysicalTableID = 1
+				row.AddPostEnqueueFunc(func() { enqueued++ })
+				row.AddPostFlushFunc(func() { flushed++ })
+				bytes := row.Rows.MemoryUsage()
+				memory.reserve(bytes)
+				items = append(items, &dmlWrite{dml: row, bytes: bytes})
+				originals = append(originals, row)
+			}
+			c := &conductor{memory: memory, mergeRows: merge}
+			prepared := c.prepare(items)
+			var liveBytes int64
+			for _, row := range prepared {
+				liveBytes += row.dml.Rows.MemoryUsage()
+				require.Equal(t, row.dml.Rows.MemoryUsage(), row.bytes)
+			}
+			t.Logf("prepared events=%d, retained quota=%d B, live chunks=%d B", len(prepared), memory.used(), liveBytes)
+			require.Equal(t, liveBytes, memory.used())
+			require.Zero(t, enqueued)
+			require.Zero(t, flushed)
+			if merge {
+				require.Len(t, prepared, 1)
+				for _, row := range originals {
+					require.Nil(t, row.Rows)
+				}
+			}
+			downstream := mock.NewMockSink(gomock.NewController(t))
+			var submitted []*event.DMLEvent
+			downstream.EXPECT().AddDMLEvent(gomock.Any()).Do(func(row *event.DMLEvent) {
+				submitted = append(submitted, row)
+			}).Times(len(prepared))
+			w := &writer{downstream: downstream, memory: memory, watermark: 200, mutations: make(map[mutationKey]*writeBatch)}
+			for _, row := range prepared {
+				w.addDML(row)
+			}
+			require.NoError(t, w.flushDML(t.Context()))
+			require.Equal(t, uint64(149), w.checkpoint)
+			require.Equal(t, liveBytes, memory.used())
+			var ids []int64
+			var rowTypes []common.RowType
+			for _, row := range submitted {
+				for index := range row.Rows.NumRows() {
+					ids = append(ids, row.Rows.GetRow(index).GetInt64(0))
+				}
+				rowTypes = append(rowTypes, row.RowTypes...)
+				row.PostEnqueue()
+			}
+			require.Equal(t, []int64{1, 2, 2, 3}, ids)
+			require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeDelete, common.RowTypeInsert, common.RowTypeDelete}, rowTypes)
+			require.Equal(t, 3, enqueued)
+			require.Zero(t, flushed)
+			require.Equal(t, liveBytes, memory.used())
+			for _, row := range submitted {
+				row.PostFlush()
+			}
+			require.Equal(t, 3, enqueued)
+			require.Equal(t, 3, flushed)
+			require.Zero(t, memory.used())
+			require.NoError(t, w.flushDML(t.Context()))
+			require.Equal(t, uint64(200), w.checkpoint)
+		})
+	}
+}
 
 func TestQuotaFollowsCapturedDataAndRows(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())

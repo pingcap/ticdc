@@ -216,6 +216,9 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 	if err != nil {
 		log.Panic("consumer protocol is invalid", zap.Error(err))
 	}
+	if source == sourcePulsar && !config.IsPulsarSupportedProtocols(protocol) {
+		log.Panic("Pulsar consumer protocol is unsupported", zap.String("protocol", protocol.String()))
+	}
 	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
