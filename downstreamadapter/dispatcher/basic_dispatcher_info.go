@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -120,7 +119,7 @@ func NewSharedInfo(
 		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:            newBlockEventExecutor(),
 		errCh:                    errCh,
-		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricHandleDDLHis:       handleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -347,5 +346,5 @@ func (s *SharedInfo) Close() {
 	}
 	keyspace := s.changefeedID.Keyspace()
 	changefeedID := s.changefeedID.Name()
-	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	handleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }

@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -71,7 +71,7 @@ type Writer struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
-	statistics           *metrics.Statistics
+	statistics           *statistics.Statistics
 	rowsAffectedCounters sync.Map
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
@@ -107,7 +107,7 @@ func NewWriter(
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
-	statistics *metrics.Statistics,
+	stats *statistics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	writerCtx, cancel := context.WithCancel(ctx)
@@ -122,7 +122,7 @@ func NewWriter(
 		lastCleanSyncPointTime:         time.Now(),
 		ddlTsTableInit:                 false,
 		stmtCache:                      cfg.stmtCache,
-		statistics:                     statistics,
+		statistics:                     stats,
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
 		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
@@ -158,7 +158,7 @@ func (w *Writer) SetWriteGate(gate *writelease.Gate) {
 // the writer is shutting down, so callers must not execute the downstream write.
 func (w *Writer) grantWrite() bool {
 	if w.writeGate == nil {
-		metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+		captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 		return true
 	}
 	for {
@@ -166,7 +166,7 @@ func (w *Writer) grantWrite() bool {
 			return false
 		}
 		if w.writeGate.IsWritable() {
-			metrics.CaptureLastWriteAdmissionTimestamp.SetToCurrentTime()
+			captureLastWriteAdmissionTimestamp.SetToCurrentTime()
 			return true
 		}
 	}
@@ -280,12 +280,9 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 			}
 			err = w.execDMLWithMaxRetries(dmls)
 		}
-
 	} else {
 		w.tryDryRunBlock()
-		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-			return dmls.rowCount, dmls.approximateSize, nil
-		})
+		w.statistics.RecordDMLBatch(dmls.rowCount, dmls.approximateSize)
 	}
 
 	if err != nil {

@@ -150,6 +150,100 @@ func TestFlushAllReleasesCallbacksPerCompletedFile(t *testing.T) {
 	require.Empty(t, worker.files)
 }
 
+func TestFlushAllWaitsForOutOfOrderUploads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	defer extStorage.Close()
+
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	cfg, err := NewConfig(changefeedID, testutil.NewConsistentConfig(uri.String()))
+	require.NoError(t, err)
+	cfg.maxLogSizeInBytes = 8
+	worker := newFileWorkerGroup(cfg, nil, extStorage)
+	defer worker.close()
+	// An unbuffered channel lets the test detect whether flushAll still accepts
+	// the older file's completion after processing the newer file's completion.
+	worker.completeCh = make(chan *fileCache)
+
+	var callbackOrder []int
+	require.NoError(t, worker.writeToCache(ctx, &polymorphicRedoEvent{
+		commitTs:  1,
+		data:      []byte("firstlog"),
+		postFlush: func() { callbackOrder = append(callbackOrder, 1) },
+	}))
+	require.NoError(t, worker.writeToCache(ctx, &polymorphicRedoEvent{
+		commitTs:  2,
+		data:      []byte("tail"),
+		postFlush: func() { callbackOrder = append(callbackOrder, 2) },
+	}))
+	first := <-worker.flushCh
+	second := worker.files[1]
+
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.flushAll(ctx)
+	}()
+	select {
+	case submitted := <-worker.flushCh:
+		require.Same(t, second, submitted)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the tail file to be submitted")
+	}
+
+	// Upload and pool the newer file's buffer while the older file is pending.
+	require.NoError(t, worker.syncWriteFile(ctx, second))
+	require.Nil(t, second.data)
+	select {
+	case worker.completeCh <- second:
+	case <-ctx.Done():
+		t.Fatal("timed out reporting the newer file's completion")
+	}
+	require.NoError(t, worker.syncWriteFile(ctx, first))
+	select {
+	case worker.completeCh <- first:
+	case err := <-done:
+		t.Fatalf("flushAll returned before the older file completed: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out reporting the older file's completion")
+	}
+	require.NoError(t, <-done)
+	require.Empty(t, worker.files)
+	require.Equal(t, []int{1, 2}, callbackOrder)
+
+	// Subsequent writes and rotation must use new file caches, even if their
+	// backing arrays come from the uploaded files' pooled buffers.
+	require.NoError(t, worker.writeToCache(ctx, &polymorphicRedoEvent{
+		commitTs: 3,
+		data:     []byte("nextlog!"),
+	}))
+	third := worker.files[0]
+	require.NotSame(t, first, third)
+	require.NotSame(t, second, third)
+	require.Empty(t, worker.flushCh)
+	require.NoError(t, worker.writeToCache(ctx, &polymorphicRedoEvent{
+		commitTs: 4,
+		data:     []byte("last"),
+	}))
+	require.Same(t, third, <-worker.flushCh)
+	require.Empty(t, worker.flushCh)
+	require.Len(t, worker.files, 2)
+	require.Equal(t, "nextlog!", third.writer.buf.String())
+	require.Equal(t, "last", worker.files[1].writer.buf.String())
+	require.Equal(t, []int{1, 2}, callbackOrder)
+
+	for _, file := range []struct {
+		cache *fileCache
+		data  string
+	}{{first, "firstlog"}, {second, "tail"}} {
+		data, err := extStorage.ReadFile(ctx, file.cache.filename)
+		require.NoError(t, err)
+		require.Equal(t, file.data, string(data))
+	}
+}
+
 func TestCompletedFilesReleaseCallbacksInCreationOrder(t *testing.T) {
 	var callbackOrder []int
 	first := &fileCache{postFlush: []func(){func() { callbackOrder = append(callbackOrder, 1) }}}

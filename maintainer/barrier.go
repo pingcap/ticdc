@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +53,11 @@ type Barrier struct {
 	// routeAdmin gates route-affecting DDLs before Barrier emits WRITE/PASS
 	// actions. A nil value keeps Barrier on the normal non-route path.
 	routeAdmin *routing.Admin
+
+	// lastSyncPointTs is the commitTs of the latest syncpoint whose writer dispatcher
+	// reported it done, i.e. it has been written to the downstream. It is read by the
+	// maintainer's checkpoint goroutine for metrics, so it must be atomic.
+	lastSyncPointTs atomic.Uint64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -79,13 +85,27 @@ func NewBarrier(spanController *span.Controller,
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) []*messaging.TargetMessage {
+	if request == nil || request.ChangefeedID == nil {
+		log.Warn("ignore invalid block status request",
+			zap.String("from", from.String()),
+			zap.Int64("mode", b.mode))
+		return nil
+	}
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
+	invalidStatusCount := 0
 	for _, status := range request.BlockStatuses {
+		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 ||
+			(status.State.IsBlocked &&
+				status.State.Stage != heartbeatpb.BlockStage_DONE &&
+				status.State.BlockTables == nil) {
+			invalidStatusCount++
+			continue
+		}
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		task := b.spanController.GetTaskByID(dispatcherID)
@@ -160,6 +180,13 @@ func (b *Barrier) HandleStatus(from node.ID,
 				actions[targetID] = append(actions[targetID], action)
 			}
 		}
+	}
+	if invalidStatusCount > 0 {
+		log.Warn("ignore invalid block statuses",
+			zap.String("from", from.String()),
+			zap.String("changefeed", request.ChangefeedID.GetName()),
+			zap.Int("invalidStatusCount", invalidStatusCount),
+			zap.Int64("mode", b.mode))
 	}
 	for event, dispatchers := range eventDispatcherIDsMap {
 		dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
@@ -355,6 +382,9 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 }
 
 func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
+	if changefeedID == nil || status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
+		return nil, nil, "", false
+	}
 	cfID := common.NewChangefeedIDFromPB(changefeedID)
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
@@ -368,9 +398,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			Mode:            status.Mode,
 		})
-		if status.State != nil {
-			span.UpdateBlockState(*status.State)
-		}
+		span.UpdateBlockState(*status.State)
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
 		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true
@@ -421,6 +449,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
+		}
+		if event.isSyncPoint {
+			b.updateLastSyncPointTs(event.commitTs)
 		}
 	}
 
@@ -557,6 +588,23 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	}
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 	return event, nil, "", true
+}
+
+// updateLastSyncPointTs advances lastSyncPointTs to ts if ts is larger.
+// The writer DONE status can be resent, so this must be idempotent and never move backwards.
+func (b *Barrier) updateLastSyncPointTs(ts uint64) {
+	for {
+		old := b.lastSyncPointTs.Load()
+		if ts <= old || b.lastSyncPointTs.CompareAndSwap(old, ts) {
+			return
+		}
+	}
+}
+
+// GetLastSyncPointTs returns the commitTs of the latest syncpoint written to the downstream,
+// or 0 if no syncpoint has been written since the barrier was created.
+func (b *Barrier) GetLastSyncPointTs() uint64 {
+	return b.lastSyncPointTs.Load()
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one

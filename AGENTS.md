@@ -13,6 +13,8 @@
 - Do not refactor adjacent code, rename symbols, or reformat unrelated files unless the task requires it.
 - Prefer the simplest solution that solves the problem; do not add speculative abstractions, features, or configurability.
 - Match existing style and patterns. Remove only unused imports, variables, functions, or files introduced by your change.
+- Never expose physical credentials or key material in production logs, debug logs, errors, configuration displays, or API responses. This includes passwords, tokens, authorization values, access or secret keys, private keys, credential-bearing URLs or DSNs, and nested third-party errors.
+- Apply masking at logging and display boundaries while preserving useful non-sensitive diagnostics. Do not redact CDC payloads or test-only consumer output unless the task explicitly requires it.
 - Validate changes with targeted tests or checks when practical.
 
 ## Before Changing Code

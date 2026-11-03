@@ -134,16 +134,6 @@ var (
 			Name:      "slow_table_puller_resolved_ts_lag",
 			Help:      "Puller Slowest ResolvedTs lag",
 		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	// checker related
-	SplitSpanCheckDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "split_span_check_duration",
-			Help:      "Bucketed histogram of split span check time (s).",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
-		}, []string{GetKeyspaceLabel(), "changefeed", "group_id"})
 )
 
 func initSchedulerMetrics(registry *prometheus.Registry) {
@@ -166,6 +156,4 @@ func initSchedulerMetrics(registry *prometheus.Registry) {
 
 	registry.MustRegister(SlowestTablePullerResolvedTs)
 	registry.MustRegister(SlowestTablePullerResolvedTsLag)
-
-	registry.MustRegister(SplitSpanCheckDuration)
 }

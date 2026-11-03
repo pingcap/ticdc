@@ -244,11 +244,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+			changefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+			changefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+			changefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+			changefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+			changefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
 			changefeedDownstreamTypes := make(map[common.ChangeFeedDisplayName]struct{})
 			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
@@ -267,7 +267,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				keyspace := displayName.Keyspace
 				name := displayName.Name
 
-				downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
+				_, downstreamType := config.ParseSinkURI(info.SinkURI)
 				if oldType, ok := changefeedDownstreamTypeCache[displayName]; ok && oldType != downstreamType {
 					metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
 				}
@@ -565,10 +565,10 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
 	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
 		return
 	}
-	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
+	captureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
 	var initializedNodes []node.ID
 	if from == c.writeLease.selfNodeID {
 		// Only the coordinator capture needs remote membership to select a witness.
@@ -577,9 +577,9 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
 	if len(messages) == 0 {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
 	} else {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+		captureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
 	}
 	hasGrant := false
 	for _, message := range messages {
@@ -626,7 +626,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	})
 	for _, message := range messages {
 		if err := c.messageCenter.SendCommand(message); err != nil {
-			metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+			captureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
 		}
 	}
 }
@@ -1064,7 +1064,7 @@ func (c *Controller) stopStaleBootstrapMaintainers(
 }
 
 func (c *Controller) Stop() {
-	metrics.CaptureP2PWitnessAvailable.Set(0)
+	captureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()

@@ -1286,6 +1286,83 @@ func TestEncodeUpdate(t *testing.T) {
 	`, buf.String())
 }
 
+func TestEncodeVirtualColumnSchema(t *testing.T) {
+	helper := NewSQLTestHelper(t, "t", `create table test.t (
+		a bigint primary key,
+		b bigint not null,
+		c bigint generated always as (b) virtual,
+		d bigint generated always as (b) stored
+	)`)
+	defer helper.Close()
+
+	dml := helper.helper.DML2Event("test", "t", `insert into test.t (a, b) values (1, 2)`)
+	insert, ok := dml.GetNextRow()
+	require.True(t, ok)
+	dml = helper.helper.DML2Event("test", "t", `update test.t set b = 3 where a = 1`)
+	update, ok := dml.GetNextRow()
+	require.True(t, ok)
+	update.PreRow = insert.Row
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{{
+			Matcher: []string{"test.t"},
+			Columns: []string{"*", "!c"},
+		}},
+	}, true)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name     string
+		selector commonEvent.Selector
+		fields   []string
+	}{
+		{
+			name:     "default selector",
+			selector: columnselector.NewDefaultColumnSelector(),
+			fields:   []string{"a", "b", "c", "d"},
+		},
+		{
+			name:     "exclude virtual column",
+			selector: selectors.Get("test", "t"),
+			fields:   []string{"a", "b", "d"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			codec := &dbzCodec{
+				config:    common.NewConfig(config.ProtocolDebezium),
+				clusterID: "test_cluster",
+				nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+			}
+			buf := new(bytes.Buffer)
+			require.NoError(t, codec.EncodeValue(&commonEvent.RowEvent{
+				TableInfo:      helper.tableInfo,
+				CommitTs:       1,
+				Event:          update,
+				ColumnSelector: tc.selector,
+			}, buf))
+
+			var message struct {
+				Payload struct {
+					Before json.RawMessage
+					After  json.RawMessage
+				}
+				Schema map[string]any
+			}
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &message))
+			require.JSONEq(t, `{"a":1,"b":2,"d":2}`, string(message.Payload.Before))
+			require.JSONEq(t, `{"a":1,"b":3,"d":3}`, string(message.Payload.After))
+			for _, name := range []string{"before", "after"} {
+				schema := schemaFieldsByName(t, message.Schema, name)
+				var fields []string
+				for _, field := range schema["fields"].([]any) {
+					fields = append(fields, field.(map[string]any)["field"].(string))
+				}
+				require.Equal(t, tc.fields, fields, name)
+			}
+		})
+	}
+}
+
 func TestEncodeDelete(t *testing.T) {
 	codec := &dbzCodec{
 		config:    common.NewConfig(config.ProtocolDebezium),

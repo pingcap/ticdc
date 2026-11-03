@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +79,111 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	changefeedConfig := info.ToChangefeedConfig()
 	require.Equal(t, PerformanceModeLowLatency, changefeedConfig.PerformanceMode)
 	require.True(t, changefeedConfig.IsLowLatencyMode())
+}
+
+func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	data, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			masked, err := MaskChangefeedInfo([]byte(data))
+			require.NoError(t, err)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(masked)))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+}
+
+func TestChangeFeedInfoStringRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(info.String())))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
 }
 
 func TestChangeFeedInfoToChangefeedConfigIntegrity(t *testing.T) {
@@ -156,6 +262,67 @@ func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	after, err := info.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: new("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+// TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
+// and removes unused fields, retaining it only for sinks with encoders or blackhole.
+func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
+	tests := []struct {
+		sinkURI string
+		keep    bool
+	}{
+		{sinkURI: "kafka://127.0.0.1:9092/topic", keep: true},
+		{sinkURI: "pulsar://127.0.0.1:6650/topic", keep: true},
+		{sinkURI: "file:///tmp/cdc", keep: true},
+		{sinkURI: "s3://bucket/cdc", keep: true},
+		{sinkURI: "gcs://bucket/cdc", keep: true},
+		{sinkURI: "azblob://bucket/cdc", keep: true},
+		{sinkURI: "mysql://127.0.0.1:3306"},
+		{sinkURI: "tidb://127.0.0.1:4000"},
+		{sinkURI: "blackhole://", keep: true},
+	}
+	for _, tt := range tests {
+		// Cleanup must preserve the configured value for encoder-backed sinks
+		// while still dropping it for MySQL-compatible sinks.
+		t.Run(tt.sinkURI, func(t *testing.T) {
+			cfg := GetDefaultReplicaConfig()
+			cfg.Sink.EncoderConcurrency = util.AddressOf(16)
+			info := &ChangeFeedInfo{SinkURI: tt.sinkURI, Config: cfg}
+			info.RmUnusedFields()
+			if tt.keep {
+				require.NotNil(t, cfg.Sink.EncoderConcurrency)
+				require.Equal(t, 16, *cfg.Sink.EncoderConcurrency)
+			} else {
+				require.Nil(t, cfg.Sink.EncoderConcurrency)
+			}
+		})
+	}
 }
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {

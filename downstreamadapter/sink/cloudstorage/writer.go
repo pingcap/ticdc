@@ -20,11 +20,10 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -46,7 +45,7 @@ type writer struct {
 	// the channel does not need to be closed explicitly.
 	flushCh chan flushTask
 
-	statistics        *pmetrics.Statistics
+	statistics        *statistics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
 	metricFlushBytes    prometheus.Observer
@@ -81,7 +80,7 @@ func newWriter(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
-	statistics *pmetrics.Statistics,
+	stats *statistics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
 	var (
@@ -95,11 +94,11 @@ func newWriter(
 		config:            config,
 		spool:             spoolBuffer,
 		flushCh:           make(chan flushTask, 64),
-		statistics:        statistics,
+		statistics:        stats,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricFlushBytes:    cloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration: cloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 	}
 	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
@@ -123,10 +122,10 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 	overseerTicker := time.NewTicker(d.config.FlushInterval * 2)
 	writerLabel := strconv.Itoa(d.shardID)
-	metricBusyRatio := metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
+	metricBusyRatio := cloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
 	defer func() {
 		overseerTicker.Stop()
-		metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
+		cloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
 	}()
 
 	for {
@@ -232,60 +231,25 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 	start := time.Now()
-
-	err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		if d.config.FlushConcurrency <= 1 {
-			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
-			if err != nil {
-				return 0, 0, err
-			}
-			return payload.rowsCount, payload.nBytes, nil
-		}
-
-		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
-			Concurrency: d.config.FlushConcurrency,
-		})
-		if err != nil {
-			return 0, 0, err
-		}
-
-		_, err = writer.Write(ctx, payload.data)
-		if err != nil {
-			closeErr := writer.Close(ctx)
-			if closeErr != nil {
-				log.Warn("failed to close writer after write failure",
-					zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-					zap.String("path", dataFilePath), zap.Error(closeErr))
-			}
-			return 0, 0, err
-		}
-
-		if err = writer.Close(ctx); err != nil {
-			log.Error("failed to close concurrency writer",
-				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-				zap.String("path", dataFilePath), zap.Error(err))
-			return 0, 0, err
-		}
-		return payload.rowsCount, payload.nBytes, nil
-	})
-	if err != nil {
+	if err := d.writeFile(ctx, dataFilePath, payload.data); err != nil {
+		d.statistics.RecordDMLError()
 		return err
 	}
-
 	if err := writelease.WaitForWrite(ctx, d.writeGate); err != nil {
 		return err
 	}
-	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
-	if err != nil {
+	if err := d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n")); err != nil {
 		log.Error("failed to write index file to external storage",
 			zap.String("keyspace", keyspace),
 			zap.String("changefeed", changefeed),
 			zap.String("path", indexFilePath),
 			zap.Int("shardID", d.shardID),
 			zap.Error(err))
+		d.statistics.RecordDMLError()
 		return err
 	}
 
+	d.statistics.RecordDMLBatch(payload.rowsCount, payload.nBytes)
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	d.metricFlushBytes.Observe(float64(payload.nBytes))
 
@@ -299,6 +263,35 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}
 	// Help GC release the potentially large encoded payload buffer before returning.
 	payload.data = nil
+	return nil
+}
+
+func (d *writer) writeFile(ctx context.Context, filePath string, data []byte) error {
+	if d.config.FlushConcurrency <= 1 {
+		return d.storage.WriteFile(ctx, filePath, data)
+	}
+	writer, err := d.storage.Create(ctx, filePath, &storeapi.WriterOption{
+		Concurrency: d.config.FlushConcurrency,
+	})
+	if err != nil {
+		return err
+	}
+	keyspace := d.changeFeedID.Keyspace()
+	changefeed := d.changeFeedID.Name()
+	if _, err = writer.Write(ctx, data); err != nil {
+		if closeErr := writer.Close(ctx); closeErr != nil {
+			log.Warn("failed to close writer after write failure",
+				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+				zap.String("path", filePath), zap.Error(closeErr))
+		}
+		return err
+	}
+	if err = writer.Close(ctx); err != nil {
+		log.Error("failed to close concurrency writer",
+			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+			zap.String("path", filePath), zap.Error(err))
+		return err
+	}
 	return nil
 }
 

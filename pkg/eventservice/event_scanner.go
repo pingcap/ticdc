@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -838,6 +839,12 @@ func newDMLProcessor(
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
