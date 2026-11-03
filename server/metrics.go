@@ -14,33 +14,13 @@
 package server
 
 import (
-	"os"
-	"runtime"
-	"strconv"
-
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 var (
-	goGC = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "go_gc",
-			Help:      "The value of GOGC",
-		})
-
-	goMaxProcs = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "server",
-			Name:      "go_max_procs",
-			Help:      "The value of GOMAXPROCS",
-		})
-
 	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
 	// It is used by dashboards to identify the exact binary running on each TiCDC server,
 	// including whether the process is running in TiCDC's new or old architecture mode.
@@ -87,28 +67,17 @@ var (
 		}, []string{"reason"})
 )
 
-// RegisterMetrics registers server metrics and runtime collectors.
-func RegisterMetrics(registry *prometheus.Registry) {
+// RecordBuildInfo records the server build metadata.
+func RecordBuildInfo() {
 	buildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
+}
 
-	// The default GOGC value is 100. See debug.SetGCPercent.
-	gogcValue := 100
-	if val, err := strconv.Atoi(os.Getenv("GOGC")); err == nil {
-		gogcValue = val
-	}
-	goGC.Set(float64(gogcValue))
-
-	maxProcs := runtime.GOMAXPROCS(0)
-	goMaxProcs.Set(float64(maxProcs))
-
+// RegisterMetrics registers capture and process metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(captureWriteGateState)
 	registry.MustRegister(captureP2PLeaseRemainingSeconds)
 	registry.MustRegister(captureEtcdProofRemainingSeconds)
 	registry.MustRegister(captureWriteBlockCounter)
-	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	registry.MustRegister(collectors.NewGoCollector(
-		collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection)))
-	registry.MustRegister(goGC)
-	registry.MustRegister(goMaxProcs)
 	registry.MustRegister(buildInfo)
+	metrics.RegisterMetrics(registry)
 }

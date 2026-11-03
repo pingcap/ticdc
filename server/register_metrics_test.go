@@ -15,7 +15,6 @@
 package server
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
@@ -26,17 +25,15 @@ import (
 )
 
 func TestRegisterMetrics(t *testing.T) {
-	t.Setenv("GOGC", "123")
 	buildInfo.Reset()
 	t.Cleanup(buildInfo.Reset)
+	RecordBuildInfo()
 
 	originalRegistry := registry
 	registry = prometheus.NewRegistry()
 	t.Cleanup(func() { registry = originalRegistry })
 
 	require.NotPanics(t, registerMetrics)
-	require.Equal(t, float64(123), testutil.ToFloat64(goGC))
-	require.Equal(t, float64(runtime.GOMAXPROCS(0)), testutil.ToFloat64(goMaxProcs))
 
 	changefeedID := common.NewChangeFeedIDWithName("test-register-metrics", common.DefaultKeyspaceName)
 	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
@@ -46,8 +43,6 @@ func TestRegisterMetrics(t *testing.T) {
 
 	count, err := testutil.GatherAndCount(registry,
 		"ticdc_server_build_info",
-		"ticdc_server_go_gc",
-		"ticdc_server_go_max_procs",
 		"ticdc_sink_batch_row_count",
 		"ticdc_sink_batch_write_bytes",
 		"ticdc_sink_execution_error",
@@ -56,5 +51,5 @@ func TestRegisterMetrics(t *testing.T) {
 		"ticdc_ddl_execution",
 	)
 	require.NoError(t, err)
-	require.Equal(t, 10, count)
+	require.Equal(t, 8, count)
 }
