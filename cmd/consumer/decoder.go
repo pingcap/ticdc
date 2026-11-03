@@ -34,30 +34,37 @@ type decoderGroup struct {
 	workers   int
 	memory    *memoryBudget
 	completed chan struct{}
+	validator dmlValidator
 }
 
 type decodeTask struct {
-	commitTs uint64
-	stream   int32
-	boundary *readBoundary
-	waiting  bool
-	message  *codecCommon.DMLMessage
-	name     event.SchemaTableName
-	dml      *event.DMLEvent
-	bytes    int64
-	done     chan struct{}
-	table    *common.TableInfo
-	tableID  int64
-	validate func(*event.DMLEvent) // Source-side check that runs after conversion.
+	commitTs          uint64
+	stream            int32
+	offset            int64 // Kafka record offset for source-side validation.
+	skipKeyOnlyDelete bool
+	boundary          *readBoundary
+	waiting           bool
+	message           *codecCommon.DMLMessage
+	name              event.SchemaTableName
+	dml               *event.DMLEvent
+	bytes             int64
+	done              chan struct{}
+	table             *common.TableInfo
+	tableID           int64
 }
 
-func newDecoderGroup(memory *memoryBudget, completed chan struct{}) *decoderGroup {
+type dmlValidator interface {
+	validateDML(task *decodeTask, dml *event.DMLEvent)
+}
+
+func newDecoderGroup(memory *memoryBudget, completed chan struct{}, validator dmlValidator) *decoderGroup {
 	workers := runtime.GOMAXPROCS(0)
 	return &decoderGroup{
 		input:     make(chan *decodeTask, workers*64),
 		workers:   workers,
 		memory:    memory,
 		completed: completed,
+		validator: validator,
 	}
 }
 
@@ -114,8 +121,8 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 				dml.TableInfo.UpdateTS = task.table.UpdateTS
 			}
 		}
-		if task.validate != nil {
-			task.validate(dml)
+		if d.validator != nil {
+			d.validator.validateDML(task, dml)
 		}
 		bytes := dml.Rows.MemoryUsage()
 		d.memory.reserve(bytes)

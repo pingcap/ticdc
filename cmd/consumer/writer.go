@@ -169,15 +169,25 @@ type dmlWrite struct {
 	dml        *event.DMLEvent
 	bytes      int64
 	sequential bool
+	memory     *memoryBudget
+}
+
+func (r *dmlWrite) release() {
+	r.memory.release(r.bytes)
 }
 
 type ddlWrite struct {
-	ddl     *event.DDLEvent
-	onFlush func()
+	ddl  *event.DDLEvent
+	task *ddlTask
+}
+
+func (d *ddlWrite) release() {
+	d.task.release()
 }
 
 func (w *writer) addDML(row *dmlWrite) {
-	row.dml.AddPostFlushFunc(func() { w.memory.release(row.bytes) })
+	row.memory = w.memory
+	row.dml.AddPostFlushFunc(row.release)
 	w.pendingDML = append(w.pendingDML, row)
 	w.progressChanged = true
 }
@@ -197,9 +207,7 @@ func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := w.downstream.WriteBlockEvent(result.ddl); err != nil {
 		return err
 	}
-	if result.onFlush != nil {
-		result.onFlush()
-	}
+	result.release()
 	return nil
 }
 
@@ -225,9 +233,7 @@ func (w *writer) flushDDL(ctx context.Context) error {
 		}
 		if w.ddlWrites[key] || (key.commitTs > 0 && key.commitTs <= w.checkpoint) {
 			// No DDL is in flight, so the original write has succeeded.
-			if result.onFlush != nil {
-				result.onFlush()
-			}
+			result.release()
 			w.pendingDDL[0] = nil
 			w.pendingDDL = w.pendingDDL[1:]
 			w.progressChanged = true
@@ -477,6 +483,34 @@ func (w *writer) finishBatches() {
 	w.advanceCheckpoint()
 }
 
+func (w *writer) resetUnsubmitted() {
+	w.unsubmitted, w.hasUnsubmitted = math.MaxUint64, false
+	clear(w.unsubmittedTables)
+}
+
+func (w *writer) trackUnsubmitted(ts uint64) {
+	w.unsubmitted, w.hasUnsubmitted = min(w.unsubmitted, ts), true
+}
+
+func (w *writer) trackUnsubmittedHead(row *decodeTask) {
+	w.trackUnsubmitted(row.commitTs)
+	if w.unsubmittedTables == nil {
+		w.unsubmittedTables = make(map[int64]uint64)
+	}
+	if ts, ok := w.unsubmittedTables[row.tableID]; !ok || row.commitTs < ts {
+		w.unsubmittedTables[row.tableID] = row.commitTs
+	}
+}
+
+func trackUnfinishedTable(tables map[int64]uint64, dml *event.DMLEvent) {
+	if tables == nil {
+		return
+	}
+	if before, ok := tables[dml.PhysicalTableID]; !ok || dml.CommitTs < before {
+		tables[dml.PhysicalTableID] = dml.CommitTs
+	}
+}
+
 func (w *writer) advanceCheckpoint() {
 	if !w.progressChanged {
 		return
@@ -501,14 +535,6 @@ func (w *writer) advanceCheckpoint() {
 			unfinishedTables[id] = ts
 		}
 	}
-	trackTable := func(dml *event.DMLEvent) {
-		if unfinishedTables != nil {
-			id := dml.PhysicalTableID
-			if before, exists := unfinishedTables[id]; !exists || dml.CommitTs < before {
-				unfinishedTables[id] = dml.CommitTs
-			}
-		}
-	}
 	for _, control := range w.pendingDDL {
 		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
 	}
@@ -517,13 +543,13 @@ func (w *writer) advanceCheckpoint() {
 	}
 	for _, item := range w.pendingDML {
 		unfinished, pending = min(unfinished, item.dml.CommitTs), true
-		trackTable(item.dml)
+		trackUnfinishedTable(unfinishedTables, item.dml)
 	}
 	for _, batch := range w.inFlight {
 		for index, dml := range batch.events {
 			if !batch.finished[index].Load() {
 				unfinished, pending = min(unfinished, dml.CommitTs), true
-				trackTable(dml)
+				trackUnfinishedTable(unfinishedTables, dml)
 			}
 		}
 	}

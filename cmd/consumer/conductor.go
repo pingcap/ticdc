@@ -45,9 +45,14 @@ func (*ddlTask) pendingTask()    {}
 
 type ddlTask struct {
 	ddl         *event.DDLEvent
-	onFlush     func()
+	memory      *memoryBudget
+	bytes       int64
 	boundary    *readBoundary
 	awaitingDDL bool
+}
+
+func (t *ddlTask) release() {
+	t.memory.release(t.bytes)
 }
 
 type watermark struct {
@@ -113,33 +118,10 @@ func (c *conductor) flush(ctx context.Context, w *writer) error {
 		if len(w.pendingDML) != 0 {
 			return nil
 		}
-		active := make(map[int64]*dmlWrite)
-		for _, batch := range w.inFlight {
-			for _, row := range batch.items {
-				active[row.dml.PhysicalTableID] = row
-			}
-		}
-		tables := make(map[int64]*dmlWrite)
+		selection := newSelection(w, c.mergeRows)
 		var items []pendingTask
-		var rows, events int
-		var bytes int64
-		canWrite := func(task *decodeTask) bool {
-			if w.inFlightEvents+events != 0 &&
-				(w.inFlightEvents+events+1 > maxInFlightEvents || w.inFlightBytes+bytes+task.bytes > maxInFlightBytes) {
-				return false
-			}
-			row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: c.mergeRows}
-			if !w.canWrite(row, active, tables) {
-				return false
-			}
-			tables[row.dml.PhysicalTableID] = row
-			rows += int(task.dml.Len())
-			events++
-			bytes += task.bytes
-			return true
-		}
-		for len(items) < batchRows && rows < batchRows && bytes < batchBytes {
-			item := c.next(canWrite)
+		for len(items) < batchRows && selection.rows < batchRows && selection.bytes < batchBytes {
+			item := c.next(selection)
 			if item == nil {
 				break
 			}
@@ -158,30 +140,88 @@ func (c *conductor) flush(ctx context.Context, w *writer) error {
 	}
 }
 
-func (c *conductor) deliver(items []pendingTask, w *writer) {
-	var rows []*dmlWrite
-	var bytes int64
-	flush := func() {
-		for _, row := range c.prepare(rows) {
-			w.addDML(row)
+// selection admits the rows for one delivery round: the writer budget, the
+// in-flight rows of the same table, and the DDL fence must all allow the task.
+type selection struct {
+	writer *writer
+	active map[int64]*dmlWrite
+	tables map[int64]*dmlWrite
+	merge  bool
+	rows   int
+	events int
+	bytes  int64
+}
+
+type dmlAdmitter interface {
+	canWrite(*decodeTask) bool
+}
+
+func newSelection(w *writer, merge bool) *selection {
+	active := make(map[int64]*dmlWrite)
+	for _, batch := range w.inFlight {
+		for _, row := range batch.items {
+			active[row.dml.PhysicalTableID] = row
 		}
-		rows = rows[:0]
-		bytes = 0
 	}
+	return &selection{
+		writer: w,
+		active: active,
+		tables: make(map[int64]*dmlWrite),
+		merge:  merge,
+	}
+}
+
+func (s *selection) canWrite(task *decodeTask) bool {
+	if s.writer.inFlightEvents+s.events != 0 &&
+		(s.writer.inFlightEvents+s.events+1 > maxInFlightEvents || s.writer.inFlightBytes+s.bytes+task.bytes > maxInFlightBytes) {
+		return false
+	}
+	row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: s.merge}
+	if !s.writer.canWrite(row, s.active, s.tables) {
+		return false
+	}
+	s.tables[row.dml.PhysicalTableID] = row
+	s.rows += int(task.dml.Len())
+	s.events++
+	s.bytes += task.bytes
+	return true
+}
+
+type deliveryBatch struct {
+	conductor *conductor
+	writer    *writer
+	rows      []*dmlWrite
+	bytes     int64
+}
+
+func (b *deliveryBatch) add(row *dmlWrite) {
+	b.rows = append(b.rows, row)
+	b.bytes += row.bytes
+	if len(b.rows) >= batchRows || b.bytes >= batchBytes {
+		b.flush()
+	}
+}
+
+func (b *deliveryBatch) flush() {
+	for _, row := range b.conductor.prepare(b.rows) {
+		b.writer.addDML(row)
+	}
+	b.rows = b.rows[:0]
+	b.bytes = 0
+}
+
+func (c *conductor) deliver(items []pendingTask, w *writer) {
+	batch := &deliveryBatch{conductor: c, writer: w}
 	for _, item := range items {
 		switch item := item.(type) {
 		case *decodeTask:
-			rows = append(rows, &dmlWrite{dml: item.dml, bytes: item.bytes, sequential: c.mergeRows})
-			bytes += item.bytes
-			if len(rows) >= batchRows || bytes >= batchBytes {
-				flush()
-			}
+			batch.add(&dmlWrite{dml: item.dml, bytes: item.bytes, sequential: c.mergeRows})
 		case *ddlTask:
-			flush()
-			w.addDDL(&ddlWrite{ddl: item.ddl, onFlush: item.onFlush})
+			batch.flush()
+			w.addDDL(&ddlWrite{ddl: item.ddl, task: item})
 		}
 	}
-	flush()
+	batch.flush()
 }
 
 func (c *conductor) prepare(items []*dmlWrite) []*dmlWrite {
@@ -391,10 +431,12 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 func (c *conductor) queueDDL(ddl *event.DDLEvent) *ddlInput {
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName))
 	c.memory.reserve(bytes)
-	c.pendingDDL = append(c.pendingDDL, &ddlTask{
-		ddl:     ddl,
-		onFlush: func() { c.memory.release(bytes) },
-	})
+	task := &ddlTask{
+		ddl:    ddl,
+		memory: c.memory,
+		bytes:  bytes,
+	}
+	c.pendingDDL = append(c.pendingDDL, task)
 	if c.ddlInputs == nil {
 		c.ddlInputs = make(map[ddlKey]*ddlInput)
 	}
@@ -405,13 +447,13 @@ func (c *conductor) queueDDL(ddl *event.DDLEvent) *ddlInput {
 		query:    ddl.Query,
 	}
 	input := &ddlInput{
-		event: c.pendingDDL[len(c.pendingDDL)-1],
+		event: task,
 	}
 	c.ddlInputs[key] = input
 	return input
 }
 
-func (c *conductor) nextReady(watermark uint64, canWrite func(*decodeTask) bool) pendingTask {
+func (c *conductor) nextReady(watermark uint64, admit dmlAdmitter) pendingTask {
 	c.controlTs = 0
 	var head *ddlTask
 	for len(c.pendingDDL) != 0 {
@@ -429,17 +471,17 @@ func (c *conductor) nextReady(watermark uint64, canWrite func(*decodeTask) bool)
 		// A covering canonical-stream watermark without this DDL means that
 		// its canonical input was confirmed before this run. Retire the replica.
 		head.awaitingDDL = false
-		head.onFlush()
+		head.release()
 		c.popDDL()
 		head = nil
 	}
 	headReady := head != nil && ddlReady(head, watermark)
 	if headReady {
-		if result := c.drainDDL(head, watermark, canWrite); result != nil {
+		if result := c.drainDDL(head, watermark, admit); result != nil {
 			return result
 		}
 	}
-	if row := c.nextDML(watermark, canWrite); row != nil {
+	if row := c.nextDML(watermark, admit); row != nil {
 		return row
 	}
 	return nil
@@ -467,7 +509,7 @@ func ddlReady(item *ddlTask, watermark uint64) bool {
 
 // Emit a ready preceding row from the DDL scope, or the DDL once all such
 // rows have moved to writer batches. The writer waits for their flush callbacks.
-func (c *conductor) drainDDL(head *ddlTask, watermark uint64, canWrite func(*decodeTask) bool) pendingTask {
+func (c *conductor) drainDDL(head *ddlTask, watermark uint64, admit dmlAdmitter) pendingTask {
 	preceding := false
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
@@ -475,7 +517,7 @@ func (c *conductor) drainDDL(head *ddlTask, watermark uint64, canWrite func(*dec
 			continue
 		}
 		preceding = true
-		if c.rowReady(row, watermark) && canWrite(row) {
+		if c.rowReady(row, watermark) && admit.canWrite(row) {
 			return c.popDML(row)
 		}
 		c.trackDMLWait(row, watermark)
@@ -502,10 +544,10 @@ func (c *conductor) popDDL() *ddlTask {
 	return item
 }
 
-func (c *conductor) nextDML(watermark uint64, canWrite func(*decodeTask) bool) *decodeTask {
+func (c *conductor) nextDML(watermark uint64, admit dmlAdmitter) *decodeTask {
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
-		if c.rowReady(row, watermark) && canWrite(row) {
+		if c.rowReady(row, watermark) && admit.canWrite(row) {
 			return c.popDML(row)
 		}
 		c.trackDMLWait(row, watermark)
@@ -613,11 +655,15 @@ func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *co
 		streams[id] = &streamWatermark{}
 	}
 	_, orderedDML := reader.(*kafkaReader)
+	var validator dmlValidator
+	if v, ok := reader.(dmlValidator); ok {
+		validator = v
+	}
 	c := &conductor{
 		orderedDML: orderedDML,
 		reader:     reader,
 		memory:     memory, streams: streams,
-		decoder:     newDecoderGroup(memory, make(chan struct{}, 1)),
+		decoder:     newDecoderGroup(memory, make(chan struct{}, 1), validator),
 		mergeRows:   parsing.codecConfig.Protocol == config.ProtocolCsv,
 		sortCSVRows: parsing.codecConfig.Protocol == config.ProtocolCsv && parsing.codecConfig.OutputOldValue && parsing.codecConfig.IncludeCommitTs,
 	}
@@ -626,8 +672,8 @@ func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *co
 	return c
 }
 
-func (c *conductor) next(canWrite func(*decodeTask) bool) pendingTask {
-	return c.nextReady(c.watermark, canWrite)
+func (c *conductor) next(admit dmlAdmitter) pendingTask {
+	return c.nextReady(c.watermark, admit)
 }
 
 // Scope names are logical event metadata. Transport routing remains reader-owned.
@@ -778,27 +824,13 @@ func (c *conductor) collectWatermarks() {
 // timestamps before letting the writer advance global or table checkpoints.
 func (c *conductor) updateWatermark(w *writer) {
 	w.watermark = max(w.watermark, c.watermark)
-	w.unsubmitted, w.hasUnsubmitted = math.MaxUint64, false
-	clear(w.unsubmittedTables)
-	track := func(ts uint64) {
-		w.unsubmitted, w.hasUnsubmitted = min(w.unsubmitted, ts), true
-	}
-	trackDML := func(row *decodeTask) {
-		track(row.commitTs)
-		if w.unsubmittedTables == nil {
-			w.unsubmittedTables = make(map[int64]uint64)
-		}
-		if ts, ok := w.unsubmittedTables[row.tableID]; !ok || row.commitTs < ts {
-			w.unsubmittedTables[row.tableID] = row.commitTs
-		}
-	}
+	w.resetUnsubmitted()
 	for _, groups := range c.pendingDML {
-		trackDML(firstDML(groups))
+		w.trackUnsubmittedHead(firstDML(groups))
 	}
 	for _, ddl := range c.pendingDDL {
-		track(ddl.ddl.GetCommitTs())
+		w.trackUnsubmitted(ddl.ddl.GetCommitTs())
 	}
-
 	w.progressChanged = true
 }
 
@@ -859,11 +891,9 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 		if err := setDDLTableNames(result.ddl); err != nil {
 			return err
 		}
-		defer func() {
-			if result.registered != nil {
-				result.registered()
-			}
-		}()
+		if result.registration != nil {
+			defer result.registration.done()
+		}
 		defer c.crossBoundary(result.scope.stream, result.ddl.GetCommitTs(), result.ddl, nil)
 		ddl := result.ddl
 		key := ddlKey{

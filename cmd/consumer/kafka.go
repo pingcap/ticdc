@@ -204,9 +204,7 @@ func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, tasks chan<-
 	// Initially only SDK buffers can hold data. The conductor takes over
 	// admission once parsed work can release memory through downstream writes.
 	c.ContinueReading(true)
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input kafkaInput) iter.Seq2[task, error] {
-		return c.parse(ctx, parser, input)
-	}, tasks)
+	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
 }
 
 func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafkaInput) iter.Seq2[task, error] {
@@ -239,10 +237,8 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > c.maxMessageBytes {
 					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
-				skipKeyOnlyDelete := parser.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
-				task.validate = func(dml *event.DMLEvent) {
-					c.checkPartition(dml, id, offset, skipKeyOnlyDelete)
-				}
+				task.offset = input.message.Offset
+				task.skipKeyOnlyDelete = parser.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
 			}
 			if rows == 0 {
 				if !yield(result, nil) {
@@ -264,6 +260,10 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 		partition.mu.Unlock()
 		notifyConfirmation(c.confirmable)
 	}
+}
+
+func (c *kafkaReader) validateDML(task *decodeTask, dml *event.DMLEvent) {
+	c.checkPartition(dml, task.stream, task.offset, task.skipKeyOnlyDelete)
 }
 
 func (c *kafkaReader) checkPartition(dml *event.DMLEvent, partition int32, offset int64, skipKeyOnlyDelete bool) {

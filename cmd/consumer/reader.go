@@ -130,7 +130,13 @@ func (r *reader) start(ctx context.Context, parser *inputParser, tasks chan<- []
 
 // Each source keeps its native input type through reading and parsing. The
 // bounded queue lets I/O run while the source parser publishes logical work.
-func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, error), parse func(context.Context, T) iter.Seq2[task, error], tasks chan<- []task) error {
+func readAndParse[T any](
+	ctx context.Context,
+	parser *inputParser,
+	read func(context.Context) ([]T, error),
+	parse func(context.Context, *inputParser, T) iter.Seq2[task, error],
+	tasks chan<- []task,
+) error {
 	g, ctx := errgroup.WithContext(ctx)
 	inputs := make(chan []T, 1)
 	g.Go(func() error {
@@ -148,51 +154,60 @@ func readAndParse[T any](ctx context.Context, read func(context.Context) ([]T, e
 		}
 	})
 	g.Go(func() error {
-		pending := make([]task, 0, batchRows)
-		flush := func() error {
-			if len(pending) == 0 {
-				return nil
-			}
-			select {
-			case tasks <- pending:
-				pending = make([]task, 0, batchRows)
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
+		batch := taskBatch{
+			tasks:   tasks,
+			pending: make([]task, 0, batchRows),
 		}
 		for {
 			select {
 			case <-ctx.Done():
 				return context.Cause(ctx)
-			case batch, ok := <-inputs:
+			case input, ok := <-inputs:
 				if !ok {
-					return flush()
+					return batch.flush(ctx)
 				}
-				for index := range batch {
-					data := batch[index]
+				for index := range input {
+					data := input[index]
 					var zero T
-					batch[index] = zero
-					for work, err := range parse(ctx, data) {
+					input[index] = zero
+					for work, err := range parse(ctx, parser, data) {
 						if err != nil {
 							return err
 						}
-						pending = append(pending, work)
+						batch.pending = append(batch.pending, work)
 						_, row := work.(*decodeTask)
-						if len(pending) == batchRows || !row {
-							if err := flush(); err != nil {
+						if len(batch.pending) == batchRows || !row {
+							if err := batch.flush(ctx); err != nil {
 								return err
 							}
 						}
 					}
 				}
-				if err := flush(); err != nil {
+				if err := batch.flush(ctx); err != nil {
 					return err
 				}
 			}
 		}
 	})
 	return g.Wait()
+}
+
+type taskBatch struct {
+	tasks   chan<- []task
+	pending []task
+}
+
+func (b *taskBatch) flush(ctx context.Context) error {
+	if len(b.pending) == 0 {
+		return nil
+	}
+	select {
+	case b.tasks <- b.pending:
+		b.pending = make([]task, 0, batchRows)
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 func (r *reader) confirm(ctx context.Context) error {

@@ -77,9 +77,13 @@ func (*watermark) isTask()      {}
 func (*resumeTask) isTask()     {}
 
 type inputDDL struct {
-	ddl        *event.DDLEvent
-	scope      inputScope
-	registered func()
+	ddl          *event.DDLEvent
+	scope        inputScope
+	registration ddlRegistration
+}
+
+type ddlRegistration interface {
+	done()
 }
 
 type inputWatermark struct {

@@ -196,34 +196,36 @@ type pulsarInput struct {
 }
 
 func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input pulsarInput) iter.Seq2[task, error] {
-		partition := c.partitions[input.message.Topic()]
-		scope := inputScope{stream: partition.stream, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
-		return func(yield func(task, error) bool) {
-			defer c.memory.release(int64(len(input.message.Key()) + len(input.message.Payload())))
-			for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
-				if err == nil {
-					through := taskTimestamp(work)
-					partition.parsedTs = max(partition.parsedTs, through)
-				}
-				if progress, ok := work.(*inputWatermark); ok && err == nil {
-					// Preserve the legacy consumer's topic-wide checkpoint semantics.
-					progress.sourceCheckpoint = true
-				}
-				if !yield(work, err) {
-					return
-				}
-				if err != nil {
-					return
-				}
+	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
+}
+
+func (c *pulsarReader) parse(ctx context.Context, parser *inputParser, input pulsarInput) iter.Seq2[task, error] {
+	partition := c.partitions[input.message.Topic()]
+	scope := inputScope{stream: partition.stream, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
+	return func(yield func(task, error) bool) {
+		defer c.memory.release(int64(len(input.message.Key()) + len(input.message.Payload())))
+		for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
+			if err == nil {
+				through := taskTimestamp(work)
+				partition.parsedTs = max(partition.parsedTs, through)
 			}
-			partition.mu.Lock()
-			c.memory.reserve(pulsarRecordBytes)
-			partition.records = append(partition.records, pulsarRecord{through: partition.parsedTs, messageID: input.message.ID()})
-			partition.mu.Unlock()
-			notifyConfirmation(c.confirmable)
+			if progress, ok := work.(*inputWatermark); ok && err == nil {
+				// Preserve the legacy consumer's topic-wide checkpoint semantics.
+				progress.sourceCheckpoint = true
+			}
+			if !yield(work, err) {
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
-	}, tasks)
+		partition.mu.Lock()
+		c.memory.reserve(pulsarRecordBytes)
+		partition.records = append(partition.records, pulsarRecord{through: partition.parsedTs, messageID: input.message.ID()})
+		partition.mu.Unlock()
+		notifyConfirmation(c.confirmable)
+	}
 }
 
 func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {

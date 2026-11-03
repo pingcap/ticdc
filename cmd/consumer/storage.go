@@ -279,6 +279,15 @@ type storageDDL struct {
 	ddl        *event.DDLEvent
 	registered chan struct{}
 }
+type storageDDLRegistration struct {
+	reader *storageReader
+	ddl    *storageDDL
+}
+
+func (r storageDDLRegistration) done() {
+	r.reader.registerDDL(r.ddl)
+}
+
 type storageWatermark uint64
 
 func (*storageFile) storageRead()     {}
@@ -286,9 +295,7 @@ func (*storageDDL) storageRead()      {}
 func (storageWatermark) storageRead() {}
 
 func (c *storageReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
-	return readAndParse(ctx, c.Read, func(ctx context.Context, input storageRead) iter.Seq2[task, error] {
-		return c.parse(ctx, parser, input)
-	}, tasks)
+	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
 }
 
 func (c *storageReader) parse(ctx context.Context, parser *inputParser, input storageRead) iter.Seq2[task, error] {
@@ -299,7 +306,8 @@ func (c *storageReader) parse(ctx context.Context, parser *inputParser, input st
 		switch input := input.(type) {
 		case *storageDDL:
 			input.ddl.TableInfo = input.schema.tableInfo()
-			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{ddlBoundary: &readBoundary{reached: true}}, registered: func() { c.registerDDL(input) }}, nil) {
+			registration := storageDDLRegistration{reader: c, ddl: input}
+			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{ddlBoundary: &readBoundary{reached: true}}, registration: registration}, nil) {
 				return
 			}
 		case storageWatermark:
