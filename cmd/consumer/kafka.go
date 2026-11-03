@@ -20,9 +20,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"iter"
+	"math"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +82,10 @@ type kafkaReader struct {
 	boundary         *readBoundary
 	control          *readBoundary
 	progressMu       sync.Mutex // Protects event progress and scheduling shared with the conductor.
+	// Enforced only when the consumer URI states the limits, matching the
+	// legacy consumer. The producer's limits are not part of the consumer.
+	maxMessageBytes int
+	maxBatchSize    int
 }
 
 func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryUsage, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
@@ -114,6 +120,19 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	query := upstreamURI.Query()
+	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
+	if value := query.Get("max-message-bytes"); value != "" {
+		maxMessageBytes, err = strconv.Atoi(value)
+		if err != nil {
+			log.Panic("Kafka max-message-bytes is invalid", zap.String("value", value), zap.Error(err))
+		}
+	}
+	if value := query.Get("max-batch-size"); value != "" {
+		maxBatchSize, err = strconv.Atoi(value)
+		if err != nil {
+			log.Panic("Kafka max-batch-size is invalid", zap.String("value", value), zap.Error(err))
+		}
+	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || ca != "" || cert != "" || key != "" {
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -175,6 +194,8 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 			reached:   helper.GetDDLDispatchRule(protocol) == helper.PartitionAll,
 			watermark: &partitions[0].watermark,
 		},
+		maxMessageBytes: maxMessageBytes,
+		maxBatchSize:    maxBatchSize,
 	}
 }
 
@@ -221,11 +242,11 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 			}
 			if task, ok := result.(*decodeTask); ok {
 				rows++
-				if rows > parser.codecConfig.MaxBatchSize {
-					log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxBatchSize", parser.codecConfig.MaxBatchSize), zap.Int("actualBatchSize", rows))
+				if rows > c.maxBatchSize {
+					log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 				}
-				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > parser.codecConfig.MaxMessageBytes {
-					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", parser.codecConfig.MaxMessageBytes), zap.Int("receivedBytes", size))
+				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > c.maxMessageBytes {
+					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
 				message := task.message
 				skipKeyOnlyDelete := parser.codecConfig.Protocol == config.ProtocolAvro && message.RowType == common.RowTypeUpdate
