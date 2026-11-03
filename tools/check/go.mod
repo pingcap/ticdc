@@ -1,6 +1,6 @@
 module github.com/pingcap/tidb-cdc/_tools
 
-go 1.25.12
+go 1.27.3
 
 require (
 	github.com/AlekSi/gocov-xml v1.1.0
@@ -17,11 +17,11 @@ require (
 	github.com/tinylib/msgp v1.5.0
 	github.com/vektra/mockery/v2 v2.53.4
 	github.com/zhouqiang-cl/gocovmerge v0.0.0-20190125174600-5256314471af
-	golang.org/x/tools v0.36.0
+	golang.org/x/tools v0.52.0
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.1.0
 	google.golang.org/protobuf v1.36.1
 	gotest.tools/gotestsum v1.13.0
-	mvdan.cc/gofumpt v0.7.0
+	mvdan.cc/gofumpt v0.12.0
 	mvdan.cc/sh/v3 v3.3.1
 )
 
@@ -214,15 +214,15 @@ require (
 	go.uber.org/automaxprocs v1.5.3 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e // indirect
 	golang.org/x/exp/typeparams v0.0.0-20240314144324-c7f7c6466f7f // indirect
-	golang.org/x/mod v0.27.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
-	golang.org/x/term v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
 	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241209162323-e6fa225c2576 // indirect

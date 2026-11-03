@@ -1,6 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.26.9
+go 1.27.3
 
 require (
 	cloud.google.com/go/kms v1.25.0
