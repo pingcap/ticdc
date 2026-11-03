@@ -238,11 +238,13 @@ func (c *server) initialize(ctx context.Context) error {
 		NewElector(c, conf.Debug.Scheduler),
 	}
 
+	maintainerManager := maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness, c.EtcdClient)
+	nodeManager.RegisterOwnerChangeHandler(appctx.MaintainerManager, maintainerManager.OnCoordinatorChange)
 	c.subModules = []common.SubModule{
 		subscriptionClient,
 		schemaStore,
 		eventStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness),
+		maintainerManager,
 		eventService,
 	}
 	// register it into global var

@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -31,6 +33,7 @@ import (
 
 const (
 	defaultManagerHeartbeatInterval = 200 * time.Millisecond
+	coordinatorElectionQueryTimeout = time.Second
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -43,6 +46,11 @@ type Manager struct {
 
 	coordinatorID      node.ID
 	coordinatorVersion int64
+	electionClient     etcd.OwnerCaptureInfoClient
+	// The owner watcher only signals this channel. Run owns coordinator state
+	// and rechecks etcd because watcher notifications may lag a valid bootstrap.
+	coordinatorChangedCh       chan struct{}
+	coordinatorNeedsValidation bool
 
 	nodeInfo *node.Info
 
@@ -66,6 +74,7 @@ func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 	nodeLiveness *liveness.Liveness,
+	electionClient etcd.OwnerCaptureInfoClient,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	heartbeatCh := make(chan struct{}, 1)
@@ -74,13 +83,15 @@ func NewMaintainerManager(
 		writeGate = writelease.NewGate()
 	}
 	m := &Manager{
-		mc:          mc,
-		nodeInfo:    nodeInfo,
-		msgCh:       make(chan *messaging.TargetMessage, 1024),
-		heartbeatCh: heartbeatCh,
-		node:        newManagerNodeState(nodeLiveness),
-		maintainers: newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
-		writeGate:   writeGate,
+		mc:                   mc,
+		nodeInfo:             nodeInfo,
+		msgCh:                make(chan *messaging.TargetMessage, 1024),
+		heartbeatCh:          heartbeatCh,
+		node:                 newManagerNodeState(nodeLiveness),
+		maintainers:          newManagerMaintainerSet(conf, nodeInfo, heartbeatCh),
+		writeGate:            writeGate,
+		electionClient:       electionClient,
+		coordinatorChangedCh: make(chan struct{}, 1),
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -206,14 +217,23 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-m.msgCh:
-			m.handleMessage(msg)
+			m.handleMessage(ctx, msg)
+		case <-m.coordinatorChangedCh:
+			m.coordinatorNeedsValidation = true
+			m.validateCoordinator(ctx)
 		case <-m.heartbeatCh:
-			m.sendHeartbeat()
+			if m.validateCoordinator(ctx) {
+				m.sendHeartbeat()
+			}
 		case <-ticker.C:
-			m.sendHeartbeat()
+			if m.validateCoordinator(ctx) {
+				m.sendHeartbeat()
+			}
 			m.cleanupRemovedMaintainers()
 		case <-nodeHeartbeatTicker.C:
-			m.sendNodeHeartbeat(false)
+			if m.validateCoordinator(ctx) {
+				m.sendNodeHeartbeat(false)
+			}
 		}
 	}
 }
@@ -243,12 +263,27 @@ func (m *Manager) Close(_ context.Context) error {
 	return nil
 }
 
-func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
-	req := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
-	if m.coordinatorVersion > req.Version {
-		log.Warn("ignore invalid coordinator version",
-			zap.Int64("coordinatorVersion", m.coordinatorVersion),
-			zap.Int64("version", req.Version))
+func (m *Manager) onCoordinatorBootstrapRequest(ctx context.Context, msg *messaging.TargetMessage) {
+	if msg == nil || msg.From.IsEmpty() || len(msg.Message) != 1 || m.electionClient == nil {
+		return
+	}
+	req, ok := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
+	if !ok || req == nil || req.Version <= 0 {
+		return
+	}
+	switch req.GetWriteLeaseProtocolVersion() {
+	case heartbeatpb.LegacyWriteLeaseProtocolVersion, heartbeatpb.CurrentWriteLeaseProtocolVersion:
+	default:
+		log.Warn("ignore coordinator bootstrap with unsupported write lease protocol",
+			zap.Stringer("from", msg.From), zap.Uint32("protocolVersion", req.GetWriteLeaseProtocolVersion()))
+		return
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, coordinatorElectionQueryTimeout)
+	defer cancel()
+	revision, err := m.electionClient.GetOwnerRevision(queryCtx, msg.From.String())
+	if err != nil || revision <= 0 || req.Version != revision {
+		log.Warn("ignore coordinator bootstrap with unverified ownership",
+			zap.Stringer("from", msg.From), zap.Int64("requestVersion", req.Version))
 		return
 	}
 	if m.coordinatorID != msg.From || m.coordinatorVersion != req.Version {
@@ -259,14 +294,15 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 		req.GetWriteLeaseProtocolVersion() == heartbeatpb.CurrentWriteLeaseProtocolVersion,
 	)
 	m.coordinatorID = msg.From
-	m.coordinatorVersion = req.Version
+	m.coordinatorVersion = revision
+	m.coordinatorNeedsValidation = false
 
 	response := m.maintainers.buildBootstrapResponse()
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
 	response.DispatcherDrainTargetNodeId = drainTarget.String()
 	response.DispatcherDrainTargetEpoch = drainEpoch
 	msg = m.newCoordinatorTopicMessage(response)
-	err := m.mc.SendCommand(msg)
+	err = m.mc.SendCommand(msg)
 	if err != nil {
 		log.Warn("send bootstrap response failed",
 			zap.Stringer("coordinatorID", m.coordinatorID),
@@ -281,10 +317,62 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	m.sendNodeHeartbeat(true)
 }
 
-func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
+// OnCoordinatorChange is called by the owner watcher. Coalesce notifications
+// without blocking the watcher or changing state outside the manager loop.
+func (m *Manager) OnCoordinatorChange(_ string) {
+	select {
+	case m.coordinatorChangedCh <- struct{}{}:
+	default:
+	}
+}
+
+// validateCoordinator revokes an obsolete identity after an owner notification.
+// A delayed notification cannot revoke a newer, already verified bootstrap.
+func (m *Manager) validateCoordinator(ctx context.Context) bool {
+	select {
+	case <-m.coordinatorChangedCh:
+		m.coordinatorNeedsValidation = true
+	default:
+	}
+	if !m.isBootstrap() {
+		return false
+	}
+	if !m.coordinatorNeedsValidation {
+		return true
+	}
+	if m.electionClient == nil {
+		return false
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, coordinatorElectionQueryTimeout)
+	defer cancel()
+	revision, err := m.electionClient.GetOwnerRevision(queryCtx, m.coordinatorID.String())
+	if err != nil && !errors.ErrNotOwner.Equal(err) && !errors.ErrOwnerNotFound.Equal(err) {
+		// Keep the last verified state during an outage, but pause commands and
+		// retry validation before accepting any more grants or control messages.
+		return false
+	}
+	m.coordinatorNeedsValidation = false
+	if err == nil && revision == m.coordinatorVersion {
+		return true
+	}
+	log.Info("coordinator ownership changed, wait for verified bootstrap",
+		zap.Stringer("coordinatorID", m.coordinatorID), zap.Int64("coordinatorVersion", m.coordinatorVersion))
+	m.coordinatorID = ""
+	m.coordinatorVersion = 0
+	m.writeGate.InvalidateP2P()
+	m.node.resetWriteLeaseRequests()
+	return false
+}
+
+func (m *Manager) handleMessage(ctx context.Context, msg *messaging.TargetMessage) {
+	if msg.Type == messaging.TypeCoordinatorBootstrapRequest {
+		m.onCoordinatorBootstrapRequest(ctx, msg)
+		return
+	}
+	if !m.validateCoordinator(ctx) {
+		return
+	}
 	switch msg.Type {
-	case messaging.TypeCoordinatorBootstrapRequest:
-		m.onCoordinatorBootstrapRequest(msg)
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest:
 		if m.isBootstrap() {

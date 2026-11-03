@@ -419,12 +419,12 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	schedulerConf.AddTableBatchSize = 1000
 	schedulerConf.CheckBalanceInterval = 0
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, newOwnerElectionClientForTest(t, selfNode.ID, 1))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
-	manager.onCoordinatorBootstrapRequest(msg)
+	manager.onCoordinatorBootstrapRequest(ctx, msg)
 	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
 	runCancelable(t, ctx, dispManager.Run)
@@ -649,12 +649,13 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		return nil
 	})
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &nodeLiveness,
+		newOwnerElectionClientForTest(t, selfNode.ID, 1))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
-	manager.onCoordinatorBootstrapRequest(msg)
+	manager.onCoordinatorBootstrapRequest(ctx, msg)
 	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
 	// table1 and table 2 will be reported by remote
@@ -795,12 +796,12 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	schedulerConf := config.NewDefaultSchedulerConfig()
 	schedulerConf.AddTableBatchSize = 1000
 	var nodeLiveness liveness.Liveness
-	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness)
+	manager := NewMaintainerManager(selfNode, schedulerConf, &nodeLiveness, newOwnerElectionClientForTest(t, selfNode.ID, 1))
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
-	manager.onCoordinatorBootstrapRequest(msg)
+	manager.onCoordinatorBootstrapRequest(ctx, msg)
 	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
 	runCancelable(t, ctx, dispManager.Run)

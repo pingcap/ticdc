@@ -33,7 +33,7 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
 
@@ -59,7 +59,7 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
 
@@ -87,7 +87,7 @@ func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 
 	msg := messaging.NewSingleTargetMessage(
@@ -124,7 +124,7 @@ func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 
 	apply := func(target string, epoch uint64) {
@@ -163,7 +163,7 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 1
 
@@ -204,8 +204,9 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	require.True(t, m.node.tryUpdateDispatcherDrainTarget(node.ID("n2"), 7))
+	m.electionClient = newOwnerElectionClientForTest(t, "coordinator", 1)
 
 	req := messaging.NewSingleTargetMessage(
 		m.nodeInfo.ID,
@@ -213,7 +214,7 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1},
 	)
 	req.From = node.ID("coordinator")
-	m.onCoordinatorBootstrapRequest(req)
+	m.onCoordinatorBootstrapRequest(t.Context(), req)
 
 	out := <-mc.GetMessageChannel()
 	require.Equal(t, messaging.TypeCoordinatorBootstrapResponse, out.Type)
@@ -231,21 +232,23 @@ func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
 	appcontext.SetService(appcontext.CaptureWriteGate, gate)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
 	require.True(t, gate.IsWritable())
 
 	bootstrap := func(coordinator node.ID, protocolVersion uint32) {
+		revision := m.coordinatorVersion + 1
+		m.electionClient = newOwnerElectionClientForTest(t, coordinator, revision)
 		message := messaging.NewSingleTargetMessage(
 			m.nodeInfo.ID,
 			messaging.MaintainerManagerTopic,
 			&heartbeatpb.CoordinatorBootstrapRequest{
-				Version:                   1,
+				Version:                   revision,
 				WriteLeaseProtocolVersion: protocolVersion,
 			},
 		)
 		message.From = coordinator
-		m.onCoordinatorBootstrapRequest(message)
+		m.onCoordinatorBootstrapRequest(t.Context(), message)
 		// Bootstrap response and the forced node heartbeat.
 		<-mc.GetMessageChannel()
 		<-mc.GetMessageChannel()
@@ -258,10 +261,6 @@ func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
 	bootstrap(node.ID("legacy-coordinator"), heartbeatpb.LegacyWriteLeaseProtocolVersion)
 	require.False(t, gate.Status().P2PRequired)
 	require.True(t, gate.IsWritable())
-
-	bootstrap(node.ID("future-coordinator"), heartbeatpb.CurrentWriteLeaseProtocolVersion+1)
-	require.False(t, gate.Status().P2PRequired)
-	require.True(t, gate.IsWritable())
 }
 
 func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
@@ -271,7 +270,7 @@ func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
 	appcontext.SetService(appcontext.CaptureWriteGate, gate)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 10
 	gate.SetP2PRequired(true)
@@ -317,7 +316,7 @@ func TestNodeHeartbeatResponseUpdatesClusterP2PMode(t *testing.T) {
 	appcontext.SetService(appcontext.CaptureWriteGate, gate)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 10
 	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
@@ -365,7 +364,7 @@ func TestNodeHeartbeatResponseEchoesWitnessChallenge(t *testing.T) {
 	appcontext.SetService(appcontext.CaptureWriteGate, writelease.NewGate())
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 	m.coordinatorID = node.ID("coordinator")
 	m.coordinatorVersion = 10
 
@@ -404,7 +403,7 @@ func TestAddMaintainerIgnoreInvalidConfig(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 
 	changefeedID := common.NewChangeFeedIDWithName("cf-invalid-config", common.DefaultKeyspaceName)
 	status := m.onAddMaintainerRequest(&heartbeatpb.AddMaintainerRequest{
@@ -423,7 +422,7 @@ func TestAddMaintainerIgnoreInvalidCheckpointTs(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	var nodeLiveness liveness.Liveness
-	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness, nil)
 
 	changefeedID := common.NewChangeFeedIDWithName("cf-invalid-checkpoint", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
