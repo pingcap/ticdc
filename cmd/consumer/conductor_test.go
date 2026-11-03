@@ -183,6 +183,45 @@ func TestConductorFlushUsesSourceBoundaryBeforeGlobalWatermark(t *testing.T) {
 	require.Zero(t, memory.used())
 }
 
+func TestConductorPulsarCheckpointUsesTopicProgress(t *testing.T) {
+	memory := newMemoryUsage()
+	c := &conductor{
+		memory: memory,
+		streams: map[int32]*streamWatermark{
+			0: {},
+			1: {}, // An idle physical partition has no marker in this run.
+		},
+	}
+	for _, ts := range []uint64{200, 150} {
+		require.NoError(t, c.accept(t.Context(), &inputWatermark{watermark: ts, sourceCheckpoint: true}))
+		c.collectWatermarks()
+		require.Equal(t, uint64(200), c.watermark)
+	}
+	w := &writer{memory: memory}
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(200), w.checkpoint)
+
+	row := conductorTestRow(memory, 1, 1, 250, false)
+	c.queueDML(row)
+	require.NoError(t, c.accept(t.Context(), &inputWatermark{watermark: 300, stream: 1, sourceCheckpoint: true}))
+	c.collectWatermarks()
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(300), c.watermark)
+	require.Equal(t, uint64(249), w.checkpoint)
+
+	downstream := mock.NewMockSink(gomock.NewController(t))
+	downstream.EXPECT().AddDMLEvent(row.dml)
+	w.downstream = downstream
+	close(row.done)
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(249), w.checkpoint)
+	require.Positive(t, memory.used())
+	row.dml.PostFlush()
+	require.NoError(t, c.flush(t.Context(), w))
+	require.Equal(t, uint64(300), w.checkpoint)
+	require.Zero(t, memory.used())
+}
+
 func TestConductorFlushByteBudget(t *testing.T) {
 	for _, size := range []int64{maxInFlightBytes / 2, maxInFlightBytes + 1} {
 		t.Run(strconv.FormatInt(size, 10), func(t *testing.T) {

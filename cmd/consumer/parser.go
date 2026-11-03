@@ -85,7 +85,7 @@ type inputDDL struct {
 type inputWatermark struct {
 	watermark        uint64
 	stream           int32
-	sourceCheckpoint bool // Production progress whose read coverage is published separately.
+	sourceCheckpoint bool // Topic-wide progress, matching the legacy Pulsar consumer.
 }
 
 type resumeTask struct{ task *decodeTask }

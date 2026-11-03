@@ -841,12 +841,12 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 		c.watermark = max(c.watermark, result.watermark)
 	case *inputWatermark:
 		c.readThrough = max(c.readThrough, result.watermark)
-		if !result.sourceCheckpoint {
+		if result.sourceCheckpoint {
+			c.watermark = max(c.watermark, result.watermark)
+		} else {
 			stream := c.streams[result.stream]
 			stream.watermark = max(stream.watermark, result.watermark)
 			stream.hasWatermark = true
-		}
-		if !result.sourceCheckpoint {
 			c.reader.Advance([]readUpdate{{stream: result.stream, watermark: result.watermark}})
 		}
 	case *inputDDL:
