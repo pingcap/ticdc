@@ -288,12 +288,12 @@ func TestGenerateBatchSQL(t *testing.T) {
 	expected4 := []interface{}{int64(17), "test", int64(18), "test", int64(16), "test"}
 	expected5 := []interface{}{int64(18), "test", int64(16), "test", int64(17), "test"}
 	expected6 := []interface{}{int64(18), "test", int64(17), "test", int64(16), "test"}
-	require.True(t, (reflect.DeepEqual(expected1, args[0])) ||
-		(reflect.DeepEqual(expected2, args[0])) ||
-		(reflect.DeepEqual(expected3, args[0])) ||
-		(reflect.DeepEqual(expected4, args[0])) ||
-		(reflect.DeepEqual(expected5, args[0])) ||
-		(reflect.DeepEqual(expected6, args[0])),
+	require.True(t, reflect.DeepEqual(expected1, args[0]) ||
+		reflect.DeepEqual(expected2, args[0]) ||
+		reflect.DeepEqual(expected3, args[0]) ||
+		reflect.DeepEqual(expected4, args[0]) ||
+		reflect.DeepEqual(expected5, args[0]) ||
+		reflect.DeepEqual(expected6, args[0]),
 		"args[0] should be one of the expected combinations: %v", args[0])
 
 	// Test performance with 1000 rows event
@@ -664,7 +664,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	expected1 := []interface{}{int64(13), "test", int64(15), "test15"}
 	expected2 := []interface{}{int64(15), "test15", int64(13), "test"}
 	require.Equal(t, 4, len(args[1]), "args[1] should have 4 elements")
-	require.True(t, (reflect.DeepEqual(expected1, args[1])) || (reflect.DeepEqual(expected2, args[1])),
+	require.True(t, reflect.DeepEqual(expected1, args[1]) || reflect.DeepEqual(expected2, args[1]),
 		"args[1] should be one of the expected combinations: %v", args[1])
 
 	// Insert A + Insert B + Insert C
@@ -683,12 +683,12 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	expected4 := []interface{}{int64(17), "test", int64(18), "test", int64(16), "test"}
 	expected5 := []interface{}{int64(18), "test", int64(16), "test", int64(17), "test"}
 	expected6 := []interface{}{int64(18), "test", int64(17), "test", int64(16), "test"}
-	require.True(t, (reflect.DeepEqual(expected1, args[0])) ||
-		(reflect.DeepEqual(expected2, args[0])) ||
-		(reflect.DeepEqual(expected3, args[0])) ||
-		(reflect.DeepEqual(expected4, args[0])) ||
-		(reflect.DeepEqual(expected5, args[0])) ||
-		(reflect.DeepEqual(expected6, args[0])),
+	require.True(t, reflect.DeepEqual(expected1, args[0]) ||
+		reflect.DeepEqual(expected2, args[0]) ||
+		reflect.DeepEqual(expected3, args[0]) ||
+		reflect.DeepEqual(expected4, args[0]) ||
+		reflect.DeepEqual(expected5, args[0]) ||
+		reflect.DeepEqual(expected6, args[0]),
 		"args[0] should be one of the expected combinations: %v", args[0])
 }
 
