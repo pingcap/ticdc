@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -289,7 +288,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 	}
 	retryRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
-		if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
+		if priority == ScanPriorityLow {
 			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
 				priority,
 				errInfo.resolvedTs(),
