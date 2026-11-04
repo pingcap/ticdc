@@ -352,7 +352,7 @@ func TestSQLGenerationSafeModeBoundary(t *testing.T) {
 
 	for _, generator := range []struct {
 		name     string
-		generate func([]*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType)
+		generate func([]*commonEvent.DMLEvent) ([]string, [][]any, []common.RowType)
 	}{
 		{name: "normal", generate: writer.generateNormalSQLs},
 		{name: "per-event batch", generate: writer.generateBatchSQLsPerEvent},
@@ -377,7 +377,7 @@ func TestSQLGenerationSafeModeBoundary(t *testing.T) {
 				require.NotEmpty(t, queries)
 				require.Len(t, args, len(queries))
 				require.Len(t, rowTypes, len(queries))
-				var rows [][]interface{}
+				var rows [][]any
 				for i, query := range queries {
 					require.True(t, strings.HasPrefix(query, tc.verb+" INTO `test`.`t` "), query)
 					require.Equal(t, common.RowTypeInsert, rowTypes[i])
@@ -385,7 +385,7 @@ func TestSQLGenerationSafeModeBoundary(t *testing.T) {
 						rows = append(rows, args[i][j:j+2])
 					}
 				}
-				require.ElementsMatch(t, [][]interface{}{{int64(1), "first"}, {int64(2), "second"}}, rows)
+				require.ElementsMatch(t, [][]any{{int64(1), "first"}, {int64(2), "second"}}, rows)
 			})
 		}
 	}
@@ -456,7 +456,7 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 			dmls, err := writer.prepareDMLs([]*commonEvent.DMLEvent{update, events[1]})
 			require.NoError(t, err)
 			defer dmlsPool.Put(dmls)
-			var rows [][]interface{}
+			var rows [][]any
 			for i, query := range dmls.sqls {
 				require.NotEqual(t, common.RowTypeUpdate, dmls.rowTypes[i], query)
 				if dmls.rowTypes[i] == common.RowTypeInsert {
@@ -464,7 +464,7 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 					rows = append(rows, dmls.values[i])
 				}
 			}
-			require.ElementsMatch(t, [][]interface{}{{int64(3), "new"}, {int64(2), "second"}}, rows)
+			require.ElementsMatch(t, [][]any{{int64(3), "new"}, {int64(2), "second"}}, rows)
 		})
 	}
 }
