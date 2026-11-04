@@ -10,6 +10,9 @@ SINK_TYPE=$1
 TLS_DIR=$(cd $CUR/../_certificates && pwd)
 MAX_RETRIES=20
 
+export TICDC_USER=ticdc
+export TICDC_PASSWORD=ticdc_secret
+
 function run() {
 	# storage and kafka are the same as mysql
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -139,6 +142,11 @@ function run() {
 		python3 $CUR/util/test_case.py "$case" $TLS_DIR
 		sleep 1
 	done
+
+	# This case removes the upstream keyspace, so it must run last.
+	if [ "${NEXT_GEN:-0}" == "1" ]; then
+		python3 $CUR/util/test_case.py list_changefeeds_after_keyspace_deleted $TLS_DIR
+	fi
 
 	cleanup_process $CDC_BINARY
 }

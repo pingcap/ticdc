@@ -103,6 +103,9 @@ type Config struct {
 	// Simple only. Whether the transaction start_ts should be included in
 	// Simple JSON DML messages. Encoding-format=avro rejects this option.
 	SimpleIncludeStartTs bool
+	// Debezium only. Whether the transaction start_ts should be included in
+	// the source block of the output. JSON protocol only.
+	DebeziumIncludeStartTs bool
 	// Debezium JSON only. Use string to preserve the full precision of numeric values.
 	DebeziumDecimalHandlingMode        string
 	DebeziumBigintUnsignedHandlingMode string
@@ -158,6 +161,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		DebeziumDisableSchema:              false,
 		CSVOutputFieldHeader:               false,
 		SimpleIncludeStartTs:               false,
+		DebeziumIncludeStartTs:             false,
 	}
 }
 
@@ -209,6 +213,7 @@ type urlConfig struct {
 	DebeziumBigintUnsignedHandlingMode *string `form:"debezium-bigint-unsigned-handling-mode"`
 	DebeziumBinaryHandlingMode         *string `form:"debezium-binary-handling-mode"`
 	SimpleIncludeStartTs               *bool   `form:"simple-include-start-ts"`
+	DebeziumIncludeStartTs             *bool   `form:"debezium-include-start-ts"`
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
@@ -359,6 +364,12 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if rawURLParameter.SimpleIncludeStartTs != nil {
 		c.SimpleIncludeStartTs = *rawURLParameter.SimpleIncludeStartTs
 	}
+	if urlParameter.DebeziumIncludeStartTs != nil {
+		c.DebeziumIncludeStartTs = *urlParameter.DebeziumIncludeStartTs
+	}
+	if rawURLParameter.DebeziumIncludeStartTs != nil {
+		c.DebeziumIncludeStartTs = *rawURLParameter.DebeziumIncludeStartTs
+	}
 
 	return nil
 }
@@ -397,6 +408,9 @@ func mergeConfig(
 		}
 		if sinkConfig.Simple != nil && sinkConfig.Simple.IncludeStartTs != nil {
 			dest.SimpleIncludeStartTs = sinkConfig.Simple.IncludeStartTs
+		}
+		if sinkConfig.Debezium != nil && sinkConfig.Debezium.IncludeStartTs != nil {
+			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
@@ -456,6 +470,12 @@ func (c *Config) Validate() error {
 			"only supports canal-json/avro/debezium/debezium-avro protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
 			zap.String("protocol", c.Protocol.String()))
+	}
+
+	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`debezium-include-start-ts only takes effect with protocol "debezium"`,
+		)
 	}
 
 	if c.Protocol == config.ProtocolDebezium &&
