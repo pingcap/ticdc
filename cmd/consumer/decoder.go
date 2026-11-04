@@ -26,7 +26,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Protocol cursors and schema updates remain with the source parser. Workers only
+// Protocol cursors and schema updates remain with the source decoder. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
 	g         *errgroup.Group
@@ -43,7 +43,6 @@ type decodeTask struct {
 	offset            int64 // Kafka record offset for source-side validation.
 	skipKeyOnlyDelete bool
 	boundary          *readBoundary
-	waiting           bool
 	message           *codecCommon.DMLMessage
 	name              event.SchemaTableName
 	dml               *event.DMLEvent

@@ -18,7 +18,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"iter"
+	"math"
 	"net/url"
 	"os"
 	"slices"
@@ -35,6 +37,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -58,7 +62,7 @@ type kafkaPartition struct {
 	targetTs    uint64 // Event progress still needed for the current boundary; zero means complete.
 	records     []kafkaRecord
 	parsedTs    uint64     // Parser-owned maximum event timestamp in the parsed prefix.
-	mu          sync.Mutex // Protects parsed positions, shared by the parser and Confirm.
+	mu          sync.Mutex // Protects decoded positions, shared by the decoder and Confirm.
 }
 
 type kafkaReader struct {
@@ -66,10 +70,12 @@ type kafkaReader struct {
 	router           *eventrouter.EventRouter
 	client           *kgo.Client
 	topic            string
+	codecConfig      *codecCommon.Config
 	memory           *memoryBudget
 	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
 	confirmable      chan<- struct{}
 	partitions       map[int32]*kafkaPartition
+	decoders         map[int32]codecCommon.Decoder
 	readSequence     uint64
 	pausedPartitions int
 	pollCancel       context.CancelFunc // Wake a poll when admission pauses every partition.
@@ -82,7 +88,17 @@ type kafkaReader struct {
 	maxBatchSize    int
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, decoding *decodeConfig, memory *memoryBudget, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
+func newKafkaReader(
+	ctx context.Context,
+	upstreamURI *url.URL,
+	consumerID string,
+	codecConfig *codecCommon.Config,
+	memory *memoryBudget,
+	replicaConfig *config.ReplicaConfig,
+	confirmable chan<- struct{},
+	upstreamDB *sql.DB,
+	tables *simple.TableInfoCache,
+) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
 		log.Panic("Kafka upstream URI must include an endpoint")
 	}
@@ -93,7 +109,7 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
 	}
-	protocol := decoding.codec.Protocol
+	protocol := codecConfig.Protocol
 	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive), topic, false, protocol == config.ProtocolAvro)
 	if err != nil {
 		log.Panic("Kafka event routing configuration is invalid", zap.Error(err))
@@ -111,6 +127,13 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	query := upstreamURI.Query()
+	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
+	if query.Has("max-message-bytes") {
+		maxMessageBytes = codecConfig.MaxMessageBytes
+	}
+	if query.Has("max-batch-size") {
+		maxBatchSize = codecConfig.MaxBatchSize
+	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || ca != "" || cert != "" || key != "" {
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -158,22 +181,28 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	for partitionID := range topicMetadata.Partitions {
 		partitions[partitionID] = &kafkaPartition{}
 	}
+	decoders := make(map[int32]codecCommon.Decoder, len(partitions))
+	for partitionID := range partitions {
+		decoders[partitionID] = newSourceDecoder(ctx, int(partitionID), codecConfig, topic, upstreamDB, tables)
+	}
 
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
 		readLimit:   newReadLimit(memory),
 		client:      client,
 		topic:       topic,
+		codecConfig: codecConfig,
 		memory:      memory,
 		confirmable: confirmable,
 		partitions:  partitions,
+		decoders:    decoders,
 		router:      router,
 		control: &readBoundary{
 			reached:   helper.GetDDLDispatchRule(protocol) == helper.PartitionAll,
 			watermark: &partitions[0].watermark,
 		},
-		maxMessageBytes: decoding.maxMessageBytes,
-		maxBatchSize:    decoding.maxBatchSize,
+		maxMessageBytes: maxMessageBytes,
+		maxBatchSize:    maxBatchSize,
 	}
 }
 
@@ -181,14 +210,18 @@ type kafkaInput struct {
 	message *kgo.Record
 }
 
-func (c *kafkaReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+func (c *kafkaReader) Decoders() map[int32]codecCommon.Decoder {
+	return c.decoders
+}
+
+func (c *kafkaReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
 	// Initially only SDK buffers can hold data. The conductor takes over
 	// admission once parsed work can release memory through downstream writes.
 	c.ContinueReading(true)
-	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
+	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
 }
 
-func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafkaInput) iter.Seq2[task, error] {
+func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, input kafkaInput) iter.Seq2[task, error] {
 	id := input.message.Partition
 	offset := input.message.Offset
 	scope := inputScope{stream: id, ddlCopy: id != 0, dmlBoundary: c.control}
@@ -202,7 +235,7 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 		defer c.memory.release(int64(len(input.message.Key) + len(input.message.Value)))
 		partition := c.partitions[id]
 		rows := 0
-		for result, err := range parser.parseMessage(ctx, scope, input.message.Key, input.message.Value) {
+		for result, err := range decoder.decodeMessage(ctx, scope, input.message.Key, input.message.Value, c.memory) {
 			if err != nil {
 				yield(nil, err)
 				return
@@ -218,7 +251,7 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
 				task.offset = input.message.Offset
-				task.skipKeyOnlyDelete = parser.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
+				task.skipKeyOnlyDelete = c.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
 			}
 			if !yield(result, nil) {
 				return

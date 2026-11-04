@@ -17,6 +17,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"iter"
 	"net/url"
 	"strings"
@@ -30,6 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -46,19 +49,31 @@ type pulsarPartition struct {
 	stream   int32
 	parsedTs uint64 // Parser-owned maximum event timestamp in the parsed prefix.
 	records  []pulsarRecord
-	mu       sync.Mutex // Protects parsed positions, shared by the parser and Confirm.
+	mu       sync.Mutex // Protects decoded positions, shared by the decoder and Confirm.
 }
 
 type pulsarReader struct {
 	*readLimit
 	client      pulsar.Client
 	consumer    pulsar.Consumer
+	topic       string
 	memory      *memoryBudget
 	partitions  map[string]*pulsarPartition
+	decoders    map[int32]codecCommon.Decoder
 	confirmable chan<- struct{}
 }
 
-func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID string, replicaConfig *config.ReplicaConfig, memory *memoryBudget, confirmable chan<- struct{}) (reader *pulsarReader) {
+func newPulsarReader(
+	ctx context.Context,
+	upstreamURI *url.URL,
+	consumerID string,
+	replicaConfig *config.ReplicaConfig,
+	codecConfig *codecCommon.Config,
+	memory *memoryBudget,
+	confirmable chan<- struct{},
+	upstreamDB *sql.DB,
+	tables *simple.TableInfoCache,
+) (reader *pulsarReader) {
 	if err := context.Cause(ctx); err != nil {
 		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
 	}
@@ -179,12 +194,18 @@ func newPulsarReader(ctx context.Context, upstreamURI *url.URL, consumerID strin
 	for id, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{stream: int32(id)}
 	}
+	decoders := make(map[int32]codecCommon.Decoder, len(partitions))
+	for _, partition := range partitions {
+		decoders[partition.stream] = newSourceDecoder(ctx, int(partition.stream), codecConfig, topic, upstreamDB, tables)
+	}
 	c := &pulsarReader{
 		readLimit:   newReadLimit(memory),
 		client:      client,
 		consumer:    consumer,
+		topic:       topic,
 		memory:      memory,
 		partitions:  partitions,
+		decoders:    decoders,
 		confirmable: confirmable,
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
@@ -195,16 +216,20 @@ type pulsarInput struct {
 	message pulsar.ConsumerMessage
 }
 
-func (c *pulsarReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
-	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
+func (c *pulsarReader) Decoders() map[int32]codecCommon.Decoder {
+	return c.decoders
 }
 
-func (c *pulsarReader) parse(ctx context.Context, parser *inputParser, input pulsarInput) iter.Seq2[task, error] {
+func (c *pulsarReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
+	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
+}
+
+func (c *pulsarReader) decode(ctx context.Context, decoder *inputDecoder, input pulsarInput) iter.Seq2[task, error] {
 	partition := c.partitions[input.message.Topic()]
 	scope := inputScope{stream: partition.stream, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
 	return func(yield func(task, error) bool) {
 		defer c.memory.release(int64(len(input.message.Key()) + len(input.message.Payload())))
-		for work, err := range parser.parseMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload()) {
+		for work, err := range decoder.decodeMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload(), c.memory) {
 			if err == nil {
 				through := taskTimestamp(work)
 				partition.parsedTs = max(partition.parsedTs, through)

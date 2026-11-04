@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -58,7 +59,7 @@ type watermark struct {
 }
 
 // One loop owns dependency selection, conversion collection and writer queues.
-// Protocol parsing and sink execution run independently of that state.
+// Protocol decoding and sink execution run independently of that state.
 func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) error {
 	c.g, ctx = errgroup.WithContext(ctx)
 	c.g.Go(func() error { return c.decoder.start(ctx) })
@@ -204,12 +205,11 @@ type conductor struct {
 	boundary          *readBoundary
 	boundaryTs        uint64
 	boundaryDDL       *ddlTask
-	checkpoint        atomic.Uint64
+	checkpoint        *atomic.Uint64
 	cleanedCheckpoint uint64
 	g                 *errgroup.Group
 	memory            *memoryBudget
 	streams           map[int32]*streamWatermark
-	waitingMetadata   int
 	decoder           *decoderGroup
 	watermark         uint64
 	merger            rowMerger
@@ -224,7 +224,7 @@ type ddlInput struct {
 	streams []int32  // Inputs that have crossed this exact DDL.
 }
 
-// queueDML takes ownership of the captured message's quota from the source parser.
+// queueDML takes ownership of the captured message's quota from the source decoder.
 func (c *conductor) queueDML(item *decodeTask) {
 	if c.pendingDML == nil {
 		c.pendingDML = make(map[int64]map[int32][]*decodeTask)
@@ -527,9 +527,16 @@ func ddlBlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string)
 	return (ddl.TableName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeDB)) && schema == ddl.SchemaName
 }
 
-func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *conductor {
-	streams := make(map[int32]*streamWatermark, len(parsing.streams))
-	for id := range parsing.streams {
+func newConductor(
+	memory *memoryBudget,
+	reader Reader,
+	input *inputDecoder,
+	codecConfig *codecCommon.Config,
+	checkpoint *atomic.Uint64,
+	confirmable chan struct{},
+) *conductor {
+	streams := make(map[int32]*streamWatermark, len(input.decoders))
+	for id := range input.decoders {
 		streams[id] = &streamWatermark{}
 	}
 	_, orderedDML := reader.(*kafkaReader)
@@ -538,14 +545,15 @@ func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *co
 		validator = v
 	}
 	c := &conductor{
-		orderedDML: orderedDML,
-		reader:     reader,
-		memory:     memory, streams: streams,
-		decoder: newDecoderGroup(memory, make(chan struct{}, 1), validator),
-		merger:  newRowMerger(parsing.codecConfig, memory),
+		orderedDML:  orderedDML,
+		reader:      reader,
+		confirmable: confirmable,
+		checkpoint:  checkpoint,
+		memory:      memory,
+		streams:     streams,
+		decoder:     newDecoderGroup(memory, make(chan struct{}, 1), validator),
+		merger:      newRowMerger(codecConfig, memory),
 	}
-	parsing.checkpoint = &c.checkpoint
-	parsing.memory = memory
 	return c
 }
 
@@ -582,12 +590,6 @@ func ddlScope(ddl *event.DDLEvent) []event.SchemaTableName {
 }
 
 func (c *conductor) advanceReading(w *writer) {
-	if c.waitingMetadata != 0 {
-		c.boundary, c.boundaryDDL = nil, nil
-		c.reader.Boundary([]event.SchemaTableName{}, 0)
-		c.reader.ContinueReading(true)
-		return
-	}
 	var (
 		pending *ddlTask
 		through uint64
@@ -670,9 +672,6 @@ func (c *conductor) needsMoreInput(w *writer) bool {
 			return true
 		}
 	}
-	if c.waitingMetadata != 0 {
-		return true
-	}
 	// Let conversions and writes release memory before reading solely to catch
 	// up global progress. An empty pipeline must still drain source buffers and
 	// reach markers that release retained transport positions.
@@ -740,17 +739,10 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 			return nil
 		}
 		c.queueDML(result)
-		if result.waiting {
-			c.waitingMetadata++
-		} else if err := c.decoder.submit(ctx, result); err != nil {
+		if err := c.decoder.submit(ctx, result); err != nil {
 			return err
 		}
 		c.crossBoundary(result.stream, result.commitTs, nil, result)
-	case *resumeTask:
-		c.waitingMetadata--
-		if err := c.decoder.submit(ctx, result.task); err != nil {
-			return err
-		}
 	case *watermark:
 		c.watermark = max(c.watermark, result.watermark)
 	case *inputWatermark:

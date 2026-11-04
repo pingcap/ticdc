@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,6 +79,8 @@ type storageReader struct {
 	nextTableID      int64
 	storage          storeapi.Storage
 	memory           *memoryBudget
+	codecConfig      *codecCommon.Config
+	selectors        *columnselector.ColumnSelectors
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -93,7 +96,13 @@ type storageReader struct {
 }
 
 // newConsumer validates and adjusts replicaConfig before opening the source.
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, protocol config.Protocol, memory *memoryBudget) *storageReader {
+func newStorageReader(
+	ctx context.Context,
+	upstreamURI *url.URL,
+	replicaConfig *config.ReplicaConfig,
+	codecConfig *codecCommon.Config,
+	memory *memoryBudget,
+) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}
@@ -104,20 +113,29 @@ func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
+	var selectors *columnselector.ColumnSelectors
+	if codecConfig.Protocol == config.ProtocolCsv {
+		selectors, err = columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
+		}
+	}
 
 	c := &storageReader{
 		readLimit:      newReadLimit(memory),
 		storage:        storage,
 		memory:         memory,
+		codecConfig:    codecConfig,
+		selectors:      selectors,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
-		fileExtension:  helper.GetFileExtension(protocol),
+		fileExtension:  helper.GetFileExtension(codecConfig.Protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
-	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
+	log.Info("Storage reader initialized", zap.String("protocol", codecConfig.Protocol.String()))
 	return c
 }
 
@@ -287,13 +305,17 @@ func (*storageFile) storageRead()     {}
 func (*storageDDL) storageRead()      {}
 func (storageWatermark) storageRead() {}
 
-func (c *storageReader) Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
-	return readAndParse(ctx, parser, c.Read, c.parse, tasks)
+func (*storageReader) Decoders() map[int32]codecCommon.Decoder {
+	return nil
 }
 
-func (c *storageReader) parse(ctx context.Context, parser *inputParser, input storageRead) iter.Seq2[task, error] {
+func (c *storageReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
+	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
+}
+
+func (c *storageReader) decode(ctx context.Context, decoder *inputDecoder, input storageRead) iter.Seq2[task, error] {
 	if file, ok := input.(*storageFile); ok {
-		return c.parseFile(ctx, parser, file)
+		return c.decodeFile(ctx, decoder, file)
 	}
 	return func(yield func(task, error) bool) {
 		switch input := input.(type) {
@@ -510,7 +532,7 @@ func (c *storageReader) Close() {
 	c.storage.Close()
 }
 
-// The reader supplies schema contents. Its parser materializes TableInfo;
+// The reader supplies schema contents. Its decoder materializes TableInfo;
 // conversion workers receive that captured immutable metadata.
 type readSchema struct {
 	file  *cloudstorage.SchemaFile
@@ -525,22 +547,25 @@ func (s *readSchema) tableInfo() *common.TableInfo {
 	return s.table
 }
 
-func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *storageFile) iter.Seq2[task, error] {
+func (c *storageReader) decodeFile(ctx context.Context, input *inputDecoder, file *storageFile) iter.Seq2[task, error] {
 	return func(yield func(task, error) bool) {
 		defer c.memory.release(int64(len(file.contents)))
 		table := file.schema.tableInfo()
 		var decoder codecCommon.Decoder
-		switch p.codecConfig.Protocol {
+		switch c.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			var err error
-			decoder, err = csv.NewDecoderWithColumnSelector(ctx, p.codecConfig, table, file.contents, p.selectors.GetForTableInfo(table))
+			decoder, err = csv.NewDecoderWithColumnSelector(ctx, c.codecConfig, table, file.contents, c.selectors.GetForTableInfo(table))
 			if err != nil {
 				yield(nil, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
 				return
 			}
 		case config.ProtocolCanalJSON:
-			decoder = canal.NewTxnDecoder(p.codecConfig)
+			decoder = canal.NewTxnDecoder(c.codecConfig)
 			decoder.AddKeyValue(nil, file.contents)
+		default:
+			yield(nil, errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported"))
+			return
 		}
 		scope := inputScope{dmlBoundary: &readBoundary{reached: true}}
 		for {
@@ -555,7 +580,9 @@ func (c *storageReader) parseFile(ctx context.Context, p *inputParser, file *sto
 			if kind != codecCommon.MessageTypeRow {
 				continue
 			}
-			task := p.messageTask(scope, decoder.NextDMLMessage())
+			message := decoder.NextDMLMessage()
+			c.memory.reserve(message.ApproximateSize)
+			task := input.messageTask(scope, message)
 			task.table, task.tableID = table, file.tableID
 			if !yield(task, nil) {
 				return

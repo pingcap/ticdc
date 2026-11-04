@@ -15,10 +15,8 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
-	"math"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"net/url"
@@ -36,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -52,7 +51,7 @@ type consumer struct {
 	g             *errgroup.Group
 	reader        *reader
 	conductor     *conductor
-	parser        *inputParser
+	decoder       *inputDecoder
 	writer        *writer
 	upstreamDB    *sql.DB
 	profileServer *http.Server
@@ -69,28 +68,21 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
 	sourceType := sourceTypeFromURI(upstreamURI)
+
 	consumerID := options.consumerID
 	if strings.TrimSpace(consumerID) == "" {
-		switch sourceType {
-		case sourceKafka:
-			consumerID = "ticdc_kafka_consumer_" + uuid.NewString()
-		case sourcePulsar:
-			consumerID = "pulsar-test-subscription"
-		}
+		consumerID = "consumer_" + uuid.NewString()
 	}
-	replicaConfig := loadReplicaConfig(options.configFile)
-	if sourceType == sourceStorage {
-		if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
-			log.Panic("Storage configuration is invalid", zap.Error(err))
-		}
-	}
-	decoding := newDecodeConfig(upstreamURI, replicaConfig)
-	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
+	replicaConfig := loadReplicaConfig(options.configFile, upstreamURI)
+	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
+	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
 
+	checkpoint := new(atomic.Uint64)
 	memory := newMemoryBudget()
 	confirmable := make(chan struct{}, 1)
-	var upstreamDB *sql.DB
-	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, decoding, memory, confirmable)
+	upstreamDB := newUpstreamDB(ctx, upstreamURI)
+	tables := simple.NewTableInfoCache()
+	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, codecConfig, memory, confirmable, checkpoint, upstreamDB, tables)
 	defer func() {
 		if c != nil {
 			return
@@ -102,33 +94,12 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			}
 		}
 	}()
-	upstreamDB = newUpstreamDB(ctx, upstreamURI)
-	var streams map[int32]*decodeStream
-	tables := simple.NewTableInfoCache()
-	if sourceType == sourceKafka {
-		partitions := reader.client.(*kafkaReader).partitions
-		streams = make(map[int32]*decodeStream, len(partitions))
-		// Protocol constructors reset table ID allocation. Prepare all partition
-		// cursors before decoding starts.
-		for id := range partitions {
-			streams[id] = newDecodeStream(ctx, int(id), decoding, upstreamDB, tables)
-		}
-	}
-	if sourceType == sourcePulsar {
-		partitions := reader.client.(*pulsarReader).partitions
-		streams = make(map[int32]*decodeStream, len(partitions))
-		for _, partition := range partitions {
-			streams[partition.stream] = newDecodeStream(ctx, int(partition.stream), decoding, upstreamDB, tables)
-		}
-	}
-	parsing := newInputParser(ctx, decoding, upstreamDB, replicaConfig, streams, tables)
-	conductor := newConductor(memory, reader.client, parsing)
-	reader.checkpoint = &conductor.checkpoint
-	conductor.confirmable = confirmable
+	decoder := newInputDecoder(reader.client.Decoders(), tables, checkpoint)
+	conductor := newConductor(memory, reader.client, decoder, codecConfig, checkpoint, confirmable)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
-		parser:        parsing,
+		decoder:       decoder,
 		conductor:     conductor,
 		writer:        writer,
 		upstreamDB:    upstreamDB,
@@ -165,87 +136,104 @@ func sourceTypeFromURI(uri *url.URL) sourceType {
 	return ""
 }
 
-func loadReplicaConfig(configFile string) *config.ReplicaConfig {
+func logConsumerConfig(
+	sourceType sourceType,
+	consumerID string,
+	upstreamURI *url.URL,
+	downstreamURI string,
+	replicaConfig *config.ReplicaConfig,
+	codecConfig *codecCommon.Config,
+) {
+	fields := []zap.Field{
+		zap.String("sourceType", string(sourceType)),
+		zap.String("consumerID", consumerID),
+		zap.String("upstreamURI", putil.MaskSensitiveDataInURI(upstreamURI.String())),
+		zap.String("downstreamURI", putil.MaskSensitiveDataInURI(downstreamURI)),
+		zap.String("protocol", codecConfig.Protocol.String()),
+		zap.String("timeZone", codecConfig.TimeZone.String()),
+		zap.Bool("caseSensitive", putil.GetOrZero(replicaConfig.CaseSensitive)),
+		zap.Bool("enableTiDBExtension", codecConfig.EnableTiDBExtension),
+		zap.Bool("avroEnableWatermark", codecConfig.AvroEnableWatermark),
+	}
+	if codecConfig.AvroConfluentSchemaRegistry != "" {
+		fields = append(fields,
+			zap.String("schemaRegistry", putil.MaskSensitiveDataInURI(codecConfig.AvroConfluentSchemaRegistry)))
+	}
+	switch sourceType {
+	case sourceKafka:
+		fields = append(fields,
+			zap.String("topic", strings.Trim(upstreamURI.Path, "/")),
+			zap.Int("maxMessageBytes", codecConfig.MaxMessageBytes),
+			zap.Int("maxBatchSize", codecConfig.MaxBatchSize))
+	case sourcePulsar:
+		fields = append(fields, zap.String("topic", strings.Trim(upstreamURI.Path, "/")))
+	case sourceStorage:
+		fields = append(fields,
+			zap.Int("fileIndexWidth", putil.GetOrZero(replicaConfig.Sink.FileIndexWidth)),
+			zap.Any("dateSeparator", putil.GetOrZero(replicaConfig.Sink.DateSeparator)))
+		if codecConfig.Protocol == config.ProtocolCsv {
+			fields = append(fields,
+				zap.String("csvDelimiter", codecConfig.Delimiter),
+				zap.String("csvTerminator", codecConfig.Terminator),
+				zap.String("csvNull", codecConfig.NullString),
+				zap.Bool("csvIncludeCommitTs", codecConfig.IncludeCommitTs),
+				zap.Bool("csvOutputOldValue", codecConfig.OutputOldValue))
+		}
+	}
+	log.Info("consumer configuration", fields...)
+}
+
+func loadReplicaConfig(configFile string, upstreamURI *url.URL) *config.ReplicaConfig {
 	replicaConfig := config.GetDefaultReplicaConfig()
-	if configFile == "" {
-		return replicaConfig
+	if configFile != "" {
+		if err := cmdutil.StrictDecodeFile(configFile, "consumer", replicaConfig); err != nil {
+			log.Panic("consumer configuration loading failed", zap.String("configFile", configFile), zap.Error(err))
+		}
+		if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
+			log.Panic("consumer filter rules are invalid", zap.Error(err))
+		}
 	}
-	if err := cmdutil.StrictDecodeFile(configFile, "consumer", replicaConfig); err != nil {
-		log.Panic("consumer configuration loading failed", zap.String("configFile", configFile), zap.Error(err))
-	}
-	if _, err := filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-		log.Panic("consumer filter rules are invalid", zap.Error(err))
+	if err := replicaConfig.ValidateAndAdjust(upstreamURI); err != nil {
+		log.Panic("consumer configuration is invalid", zap.Error(err))
 	}
 	return replicaConfig
 }
 
-// Resolve transport-specific defaults and requirements before constructing the conductor.
-func newDecodeConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *decodeConfig {
-	source := sourceTypeFromURI(upstreamURI)
-	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
-	switch source {
-	case sourcePulsar:
-		protocolName = cmp.Or(protocolName, putil.GetOrZero(replicaConfig.Sink.Protocol), "canal-json")
-	case sourceStorage:
-		protocolName = putil.GetOrZero(replicaConfig.Sink.Protocol)
-	}
-	protocol, err := config.ParseSinkProtocolFromString(protocolName)
+// newCodecConfig builds the decoder config. loadReplicaConfig has already
+// applied the sink URI parameters, including protocol, to replicaConfig.Sink.
+
+func newCodecConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *codecCommon.Config {
+	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
 	if err != nil {
 		log.Panic("consumer protocol is invalid", zap.Error(err))
-	}
-	if source == sourcePulsar && !config.IsPulsarSupportedProtocols(protocol) {
-		log.Panic("Pulsar consumer protocol is unsupported", zap.String("protocol", protocol.String()))
-	}
-	if source == sourceStorage && protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-		log.Panic("Storage consumer requires CSV or Canal JSON", zap.String("protocol", protocol.String()))
 	}
 	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
 	}
-	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
-	if upstreamURI.Query().Has("max-message-bytes") {
-		maxMessageBytes = codecConfig.MaxMessageBytes
-	}
-	if upstreamURI.Query().Has("max-batch-size") {
-		maxBatchSize = codecConfig.MaxBatchSize
-	}
-	if source == sourceKafka && protocol == config.ProtocolAvro {
-		codecConfig.AvroEnableWatermark = true
-	}
 	if replicaConfig.Integrity != nil {
 		codecConfig.EnableRowChecksum = replicaConfig.Integrity.Enabled()
 	}
-	switch source {
-	case sourceStorage:
-		if protocol == config.ProtocolCanalJSON {
-			codecConfig.EnableTiDBExtension = true
+
+	// The upstream encoder only emits commit-ts, DDL and resolved events when
+	// these flags are enabled; the decoder cannot reconstruct them.
+	switch protocol {
+	case config.ProtocolCanalJSON, config.ProtocolDebezium:
+		if !codecConfig.EnableTiDBExtension {
+			log.Panic("consumer requires TiDB protocol extensions", zap.String("protocol", protocol.String()))
 		}
-	default:
-		switch protocol {
-		case config.ProtocolCanalJSON, config.ProtocolDebezium:
-			if !codecConfig.EnableTiDBExtension {
-				log.Panic("consumer requires TiDB protocol extensions", zap.String("protocol", protocol.String()))
-			}
-		case config.ProtocolAvro, config.ProtocolDebeziumAvro:
-			if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
-				log.Panic("consumer requires TiDB protocol extensions and Avro watermarks", zap.String("protocol", protocol.String()))
-			}
-			if codecConfig.AvroConfluentSchemaRegistry == "" {
-				log.Panic("consumer requires an Avro schema registry")
-			}
+	case config.ProtocolAvro, config.ProtocolDebeziumAvro:
+		if !codecConfig.EnableTiDBExtension || !codecConfig.AvroEnableWatermark {
+			log.Panic("consumer requires TiDB protocol extensions and Avro watermarks", zap.String("protocol", protocol.String()))
+		}
+		if codecConfig.AvroConfluentSchemaRegistry == "" {
+			log.Panic("consumer requires an Avro schema registry")
 		}
 	}
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
 		log.Panic("consumer requires Debezium schemas")
 	}
-	return &decodeConfig{
-		codec:           codecConfig,
-		rowFormat:       source == sourceStorage,
-		topic:           strings.Trim(upstreamURI.Path, "/"),
-		maxMessageBytes: maxMessageBytes,
-		maxBatchSize:    maxBatchSize,
-	}
+	return codecConfig
 }
 
 func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
@@ -303,7 +291,7 @@ func (c *consumer) consume(ctx context.Context) error {
 	tasks := make(chan []task, 1)
 	writeDone := make(chan struct{})
 	c.g.Go(func() error {
-		return c.reader.start(ctx, c.parser, tasks)
+		return c.reader.start(ctx, c.decoder, tasks)
 	})
 	c.g.Go(func() error {
 		defer close(writeDone)

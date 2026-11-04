@@ -16,29 +16,35 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"iter"
 	"net/url"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-// Run owns source reading and parsing. Advance and Confirm may run concurrently.
+// Run owns source reading and decoding. Advance and Confirm may run concurrently.
 // Boundary is conductor-owned. Close runs after all callers have stopped.
 // ContinueReading permits progress past the soft budget for missing input
 // dependencies or an empty pipeline holding source buffers and positions.
 type Reader interface {
-	Run(ctx context.Context, parser *inputParser, tasks chan<- []task) error
+	Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error
 	Advance(updates []readUpdate)
 	// Boundary requests event progress through commitTs. Nil covers every input;
 	// an empty, nonnil selection covers the control stream. Zero clears the request.
 	Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary
 	ContinueReading(bool)
 	Confirm(ctx context.Context, checkpoint uint64) error
+	// Decoders returns the decoder cursors created with the reader. Sources
+	// that decode files directly have no persistent streams and return nil.
+	Decoders() map[int32]codecCommon.Decoder
 	Close()
 }
 
@@ -96,30 +102,34 @@ func newReader(
 	upstreamURI *url.URL,
 	consumerID string,
 	replicaConfig *config.ReplicaConfig,
-	decoding *decodeConfig,
+	codecConfig *codecCommon.Config,
 	memory *memoryBudget,
 	confirmable chan struct{},
+	checkpoint *atomic.Uint64,
+	upstreamDB *sql.DB,
+	tables *simple.TableInfoCache,
 ) *reader {
 	var client Reader
 	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		client = newKafkaReader(ctx, upstreamURI, consumerID, decoding, memory, replicaConfig, confirmable)
+		client = newKafkaReader(ctx, upstreamURI, consumerID, codecConfig, memory, replicaConfig, confirmable, upstreamDB, tables)
 	case sourcePulsar:
-		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
+		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, codecConfig, memory, confirmable, upstreamDB, tables)
 	default:
-		client = newStorageReader(ctx, upstreamURI, replicaConfig, decoding.codec.Protocol, memory)
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, codecConfig, memory)
 	}
 	return &reader{
 		client:      client,
 		confirmable: confirmable,
+		checkpoint:  checkpoint,
 	}
 }
 
-func (r *reader) start(ctx context.Context, parser *inputParser, tasks chan<- []task) error {
+func (r *reader) start(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
 	r.g, ctx = errgroup.WithContext(ctx)
 	r.g.Go(func() error { return r.confirm(ctx) })
 	defer close(tasks)
-	err := r.client.Run(ctx, parser, tasks)
+	err := r.client.Run(ctx, decoder, tasks)
 	if ctx.Err() != nil {
 		return context.Cause(ctx)
 	}
@@ -129,13 +139,13 @@ func (r *reader) start(ctx context.Context, parser *inputParser, tasks chan<- []
 	return err
 }
 
-// Each source keeps its native input type through reading and parsing. The
-// bounded queue lets I/O run while the source parser publishes logical work.
-func readAndParse[T any](
+// Each source keeps its native input type through reading and decoding. The
+// bounded queue lets I/O run while the source decoder publishes logical work.
+func readAndDecode[T any](
 	ctx context.Context,
-	parser *inputParser,
+	decoder *inputDecoder,
 	read func(context.Context) ([]T, error),
-	parse func(context.Context, *inputParser, T) iter.Seq2[task, error],
+	decode func(context.Context, *inputDecoder, T) iter.Seq2[task, error],
 	tasks chan<- []task,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
@@ -163,15 +173,15 @@ func readAndParse[T any](
 			select {
 			case <-ctx.Done():
 				return context.Cause(ctx)
-			case input, ok := <-inputs:
+			case items, ok := <-inputs:
 				if !ok {
 					return batch.flush(ctx)
 				}
-				for index := range input {
-					data := input[index]
+				for index := range items {
+					data := items[index]
 					var zero T
-					input[index] = zero
-					for work, err := range parse(ctx, parser, data) {
+					items[index] = zero
+					for work, err := range decode(ctx, decoder, data) {
 						if err != nil {
 							return err
 						}
