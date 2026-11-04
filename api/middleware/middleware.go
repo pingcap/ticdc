@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -75,7 +76,7 @@ func LogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := strings.TrimPrefix(util.MaskSensitiveDataInURIForError("?"+c.Request.URL.RawQuery), "?")
 		user, _, _ := c.Request.BasicAuth()
 		c.Next()
 
@@ -183,7 +184,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 		}
 	}
 	log.Info("forwarding request to another server",
-		zap.String("url", c.Request.RequestURI),
+		zap.String("url", util.MaskSensitiveDataInURIForError(c.Request.RequestURI)),
 		zap.String("method", c.Request.Method),
 		zap.Any("fromID", fromID),
 		zap.String("toAddr", toAddr),

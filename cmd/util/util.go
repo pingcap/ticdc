@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"golang.org/x/net/http/httpproxy"
@@ -82,15 +83,22 @@ func findProxyFields() []zap.Field {
 	proxyCfg := httpproxy.FromEnvironment()
 	fields := make([]zap.Field, 0, 3)
 	if proxyCfg.HTTPProxy != "" {
-		fields = append(fields, zap.String("http_proxy", proxyCfg.HTTPProxy))
+		fields = append(fields, zap.String("http_proxy", maskProxyForLog(proxyCfg.HTTPProxy)))
 	}
 	if proxyCfg.HTTPSProxy != "" {
-		fields = append(fields, zap.String("https_proxy", proxyCfg.HTTPSProxy))
+		fields = append(fields, zap.String("https_proxy", maskProxyForLog(proxyCfg.HTTPSProxy)))
 	}
 	if proxyCfg.NoProxy != "" {
 		fields = append(fields, zap.String("no_proxy", proxyCfg.NoProxy))
 	}
 	return fields
+}
+
+func maskProxyForLog(proxy string) string {
+	if !strings.Contains(proxy, "://") {
+		proxy = "http://" + proxy
+	}
+	return pkgutil.MaskSensitiveDataInURIForError(proxy)
 }
 
 // shutdownNotify is a callback to notify caller that TiCDC is about to shutdown.
