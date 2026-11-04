@@ -132,9 +132,6 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 
 	for _, meta := range metaList {
 		if meta.Err != sarama.ErrNoError {
-			if meta.Err == sarama.ErrUnknownTopicOrPartition {
-				continue
-			}
 			if !ignoreTopicError {
 				return nil, meta.Err
 			}
@@ -157,6 +154,26 @@ func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool
 func IsAdminAuthorizationFailed(err error) bool {
 	return errors.Is(err, sarama.ErrTopicAuthorizationFailed) ||
 		errors.Is(err, sarama.ErrClusterAuthorizationFailed)
+}
+
+// IsUnretryableKafkaError reports whether err is not retryable.
+// See Apache Kafka protocol error definitions:
+// https://kafka.apache.org/38/generated/protocol_errors.html
+func IsUnretryableKafkaError(err error) bool {
+	if IsAuthorizationFailed(err) ||
+		errors.Is(err, errors.ErrKafkaInvalidConfig) ||
+		errors.Is(err, sarama.ErrInvalidTopic) ||
+		errors.Is(err, sarama.ErrInvalidConfig) ||
+		errors.Is(err, sarama.ErrSASLAuthenticationFailed) ||
+		errors.Is(err, sarama.ErrUnsupportedSASLMechanism) ||
+		errors.Is(err, sarama.ErrIllegalSASLState) ||
+		errors.Is(err, sarama.ErrUnsupportedVersion) ||
+		errors.Is(err, sarama.ErrInvalidRequest) {
+		return true
+	}
+
+	var configErr sarama.ConfigurationError
+	return errors.As(err, &configErr)
 }
 
 func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
