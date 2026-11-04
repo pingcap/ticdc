@@ -21,6 +21,12 @@ import (
 
 type RFCErrorCode = perrors.RFCErrorCode
 
+const (
+	RedactLogEnable  = perrors.RedactLogEnable
+	RedactLogDisable = perrors.RedactLogDisable
+	RedactLogMarker  = perrors.RedactLogMarker
+)
+
 var (
 	// Is is a shortcut for errors.Is.
 	Is = errors.Is
@@ -40,4 +46,6 @@ var (
 	Annotatef = perrors.Annotatef
 	// WithMessage is a shortcut for github.com/pingcap/errors.WithMessage.
 	WithMessage = perrors.WithMessage
+
+	RedactLogEnabled = &perrors.RedactLogEnabled
 )

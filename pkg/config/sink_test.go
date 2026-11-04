@@ -322,6 +322,16 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 	}
 }
 
+func TestCheckCompatibilityWithSinkURIMasksCredentialsInParseError(t *testing.T) {
+	t.Parallel()
+
+	err := new(SinkConfig).CheckCompatibilityWithSinkURI(
+		new(SinkConfig), "mysql://root:verysecure@127.0.0.1/%zz")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
 func TestValidateTableRoute(t *testing.T) {
 	t.Parallel()
 

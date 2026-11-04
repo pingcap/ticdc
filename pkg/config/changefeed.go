@@ -351,10 +351,7 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
@@ -369,11 +366,21 @@ func MaskChangefeedInfo(data []byte) (string, error) {
 	if err := info.Unmarshal(data); err != nil {
 		return "", err
 	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
 	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
 	if info.Config != nil {
 		info.Config.MaskSensitiveData()
 	}
-	return info.Marshal()
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the
