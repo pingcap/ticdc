@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -170,10 +169,10 @@ func New(serverId node.ID) *EventCollector {
 		metricRedoDispatcherReceivedKVEventCount:         dispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
 		metricRedoDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
 
-		metricDSEventChanSize:     metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
-		metricDSPendingQueue:      metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
-		metricDSEventChanSizeRedo: metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
-		metricDSPendingQueueRedo:  metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
+		metricDSEventChanSize:     dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
+		metricDSPendingQueue:      dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
+		metricDSEventChanSizeRedo: dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
+		metricDSPendingQueueRedo:  dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
 	}
 
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)

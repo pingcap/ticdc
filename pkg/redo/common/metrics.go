@@ -1,4 +1,4 @@
-// Copyright 2026 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -8,22 +8,31 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservice
+package common
 
 import (
-	"github.com/pingcap/ticdc/logservice/coordinator"
-	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/logservice/txnutil"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// RegisterMetrics registers metrics owned by the log service components.
+const (
+	namespace = "ticdc"
+	subsystem = "redo"
+)
+
+// RedoWorkerBusyRatio records the busy time of redo writer workers.
+var RedoWorkerBusyRatio = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "worker_busy_ratio",
+		Help:      "Busy time in seconds for redo writer workers.",
+	}, []string{metrics.GetKeyspaceLabel(), "changefeed", "type"})
+
+// RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
-	logcoordinator.RegisterMetrics(registry)
-	schemastore.RegisterMetrics(registry)
-	txnutil.RegisterMetrics(registry)
+	registry.MustRegister(RedoWorkerBusyRatio)
 }

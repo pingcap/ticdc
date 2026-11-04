@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -216,17 +215,17 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 		maintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 		maintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
 
-		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
-		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
-		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		scheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+		scheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+		spanCountGauge.DeleteLabelValues(keyspace, name, "default")
+		spanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		tableCountGauge.DeleteLabelValues(keyspace, name, "default")
+		tableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 	}
 	cleanup()
 	t.Cleanup(cleanup)

@@ -1,4 +1,4 @@
-// Copyright 2026 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -8,18 +8,26 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package api
+package metrics
 
 import (
-	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/prometheus/client_golang/prometheus"
+	"strconv"
+
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 )
 
-// RegisterMetrics registers metrics for the API components.
-func RegisterMetrics(registry *prometheus.Registry) {
-	middleware.RegisterMetrics(registry)
+// GetKeyspaceLabel returns the keyspace label name used by TiCDC metrics.
+func GetKeyspaceLabel() string {
+	if kerneltype.IsNextGen() {
+		return "keyspace_name"
+	}
+	return "namespace"
+}
+
+// FormatKeyspaceID formats a keyspace ID as a metric label value.
+func FormatKeyspaceID(keyspaceID uint32) string {
+	return strconv.FormatUint(uint64(keyspaceID), 10)
 }

@@ -14,25 +14,26 @@
 package server
 
 import (
-	"github.com/pingcap/ticdc/api"
-	"github.com/pingcap/ticdc/coordinator"
-	"github.com/pingcap/ticdc/downstreamadapter"
-	"github.com/pingcap/ticdc/logservice"
-	"github.com/pingcap/ticdc/maintainer"
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var registry = prometheus.NewRegistry()
-
 var (
+	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
+	// It is used by dashboards to identify the exact binary running on each TiCDC server,
+	// including whether the process is running in TiCDC's new or old architecture mode.
+	buildInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "build_info",
+			Help:      "TiCDC build information as labels.",
+		},
+		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type", "ticdc_arch"},
+	)
+
 	captureWriteGateState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -66,22 +67,17 @@ var (
 		}, []string{"reason"})
 )
 
-func registerMetrics() {
+// RecordBuildInfo records the server build metadata.
+func RecordBuildInfo() {
+	buildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
+}
+
+// RegisterMetrics registers capture and process metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(captureWriteGateState)
 	registry.MustRegister(captureP2PLeaseRemainingSeconds)
 	registry.MustRegister(captureEtcdProofRemainingSeconds)
 	registry.MustRegister(captureWriteBlockCounter)
+	registry.MustRegister(buildInfo)
 	metrics.RegisterMetrics(registry)
-	coordinator.RegisterMetrics(registry)
-	maintainer.RegisterMetrics(registry)
-	downstreamadapter.RegisterMetrics(registry)
-	api.RegisterMetrics(registry)
-	logger.RegisterMetrics(registry)
-	messaging.RegisterMetrics(registry)
-	logservice.RegisterMetrics(registry)
-	common.RegisterMetrics(registry)
-	event.RegisterMetrics(registry)
-	codec.RegisterMetrics(registry)
-	gc.RegisterMetrics(registry)
-	watcher.RegisterMetrics(registry)
 }

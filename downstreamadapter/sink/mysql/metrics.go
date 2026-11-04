@@ -15,9 +15,7 @@
 package mysql
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -82,7 +80,7 @@ var (
 		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "id"})
 )
 
-// RegisterMetrics registers MySQL sink, writer, and conflict detection metrics.
+// RegisterMetrics registers the metrics owned by this package.
 func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(changefeedDownstreamIsTiDBGauge)
 	registry.MustRegister(workerBatchFlushDurationHistogram)
@@ -90,6 +88,4 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(workerTotalDurationHistogram)
 	registry.MustRegister(workerHandledRowsCounter)
 	registry.MustRegister(workerEventRowCountHistogram)
-	mysql.RegisterMetrics(registry)
-	causality.RegisterMetrics(registry)
 }
