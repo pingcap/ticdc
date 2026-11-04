@@ -19,7 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
-	_ "net/http/pprof" // Register the pprof handlers on DefaultServeMux.
+	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"net/url"
 	"strings"
 	"time"

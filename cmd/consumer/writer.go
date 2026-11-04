@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -530,10 +531,8 @@ func (w *writer) advanceCheckpoint() {
 	}
 	var unfinishedTables map[int64]uint64
 	if len(w.mutations) != 0 {
-		unfinishedTables = make(map[int64]uint64)
-		for id, ts := range w.unsubmittedTables {
-			unfinishedTables[id] = ts
-		}
+		unfinishedTables = make(map[int64]uint64, len(w.unsubmittedTables))
+		maps.Copy(unfinishedTables, w.unsubmittedTables)
 	}
 	for _, control := range w.pendingDDL {
 		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true

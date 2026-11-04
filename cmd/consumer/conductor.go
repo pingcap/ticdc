@@ -481,6 +481,7 @@ func (c *conductor) nextReady(watermark uint64, admit dmlAdmitter) pendingTask {
 			return result
 		}
 	}
+	//nolint:revive // A nil *decodeTask converted to pendingTask would be a non-nil interface.
 	if row := c.nextDML(watermark, admit); row != nil {
 		return row
 	}

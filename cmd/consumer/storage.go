@@ -333,7 +333,8 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			if c.scanned && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				return []storageRead{storageWatermark(c.sourceCheckpoint)}, nil
+				watermark := storageWatermark(c.sourceCheckpoint)
+				return []storageRead{watermark}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -368,7 +369,8 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			if err := c.wait(ctx); err != nil {
 				return nil, err
 			}
-			return []storageRead{c.readDDL(key, schema)}, nil
+			ddl := c.readDDL(schema)
+			return []storageRead{ddl}, nil
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -440,7 +442,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDDL(key cloudstorage.DMLPathKey, schema *readSchema) *storageDDL {
+func (c *storageReader) readDDL(schema *readSchema) *storageDDL {
 	c.pendingSchema = make(chan struct{})
 	scope := event.InfluenceTypeNormal
 	switch {

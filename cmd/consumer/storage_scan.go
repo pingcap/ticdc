@@ -105,7 +105,7 @@ func (c *storageReader) metadataPaths(ctx context.Context) ([]string, error) {
 			}
 			return collect(name, size)
 		})
-		if err != nil && !(errors.Is(err, io.EOF) && (next != "" || cursorIgnored)) {
+		if err != nil && (!errors.Is(err, io.EOF) || (next == "" && !cursorIgnored)) {
 			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "discover Storage metadata")
 		}
 		if cursorIgnored {
