@@ -96,17 +96,18 @@ func newReader(
 	upstreamURI *url.URL,
 	consumerID string,
 	replicaConfig *config.ReplicaConfig,
+	decoding *decodeConfig,
 	memory *memoryBudget,
 	confirmable chan struct{},
 ) *reader {
 	var client Reader
 	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		client = newKafkaReader(ctx, upstreamURI, consumerID, memory, replicaConfig, confirmable)
+		client = newKafkaReader(ctx, upstreamURI, consumerID, decoding, memory, replicaConfig, confirmable)
 	case sourcePulsar:
 		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
-		client = newStorageReader(ctx, upstreamURI, replicaConfig, memory)
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, decoding.codec.Protocol, memory)
 	}
 	return &reader{
 		client:      client,

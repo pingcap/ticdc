@@ -93,19 +93,12 @@ type storageReader struct {
 }
 
 // newConsumer validates and adjusts replicaConfig before opening the source.
-func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, memory *memoryBudget) *storageReader {
+func newStorageReader(ctx context.Context, upstreamURI *url.URL, replicaConfig *config.ReplicaConfig, protocol config.Protocol, memory *memoryBudget) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
 		log.Panic("file upstream URI must include a path")
 	}
 	if upstreamURI.Scheme != config.FileScheme && upstreamURI.Host == "" {
 		log.Panic("object storage upstream URI must include a bucket")
-	}
-	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
-	if err != nil {
-		log.Panic("Storage protocol is invalid", zap.Error(err))
-	}
-	if protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
-		log.Panic("Storage consumer requires CSV or Canal JSON", zap.String("protocol", protocol.String()))
 	}
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {

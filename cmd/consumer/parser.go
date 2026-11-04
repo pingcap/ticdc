@@ -31,17 +31,12 @@ import (
 	"go.uber.org/zap"
 )
 
-type readFormat uint8
-
-const (
-	messageFormat readFormat = iota
-	rowFormat
-)
-
 type decodeConfig struct {
-	codec  *codecCommon.Config
-	format readFormat
-	topic  string
+	codec           *codecCommon.Config
+	rowFormat       bool
+	topic           string
+	maxMessageBytes int
+	maxBatchSize    int
 }
 
 // inputScope carries source-provided identity and ordering facts into parsed work.
@@ -115,7 +110,7 @@ func newInputParser(ctx context.Context, decoding *decodeConfig, upstreamDB *sql
 			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
 		}
 	}
-	if streams == nil && decoding.format == messageFormat {
+	if streams == nil && !decoding.rowFormat {
 		streams = map[int32]*decodeStream{0: newDecodeStream(ctx, 0, decoding, upstreamDB, schemas)}
 	}
 	return &inputParser{codecConfig: decoding.codec, selectors: selectors, streams: streams, schemas: schemas}

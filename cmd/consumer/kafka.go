@@ -15,16 +15,13 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"iter"
-	"math"
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -85,7 +82,7 @@ type kafkaReader struct {
 	maxBatchSize    int
 }
 
-func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, memory *memoryBudget, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
+func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string, decoding *decodeConfig, memory *memoryBudget, replicaConfig *config.ReplicaConfig, confirmable chan<- struct{}) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
 		log.Panic("Kafka upstream URI must include an endpoint")
 	}
@@ -96,10 +93,7 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
 	}
-	protocol, err := config.ParseSinkProtocolFromString(cmp.Or(upstreamURI.Query().Get(config.ProtocolKey), "open-protocol"))
-	if err != nil {
-		log.Panic("Kafka protocol is invalid", zap.Error(err))
-	}
+	protocol := decoding.codec.Protocol
 	router, err := eventrouter.NewEventRouter(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive), topic, false, protocol == config.ProtocolAvro)
 	if err != nil {
 		log.Panic("Kafka event routing configuration is invalid", zap.Error(err))
@@ -117,19 +111,6 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 		kgo.BrokerMaxReadBytes(32 << 20),
 	}
 	query := upstreamURI.Query()
-	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
-	if value := query.Get("max-message-bytes"); value != "" {
-		maxMessageBytes, err = strconv.Atoi(value)
-		if err != nil {
-			log.Panic("Kafka max-message-bytes is invalid", zap.String("value", value), zap.Error(err))
-		}
-	}
-	if value := query.Get("max-batch-size"); value != "" {
-		maxBatchSize, err = strconv.Atoi(value)
-		if err != nil {
-			log.Panic("Kafka max-batch-size is invalid", zap.String("value", value), zap.Error(err))
-		}
-	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || ca != "" || cert != "" || key != "" {
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -191,8 +172,8 @@ func newKafkaReader(ctx context.Context, upstreamURI *url.URL, consumerID string
 			reached:   helper.GetDDLDispatchRule(protocol) == helper.PartitionAll,
 			watermark: &partitions[0].watermark,
 		},
-		maxMessageBytes: maxMessageBytes,
-		maxBatchSize:    maxBatchSize,
+		maxMessageBytes: decoding.maxMessageBytes,
+		maxBatchSize:    decoding.maxBatchSize,
 	}
 }
 
@@ -220,7 +201,6 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 	return func(yield func(task, error) bool) {
 		defer c.memory.release(int64(len(input.message.Key) + len(input.message.Value)))
 		partition := c.partitions[id]
-		pending := make([]task, 0, 1)
 		rows := 0
 		for result, err := range parser.parseMessage(ctx, scope, input.message.Key, input.message.Value) {
 			if err != nil {
@@ -240,16 +220,6 @@ func (c *kafkaReader) parse(ctx context.Context, parser *inputParser, input kafk
 				task.offset = input.message.Offset
 				task.skipKeyOnlyDelete = parser.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
 			}
-			if rows == 0 {
-				if !yield(result, nil) {
-					return
-				}
-				continue
-			}
-			// Validate the whole DML message before any of its rows reach the conductor.
-			pending = append(pending, result)
-		}
-		for _, result := range pending {
 			if !yield(result, nil) {
 				return
 			}

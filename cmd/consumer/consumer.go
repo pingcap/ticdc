@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"math"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"net/url"
@@ -89,7 +90,7 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	memory := newMemoryBudget()
 	confirmable := make(chan struct{}, 1)
 	var upstreamDB *sql.DB
-	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
+	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, decoding, memory, confirmable)
 	defer func() {
 		if c != nil {
 			return
@@ -195,9 +196,19 @@ func newDecodeConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) 
 	if source == sourcePulsar && !config.IsPulsarSupportedProtocols(protocol) {
 		log.Panic("Pulsar consumer protocol is unsupported", zap.String("protocol", protocol.String()))
 	}
+	if source == sourceStorage && protocol != config.ProtocolCsv && protocol != config.ProtocolCanalJSON {
+		log.Panic("Storage consumer requires CSV or Canal JSON", zap.String("protocol", protocol.String()))
+	}
 	codecConfig := codecCommon.NewConfig(protocol)
 	if err := codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("consumer codec configuration is invalid", zap.Error(err))
+	}
+	maxMessageBytes, maxBatchSize := math.MaxInt, math.MaxInt
+	if upstreamURI.Query().Has("max-message-bytes") {
+		maxMessageBytes = codecConfig.MaxMessageBytes
+	}
+	if upstreamURI.Query().Has("max-batch-size") {
+		maxBatchSize = codecConfig.MaxBatchSize
 	}
 	if source == sourceKafka && protocol == config.ProtocolAvro {
 		codecConfig.AvroEnableWatermark = true
@@ -228,14 +239,12 @@ func newDecodeConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) 
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
 		log.Panic("consumer requires Debezium schemas")
 	}
-	format := messageFormat
-	if source == sourceStorage {
-		format = rowFormat
-	}
 	return &decodeConfig{
-		codec:  codecConfig,
-		format: format,
-		topic:  strings.Trim(upstreamURI.Path, "/"),
+		codec:           codecConfig,
+		rowFormat:       source == sourceStorage,
+		topic:           strings.Trim(upstreamURI.Path, "/"),
+		maxMessageBytes: maxMessageBytes,
+		maxBatchSize:    maxBatchSize,
 	}
 }
 

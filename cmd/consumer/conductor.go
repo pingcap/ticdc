@@ -24,13 +24,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/integrity"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -118,203 +115,84 @@ func (c *conductor) flush(ctx context.Context, w *writer) error {
 		if len(w.pendingDML) != 0 {
 			return nil
 		}
-		selection := newSelection(w, c.mergeRows)
-		var items []pendingTask
-		for len(items) < batchRows && selection.rows < batchRows && selection.bytes < batchBytes {
-			item := c.next(selection)
+		delivery := newDelivery(c, w)
+		var control *ddlTask
+		for delivery.events < batchRows && delivery.rows < batchRows && delivery.bytes < batchBytes {
+			item := c.next(delivery)
 			if item == nil {
 				break
 			}
-			items = append(items, item)
-			if _, ddl := item.(*ddlTask); ddl {
+			if ddl, ok := item.(*ddlTask); ok {
+				control = ddl
 				break
 			}
 		}
-		if len(items) == 0 {
+		if delivery.events == 0 && control == nil {
 			// Selection can retire a covered DDL replica without delivering work.
 			c.updateWatermark(w)
 			return w.flushDML(ctx)
 		}
-		// Register the resolved prefix in the writer before updating progress.
-		c.deliver(items, w)
+		delivery.flush()
+		if control != nil {
+			w.addDDL(&ddlWrite{ddl: control.ddl, task: control})
+		}
 	}
 }
 
-// selection admits the rows for one delivery round: the writer budget, the
-// in-flight rows of the same table, and the DDL fence must all allow the task.
-type selection struct {
-	writer *writer
-	active map[int64]*dmlWrite
-	tables map[int64]*dmlWrite
-	merge  bool
-	rows   int
-	events int
-	bytes  int64
+// delivery admits the rows for one round and buffers the accepted rows for the
+// writer. The writer budget, the in-flight rows of the same table, and the DDL
+// fence must all allow a task before it is buffered.
+type delivery struct {
+	conductor *conductor
+	writer    *writer
+	active    map[int64]*dmlWrite
+	tables    map[int64]*dmlWrite
+	pending   []*dmlWrite
+	merge     bool
+	rows      int
+	events    int
+	bytes     int64
 }
 
-type dmlAdmitter interface {
-	canWrite(*decodeTask) bool
-}
-
-func newSelection(w *writer, merge bool) *selection {
+func newDelivery(c *conductor, w *writer) *delivery {
 	active := make(map[int64]*dmlWrite)
 	for _, batch := range w.inFlight {
 		for _, row := range batch.items {
 			active[row.dml.PhysicalTableID] = row
 		}
 	}
-	return &selection{
-		writer: w,
-		active: active,
-		tables: make(map[int64]*dmlWrite),
-		merge:  merge,
+	return &delivery{
+		conductor: c,
+		writer:    w,
+		active:    active,
+		tables:    make(map[int64]*dmlWrite),
+		merge:     c.merger.sequential(),
 	}
 }
 
-func (s *selection) canWrite(task *decodeTask) bool {
-	if s.writer.inFlightEvents+s.events != 0 &&
-		(s.writer.inFlightEvents+s.events+1 > maxInFlightEvents || s.writer.inFlightBytes+s.bytes+task.bytes > maxInFlightBytes) {
+func (d *delivery) admit(task *decodeTask) bool {
+	if d.writer.inFlightEvents+d.events != 0 &&
+		(d.writer.inFlightEvents+d.events+1 > maxInFlightEvents || d.writer.inFlightBytes+d.bytes+task.bytes > maxInFlightBytes) {
 		return false
 	}
-	row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: s.merge}
-	if !s.writer.canWrite(row, s.active, s.tables) {
+	row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: d.merge}
+	if !d.writer.canWrite(row, d.active, d.tables) {
 		return false
 	}
-	s.tables[row.dml.PhysicalTableID] = row
-	s.rows += int(task.dml.Len())
-	s.events++
-	s.bytes += task.bytes
+	d.tables[row.dml.PhysicalTableID] = row
+	d.pending = append(d.pending, row)
+	d.rows += int(task.dml.Len())
+	d.events++
+	d.bytes += task.bytes
 	return true
 }
 
-type deliveryBatch struct {
-	conductor *conductor
-	writer    *writer
-	rows      []*dmlWrite
-	bytes     int64
-}
-
-func (b *deliveryBatch) add(row *dmlWrite) {
-	b.rows = append(b.rows, row)
-	b.bytes += row.bytes
-	if len(b.rows) >= batchRows || b.bytes >= batchBytes {
-		b.flush()
+func (d *delivery) flush() {
+	for _, row := range d.conductor.merger.merge(d.pending) {
+		d.writer.addDML(row)
 	}
-}
-
-func (b *deliveryBatch) flush() {
-	for _, row := range b.conductor.prepare(b.rows) {
-		b.writer.addDML(row)
-	}
-	b.rows = b.rows[:0]
-	b.bytes = 0
-}
-
-func (c *conductor) deliver(items []pendingTask, w *writer) {
-	batch := &deliveryBatch{conductor: c, writer: w}
-	for _, item := range items {
-		switch item := item.(type) {
-		case *decodeTask:
-			batch.add(&dmlWrite{dml: item.dml, bytes: item.bytes, sequential: c.mergeRows})
-		case *ddlTask:
-			batch.flush()
-			w.addDDL(&ddlWrite{ddl: item.ddl, task: item})
-		}
-	}
-	batch.flush()
-}
-
-func (c *conductor) prepare(items []*dmlWrite) []*dmlWrite {
-	if !c.mergeRows {
-		return items
-	}
-	if c.sortCSVRows {
-		slices.SortStableFunc(items, func(x, y *dmlWrite) int {
-			return cmp.Or(cmp.Compare(x.dml.CommitTs, y.dml.CommitTs), cmp.Compare(x.dml.RowTypes[0], y.dml.RowTypes[0]))
-		})
-	}
-	for _, item := range items {
-		item.sequential = true
-	}
-	prepared := items[:0]
-	remaining := items
-	for len(remaining) != 0 {
-		item := remaining[0]
-		// Merge only the bounded batch already available. Waiting for an entire
-		// transaction could retain arbitrarily large input in memory.
-		first := item.dml
-		count, retained := int(first.Len()), item.bytes
-		end := 1
-		for end < len(remaining) {
-			if count >= batchRows || retained >= batchBytes {
-				break
-			}
-			next := remaining[end].dml
-			if next.PhysicalTableID != first.PhysicalTableID || next.CommitTs != first.CommitTs || !sameTableSchema(first.TableInfo, next.TableInfo) {
-				break
-			}
-			count += int(next.Len())
-			retained += remaining[end].bytes
-			end++
-		}
-		if end == 1 {
-			prepared = append(prepared, item)
-			remaining = remaining[1:]
-			continue
-		}
-		var rows int
-		for _, part := range remaining[:end] {
-			rows += len(part.dml.RowTypes)
-		}
-		dml := event.NewDMLEvent(first.DispatcherID, first.PhysicalTableID, first.StartTs, first.CommitTs, first.TableInfo)
-		dml.Version, dml.Seq, dml.Epoch = first.Version, first.Seq, first.Epoch
-		dml.ReplicatingTs, dml.TableInfoVersion = first.ReplicatingTs, first.TableInfoVersion
-		dml.Rows = chunk.NewChunkWithCapacity(first.TableInfo.GetFieldSlice(), rows)
-		for _, source := range remaining[:end] {
-			part := source.dml
-			dml.Rows.Append(part.Rows, part.PreviousTotalOffset, part.PreviousTotalOffset+len(part.RowTypes))
-			dml.RowTypes = append(dml.RowTypes, part.RowTypes...)
-			if len(dml.RowKeys) != 0 || len(part.RowKeys) != 0 {
-				if len(dml.RowKeys) == 0 {
-					dml.RowKeys = make([][]byte, dml.Rows.NumRows()-len(part.RowTypes))
-				}
-				keys := part.RowKeys
-				if len(keys) == 0 {
-					keys = make([][]byte, len(part.RowTypes))
-				}
-				dml.RowKeys = append(dml.RowKeys, keys...)
-			}
-			if len(dml.Checksum) != 0 || len(part.Checksum) != 0 {
-				if len(dml.Checksum) == 0 {
-					dml.Checksum = make([]*integrity.Checksum, dml.Length)
-				}
-				checksums := part.Checksum
-				if len(checksums) == 0 {
-					checksums = make([]*integrity.Checksum, part.Length)
-				}
-				dml.Checksum = append(dml.Checksum, checksums...)
-			}
-			dml.Length += part.Length
-			dml.ApproximateSize += part.ApproximateSize
-			if len(part.PostTxnEnqueued) != 0 || len(part.PostTxnFlushed) != 0 {
-				postEnqueue, postFlush := part.DetachPostCallbacks()
-				dml.AddPostEnqueueFunc(postEnqueue)
-				dml.AddPostFlushFunc(postFlush)
-			}
-			part.Rows = nil
-		}
-		bytes := dml.Rows.MemoryUsage()
-		c.memory.reserve(bytes)
-		c.memory.release(retained)
-		prepared = append(prepared, &dmlWrite{
-			dml:        dml,
-			bytes:      bytes,
-			sequential: true,
-		})
-		remaining = remaining[end:]
-	}
-	clear(items[len(prepared):])
-	return prepared
+	d.pending = d.pending[:0]
+	d.bytes = 0
 }
 
 // conductor coordinates row conversion, write ordering and completion progress.
@@ -334,8 +212,7 @@ type conductor struct {
 	waitingMetadata   int
 	decoder           *decoderGroup
 	watermark         uint64
-	mergeRows         bool
-	sortCSVRows       bool
+	merger            rowMerger
 	pendingDML        map[int64]map[int32][]*decodeTask
 	orderedDML        bool
 	pendingDDL        []*ddlTask
@@ -453,7 +330,7 @@ func (c *conductor) queueDDL(ddl *event.DDLEvent) *ddlInput {
 	return input
 }
 
-func (c *conductor) nextReady(watermark uint64, admit dmlAdmitter) pendingTask {
+func (c *conductor) nextReady(watermark uint64, delivery *delivery) pendingTask {
 	c.controlTs = 0
 	var head *ddlTask
 	for len(c.pendingDDL) != 0 {
@@ -477,12 +354,12 @@ func (c *conductor) nextReady(watermark uint64, admit dmlAdmitter) pendingTask {
 	}
 	headReady := head != nil && ddlReady(head, watermark)
 	if headReady {
-		if result := c.drainDDL(head, watermark, admit); result != nil {
+		if result := c.drainDDL(head, watermark, delivery); result != nil {
 			return result
 		}
 	}
 	//nolint:revive // A nil *decodeTask converted to pendingTask would be a non-nil interface.
-	if row := c.nextDML(watermark, admit); row != nil {
+	if row := c.nextDML(watermark, delivery); row != nil {
 		return row
 	}
 	return nil
@@ -510,7 +387,7 @@ func ddlReady(item *ddlTask, watermark uint64) bool {
 
 // Emit a ready preceding row from the DDL scope, or the DDL once all such
 // rows have moved to writer batches. The writer waits for their flush callbacks.
-func (c *conductor) drainDDL(head *ddlTask, watermark uint64, admit dmlAdmitter) pendingTask {
+func (c *conductor) drainDDL(head *ddlTask, watermark uint64, delivery *delivery) pendingTask {
 	preceding := false
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
@@ -518,7 +395,7 @@ func (c *conductor) drainDDL(head *ddlTask, watermark uint64, admit dmlAdmitter)
 			continue
 		}
 		preceding = true
-		if c.rowReady(row, watermark) && admit.canWrite(row) {
+		if c.rowReady(row, watermark) && delivery.admit(row) {
 			return c.popDML(row)
 		}
 		c.trackDMLWait(row, watermark)
@@ -545,10 +422,10 @@ func (c *conductor) popDDL() *ddlTask {
 	return item
 }
 
-func (c *conductor) nextDML(watermark uint64, admit dmlAdmitter) *decodeTask {
+func (c *conductor) nextDML(watermark uint64, delivery *delivery) *decodeTask {
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
-		if c.rowReady(row, watermark) && admit.canWrite(row) {
+		if c.rowReady(row, watermark) && delivery.admit(row) {
 			return c.popDML(row)
 		}
 		c.trackDMLWait(row, watermark)
@@ -664,17 +541,16 @@ func newConductor(memory *memoryBudget, reader Reader, parsing *inputParser) *co
 		orderedDML: orderedDML,
 		reader:     reader,
 		memory:     memory, streams: streams,
-		decoder:     newDecoderGroup(memory, make(chan struct{}, 1), validator),
-		mergeRows:   parsing.codecConfig.Protocol == config.ProtocolCsv,
-		sortCSVRows: parsing.codecConfig.Protocol == config.ProtocolCsv && parsing.codecConfig.OutputOldValue && parsing.codecConfig.IncludeCommitTs,
+		decoder: newDecoderGroup(memory, make(chan struct{}, 1), validator),
+		merger:  newRowMerger(parsing.codecConfig, memory),
 	}
 	parsing.checkpoint = &c.checkpoint
 	parsing.memory = memory
 	return c
 }
 
-func (c *conductor) next(admit dmlAdmitter) pendingTask {
-	return c.nextReady(c.watermark, admit)
+func (c *conductor) next(delivery *delivery) pendingTask {
+	return c.nextReady(c.watermark, delivery)
 }
 
 // Scope names are logical event metadata. Transport routing remains reader-owned.
