@@ -222,16 +222,23 @@ function run() {
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
-	# Test 3: Redaction ON mode with BlackHole sink
+	# Test 3: Default redaction ON mode with BlackHole sink
 	# ==========================================================================
 	echo ""
-	echo "=== Test 3: Redaction ON mode (BlackHole sink) ==="
+	echo "=== Test 3: Default redaction ON mode (BlackHole sink) ==="
 	run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
 	run_sql "DROP DATABASE IF EXISTS log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "CREATE DATABASE log_redaction_test;"
 	run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+<<<<<<< HEAD
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_blackhole"
+=======
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_on_blackhole"
+	require_log_pattern "$WORK_DIR/cdc_on_blackhole.log" \
+		"log redaction initialized.*ON" \
+		"Unset redact-info-log defaults to ON"
+>>>>>>> dfc96ee89 (server: enable log redaction by default in new architecture (#6790))
 
 	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-on-test" --config=$CUR/conf/changefeed.toml >"$WORK_DIR/credential-create-on.txt" 2>&1
 
