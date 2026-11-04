@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -34,7 +34,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const confluentAvroHeaderLen = 5
+const (
+	confluentAvroHeaderLen             = 5
+	debeziumAvroDecoderSchemaCacheSize = 128
+)
 
 type avroDecoder struct {
 	ctx         context.Context
@@ -42,8 +45,7 @@ type avroDecoder struct {
 	httpClient  *http.Client
 	inner       *decoder
 
-	mu      sync.RWMutex
-	schemas map[int]*registeredDebeziumAvroSchema
+	schemas *lru.Cache
 }
 
 type registeredDebeziumAvroSchema struct {
@@ -65,13 +67,14 @@ func NewAvroDecoder(
 	if registryURL == "" {
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs("schema registry URI is empty")
 	}
+	schemas, _ := lru.New(debeziumAvroDecoderSchemaCacheSize)
 
 	return &avroDecoder{
 		ctx:         ctx,
 		registryURL: registryURL,
 		httpClient:  http.DefaultClient,
 		inner:       NewDecoder(config, idx, db).(*decoder),
-		schemas:     make(map[int]*registeredDebeziumAvroSchema),
+		schemas:     schemas,
 	}, nil
 }
 
@@ -162,11 +165,9 @@ func (d *avroDecoder) decodeConfluentAvroMessage(data []byte) (any, map[string]a
 }
 
 func (d *avroDecoder) getSchema(schemaID int) (*registeredDebeziumAvroSchema, error) {
-	d.mu.RLock()
-	schema, ok := d.schemas[schemaID]
-	d.mu.RUnlock()
+	cached, ok := d.schemas.Get(schemaID)
 	if ok {
-		return schema, nil
+		return cached.(*registeredDebeziumAvroSchema), nil
 	}
 
 	uri := d.registryURL + "/schemas/ids/" + strconv.Itoa(schemaID)
@@ -219,14 +220,12 @@ func (d *avroDecoder) getSchema(schemaID int) (*registeredDebeziumAvroSchema, er
 	namedSchemas := make(map[string]any)
 	collectAvroNamedSchemas(schemaDef, namedSchemas)
 
-	schema = &registeredDebeziumAvroSchema{
+	schema := &registeredDebeziumAvroSchema{
 		schema:       schemaDef,
 		namedSchemas: namedSchemas,
 		codec:        codec,
 	}
-	d.mu.Lock()
-	d.schemas[schemaID] = schema
-	d.mu.Unlock()
+	d.schemas.Add(schemaID, schema)
 	return schema, nil
 }
 
