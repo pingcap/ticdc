@@ -3961,9 +3961,9 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("exchange partition", func(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
-		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
+		job.Query = "ALTER TABLE `with table` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
-		ddl, _ := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		ddl, err := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
@@ -3979,6 +3979,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 				},
 			},
 		})
+		require.NoError(t, err)
 
 		assert.Equal(t,
 			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p``0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
@@ -4979,6 +4980,72 @@ func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, byte(model.ActionAddIndex), events[0].Type)
 	require.Equal(t, expectedIndexIDs, events[0].IndexIDs)
+}
+
+func TestIsAddFullTextIndexDDL(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		sqlMode mysql.SQLMode
+		want    bool
+	}{
+		{
+			name:  "add fulltext index",
+			query: "ALTER TABLE t ADD FULLTEXT INDEX (c) WITH PARSER standard",
+			want:  true,
+		},
+		{
+			name:  "add fulltext key with quoted table",
+			query: "alter table `add fulltext index` add fulltext key idx (c)",
+			want:  true,
+		},
+		{
+			name:    "ANSI quoted table",
+			query:   `ALTER TABLE "t" ADD FULLTEXT INDEX idx (c)`,
+			sqlMode: mysql.ModeANSIQuotes,
+			want:    true,
+		},
+		{
+			name:  "phrase in table name",
+			query: "CREATE TABLE `x add fulltext index` (id INT)",
+		},
+		{
+			name:  "phrase in column name",
+			query: "ALTER TABLE t ADD COLUMN `add fulltext index` INT",
+		},
+		{
+			name:  "phrase in string literal",
+			query: "ALTER TABLE t COMMENT = 'add fulltext index'",
+		},
+		{
+			name:  "phrase in comment",
+			query: "ALTER TABLE t /* ADD FULLTEXT INDEX idx (c) */ ADD COLUMN c INT",
+		},
+		{
+			name:  "invalid query",
+			query: "not ddl ADD FULLTEXT INDEX",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := &model.Job{Query: test.query, SQLMode: test.sqlMode}
+			require.Equal(t, test.want, isAddFullTextIndexDDL(job))
+		})
+	}
+}
+
+func TestHandleDDLJobDoesNotReclassifyFullTextPhraseInIdentifier(t *testing.T) {
+	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+	})
+	t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+	job := buildCreateTableJobForTest(10, 100, "x add fulltext index", 1000)
+	job.Query = "CREATE TABLE `x add fulltext index` (id INT)"
+	require.NoError(t, storage.handleDDLJob(job))
+	require.Equal(t, model.ActionCreateTable, job.Type)
+	require.Contains(t, storage.tableMap, int64(100))
 }
 
 func TestHandleDDLJobSkipRules(t *testing.T) {
