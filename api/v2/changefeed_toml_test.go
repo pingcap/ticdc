@@ -26,6 +26,7 @@ import (
 func TestDebeziumHandlingModesTOMLRoundTrip(t *testing.T) {
 	cfg := DebeziumConfig{
 		OutputOldValue:             true,
+		IncludeStartTs:             util.AddressOf(true),
 		DecimalHandlingMode:        util.AddressOf("string"),
 		BigintUnsignedHandlingMode: util.AddressOf("string"),
 		BinaryHandlingMode:         util.AddressOf("hex"),
@@ -37,6 +38,7 @@ func TestDebeziumHandlingModesTOMLRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, meta.Undecoded())
 	require.True(t, internal.OutputOldValue)
+	require.True(t, util.GetOrZero(internal.IncludeStartTs))
 	require.Equal(t, "string", util.GetOrZero(internal.DecimalHandlingMode))
 	require.Equal(t, "string", util.GetOrZero(internal.BigintUnsignedHandlingMode))
 	require.Equal(t, "hex", util.GetOrZero(internal.BinaryHandlingMode))

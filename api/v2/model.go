@@ -517,6 +517,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			debeziumConfig = &config.DebeziumConfig{
 				OutputOldValue: c.Sink.DebeziumConfig.OutputOldValue,
 			}
+			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
+			}
 			if c.Sink.DebeziumConfig.DecimalHandlingMode != nil {
 				debeziumConfig.DecimalHandlingMode = util.AddressOf(*c.Sink.DebeziumConfig.DecimalHandlingMode)
 			}
@@ -883,6 +886,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
 				OutputOldValue: cloned.Sink.Debezium.OutputOldValue,
+			}
+			if cloned.Sink.Debezium.IncludeStartTs != nil {
+				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
 			}
 			if cloned.Sink.Debezium.DecimalHandlingMode != nil {
 				debeziumConfig.DecimalHandlingMode = util.AddressOf(*cloned.Sink.Debezium.DecimalHandlingMode)
@@ -1686,6 +1692,7 @@ type DebeziumConfig struct {
 	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
 	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
 	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
+	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 
 type DispatcherCount struct {
