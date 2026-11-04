@@ -18,10 +18,72 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChangeFeedStatusMeteringMarshal(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		metering *MeteringStatus
+		expected string
+	}{
+		{name: "disabled"},
+		{name: "zero", metering: &MeteringStatus{}, expected: `,"metering":{"effective_bytes":0}`},
+		{name: "nonzero", metering: &MeteringStatus{EffectiveBytes: 2048}, expected: `,"metering":{"effective_bytes":2048}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status := ChangeFeedStatus{
+				CheckpointTs:             100,
+				Progress:                 ProgressNone,
+				Metering:                 tt.metering,
+				MinTableBarrierTs:        90,
+				AdminJobType:             AdminStop,
+				maintainerAddr:           "localhost:8300",
+				LastSyncedTs:             80,
+				LogCoordinatorResolvedTs: 110,
+			}
+			original := status
+			if status.Metering != nil {
+				original.Metering = new(*status.Metering)
+			}
+			expected := `{"checkpoint-ts":100,"progress":1,"min-table-barrier-ts":90,"admin-job-type":1`
+			if kerneltype.IsNextGen() {
+				expected += tt.expected
+			}
+			expected += `}`
+
+			encoded, err := status.Marshal()
+			require.NoError(t, err)
+			require.JSONEq(t, expected, encoded)
+			valueEncoded, err := json.Marshal(status)
+			require.NoError(t, err)
+			require.JSONEq(t, expected, string(valueEncoded))
+			require.Equal(t, original, status)
+			require.Same(t, tt.metering, status.Metering)
+		})
+	}
+}
+
+func TestChangeFeedStatusMeteringUnmarshal(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		encoded  string
+		metering *MeteringStatus
+	}{
+		{name: "legacy", encoded: `{"checkpoint-ts":100,"progress":1}`},
+		{name: "zero", encoded: `{"checkpoint-ts":100,"progress":1,"metering":{"effective_bytes":0}}`, metering: &MeteringStatus{}},
+		{name: "nonzero", encoded: `{"checkpoint-ts":100,"progress":1,"metering":{"effective_bytes":2048}}`, metering: &MeteringStatus{EffectiveBytes: 2048}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var status ChangeFeedStatus
+			require.NoError(t, status.Unmarshal([]byte(tt.encoded)))
+			require.Equal(t, ChangeFeedStatus{CheckpointTs: 100, Progress: ProgressNone, Metering: tt.metering}, status)
+		})
+	}
+}
 
 // TestFeedStateIsResumable verifies the shared state predicate used by CLI/API
 // resume paths. Only stopped or terminal-but-resumable states should be accepted.

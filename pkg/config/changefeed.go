@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -765,12 +766,17 @@ var (
 	ProgressStopping Progress = 3
 )
 
+type MeteringStatus struct {
+	EffectiveBytes uint64 `json:"effective_bytes"`
+}
+
 // ChangeFeedStatus stores information about a ChangeFeed
 // It is stored in etcd.
 type ChangeFeedStatus struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
 	// Progress indicates changefeed progress status
-	Progress Progress `json:"progress"`
+	Progress Progress        `json:"progress"`
+	Metering *MeteringStatus `json:"metering,omitempty"`
 
 	// MaintainerAddr is the address of the changefeed's maintainer
 	// It is used to identify the changefeed's maintainer, and it is not stored in etcd.
@@ -788,6 +794,15 @@ type ChangeFeedStatus struct {
 	LastSyncedTs uint64 `json:"-"`
 	// LogCoordinatorResolvedTs is the resolved timestamp from the log coordinator.
 	LogCoordinatorResolvedTs uint64 `json:"-"`
+}
+
+func (status ChangeFeedStatus) MarshalJSON() ([]byte, error) {
+	type statusJSON ChangeFeedStatus
+	data := statusJSON(status)
+	if !kerneltype.IsNextGen() {
+		data.Metering = nil
+	}
+	return json.Marshal(data)
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
