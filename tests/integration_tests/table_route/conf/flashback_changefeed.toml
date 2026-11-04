@@ -1,0 +1,25 @@
+# Changefeed configuration for FLASHBACK DATABASE table route tests.
+
+[filter]
+rules = ['source_db.*', 'table_only_db.*', 'old_db.*', 'new_db.*']
+
+[sink]
+[[sink.dispatchers]]
+matcher = ['source_db.*']
+target-schema = 'target_db'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['table_only_db.*']
+target-schema = 'table_only_db'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['old_db.*']
+target-schema = 'old_target_db'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['new_db.*']
+target-schema = 'new_target_db'
+target-table = '{table}_routed'

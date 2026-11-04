@@ -13,40 +13,6 @@
 
 package kafka
 
-// TopicDetail represent a topic's detail information.
-type TopicDetail struct {
-	Name              string
-	NumPartitions     int32
-	ReplicationFactor int16
-}
-
-// Broker represents a Kafka broker.
-type Broker struct {
-	ID int32
-}
-
 // ClusterAdminClient is the administrative client for Kafka,
 // which supports managing and inspecting topics, brokers, configurations and ACLs.
-type ClusterAdminClient interface {
-	// GetAllBrokers return all brokers among the cluster
-	GetAllBrokers() []Broker
-
-	// GetBrokerConfig returns the broker-level configuration and whether it exists.
-	GetBrokerConfig(configName string) (value string, found bool, err error)
-
-	// GetTopicConfig returns the topic-level configuration and whether it exists.
-	GetTopicConfig(topicName string, configName string) (value string, found bool, err error)
-
-	// GetTopicsMeta return all target topics' metadata
-	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
-	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
-
-	// GetTopicsPartitionsNum return the number of partitions of each topic.
-	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
-
-	// CreateTopic creates a new topic.
-	CreateTopic(detail *TopicDetail) error
-
-	// Close shuts down the admin client.
-	Close()
-}
+type ClusterAdminClient = AdminClient

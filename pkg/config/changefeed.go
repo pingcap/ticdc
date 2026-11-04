@@ -190,10 +190,11 @@ func (t AdminJobType) IsStopState() bool {
 }
 
 type ChangefeedConfig struct {
-	ChangefeedID common.ChangeFeedID `json:"changefeed_id"`
-	StartTS      uint64              `json:"start_ts"`
-	TargetTS     uint64              `json:"target_ts"`
-	SinkURI      string              `json:"sink_uri"`
+	ChangefeedID    common.ChangeFeedID `json:"changefeed_id"`
+	PerformanceMode string              `json:"performance_mode"`
+	StartTS         uint64              `json:"start_ts"`
+	TargetTS        uint64              `json:"target_ts"`
+	SinkURI         string              `json:"sink_uri"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -216,6 +217,10 @@ type ChangefeedConfig struct {
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
+}
+
+func (cfg *ChangefeedConfig) IsLowLatencyMode() bool {
+	return cfg != nil && cfg.PerformanceMode == PerformanceModeLowLatency
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -273,14 +278,25 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	sinkConfig := info.Config.Sink
+	if sinkConfig != nil && info.Config.Integrity != nil {
+		// Keep integrity in the existing wire location without mutating the replica config.
+		clonedSinkConfig := *sinkConfig
+		sinkConfig = &clonedSinkConfig
+		sinkConfig.Integrity = &IntegrityConfig{
+			IntegrityCheckLevel:   util.GetOrZero(info.Config.Integrity.IntegrityCheckLevel),
+			CorruptionHandleLevel: util.GetOrZero(info.Config.Integrity.CorruptionHandleLevel),
+		}
+	}
 	return &ChangefeedConfig{
 		ChangefeedID:             info.ChangefeedID,
+		PerformanceMode:          util.GetOrZero(info.Config.PerformanceMode),
 		StartTS:                  info.StartTs,
 		TargetTS:                 info.TargetTs,
 		SinkURI:                  info.SinkURI,
 		CaseSensitive:            util.GetOrZero(info.Config.CaseSensitive),
 		ForceReplicate:           util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:               info.Config.Sink,
+		SinkConfig:               sinkConfig,
 		Filter:                   info.Config.Filter,
 		EnableSyncPoint:          util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:        util.GetOrZero(info.Config.SyncPointInterval),
@@ -335,16 +351,36 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
 	return str
+}
+
+// MaskChangefeedInfo masks sensitive fields in serialized changefeed metadata.
+func MaskChangefeedInfo(data []byte) (string, error) {
+	info := new(ChangeFeedInfo)
+	if err := info.Unmarshal(data); err != nil {
+		return "", err
+	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
+	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
+	if info.Config != nil {
+		info.Config.MaskSensitiveData()
+	}
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the
@@ -399,8 +435,7 @@ func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, e
 func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
 	if err != nil {
-		return errors.Annotatef(
-			cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		return cerror.WrapError(cerror.ErrUnmarshalFailed, err)
 	}
 	return nil
 }
@@ -464,8 +499,8 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 	if err != nil {
 		log.Warn(
 			"failed to parse the sink uri",
-			zap.Error(err),
-			zap.Any("sinkUri", info.SinkURI),
+			zap.Error(util.MaskSensitiveDataInURLError(err)),
+			zap.String("sinkURI", util.MaskSensitiveDataInURIForError(info.SinkURI)),
 		)
 		return
 	}
@@ -477,8 +512,9 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmMQOnlyFields()
 	} else {
 		// remove schema registry for MQ downstream with
-		// protocol other than avro
-		if util.GetOrZero(info.Config.Sink.Protocol) != ProtocolAvro.String() {
+		// protocol other than avro or debezium-avro
+		protocol := util.GetOrZero(info.Config.Sink.Protocol)
+		if protocol != ProtocolAvro.String() && protocol != ProtocolDebeziumAvro.String() {
 			info.Config.Sink.SchemaRegistry = nil
 		}
 	}
@@ -614,7 +650,7 @@ func (info *ChangeFeedInfo) fixState() {
 func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
-		log.Warn("parse sink URI failed", zap.Error(err))
+		log.Warn("parse sink URI failed", zap.Error(util.MaskSensitiveDataInURLError(err)))
 		// SAFETY: It is safe to ignore this unresolvable sink URI here,
 		// as it is almost impossible for this to happen.
 		// If we ignore it when fixing it after it happens,
@@ -630,11 +666,8 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 	query := uri.Query()
 	protocolStr := query.Get(ProtocolKey)
 	if protocolStr != "" || info.Config.Sink.Protocol != nil {
-		maskedSinkURI, _ := util.MaskSinkURI(info.SinkURI)
 		log.Warn("sink URI or sink config contains protocol, but scheme is not mq",
-			zap.String("sinkURI", maskedSinkURI),
-			zap.String("protocol", protocolStr),
-			zap.Any("sinkConfig", info.Config.Sink))
+			zap.String("protocol", protocolStr))
 		// always set protocol of mysql sink to ""
 		query.Del(ProtocolKey)
 		info.updateSinkURIAndConfigProtocol(uri, "", query)
@@ -644,7 +677,7 @@ func (info *ChangeFeedInfo) fixMySQLSinkProtocol() {
 func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
-		log.Warn("parse sink URI failed", zap.Error(err))
+		log.Warn("parse sink URI failed", zap.Error(util.MaskSensitiveDataInURLError(err)))
 		return
 	}
 
@@ -682,9 +715,7 @@ func (info *ChangeFeedInfo) fixMQSinkProtocol() {
 
 func (info *ChangeFeedInfo) updateSinkURIAndConfigProtocol(uri *url.URL, newProtocol string, newQuery url.Values) {
 	newRawQuery := newQuery.Encode()
-	maskedURI, _ := util.MaskSinkURI(uri.String())
 	log.Info("handle incompatible protocol from sink URI",
-		zap.String("oldURI", maskedURI),
 		zap.String("newProtocol", newProtocol))
 
 	uri.RawQuery = newRawQuery

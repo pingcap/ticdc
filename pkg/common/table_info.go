@@ -283,6 +283,11 @@ func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
+// HasClusteredPrimaryKey reports whether record keys are derived from the primary key.
+func (ti *TableInfo) HasClusteredPrimaryKey() bool {
+	return ti.columnSchema.PKIsHandle || ti.columnSchema.IsCommonHandle
+}
+
 func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
@@ -511,6 +516,26 @@ func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	}
 
 	return false
+}
+
+// IsSplitable returns whether a table with the given primary key storage and indexes
+// is eligible for split in all sinks.
+// A clustered primary key keeps changes to the same logical row in the same
+// record span. Nonclustered primary keys and other unique keys do not.
+func IsSplitable(hasClusteredPrimaryKey bool, indices []*model.IndexInfo) bool {
+	if !hasClusteredPrimaryKey {
+		return false
+	}
+
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
 }
 
 // GetIndex return the corresponding index by the given name.

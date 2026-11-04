@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -46,11 +47,12 @@ type Sink struct {
 	dmlWriter []*mysql.Writer
 	ddlWriter *mysql.Writer
 
-	// dmlDB and controlDB are the DB pools this sink is responsible for closing.
+	// dmlDB, controlDB, and controlAsyncDB are the DB pools this sink is responsible for closing.
 	// Compatibility callers built through NewMySQLSink use one shared pool.
-	dmlDB      *sql.DB
-	controlDB  *sql.DB
-	statistics *metrics.Statistics
+	dmlDB          *sql.DB
+	controlDB      *sql.DB
+	controlAsyncDB *sql.DB
+	statistics     *metrics.Statistics
 
 	conflictDetector *causality.ConflictDetector
 
@@ -58,6 +60,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	// cfg is retained so remove cleanup can reopen a short-lived DB connection after Close.
 	cfg        *mysql.Config
+	writeGate  *writelease.Gate
 	maxTxnRows int
 	bdrMode    bool
 }
@@ -71,12 +74,15 @@ func Verify(
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
+	_, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
 	_ = dmlDB.Close()
 	_ = controlDB.Close()
+	if controlAsyncDB != nil {
+		_ = controlAsyncDB.Close()
+	}
 	return nil
 }
 
@@ -85,8 +91,9 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	keyspaceID uint32,
 ) (*Sink, error) {
-	cfg, dmlDB, controlDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
+	cfg, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
@@ -102,17 +109,23 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, config.BDRMode), nil
+	return newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, config.BDRMode, keyspaceID), nil
 }
 
+// NewMySQLSink used for test
 func NewMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
-	return newMySQLSinkWithControlDB(ctx, changefeedID, cfg, db, db, bdrMode)
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = db
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, db, db, controlAsyncDB, bdrMode, keyspaceID)
 }
 
 // newMySQLSinkWithControlDB creates a MySQL sink with separate pools for DML and
@@ -125,14 +138,52 @@ func newMySQLSinkWithControlDB(
 	dmlDB *sql.DB,
 	controlDB *sql.DB,
 	bdrMode bool,
+	keyspaceID uint32,
 ) *Sink {
-	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+	var controlAsyncDB *sql.DB
+	if cfg.IsTiDB {
+		controlAsyncDB = controlDB
+	}
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, keyspaceID)
+}
+
+func newMySQLSinkWithControlAsyncDB(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	controlAsyncDB *sql.DB,
+	bdrMode bool,
+	keyspaceID uint32,
+) *Sink {
+	return newMySQLSinkWithDBs(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, bdrMode, keyspaceID)
+}
+
+func newMySQLSinkWithDBs(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	cfg *mysql.Config,
+	dmlDB *sql.DB,
+	controlDB *sql.DB,
+	controlAsyncDB *sql.DB,
+	bdrMode bool,
+	keyspaceID uint32,
+) *Sink {
+	if !cfg.IsTiDB {
+		controlAsyncDB = nil
+	} else if controlAsyncDB == nil {
+		controlAsyncDB = controlDB
+	}
+
+	stat := metrics.NewStatistics(changefeedID, keyspaceID, "TxnSink")
 	result := &Sink{
-		changefeedID: changefeedID,
-		dmlDB:        dmlDB,
-		controlDB:    controlDB,
-		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
-		statistics:   stat,
+		changefeedID:   changefeedID,
+		dmlDB:          dmlDB,
+		controlDB:      controlDB,
+		controlAsyncDB: controlAsyncDB,
+		dmlWriter:      make([]*mysql.Writer, cfg.WorkerCount),
+		statistics:     stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots,
 			causality.TxnCacheOption{
 				Count:         cfg.WorkerCount,
@@ -149,6 +200,7 @@ func newMySQLSinkWithControlDB(
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), controlDB, cfg, changefeedID, stat)
+	result.ddlWriter.SetControlAsyncDB(controlAsyncDB)
 	return result
 }
 
@@ -260,6 +312,16 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
+// SetWriteGate delegates admission to the transport writers, where each
+// downstream write is checked immediately before it is executed.
+func (s *Sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	for _, writer := range s.dmlWriter {
+		writer.SetWriteGate(gate)
+	}
+	s.ddlWriter.SetWriteGate(gate)
+}
+
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
 }
@@ -369,6 +431,9 @@ func (s *Sink) Close() {
 	if s.controlDB != s.dmlDB {
 		s.closeDBPool("control", s.controlDB)
 	}
+	if s.controlAsyncDB != nil && s.controlAsyncDB != s.dmlDB && s.controlAsyncDB != s.controlDB {
+		s.closeDBPool("control async", s.controlAsyncDB)
+	}
 	s.statistics.Close()
 
 	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
@@ -410,6 +475,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 
 	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil)
 	defer cleanupWriter.Close()
+	cleanupWriter.SetWriteGate(s.writeGate)
 	return cleanupWriter.RemoveDDLTsItem()
 }
 

@@ -86,14 +86,18 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, int64(10), path.pendingSize.Load())
 
-	// Remove path and deduct the current pending size immediately.
+	// Remove the path from the area's registry. The pending size remains
+	// accounted until the owning stream clears the queue.
 	path.removed.Store(true)
 	mc.removePathFromArea(path)
-	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
-	require.Equal(t, int64(0), path.pendingSize.Load())
+	// Memory accounting is reconciled by the owning stream when it clears the
+	// pending queue, avoiding a double deduction if removal races with a pop.
+	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(10), path.pendingSize.Load())
 
 	// Simulate a stale in-flight append that races with RemovePath.
 	appendEvent(2, 7)
+	require.Equal(t, []*mockEvent{{id: 2, path: path.path}}, handler.drainDroppedEvents())
 
 	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 0)
@@ -103,6 +107,56 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	require.Equal(t, int64(0), path.pendingSize.Load())
 	require.Equal(t, 0, path.pendingQueue.Length())
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
+func TestRemovePathWhilePoppingDoesNotUndercountAreaPendingSize(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	_, removedPath := setupTestComponents()
+	remainingPath := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         removedPath.area,
+		path:         "remaining-path",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	mc.addPathToArea(removedPath, settings, feedbackChan)
+	mc.addPathToArea(remainingPath, settings, feedbackChan)
+
+	handler := &mockHandler{}
+	eq := newEventQueue(handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(4, 0)))
+	eq.initPath(removedPath)
+	eq.initPath(remainingPath)
+	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], id, size int) {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{id: id, path: path.path},
+			eventType: DefaultEventType,
+			eventSize: size,
+		})
+	}
+
+	appendEvent(removedPath, 1, 10)
+	appendEvent(removedPath, 2, 20)
+	appendEvent(remainingPath, 3, 40)
+	require.Equal(t, int64(70), removedPath.areaMemStat.totalPendingSize.Load())
+
+	// Reproduce the ordering where popEvents has selected removedPath, then
+	// RemovePath runs before popEvent updates memory accounting.
+	removedPath.removed.Store(true)
+	mc.removePathFromArea(removedPath)
+	_, ok := removedPath.popEvent()
+	require.True(t, ok)
+	eq.releasePath(removedPath, false)
+
+	// Removing one path must not deduct any memory owned by another path.
+	require.Equal(t, int64(0), removedPath.pendingSize.Load())
+	require.Equal(t, int64(40), remainingPath.pendingSize.Load())
+	require.Equal(t, int64(40), remainingPath.areaMemStat.totalPendingSize.Load())
 }
 
 func TestAreaMemStatAppendEvent(t *testing.T) {
@@ -126,8 +180,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 1,
 		queueTime: time.Now(),
 	}
-	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
-	require.True(t, ok)
+	accepted, appended := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(1), path1.areaMemStat.totalPendingSize.Load())
 	require.False(t, path1.areaMemStat.paused.Load())
 
@@ -139,8 +194,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -152,8 +208,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	require.True(t, accepted)
+	require.False(t, appended)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(2), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -170,8 +227,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(22), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -203,13 +261,54 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
-	require.True(t, ok)
+	accepted, appended = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
 	require.Equal(t, int64(42), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 4, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
 	require.Equal(t, normalEvent3.timestamp, back.timestamp)
 	require.False(t, path1.areaMemStat.paused.Load())
+}
+
+func TestAreaMemStatAppendDropEventUpdatesPendingSize(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		maxPendingSize:   10,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	mc.addPathToArea(path, settings, make(chan Feedback[int, string, any], 1))
+
+	dropEvent := &mockEvent{id: 3, path: path.path}
+	handler := &mockHandler{dropEvent: dropEvent}
+
+	accepted, appended := path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 1, path: path.path},
+		eventSize: 15,
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+
+	accepted, appended = path.areaMemStat.appendEvent(path, eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event:     &mockEvent{id: 2, path: path.path},
+		eventSize: 7,
+		eventType: EventType{Droppable: true},
+	}, handler)
+	require.True(t, accepted)
+	require.True(t, appended)
+	require.Equal(t, int64(22), path.pendingSize.Load())
+	require.Equal(t, int64(22), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, 2, path.pendingQueue.Length())
+
+	_, ok := path.popEvent()
+	require.True(t, ok)
+	event, ok := path.popEvent()
+	require.True(t, ok)
+	require.Same(t, dropEvent, event.event)
+	require.Equal(t, 7, event.eventSize)
+	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
 }
 
 func TestSetAreaSettings(t *testing.T) {

@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -46,10 +48,11 @@ import (
 //     and we will pull ddl job from `resolved_ts` at restart if the current gc ts is smaller than resolved_ts.
 
 const (
-	snapshotSchemaKeyPrefix    = "ss_"
-	snapshotTableKeyPrefix     = "st_"
-	snapshotPartitionKeyPrefix = "sp_"
-	ddlKeyPrefix               = "ds_"
+	snapshotSchemaKeyPrefix      = "ss_"
+	snapshotTableKeyPrefix       = "st_"
+	snapshotPartitionKeyPrefix   = "sp_"
+	ddlKeyPrefix                 = "ds_"
+	schemaSnapshotBatchFlushSize = 512 * 1024
 )
 
 func gcTsKey() []byte {
@@ -202,6 +205,15 @@ func loadTablesInKVSnap(
 	gcTs uint64,
 	databaseMap map[int64]*BasicDatabaseInfo,
 ) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	return loadTablesInKVSnapWithCallback(snap, gcTs, databaseMap, nil)
+}
+
+func loadTablesInKVSnapWithCallback(
+	snap *pebble.Snapshot,
+	gcTs uint64,
+	databaseMap map[int64]*BasicDatabaseInfo,
+	onTable func(*model.TableInfo),
+) (map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	tablesInKVSnap := make(map[int64]*BasicTableInfo)
 	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
 
@@ -243,6 +255,9 @@ func loadTablesInKVSnap(
 		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
 			SchemaID: table_info_entry.SchemaID,
 			Name:     tableInfo.Name.O,
+		}
+		if onTable != nil {
+			onTable(&tableInfo)
 		}
 		if tableInfo.Partition != nil {
 			partitionInfo := make(BasicPartitionInfo)
@@ -255,64 +270,39 @@ func loadTablesInKVSnap(
 	return tablesInKVSnap, partitionsInKVSnap, nil
 }
 
-func loadFullTablesInKVSnap(
-	snap *pebble.Snapshot,
-	gcTs uint64,
-	databaseMap map[int64]*BasicDatabaseInfo,
-) (map[int64]*model.TableInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	tableInfosInKVSnap := make(map[int64]*model.TableInfo)
-	tablesInKVSnap := make(map[int64]*BasicTableInfo)
-	partitionsInKVSnap := make(map[int64]BasicPartitionInfo)
+type physicalTableTraits struct {
+	isView    bool
+	eligible  bool
+	splitable bool
+}
 
-	startKey, err := tableInfoKey(gcTs, 0)
-	if err != nil {
-		log.Fatal("generate lower bound failed", zap.Error(err))
-	}
-	endKey, err := tableInfoKey(gcTs, math.MaxInt64)
-	if err != nil {
-		log.Fatal("generate upper bound failed", zap.Error(err))
-	}
-	snapIter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: startKey,
-		UpperBound: endKey,
-	})
-	if err != nil {
-		log.Fatal("new iterator failed", zap.Error(err))
-	}
-	defer snapIter.Close()
-	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		var table_info_entry PersistedTableInfoEntry
-		if _, err := table_info_entry.UnmarshalMsg(snapIter.Value()); err != nil {
-			log.Fatal("unmarshal table info entry failed", zap.Error(err))
+func physicalTableTraitsFromTiDBTableInfo(tableInfo *model.TableInfo, tableFilter filter.Filter) physicalTableTraits {
+	eligible := true
+	if tableFilter != nil {
+		compactTableInfo := &common.TableInfo{
+			HasPKOrNotNullUK: common.OriginalHasPKOrNotNullUK(tableInfo),
+			View:             tableInfo.View,
+			Sequence:         tableInfo.Sequence,
 		}
+		eligible = tableFilter.IsEligibleTable(compactTableInfo)
+	}
+	return physicalTableTraits{
+		isView:    tableInfo.View != nil,
+		eligible:  eligible,
+		splitable: isSplitable(tableInfo),
+	}
+}
 
-		tableInfo := model.TableInfo{}
-		if err := json.Unmarshal(table_info_entry.TableInfoValue, &tableInfo); err != nil {
-			log.Fatal("unmarshal table info failed", zap.Error(err))
-		}
-		databaseInfo, ok := databaseMap[table_info_entry.SchemaID]
-		if !ok {
-			log.Panic("database not found",
-				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("schemaName", table_info_entry.SchemaName),
-				zap.String("tableName", tableInfo.Name.O))
-		}
-		// TODO: add a unit test for this case
-		tableInfosInKVSnap[tableInfo.ID] = &tableInfo
-		databaseInfo.Tables[tableInfo.ID] = true
-		tablesInKVSnap[tableInfo.ID] = &BasicTableInfo{
-			SchemaID: table_info_entry.SchemaID,
-			Name:     tableInfo.Name.O,
-		}
-		if tableInfo.Partition != nil {
-			partitionInfo := make(BasicPartitionInfo)
-			for _, partition := range tableInfo.Partition.Definitions {
-				partitionInfo[partition.ID] = nil
-			}
-			partitionsInKVSnap[tableInfo.ID] = partitionInfo
-		}
+func physicalTableTraitsFromCommonTableInfo(tableInfo *common.TableInfo, tableFilter filter.Filter) physicalTableTraits {
+	eligible := true
+	if tableFilter != nil {
+		eligible = tableFilter.IsEligibleTable(tableInfo)
 	}
-	return tableInfosInKVSnap, tablesInKVSnap, partitionsInKVSnap, nil
+	return physicalTableTraits{
+		isView:    tableInfo.IsView(),
+		eligible:  eligible,
+		splitable: commonEvent.IsSplitable(tableInfo),
+	}
 }
 
 // load the ddl jobs in the range (gcTs, upperBound] and apply the ddl job to update database and table info
@@ -541,11 +531,12 @@ func addTableInfoToBatch(
 	batch *pebble.Batch,
 	ts uint64,
 	dbInfo *model.DBInfo,
-	tableInfoValue []byte,
-) (int64, string, []int64) {
-	tableInfo := model.TableInfo{}
-	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
-		log.Fatal("unmarshal table info failed", zap.Error(err))
+	tableInfo *model.TableInfo,
+	marshalBuf []byte,
+) (int64, string, []int64, []byte, error) {
+	tableInfoValue, err := json.Marshal(tableInfo)
+	if err != nil {
+		return 0, "", nil, marshalBuf, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	// write table info to batch
 	tableKey, err := tableInfoKey(ts, tableInfo.ID)
@@ -557,10 +548,11 @@ func addTableInfoToBatch(
 		SchemaName:     dbInfo.Name.O,
 		TableInfoValue: tableInfoValue,
 	}
-	tableInfoEntryValue, err := tableInfoEntry.MarshalMsg(nil)
+	tableInfoEntryValue, err := tableInfoEntry.MarshalMsg(marshalBuf[:0])
 	if err != nil {
 		log.Fatal("marshal table info entry failed", zap.Error(err))
 	}
+	marshalBuf = tableInfoEntryValue
 	batch.Set(tableKey, tableInfoEntryValue, pebble.NoSync)
 
 	// write partition info to batch if the table is a partition table
@@ -579,27 +571,36 @@ func addTableInfoToBatch(
 			partitionIDs = append(partitionIDs, partition.ID)
 		}
 	}
-	return tableInfo.ID, tableInfo.Name.O, partitionIDs
+	return tableInfo.ID, tableInfo.Name.O, partitionIDs, marshalBuf, nil
 }
 
 // persistSchemaSnapshot write database/table/partition info to disks.
 // Notes: The GC may happens during the snapshotMeta is using, so the caller must be careful.
 func persistSchemaSnapshot(
+	ctx context.Context,
 	db *pebble.DB,
 	tiStore kv.Storage,
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		meta := getSnapshotMeta(tiStore, snapTs)
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, nil, ctxErr
+			}
 			// The snapshot is already GC'ed and retrying the same ts cannot recover.
 			if isGCLifeTimeError(err) {
 				return nil, nil, nil, err
 			}
-			time.Sleep(100 * time.Millisecond)
+			if err := waitSchemaSnapshotRetry(ctx); err != nil {
+				return nil, nil, nil, err
+			}
 			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
 		}
@@ -612,57 +613,73 @@ func persistSchemaSnapshot(
 			tableMap = make(map[int64]*BasicTableInfo)
 			partitionMap = make(map[int64]BasicPartitionInfo)
 		}
+		var tableInfoEntryMarshalBuf []byte
 		for _, dbInfo := range dbInfos {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
 			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
 			}
-			batch := db.NewBatch()
-			addSchemaInfoToBatch(batch, snapTs, dbInfo)
 			for {
-				rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
+				batch := db.NewBatch()
+				addSchemaInfoToBatch(batch, snapTs, dbInfo)
+				var tablesInDB map[int64]bool
+				if collectMetaInfo {
+					tablesInDB = make(map[int64]bool)
+				}
+				var callbackErr error
+				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
+					if err := ctx.Err(); err != nil {
+						callbackErr = err
+						return err
+					}
+					tableID, tableName, partitionIDs, marshalBuf, err := addTableInfoToBatch(
+						batch, snapTs, dbInfo, tableInfo, tableInfoEntryMarshalBuf)
+					tableInfoEntryMarshalBuf = marshalBuf
+					if err != nil {
+						callbackErr = err
+						return err
+					}
+					if collectMetaInfo {
+						tableMap[tableID] = &BasicTableInfo{SchemaID: dbInfo.ID, Name: tableName}
+						tablesInDB[tableID] = true
+						if len(partitionIDs) > 0 {
+							partitionMap[tableID] = make(BasicPartitionInfo)
+							partitionMap[tableID].AddPartitionIDs(partitionIDs...)
+						}
+					}
+					if batch.Len() >= schemaSnapshotBatchFlushSize {
+						if err := batch.Commit(pebble.NoSync); err != nil {
+							callbackErr = errors.WrapError(errors.ErrUnexpected, err, "commit schema snapshot batch")
+							return callbackErr
+						}
+						batch.Reset()
+					}
+					return nil
+				})
+				if callbackErr != nil {
+					_ = batch.Close()
+					return nil, nil, nil, callbackErr
+				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					_ = batch.Close()
+					return nil, nil, nil, ctxErr
+				}
 				if err == nil {
-					var tablesInDB map[int64]bool
-					if collectMetaInfo {
-						tablesInDB = make(map[int64]bool)
-					}
-					for _, rawTable := range rawTables {
-						if !isTableRawKey(rawTable.Field) {
-							continue
-						}
-						tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
-						if collectMetaInfo {
-							tableMap[tableID] = &BasicTableInfo{
-								SchemaID: dbInfo.ID,
-								Name:     tableName,
-							}
-							tablesInDB[tableID] = true
-							if len(partitionIDs) > 0 {
-								partitionMap[tableID] = make(BasicPartitionInfo)
-								for _, partitionID := range partitionIDs {
-									partitionMap[tableID].AddPartitionIDs(partitionID)
-								}
-							}
-						}
-						// 8M is arbitrary, we can adjust it later
-						if batch.Len() >= 8*1024*1024 {
-							if err := batch.Commit(pebble.NoSync); err != nil {
-								return nil, nil, nil, err
-							}
-							batch = db.NewBatch()
-						}
-					}
-					if collectMetaInfo {
-						databaseInfo := &BasicDatabaseInfo{
-							Name:   dbInfo.Name.O,
-							Tables: tablesInDB,
-						}
-						databaseMap[dbInfo.ID] = databaseInfo
-					}
 					if err := batch.Commit(pebble.NoSync); err != nil {
-						return nil, nil, nil, err
+						_ = batch.Close()
+						return nil, nil, nil, errors.WrapError(errors.ErrUnexpected, err, "commit schema snapshot batch")
+					}
+					if err := batch.Close(); err != nil {
+						return nil, nil, nil, errors.WrapError(errors.ErrUnexpected, err, "close schema snapshot batch")
+					}
+					if collectMetaInfo {
+						databaseMap[dbInfo.ID] = &BasicDatabaseInfo{Name: dbInfo.Name.O, Tables: tablesInDB}
 					}
 					break
 				}
+				_ = batch.Close()
 
 				// If this error is caused by the GC life time is shorter than transaction duration,
 				// it means the snapshot is lost forever, so we should return the error to the caller.
@@ -670,16 +687,32 @@ func persistSchemaSnapshot(
 					return nil, nil, nil, err
 				}
 
-				time.Sleep(100 * time.Millisecond)
+				if err := waitSchemaSnapshotRetry(ctx); err != nil {
+					return nil, nil, nil, err
+				}
 				log.Warn("get tables failed", zap.Error(err))
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		writeGcTs(db, snapTs)
 
 		log.Info("finish write schema snapshot",
 			zap.Any("duration", time.Since(start).Seconds()))
 		return databaseMap, tableMap, partitionMap, nil
+	}
+}
+
+func waitSchemaSnapshotRetry(ctx context.Context) error {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -733,24 +766,53 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 	}
 }
 
+// loadPhysicalTableTraitsAtTs rebuilds one table's traits from its DDL history.
+func loadPhysicalTableTraitsAtTs(
+	storageSnap *pebble.Snapshot,
+	gcTs uint64,
+	snapVersion uint64,
+	physicalTableID int64,
+	ddlHistory []uint64,
+	tableFilter filter.Filter,
+) (physicalTableTraits, error) {
+	store := newEmptyVersionedTableInfoStore(physicalTableID)
+	if err := addTableInfoFromKVSnap(store, gcTs, storageSnap); err != nil {
+		return physicalTableTraits{}, err
+	}
+	for _, version := range ddlHistory {
+		ddlEvent := readPersistedDDLEvent(storageSnap, version)
+		store.applyDDLFromPersistStorage(&ddlEvent)
+	}
+	store.setTableInfoInitialized()
+	tableInfo, err := store.getTableInfo(snapVersion)
+	if err != nil {
+		return physicalTableTraits{}, err
+	}
+	return physicalTableTraitsFromCommonTableInfo(tableInfo, tableFilter), nil
+}
+
 func loadAllPhysicalTablesAtTs(
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
 ) ([]commonEvent.Table, error) {
-	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
+	// Replay DDLs before applying the filter to the final physical table list.
 	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
 	if err != nil {
 		return nil, err
 	}
 
-	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
+	tableTraits := make(map[int64]physicalTableTraits)
+	tableMap, partitionMap, err := loadTablesInKVSnapWithCallback(
+		storageSnap, gcTs, databaseMap, func(tableInfo *model.TableInfo) {
+			tableTraits[tableInfo.ID] = physicalTableTraitsFromTiDBTableInfo(tableInfo, tableFilter)
+		})
 	if err != nil {
 		return nil, err
 	}
 	log.Info("after load tables in kv snap",
-		zap.Int("tableInfoMapLen", len(tableInfoMap)),
+		zap.Int("tableTraitsLen", len(tableTraits)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 
@@ -771,18 +833,21 @@ func loadAllPhysicalTablesAtTs(
 		log.Fatal("new iterator failed", zap.Error(err))
 	}
 	defer snapIter.Close()
+	tablesDDLHistory := make(map[int64][]uint64)
+	tableTriggerDDLHistory := make([]uint64, 0)
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
-		// Note: updateFullTableInfoFunc must be called before updateSchemaMetadataFunc,
-		// because it depends on some info which may be updated by updateSchemaMetadataFunc.
-		handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
-			event:        &ddlEvent,
-			databaseMap:  databaseMap,
-			tableInfoMap: tableInfoMap,
+		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+			ddlEvent:               &ddlEvent,
+			databaseMap:            databaseMap,
+			tableMap:               tableMap,
+			partitionMap:           partitionMap,
+			tablesDDLHistory:       tablesDDLHistory,
+			tableTriggerDDLHistory: tableTriggerDDLHistory,
 		})
 		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 			event:        &ddlEvent,
@@ -792,7 +857,7 @@ func loadAllPhysicalTablesAtTs(
 		})
 	}
 	log.Info("after load tables from ddl",
-		zap.Int("tableInfoMapLen", len(tableInfoMap)),
+		zap.Int("tableTraitsLen", len(tableTraits)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 	tables := make([]commonEvent.Table, 0)
@@ -805,27 +870,38 @@ func loadAllPhysicalTablesAtTs(
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}
 		schemaName := databaseMap[tableInfo.SchemaID].Name
-		fullTableInfo, ok := tableInfoMap[tableID]
-		if !ok {
-			log.Panic("table info not found", zap.Int64("tableID", tableID))
+		physicalTableID := tableID
+		if partitionInfo, ok := partitionMap[tableID]; ok {
+			for partitionID := range partitionInfo {
+				physicalTableID = partitionID
+				break
+			}
+		}
+		traits, ok := tableTraits[tableID]
+		ddlHistory := tablesDDLHistory[physicalTableID]
+		if !ok || len(ddlHistory) > 0 {
+			traits, err = loadPhysicalTableTraitsAtTs(
+				storageSnap, gcTs, snapVersion, physicalTableID, ddlHistory, tableFilter)
+			if err != nil {
+				return nil, err
+			}
 		}
 		// Views have no physical KV events. Their DDLs are replicated by the
 		// table-trigger dispatcher, so creating a table dispatcher for a view can
 		// only leave an orphan after the view is dropped.
-		if fullTableInfo.View != nil {
+		if traits.isView {
 			continue
 		}
-		if tableFilter != nil {
-			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
-				continue
-			}
-			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {
-				log.Info("table is not eligible, should ignore this table", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
-				continue
-			}
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
+			continue
+		}
+		if !traits.eligible {
+			log.Info("table is not eligible, should ignore this table",
+				zap.String("schema", schemaName), zap.String("table", tableInfo.Name))
+			continue
 		}
 
-		splitable := isSplitable(fullTableInfo)
+		splitable := traits.splitable
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{

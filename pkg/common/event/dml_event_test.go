@@ -20,6 +20,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -86,6 +88,241 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	require.Nil(t, err)
 	reverseEvent.eventSize = 0
 	require.Equal(t, e, reverseEvent)
+}
+
+func TestDMLEventChecksumEncodeAndDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		checksums []*integrity.Checksum
+	}{
+		{name: "nil"},
+		{name: "empty", checksums: []*integrity.Checksum{}},
+		{name: "sparse", checksums: []*integrity.Checksum{nil, {Current: 123, Version: 1}, {}, nil}},
+		{name: "all missing", checksums: []*integrity.Checksum{nil, nil, nil, nil}},
+		{
+			name: "mixed",
+			checksums: []*integrity.Checksum{
+				{Current: 123, Version: 1},
+				{Current: 456, Previous: 123, Version: 2, Corrupted: true},
+				{Previous: 456, Version: 1},
+				{},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
+			input.RowTypes = []common.RowType{
+				common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeUpdate,
+				common.RowTypeDelete, common.RowTypeInsert,
+			}
+			input.RowKeys = [][]byte{
+				[]byte("insert"), []byte("update"), []byte("update"),
+				[]byte("delete"), []byte("zero-checksum"),
+			}
+			input.Length = 4
+			input.Checksum = tc.checksums
+			data, err := input.Marshal()
+			require.NoError(t, err)
+
+			output := &DMLEvent{
+				Checksum:       []*integrity.Checksum{{Current: 789}},
+				checksumOffset: 1,
+			}
+			require.NoError(t, output.Unmarshal(data))
+			require.Equal(t, input.Checksum, output.Checksum)
+			output.eventSize = 0
+			require.Equal(t, input, output)
+		})
+	}
+}
+
+func TestDMLEventChecksumCompatibility(t *testing.T) {
+	// A legacy V1 event with zero-valued metadata, no row types, and no row keys.
+	legacyPayload := make([]byte, 80)
+	data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, legacyPayload)
+	require.NoError(t, err)
+	output := &DMLEvent{
+		Checksum:       []*integrity.Checksum{{Current: 123}},
+		checksumOffset: 1,
+	}
+	require.NoError(t, output.Unmarshal(data))
+	require.Nil(t, output.Checksum)
+	require.Zero(t, output.checksumOffset)
+	roundTrip, err := output.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, data, roundTrip, "events without checksums must retain the legacy encoding")
+}
+
+func TestDMLEventChecksumDecodeInvalidData(t *testing.T) {
+	input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
+	input.Length = 1
+	input.RowTypes = []common.RowType{common.RowTypeInsert}
+	legacyPayload, err := input.encodeV1()
+	require.NoError(t, err)
+	suffixOffset := len(legacyPayload)
+	input.Checksum = []*integrity.Checksum{{Current: 123, Previous: 456, Version: 2, Corrupted: true}}
+	payload, err := input.encodeV1()
+	require.NoError(t, err)
+	// Every nonempty, incomplete checksum suffix should return a decode error.
+	for end := suffixOffset + 1; end < len(payload); end++ {
+		data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload[:end])
+		require.NoError(t, err)
+		output := &DMLEvent{}
+		require.ErrorContains(t, output.Unmarshal(data), "DML checksum", "payload length: %d", end)
+	}
+	for _, tc := range []struct {
+		name    string
+		count   uint32
+		entries int
+		rows    uint32
+		extra   int
+	}{
+		{name: "oversized count", count: ^uint32(0), entries: 1, rows: 1},
+		{name: "extra byte", count: 1, entries: 1, rows: 1, extra: 1},
+		{name: "extra entry", count: 1, entries: 2, rows: 1},
+		{name: "empty count with entry", count: 0, entries: 1, rows: 1},
+		{name: "too few checksums", count: 1, entries: 1, rows: 2},
+		{name: "too many checksums", count: 2, entries: 2, rows: 1},
+		{name: "no rows", count: 1, entries: 1, rows: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := make([]byte, suffixOffset+4+tc.entries*dmlChecksumSize+tc.extra)
+			copy(invalid, payload)
+			binary.BigEndian.PutUint32(invalid[56:60], tc.rows)
+			binary.BigEndian.PutUint32(invalid[suffixOffset:suffixOffset+4], tc.count)
+			data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, invalid)
+			require.NoError(t, err)
+			require.ErrorContains(t, (&DMLEvent{}).Unmarshal(data), "DML checksum")
+		})
+	}
+	payload[len(payload)-1] = dmlChecksumCorrupted // Corrupted requires a present checksum.
+	data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload)
+	require.NoError(t, err)
+	require.ErrorContains(t, (&DMLEvent{}).Unmarshal(data), "invalid DML checksum flags")
+}
+
+func TestDMLEventChecksumEncodeInvalidData(t *testing.T) {
+	input := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, nil)
+	input.Length = 2
+	input.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeDelete}
+	for _, checksums := range [][]*integrity.Checksum{
+		{{Current: 123}},
+		{nil, {Current: 123}, nil},
+	} {
+		input.Checksum = checksums
+		_, err := input.Marshal()
+		require.ErrorContains(t, err, "DML checksum count")
+	}
+}
+
+func TestDMLEventAppendSparseChecksums(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		checksums []*integrity.Checksum
+	}{
+		{name: "all missing", checksums: []*integrity.Checksum{nil, nil, nil, nil, nil}},
+		{name: "missing first middle last", checksums: []*integrity.Checksum{nil, {Current: 123}, nil, {Previous: 456}, nil}},
+		{name: "update checksum", checksums: []*integrity.Checksum{nil, nil, {Current: 456}, nil, nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := newChecksumTestTableInfo()
+			input := NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 100, 200, tableInfo)
+			batch := NewBatchDMLEvent()
+			require.NoError(t, batch.AppendDMLEvent(input))
+			rawRows := []*common.RawKVEntry{
+				{OpType: common.OpTypeDelete, OldValue: []byte("old")},
+				{OpType: common.OpTypePut, Value: []byte("new")},
+				{OpType: common.OpTypePut, Value: []byte("new"), OldValue: []byte("old")},
+				{OpType: common.OpTypeDelete, OldValue: []byte("old")},
+				{OpType: common.OpTypeDelete, OldValue: []byte("old")},
+			}
+			for i, raw := range rawRows {
+				decode := func(raw *common.RawKVEntry, _ *common.TableInfo, rows *chunk.Chunk) (int, *integrity.Checksum, error) {
+					count := 1
+					if raw.IsUpdate() {
+						count = 2
+					}
+					for range count {
+						rows.AppendInt64(0, int64(i))
+					}
+					return count, tc.checksums[i], nil
+				}
+				require.NoError(t, input.AppendRow(raw, decode, nil))
+			}
+			require.EqualValues(t, 5, input.Length)
+			require.Len(t, input.RowTypes, 6, "updates contain two physical rows")
+			if tc.name == "all missing" {
+				require.Nil(t, input.Checksum, "do not allocate when no row has a checksum")
+			} else {
+				require.Equal(t, tc.checksums, input.Checksum)
+			}
+			data, err := batch.Marshal()
+			require.NoError(t, err)
+			output := &BatchDMLEvent{}
+			require.NoError(t, output.Unmarshal(data))
+			output.AssembleRows(tableInfo)
+			for _, dml := range []*DMLEvent{input, output.DMLEvents[0]} {
+				for i, checksum := range tc.checksums {
+					row, ok := dml.GetNextRow()
+					require.True(t, ok, "logical row %d must not be skipped", i)
+					require.Equal(t, checksum, row.Checksum)
+					if !row.Row.IsEmpty() {
+						require.EqualValues(t, i, row.Row.GetInt64(0))
+					}
+					if !row.PreRow.IsEmpty() {
+						require.EqualValues(t, i, row.PreRow.GetInt64(0))
+					}
+				}
+				_, ok := dml.GetNextRow()
+				require.False(t, ok)
+			}
+		})
+	}
+}
+
+func TestBatchDMLEventChecksumEncodeAndDecode(t *testing.T) {
+	tableInfo := newChecksumTestTableInfo()
+	batch := NewBatchDMLEvent()
+	for _, checksums := range [][]*integrity.Checksum{
+		{{Current: 123, Version: 1}, {Current: 456, Previous: 123, Version: 2, Corrupted: true}, {Previous: 456, Version: 1}},
+		{{Current: 789, Version: 2}, {}, {Previous: 789, Version: 2}},
+		{nil, {Current: 789, Version: 2}, nil},
+		nil,
+	} {
+		dml := newChecksumTestDMLEvent(tableInfo,
+			[]common.RowType{common.RowTypeInsert, common.RowTypeUpdate, common.RowTypeDelete},
+			[][]any{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}})
+		dml.Checksum = checksums
+		rows := dml.Rows
+		require.NoError(t, batch.AppendDMLEvent(dml))
+		batch.Rows.Append(rows, 0, rows.NumRows())
+	}
+	data, err := batch.Marshal()
+	require.NoError(t, err)
+	output := &BatchDMLEvent{}
+	require.NoError(t, output.Unmarshal(data))
+	output.AssembleRows(tableInfo)
+	require.Len(t, output.DMLEvents, len(batch.DMLEvents))
+	for i, expected := range batch.DMLEvents {
+		actual := output.DMLEvents[i]
+		require.Equal(t, expected.Checksum, actual.Checksum)
+		for range expected.Len() {
+			expectedRow, ok := expected.GetNextRow()
+			require.True(t, ok)
+			actualRow, ok := actual.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, expectedRow.RowType, actualRow.RowType)
+			require.Equal(t, expectedRow.Checksum, actualRow.Checksum)
+			if !expectedRow.Row.IsEmpty() {
+				require.Equal(t, expectedRow.Row.GetInt64(0), actualRow.Row.GetInt64(0))
+			}
+			if !expectedRow.PreRow.IsEmpty() {
+				require.Equal(t, expectedRow.PreRow.GetInt64(0), actualRow.PreRow.GetInt64(0))
+			}
+		}
+		_, ok := actual.GetNextRow()
+		require.False(t, ok)
+	}
 }
 
 // TestBatchDMLEvent test the Marshal and Unmarshal of BatchDMLEvent.
@@ -215,6 +452,8 @@ func TestBatchDMLEventAssembleRowsKeepsOriginalTableInfoForLocalRowsWithoutRouti
 	require.Equal(t, "t", batchDMLEvent.TableInfo.GetTargetTableName())
 }
 
+// TestBatchDMLEventAssembleRowsDecodesRemoteRawRows verifies size accounting
+// before and after a remotely received batch decodes its raw row payload.
 func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
@@ -232,6 +471,9 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 		Rows:          dmlEvent.Rows,
 		TableInfo:     dmlEvent.TableInfo,
 	}
+	require.Equal(t, batchDMLEvent.Rows.MemoryUsage(), batchDMLEvent.GetSize())
+	require.Positive(t, batchDMLEvent.GetSize())
+
 	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
 
@@ -240,10 +482,13 @@ func TestBatchDMLEventAssembleRowsDecodesRemoteRawRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, reverseEvents.Rows)
 	require.NotEmpty(t, reverseEvents.RawRows)
+	require.Equal(t, int64(len(reverseEvents.RawRows)), reverseEvents.GetSize())
 
 	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
 
 	require.Nil(t, reverseEvents.RawRows)
+	require.Equal(t, reverseEvents.Rows.MemoryUsage(), reverseEvents.GetSize())
+	require.Positive(t, reverseEvents.GetSize())
 	require.Same(t, batchDMLEvent.TableInfo, reverseEvents.TableInfo)
 	require.Equal(t, batchDMLEvent.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()), reverseEvents.Rows.ToString(batchDMLEvent.TableInfo.GetFieldSlice()))
 }
@@ -462,6 +707,7 @@ func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
 	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
 	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
+	t.Run("detach callbacks", verifyDMLEventDetachPostCallbacks)
 }
 
 func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
@@ -527,4 +773,50 @@ func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int64(1), enqueueCalled.Load())
+}
+
+func verifyDMLEventDetachPostCallbacks(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	postEnqueue, postFlush := event.DetachPostCallbacks()
+	require.Empty(t, event.PostTxnFlushed)
+	require.Empty(t, event.PostTxnEnqueued)
+
+	postFlush()
+	postEnqueue()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue"}, order)
+}
+
+func newChecksumTestTableInfo() *common.TableInfo {
+	return common.NewTableInfo4Decoder("test", &model.TableInfo{
+		ID: 1, Name: parser_model.NewCIStr("t"),
+		Columns: []*model.ColumnInfo{{ID: 1, Name: parser_model.NewCIStr("id"), State: model.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLonglong)}},
+	})
+}
+
+func newChecksumTestDMLEvent(tableInfo *common.TableInfo, rowTypes []common.RowType, values [][]any) *DMLEvent {
+	e := NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 100, 200, tableInfo)
+	e.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), len(values))
+	e.Length = int32(len(rowTypes))
+	for _, rowType := range rowTypes {
+		e.RowTypes = append(e.RowTypes, rowType)
+		if rowType == common.RowTypeUpdate {
+			e.RowTypes = append(e.RowTypes, rowType)
+		}
+	}
+	for _, row := range values {
+		e.Rows.AppendInt64(0, row[0].(int64))
+	}
+	return e
 }

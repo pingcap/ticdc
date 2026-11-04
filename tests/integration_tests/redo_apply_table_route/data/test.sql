@@ -150,7 +150,25 @@ UPDATE products SET name = 'Super Widget', price = 12.99 WHERE id = 1;
 DELETE FROM products WHERE price < 15.00;
 
 -- ============================================
--- Create finish marker table
+-- Redo replay regression tables and finish marker
 -- ============================================
+-- The unique-key updates in the redo-only phase must be split into deferred
+-- inserts. Each transaction changes 64 rows, exceeding the spill threshold.
+CREATE TABLE generated_updates (
+    id INT PRIMARY KEY,
+    uk INT NOT NULL UNIQUE,
+    g INT GENERATED ALWAYS AS (uk + 1) STORED,
+    v INT
+);
+INSERT INTO generated_updates (id, uk, v) VALUES (1, 1, 10);
+INSERT INTO generated_updates (id, uk, v) SELECT id + 1, uk + 1, v FROM generated_updates;
+INSERT INTO generated_updates (id, uk, v) SELECT id + 2, uk + 2, v FROM generated_updates;
+INSERT INTO generated_updates (id, uk, v) SELECT id + 4, uk + 4, v FROM generated_updates;
+INSERT INTO generated_updates (id, uk, v) SELECT id + 8, uk + 8, v FROM generated_updates;
+INSERT INTO generated_updates (id, uk, v) SELECT id + 16, uk + 16, v FROM generated_updates;
+INSERT INTO generated_updates (id, uk, v) SELECT id + 32, uk + 32, v FROM generated_updates;
+
+CREATE TABLE recovery_guard (id INT PRIMARY KEY, v VARCHAR(32));
+
 CREATE TABLE finish_mark (id INT PRIMARY KEY);
 INSERT INTO finish_mark VALUES (1);

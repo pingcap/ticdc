@@ -17,15 +17,17 @@ function prepare() {
 	start_tidb_cluster --workdir $WORK_DIR
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 20
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
 
 	# make node0 to be maintainer
 	sleep 10
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	TOPIC_NAME="ticdc-merge-table-test-$RANDOM"
 	case $SINK_TYPE in
@@ -63,8 +65,13 @@ main() {
 
 	sleep 10
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 20
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

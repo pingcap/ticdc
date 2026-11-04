@@ -15,10 +15,10 @@ package redo
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,9 +48,8 @@ const (
 	DefaultMetaFlushIntervalInMs = 200
 	// MinFlushIntervalInMs is the minimum flush interval for redo log.
 	MinFlushIntervalInMs = 50
-	// DefaultFlushBatchSize is the default flush batch size for redo log.
-	DefaultFlushBatchSize = 1024
-
+	// DefaultSpoolDiskQuota is the default disk quota in bytes for redo spool files.
+	DefaultSpoolDiskQuota = int64(10 * 1024 * 1024 * 1024)
 	// DefaultEncodingWorkerNum is the default number of encoding workers.
 	DefaultEncodingWorkerNum = 16
 	// DefaultEncodingInputChanSize is the default size of input channel for encoding worker.
@@ -194,8 +193,7 @@ func IsBlackholeStorage(scheme string) bool {
 var InitExternalStorage = func(ctx context.Context, uri url.URL) (storage.ExternalStorage, error) {
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrStorageInitialize, err,
-			fmt.Sprintf("can't init external storage for %s", uri.String()))
+		return nil, errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 	return s, nil
 }
@@ -204,8 +202,8 @@ func initExternalStorageForTest(ctx context.Context, uri url.URL) (storage.Exter
 	if ConsistentStorage(uri.Scheme) == consistentStorageS3 && len(uri.Host) == 0 {
 		// TODO: this branch is compatible with previous s3 logic and will be removed
 		// in the future.
-		return nil, errors.WrapError(errors.ErrStorageInitialize,
-			errors.Errorf("please specify the bucket for %+v", uri))
+		return nil, errors.ErrStorageInitialize.GenWithStack(
+			"please specify the bucket for %s", util.MaskSensitiveDataInURIForError(uri.String()))
 	}
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
@@ -249,19 +247,16 @@ func ValidateStorageWithOptions(uri *url.URL, opts StorageValidationOptions) err
 
 	err := os.MkdirAll(uri.Path, DefaultDirMode)
 	if err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't make dir for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 
 	file := filepath.Join(uri.Path, "file.test")
 	if err := os.WriteFile(file, []byte(""), DefaultFileMode); err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't write file for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 
 	if _, err := os.ReadFile(file); err != nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.Annotate(err,
-			fmt.Sprintf("can't read file for new redo log: %+v", uri)))
+		return errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 	_ = os.Remove(file)
 	return nil
@@ -278,13 +273,6 @@ const (
 	// layout: captureID_keyspace_changefeedID_fileType_uuid.fileExtName
 	RedoMetaFileFormat = "%s_%s_%s_%s_%s%s"
 )
-
-// logFormat2ParseFormat converts redo log file name format to the space separated
-// format, which can be read and parsed by sscanf. Besides remove the suffix `%s`
-// which is used as file name extension, since we will parse extension first.
-func logFormat2ParseFormat(fmtStr string) string {
-	return strings.TrimSuffix(strings.ReplaceAll(fmtStr, "_", " "), "%s")
-}
 
 // ParseLogFileName extract the commitTs, fileType from log fileName
 func ParseLogFileName(name string) (uint64, string, error) {
@@ -305,8 +293,6 @@ func ParseLogFileName(name string) (uint64, string, error) {
 		return 0, "", nil
 	}
 
-	var commitTs uint64
-	var captureID, keyspace, changefeedID, fileType, uid string
 	// if the keyspace is not default, the log looks like:
 	// fmt.Sprintf("%s_%s_%s_%s_%d_%s%s", w.cfg.captureID,
 	// w.cfg.changeFeedID.Keyspace,w.cfg.changeFeedID.ID,
@@ -315,19 +301,13 @@ func ParseLogFileName(name string) (uint64, string, error) {
 	// fmt.Sprintf("%s_%s_%s_%d_%s%s", w.cfg.captureID,
 	// w.cfg.changeFeedID.ID,
 	// w.cfg.fileType, w.commitTS.Load(), uuid, redo.LogEXT)
-	var (
-		vars      []any
-		formatStr string
-	)
-	if len(strings.Split(name, "_")) == 6 {
-		formatStr = logFormat2ParseFormat(RedoLogFileFormatV2)
-		vars = []any{&captureID, &keyspace, &changefeedID, &fileType, &commitTs, &uid}
-	} else {
-		formatStr = logFormat2ParseFormat(RedoLogFileFormatV1)
-		vars = []any{&captureID, &changefeedID, &fileType, &commitTs, &uid}
+	parts := strings.Split(strings.TrimSuffix(name, ext), "_")
+	if len(parts) < 5 {
+		return 0, "", errors.Annotatef(errors.Errorf("missing fields"), "bad log name: %s", name)
 	}
-	name = strings.ReplaceAll(name, "_", " ")
-	_, err := fmt.Sscanf(name, formatStr, vars...)
+
+	fileType := parts[len(parts)-3]
+	commitTs, err := strconv.ParseUint(parts[len(parts)-2], 10, 64)
 	if err != nil {
 		return 0, "", errors.Annotatef(err, "bad log name: %s", name)
 	}

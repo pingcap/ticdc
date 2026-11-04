@@ -100,6 +100,22 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	}
 }
 
+// acceptsOriginStopStatus reports whether status is the fenced terminal report
+// expected from the old maintainer during an origin-first handoff.
+func (m *MoveMaintainerOperator) acceptsOriginStopStatus(
+	from node.ID,
+	status *heartbeatpb.MaintainerStatus,
+) bool {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	return status != nil &&
+		m.state == moveMaintainerStateRemoveOrigin &&
+		from == m.origin &&
+		common.MaintainerEpochMatches(status.MaintainerEpoch, m.originMaintainerEpoch) &&
+		status.State != heartbeatpb.ComponentState_Working
+}
+
 // Schedule returns the next remove or add command needed by the current move state.
 func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	m.lck.Lock()

@@ -140,16 +140,26 @@ func TestStopByChangefeedIDDeletesCheckpointMetrics(t *testing.T) {
 	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
 
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-metrics", common.DefaultKeyspaceName)}
+	cfID := common.NewChangeFeedIDWithName("test-metrics", common.DefaultKeyspaceName)
+	cf := NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		KeyspaceID:   123,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+	}, 100, false)
 	db.AddReplicatingMaintainer(cf, "node1")
 
+	metrics.ChangefeedStatusGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(1)
 	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(100)
-	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name()).Set(10)
+	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cf.ID.Keyspace(), cf.ID.Name(), "123").Set(10)
+	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedStatusGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
 
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf.ID, true))
 
+	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedStatusGauge))
 	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
 	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
 }

@@ -21,16 +21,20 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
-func newAvroEncoderForTest(keyspace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
+func newAvroEncoderForTest(
+	keyspace string, schemaM schemamanager.SchemaManager, config *common.Config,
+) common.EventEncoder {
 	return &BatchEncoder{
-		keyspace: keyspace,
-		schemaM:  schemaM,
-		result:   make([]*common.Message, 0, 1),
-		config:   config,
+		keyspace:   keyspace,
+		schemaM:    schemaM,
+		codecCache: NewCodecCache(schemaM),
+		result:     make([]*common.Message, 0, 1),
+		config:     config,
 	}
 }
 
@@ -59,7 +63,7 @@ func TestDMLEventE2E(t *testing.T) {
 			require.Len(t, messages, 1)
 			message := messages[0]
 
-			schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+			schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 			require.NoError(t, err)
 
 			decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
@@ -122,7 +126,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
 
-	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	schemaM, err := schemamanager.NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 	require.NoError(t, err)
 	decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
 	decoder.AddKeyValue(messages[0].Key, messages[0].Value)

@@ -41,7 +41,7 @@ func TestIsSplitable(t *testing.T) {
 	tableInfo = helper.GetModelTableInfo(job)
 	require.False(t, isSplitable(tableInfo))
 
-	createTableSQLWithVarcharPK := "create table t4 (id varchar(32) primary key, name varchar(32));"
+	createTableSQLWithVarcharPK := "create table t4 (id varchar(32) primary key clustered, name varchar(32));"
 	job = helper.DDL2Job(createTableSQLWithVarcharPK)
 	tableInfo = helper.GetModelTableInfo(job)
 	require.True(t, isSplitable(tableInfo))
@@ -49,15 +49,23 @@ func TestIsSplitable(t *testing.T) {
 	createTableSQLWithVarcharPKNONCLUSTERED := "create table t5 (a varchar(200), b int, primary key(a) NONCLUSTERED);"
 	job = helper.DDL2Job(createTableSQLWithVarcharPKNONCLUSTERED)
 	tableInfo = helper.GetModelTableInfo(job)
-	require.True(t, isSplitable(tableInfo))
+	require.False(t, isSplitable(tableInfo))
 
-	createTableSQLWithMultiPK := "create table t6 (a int, b int, primary key(a, b));"
+	createTableSQLWithMultiPK := "create table t6 (a int, b int, primary key(a, b) clustered);"
 	job = helper.DDL2Job(createTableSQLWithMultiPK)
 	tableInfo = helper.GetModelTableInfo(job)
 	require.True(t, isSplitable(tableInfo))
 
 	createTableSQLWithUK := "create table t7 (a int, b int, unique key(a, b));"
 	job = helper.DDL2Job(createTableSQLWithUK)
+	tableInfo = helper.GetModelTableInfo(job)
+	require.False(t, isSplitable(tableInfo))
+
+	job = helper.DDL2Job("create table t8 (id bigint primary key nonclustered, v int)")
+	tableInfo = helper.GetModelTableInfo(job)
+	require.False(t, isSplitable(tableInfo))
+
+	job = helper.DDL2Job("create table t9 (a int, b int, primary key(a, b) nonclustered)")
 	tableInfo = helper.GetModelTableInfo(job)
 	require.False(t, isSplitable(tableInfo))
 }
@@ -89,7 +97,7 @@ func TestBuildPersistedDDLEventForMultiSchemaChangeContainsIndexIDs(t *testing.T
 		},
 	}
 
-	event := buildPersistedDDLEventForMultiSchemaChange(args)
+	event, _ := buildPersistedDDLEventForMultiSchemaChange(args)
 	expectedIndexIDs := getIndexIDs(job)
 	require.Len(t, expectedIndexIDs, 1)
 	require.Equal(t, expectedIndexIDs, event.IndexIDs)

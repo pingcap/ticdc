@@ -14,6 +14,7 @@
 package event
 
 import (
+	"sort"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -124,6 +125,10 @@ func calculateColumnChecksum(
 		}
 		columns = append(columns, column)
 	}
+	// Column offsets can differ from IDs after a column is moved or rebuilt by DDL.
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].ID < columns[j].ID
+	})
 
 	calculator := rowcodec.RowData{
 		Cols: columns,

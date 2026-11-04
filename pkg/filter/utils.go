@@ -63,13 +63,16 @@ func VerifyTableRules(cfg *config.FilterConfig) (tfilter.Filter, error) {
 	return f, nil
 }
 
-// ddlToEventType get event type from ddl query.
+// ddlToEventType returns the event type of the ddl. It returns NullEvent when
+// the event filter does not handle the ddl type, which includes a whitelisted
+// ddl type whose event type is unknown to the event filter, so that
+// shouldSkipDDL leaves such a ddl to replicate.
 func ddlToEventType(jobType timodel.ActionType) bf.EventType {
-	evenType, ok := ddlWhiteListMap[jobType]
-	if ok {
-		return evenType
+	eventType, ok := ddlWhiteListMap[jobType]
+	if !ok || bf.ClassifyEvent(eventType) == bf.NullEvent {
+		return bf.NullEvent
 	}
-	return bf.NullEvent
+	return eventType
 }
 
 var alterTableSubType = []timodel.ActionType{

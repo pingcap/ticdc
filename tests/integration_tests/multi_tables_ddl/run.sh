@@ -33,6 +33,39 @@ stop() {
 	stop_test $WORK_DIR
 }
 
+function test_system_schema_rename() {
+	local rename_type
+	local marker=0
+	for rename_type in single multiple; do
+		local changefeed_id="system-rename-$rename_type"
+		local rename_start_ts
+		rename_start_ts=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+		cdc_cli_changefeed create -c=$changefeed_id --start-ts=$rename_start_ts \
+			--sink-uri="$SINK_URI" --config="$CUR/conf/system-rename.toml"
+
+		run_sql "CREATE TABLE mysql.ticdc_system_${rename_type}_a (id INT PRIMARY KEY);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		if [ "$rename_type" == "single" ]; then
+			run_sql "RENAME TABLE mysql.ticdc_system_single_a TO system_schema_rename.selected_single;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		else
+			run_sql "CREATE TABLE mysql.ticdc_system_multiple_b (id INT PRIMARY KEY) PARTITION BY HASH(id) PARTITIONS 2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			run_sql "RENAME TABLE mysql.ticdc_system_multiple_a TO system_schema_rename.selected_multiple_a,
+				mysql.ticdc_system_multiple_b TO system_schema_rename.selected_multiple_b;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		fi
+		do_retry 20 2 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $changefeed_id "failed" "ErrSyncRenameTableFailed" ""
+		cdc_cli_changefeed remove -c=$changefeed_id
+
+		# A feed that excludes the renamed tables must continue replicating data.
+		marker=$((marker + 1))
+		run_sql "INSERT INTO multi_tables_ddl_test.finish_mark VALUES ($marker);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		ensure 10 "run_sql 'SELECT COUNT(*) AS marker_count FROM multi_tables_ddl_test.finish_mark WHERE id = $marker;' \
+			${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'marker_count: 1'"
+		check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_normal "normal" "null" ""
+		check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err1 "normal" "null" ""
+		run_sql "DROP TABLE IF EXISTS system_schema_rename.selected_single,
+			system_schema_rename.selected_multiple_a, system_schema_rename.selected_multiple_b;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
+}
+
 function run() {
 	if [ "$SINK_TYPE" == "storage" ]; then
 		return
@@ -61,6 +94,13 @@ function run() {
 	start_ts=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+
+	# Regression for #2983: system-table rename must be safe even without a changefeed.
+	run_sql "CREATE DATABASE system_schema_rename;
+		CREATE TABLE mysql.ticdc_system_no_feed (id INT PRIMARY KEY);
+		RENAME TABLE mysql.ticdc_system_no_feed TO system_schema_rename.no_feed;
+		ALTER TABLE system_schema_rename.no_feed ADD COLUMN value INT;
+		DROP TABLE system_schema_rename.no_feed;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	TOPIC_NAME_1="ticdc-multi-tables-ddl-test-normal-$RANDOM"
 	TOPIC_NAME_2="ticdc-multi-tables-ddl-test-error-1-$RANDOM"
@@ -118,6 +158,8 @@ function run() {
 	do_retry 10 2 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" $cf_err2 "failed" "ErrSyncRenameTableFailed" ""
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	test_system_schema_rename
 
 	cleanup_process $CDC_BINARY
 }

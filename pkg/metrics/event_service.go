@@ -156,6 +156,13 @@ var (
 			Name:      "pending_scan_task_count",
 			Help:      "The number of pending scan tasks",
 		})
+	EventServiceDroppedScanTaskCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "dropped_scan_task_count",
+			Help:      "The number of scan tasks dropped because the worker queue is full",
+		})
 	EventServiceDispatcherStatusCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -198,6 +205,19 @@ var (
 		Name:      "scanned_txn_count",
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
+	})
+	EventServiceBigTxnSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "big_txn_size",
+		Help:      "The raw KV size of big transactions scanned from eventStore",
+		Buckets:   prometheus.ExponentialBuckets(1024*1024, 2.0, 16), // 1MB to 32GB
+	})
+	EventServiceBigTxnCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "big_txn_count",
+		Help:      "The number of big transactions scanned from eventStore",
 	})
 
 	EventServiceSkipScanCount = prometheus.NewCounterVec(
@@ -263,11 +283,14 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
+	registry.MustRegister(EventServiceDroppedScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceBigTxnSize)
+	registry.MustRegister(EventServiceBigTxnCount)
 	registry.MustRegister(EventServiceSkipScanCount)
 	registry.MustRegister(EventServiceInterruptScanCount)
 	registry.MustRegister(EventServiceGetDDLEventDuration)

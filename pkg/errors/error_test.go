@@ -109,6 +109,11 @@ func TestShouldFailChangefeed(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "ErrKafkaAuthorizationFailed should return false",
+			err:      ErrKafkaAuthorizationFailed.GenWithStackByArgs("describe-topic", "test-topic"),
+			expected: false,
+		},
+		{
 			name:     "ErrKafkaSendMessage should return false",
 			err:      ErrKafkaSendMessage.GenWithStackByArgs(),
 			expected: false,

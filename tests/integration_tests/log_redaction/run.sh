@@ -91,6 +91,16 @@ require_no_log_pattern() {
 	fi
 }
 
+check_config_credential_redaction() {
+	local mode=$1 changefeed=$2
+	cdc_cli_changefeed query -c "$changefeed" >"$WORK_DIR/credential-query-$mode.txt" 2>&1
+	if grep -Eq 'credential-sentinel' "$WORK_DIR/cdc_${mode}_blackhole.log" \
+		"$WORK_DIR/stdout_${mode}_blackhole.log" "$WORK_DIR/credential-create-$mode.txt" "$WORK_DIR/credential-query-$mode.txt"; then
+		echo "configuration credentials leaked with log redaction mode $mode"
+		exit 1
+	fi
+}
+
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
@@ -107,11 +117,11 @@ function run() {
 	# This test uses blackhole sink to FORCE DMLEvent logging code path
 	# ==========================================================================
 	echo "=== Test 1: Redaction OFF mode (BlackHole sink - forces DMLEvent logging) ==="
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_blackhole"
 
 	# Create blackhole changefeed to force DMLEvent.String() logging
-	BLACKHOLE_SINK_URI="blackhole://"
-	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-off-test" --config=$CUR/conf/changefeed.toml
+	BLACKHOLE_SINK_URI="blackhole://user:uri-credential-sentinel@localhost/?sasl-password=query-credential-sentinel"
+	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-off-test" --config=$CUR/conf/changefeed.toml >"$WORK_DIR/credential-create-off.txt" 2>&1
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -144,6 +154,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ OFF mode (BlackHole): Raw data visible in DMLEvent logs"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_blackhole"
+	check_config_credential_redaction off blackhole-off-test
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -156,9 +169,9 @@ function run() {
 	run_sql "CREATE DATABASE log_redaction_test;"
 	run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_blackhole"
 
-	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-marker-test" --config=$CUR/conf/changefeed.toml
+	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-marker-test" --config=$CUR/conf/changefeed.toml >"$WORK_DIR/credential-create-marker.txt" 2>&1
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -203,6 +216,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ MARKER mode (BlackHole): Data wrapped with ‹› markers"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_blackhole"
+	check_config_credential_redaction marker blackhole-marker-test
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -215,9 +231,9 @@ function run() {
 	run_sql "CREATE DATABASE log_redaction_test;"
 	run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_blackhole"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_blackhole"
 
-	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-on-test" --config=$CUR/conf/changefeed.toml
+	cdc_cli_changefeed create --sink-uri="$BLACKHOLE_SINK_URI" --changefeed-id="blackhole-on-test" --config=$CUR/conf/changefeed.toml >"$WORK_DIR/credential-create-on.txt" 2>&1
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -267,6 +283,9 @@ function run() {
 	captured_logs=""
 
 	echo "[$(date)] ✓ ON mode (BlackHole): All sensitive data fully redacted to '?'"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_blackhole"
+	check_config_credential_redaction on blackhole-on-test
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
@@ -282,14 +301,16 @@ function run() {
 
 		# Test OFF mode with MySQL sink
 		echo "  [4a] OFF mode with MySQL sink:"
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_mysql"
 
 		SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		check_table_exists log_redaction_test.users ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
 
 		# Capture MySQL logs once for all validations
 		captured_logs=$(grep -E "(Query:|Args:)" "$WORK_DIR/cdc_off_mysql.log" 2>/dev/null || echo "")
@@ -304,6 +325,8 @@ function run() {
 			"MySQL Args shows plain text values"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		# Test MARKER mode with MySQL sink
@@ -314,7 +337,7 @@ function run() {
 		run_sql "CREATE DATABASE log_redaction_test;"
 		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_mysql"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -333,6 +356,8 @@ function run() {
 			"MySQL Args values wrapped with ‹› markers"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		# Test ON mode with MySQL sink
@@ -343,7 +368,7 @@ function run() {
 		run_sql "CREATE DATABASE log_redaction_test;"
 		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-		run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_mysql"
+		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_mysql"
 		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 
 		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -367,6 +392,8 @@ function run() {
 			"No sensitive data leaked in MySQL sink ON mode"
 
 		captured_logs=""
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_mysql"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		echo "[$(date)] ✓ MySQL sink: All redaction modes validated"
@@ -486,5 +513,5 @@ function run() {
 	echo "=========================================="
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_cdc_server_guards; stop_tidb_cluster' EXIT
 run $*

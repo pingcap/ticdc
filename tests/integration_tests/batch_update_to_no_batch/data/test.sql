@@ -175,3 +175,11 @@ VALUES (1),
 UPDATE `column_is_null`
 SET t = NULL
 WHERE id = 1;
+
+-- Composite keys containing embedded NUL bytes must remain distinct during batching.
+CREATE TABLE composite_key_nul
+(
+    a VARBINARY(32) NOT NULL,
+    b VARBINARY(32) NOT NULL,
+    PRIMARY KEY (a, b)
+);

@@ -29,8 +29,7 @@ import (
 )
 
 var (
-	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = metrics.PullerEventCounter.WithLabelValues("event")
 
 	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
 	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
@@ -56,6 +55,13 @@ type regionEvent struct {
 
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+	// memoryBytes is released when this event is dropped or when the derived KV
+	// events no longer need to be retained by the log puller.
+	memoryBytes uint64
+}
+
+func (event *regionEvent) needsMemoryAccounting() bool {
+	return event.entries != nil
 }
 
 func (event *regionEvent) getSize() int {
@@ -122,7 +128,9 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	newResolvedTs := uint64(0)
+	memoryBytes := uint64(0)
 	for _, event := range events {
+		memoryBytes += event.memoryBytes
 		if len(event.states) == 1 && event.states[0].isStale() {
 			hasError = true
 			h.handleRegionError(event.states[0])
@@ -148,9 +156,13 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			span.advanceResolvedTs(newResolvedTs)
 		}
 	}
+	releaseMemoryQuota := func() {
+		h.eventSink.memoryQuota.ReleaseEvent(memoryBytes)
+	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			defer releaseMemoryQuota()
 			start := time.Now()
 			span.clearKVEventsCache()
 			metricConsumeKVEventsCallbackDurationClearCache.Observe(time.Since(start).Seconds())
@@ -167,10 +179,12 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if !await {
 			span.clearKVEventsCache()
 			tryAdvanceResolvedTs()
+			releaseMemoryQuota()
 		}
 		return await
 	} else {
 		tryAdvanceResolvedTs()
+		releaseMemoryQuota()
 	}
 	return false
 }
@@ -227,8 +241,18 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+	h.eventSink.memoryQuota.ReleaseEvent(event.memoryBytes)
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
-	state := event.mustFirstState()
+	if len(event.states) == 0 || event.states[0] == nil {
+		log.Error("drop invalid region event",
+			zap.Bool("hasEntries", event.entries != nil),
+			zap.Uint64("resolvedTs", event.resolvedTs),
+			zap.Int("states", len(event.states)),
+			zap.Uint64("memoryBytes", event.memoryBytes))
+		return nil
+	}
+
+	state := event.states[0]
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
@@ -255,7 +279,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
+		worker.tracker.RemoveIf(SubscriptionID(state.requestID), state.getRegionID(), state)
 		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
@@ -422,8 +446,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}

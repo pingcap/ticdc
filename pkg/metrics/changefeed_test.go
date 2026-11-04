@@ -16,9 +16,36 @@ package metrics
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func requireMetricHasLabel(
+	t *testing.T,
+	collector prometheus.Collector,
+	labelName string,
+	labelValue string,
+) {
+	t.Helper()
+
+	registry := prometheus.NewPedanticRegistry()
+	registry.MustRegister(collector)
+	metricFamilies, err := registry.Gather()
+	require.NoError(t, err)
+	require.NotEmpty(t, metricFamilies)
+
+	for _, metricFamily := range metricFamilies {
+		for _, metric := range metricFamily.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == labelName && label.GetValue() == labelValue {
+					return
+				}
+			}
+		}
+	}
+	require.Failf(t, "metric label not found", "%s=%q", labelName, labelValue)
+}
 
 // TestResetOwnerChangefeedMetrics seeds every owner changefeed gauge, resets
 // them, and verifies that no stale label series remains.
@@ -28,11 +55,12 @@ func TestResetOwnerChangefeedMetrics(t *testing.T) {
 
 	keyspace := "default"
 	changefeed := "reset-owner-changefeed-metrics"
+	keyspaceID := "123"
 
-	ChangefeedStatusGauge.WithLabelValues(keyspace, changefeed).Set(1)
+	ChangefeedStatusGauge.WithLabelValues(keyspace, changefeed, keyspaceID).Set(1)
 	ChangefeedErrorInfoGauge.WithLabelValues(keyspace, changefeed, "failed", "1000", "CDC:ErrTest", "test").Set(1)
 	ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, changefeed).Set(100)
-	ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, changefeed).Set(10)
+	ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, changefeed, keyspaceID).Set(10)
 	ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, changefeed, "mysql/tidb").Set(1)
 
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedStatusGauge))
@@ -40,6 +68,8 @@ func TestResetOwnerChangefeedMetrics(t *testing.T) {
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedCheckpointTsLagGauge))
 	require.Equal(t, 1, testutil.CollectAndCount(ChangefeedDownstreamInfoGauge))
+	requireMetricHasLabel(t, ChangefeedStatusGauge, "keyspace_id", keyspaceID)
+	requireMetricHasLabel(t, ChangefeedCheckpointTsLagGauge, "keyspace_id", keyspaceID)
 
 	ResetOwnerChangefeedMetrics()
 

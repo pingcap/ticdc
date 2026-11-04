@@ -24,6 +24,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestExternalStorageRejectsInvalidURIWithoutCredentials(t *testing.T) {
+	t.Parallel()
+	for _, uri := range []string{
+		"s3:///missing-bucket?secret-access-key=storage-secret-sentinel",
+		"s3://bucket/%zz?secret-access-key=storage-secret-sentinel",
+	} {
+		_, err := GetExternalStorageWithDefaultTimeout(t.Context(), uri)
+		require.ErrorContains(t, err, "invalid external storage URI")
+		require.NotContains(t, err.Error(), "storage-secret-sentinel")
+	}
+}
+
 // mockRoundTripper blocks until the context is done.
 type mockRoundTripper struct {
 	blockUntilContextDone bool

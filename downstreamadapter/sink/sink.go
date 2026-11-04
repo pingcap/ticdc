@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/writelease"
 )
 
 type Sink interface {
@@ -42,6 +43,9 @@ type Sink interface {
 	// implementations are expected to call event.PostFlush().
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
+	// SetWriteGate installs the capture-wide write admission gate. Every sink
+	// must enforce it again at its actual downstream mutation boundary.
+	SetWriteGate(gate *writelease.Gate)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
 	Close()
@@ -50,7 +54,7 @@ type Sink interface {
 	BatchBytes() int
 }
 
-func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
+func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID, keyspaceID uint32) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
 		return nil, errors.WrapError(
@@ -61,15 +65,15 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
-		return mysql.New(ctx, changefeedID, cfg, sinkURI)
+		return mysql.New(ctx, changefeedID, cfg, sinkURI, keyspaceID)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, keyspaceID)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, keyspaceID)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, cfg.EnableTableAcrossNodes, nil, keyspaceID)
 	case config.BlackHoleScheme:
-		return blackhole.New(changefeedID)
+		return blackhole.New(changefeedID, keyspaceID)
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(
 		util.MaskSensitiveDataInURIForError(sinkURI.String()))
@@ -88,11 +92,11 @@ func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID comm
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
 		return mysql.Verify(ctx, sinkURI, cfg)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return kafka.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes)
+		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.CaseSensitive, cfg.EnableTableAcrossNodes)
 	case config.BlackHoleScheme:
 		return nil
 	}

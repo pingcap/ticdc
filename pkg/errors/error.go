@@ -139,6 +139,10 @@ var (
 		"kafka admin API %s failed: %s",
 		errors.RFCCodeText("CDC:ErrKafkaAdminAPI"),
 	)
+	ErrKafkaAuthorizationFailed = errors.Normalize(
+		"kafka %s authorization failed: %s",
+		errors.RFCCodeText("CDC:ErrKafkaAuthorizationFailed"),
+	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",
 		errors.RFCCodeText("CDC:ErrPulsarTopicExprInvalid"),
@@ -567,6 +571,11 @@ var (
 		"upstream not found, cluster-id: %d",
 		errors.RFCCodeText("CDC:ErrUpstreamNotFound"),
 	)
+	ErrUpstreamHasRunningImport = errors.Normalize(
+		"upstream has running import tasks, upstream-id: %d; please stop or wait for "+
+			"Lightning/restore tasks to finish, or wait for the task lease to expire if it terminated abnormally",
+		errors.RFCCodeText("CDC:ErrUpstreamHasRunningImport"),
+	)
 	ErrUpdateServiceSafepointFailed = errors.Normalize(
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
@@ -675,6 +684,10 @@ var (
 	ErrStorageInitialize = errors.Normalize(
 		"fail to open storage for redo log",
 		errors.RFCCodeText("CDC:ErrStorageInitialize"),
+	)
+	ErrSpillFileOp = errors.Normalize(
+		"spill file operation failed: %s",
+		errors.RFCCodeText("CDC:ErrSpillFileOp"),
 	)
 
 	ErrRedoConfigInvalid = errors.Normalize(

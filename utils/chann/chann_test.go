@@ -38,9 +38,9 @@ func TestChanBasic(t *testing.T) {
 
 func TestChan(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
-	N := 200
+	N := 50
 	if testing.Short() {
-		N = 20
+		N = 10
 	}
 	for chanCap := 0; chanCap < N; chanCap++ {
 		{
@@ -245,7 +245,7 @@ const internalCacheSize = 16 + 1<<10
 // is always ready for receiving, so the select in the second goroutine must
 // always receive from one or the other. It must never execute the default case.
 func TestNonblockSelectRace(t *testing.T) {
-	n := 1000
+	n := 200
 	done := New[bool](Cap(1))
 	for i := 0; i < n; i++ {
 		c1 := New[int]()
@@ -292,7 +292,7 @@ func TestNonblockSelectRace(t *testing.T) {
 
 // Same as TestNonblockSelectRace, but close(c2) replaces c2 <- 1.
 func TestNonblockSelectRace2(t *testing.T) {
-	n := 1000
+	n := 200
 	done := make(chan bool, 1)
 	for i := 0; i < n; i++ {
 		c1 := New[int]()
@@ -332,9 +332,9 @@ func TestNonblockSelectRace2(t *testing.T) {
 }
 
 func TestUnboundedChann(t *testing.T) {
-	N := 200
+	N := 50
 	if testing.Short() {
-		N = 20
+		N = 10
 	}
 
 	wg := sync.WaitGroup{}

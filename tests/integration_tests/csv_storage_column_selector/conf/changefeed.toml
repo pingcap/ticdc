@@ -1,0 +1,15 @@
+[sink]
+protocol = "csv"
+terminator = "\n"
+date-separator = "day"
+column-selectors = [
+    {matcher = ["test.t1"], columns = ["a", "b"]},
+    {matcher = ["test.*"], columns = ["*", "!b"]},
+    {matcher = ["test1.t1"], columns = ["column*", "!column1"]},
+]
+
+[sink.csv]
+delimiter = ","
+quote = '"'
+null = '\N'
+include-commit-ts = true

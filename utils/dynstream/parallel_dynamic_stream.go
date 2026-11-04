@@ -247,7 +247,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	s.batchConfigRegistry.onRemovePath(pi.area)
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
-	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
+	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi, removePath: true})
 	s._statRemovePathCount.Add(1)
 	return nil
 }

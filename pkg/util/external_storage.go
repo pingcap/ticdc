@@ -64,7 +64,9 @@ func getExternalStorage(
 ) (storage.ExternalStorage, error) {
 	backEnd, err := storage.ParseBackend(uri, opts)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
+		// Parser errors can quote the complete URI, including credentials.
+		return nil, errors.ErrExternalStorageAPI.GenWithStack(
+			"invalid external storage URI: %s", MaskSensitiveDataInURIForError(uri))
 	}
 
 	ret, err := storage.New(ctx, backEnd, &storage.ExternalStorageOptions{

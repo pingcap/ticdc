@@ -79,25 +79,50 @@ func NewBarrier(spanController *span.Controller,
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) []*messaging.TargetMessage {
+	if request == nil || request.ChangefeedID == nil {
+		log.Warn("ignore invalid block status request",
+			zap.String("from", from.String()),
+			zap.Int64("mode", b.mode))
+		return nil
+	}
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
+	invalidStatusCount := 0
 	for _, status := range request.BlockStatuses {
+		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 ||
+			(status.State.IsBlocked &&
+				status.State.Stage != heartbeatpb.BlockStage_DONE &&
+				status.State.BlockTables == nil) {
+			invalidStatusCount++
+			continue
+		}
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+		task := b.spanController.GetTaskByID(dispatcherID)
+		if task == nil {
+			log.Info("Get block status from unexisted dispatcher, ignore it",
+				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		ownerNodeID := task.GetNodeID()
+		if ownerNodeID != from {
+			log.Warn("ignore block status from non-owner dispatcher",
+				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.String("ownerNodeID", ownerNodeID.String()),
+				zap.String("fromNodeID", from.String()),
+				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
-			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it",
-					zap.String("changefeed", request.ChangefeedID.GetName()),
-					zap.String("dispatcher", dispatcherID.String()),
-					zap.Uint64("commitTs", status.State.BlockTs),
-					zap.Int64("mode", b.mode))
-				continue
-			}
 			if !b.spanController.IsReplicating(task) {
 				log.Info("Get block status from unreplicating dispatcher, ignore it",
 					zap.String("changefeed", request.ChangefeedID.GetName()),
@@ -149,6 +174,13 @@ func (b *Barrier) HandleStatus(from node.ID,
 				actions[targetID] = append(actions[targetID], action)
 			}
 		}
+	}
+	if invalidStatusCount > 0 {
+		log.Warn("ignore invalid block statuses",
+			zap.String("from", from.String()),
+			zap.String("changefeed", request.ChangefeedID.GetName()),
+			zap.Int("invalidStatusCount", invalidStatusCount),
+			zap.Int64("mode", b.mode))
 	}
 	for event, dispatchers := range eventDispatcherIDsMap {
 		dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
@@ -344,6 +376,9 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 }
 
 func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
+	if changefeedID == nil || status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
+		return nil, nil, "", false
+	}
 	cfID := common.NewChangefeedIDFromPB(changefeedID)
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
@@ -357,9 +392,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			Mode:            status.Mode,
 		})
-		if status.State != nil {
-			span.UpdateBlockState(*status.State)
-		}
+		span.UpdateBlockState(*status.State)
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
 		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true

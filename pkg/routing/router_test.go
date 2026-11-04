@@ -64,6 +64,33 @@ func TestSubstituteExpression(t *testing.T) {
 			defaultValue: "unused",
 			expected:     "db_prod_users_v2",
 		},
+		{
+			name:         "table placeholder in source schema stays literal",
+			expr:         "{schema}_{table}",
+			sourceSchema: "db{table}",
+			sourceTable:  "orders",
+			expected:     "db{table}_orders",
+		},
+		{
+			name:         "table placeholder in source table stays literal",
+			expr:         "{schema}_{table}",
+			sourceSchema: "sales",
+			sourceTable:  "table{table}",
+			expected:     "sales_table{table}",
+		},
+		{
+			name:         "repeated placeholders preserve literal source names",
+			expr:         "{table}_{schema}_{table}_{schema}",
+			sourceSchema: "db{table}",
+			sourceTable:  "table{schema}",
+			expected:     "table{schema}_db{table}_table{schema}_db{table}",
+		},
+		{
+			name:         "empty expression preserves literal default",
+			defaultValue: "db{table}",
+			sourceTable:  "orders",
+			expected:     "db{table}",
+		},
 	}
 
 	for _, tc := range testCases {

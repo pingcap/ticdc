@@ -253,10 +253,11 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
 		case e.release:
-			s.eventQueue.releasePath(e.pathInfo)
+			s.eventQueue.releasePath(e.pathInfo, false)
+		case e.removePath:
+			s.eventQueue.releasePath(e.pathInfo, true)
 		case e.pathInfo.removed.Load():
-			// The path is removed, so we don't need to handle its events.
-			return
+			s.handler.OnDrop(e.event)
 		default:
 			s.eventQueue.appendEvent(e)
 		}
@@ -333,7 +334,7 @@ Loop:
 					eventQueueEmpty = true
 					continue Loop
 				}
-				if path.removed.Load() {
+				if s.dropBatchIfPathRemoved(path, eventBuf) {
 					cleanUpEventBuf()
 					continue Loop
 				}
@@ -354,6 +355,19 @@ Loop:
 			}
 		}
 	}
+}
+
+func (s *stream[A, P, T, D, H]) dropBatchIfPathRemoved(
+	path *pathInfo[A, P, T, D, H],
+	events []T,
+) bool {
+	if !path.removed.Load() {
+		return false
+	}
+	for _, event := range events {
+		s.handler.OnDrop(event)
+	}
+	return true
 }
 
 // ====== internal types ======
@@ -409,9 +423,13 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
-// appendEvent appends an event to the pending queue.
-// It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+// appendEvent adds an event to the pending queue or merges it into the last
+// periodic signal. accepted reports whether the event was accepted, while
+// appended reports whether the pending queue grew by one event.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(
+	event eventWrap[A, P, T, D, H],
+	handler H,
+) (accepted bool, appended bool) {
 	if pi.areaMemStat != nil {
 		return pi.areaMemStat.appendEvent(pi, event, handler)
 	}
@@ -419,7 +437,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 
 	back, ok := pi.pendingQueue.BackRef()
@@ -427,11 +445,11 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		// If the last event is a periodic signal, we only need to keep the latest one.
 		// And we don't need to add a new signal.
 		*back = event
-		return true
+		return true, false
 	} else {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 }
 
@@ -459,13 +477,13 @@ func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	}
 }
 
-// eventWrap contains the event and the path info.
-// It can be a event or a wake signal.
+// eventWrap contains either a data event or a control signal and its path info.
 type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	event   T
-	wake    bool
-	newPath bool
-	release bool
+	event      T
+	wake       bool
+	newPath    bool
+	release    bool
+	removePath bool
 
 	pathInfo *pathInfo[A, P, T, D, H]
 

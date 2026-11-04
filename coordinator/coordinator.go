@@ -314,9 +314,9 @@ func (c *coordinator) handleStateChange(
 }
 
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
-func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
+func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, checkpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(id, checkpointTs)
 	if err == nil {
 		return
 	}
@@ -345,6 +345,18 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 	}
 }
 
+// checkStaleCheckpoints also checks non-running changefeeds because their
+// checkpoints no longer advance and cannot trigger the heartbeat-driven check.
+func (c *coordinator) checkStaleCheckpoints(ctx context.Context) {
+	for _, cf := range c.controller.changefeedDB.GetAllChangefeeds() {
+		info := cf.GetInfo()
+		if info == nil || !info.NeedBlockGC() {
+			continue
+		}
+		c.checkStaleCheckpointTs(ctx, cf, cf.GetLastSavedCheckPointTs())
+	}
+}
+
 func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefeedChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
@@ -363,7 +375,7 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefee
 	if len(statusMap) == 0 {
 		return nil
 	}
-	err := c.controller.backend.UpdateChangefeedCheckpointTs(ctx, statusMap)
+	err := c.controller.updateChangefeedCheckpointTs(ctx, statusMap)
 	if err != nil {
 		log.Error("failed to update checkpointTs", zap.Error(err))
 		return errors.Trace(err)
@@ -503,5 +515,9 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
 func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
-	return c.updateGlobalGcSafepoint(ctx)
+	if err := c.updateGlobalGcSafepoint(ctx); err != nil {
+		return err
+	}
+	c.checkStaleCheckpoints(ctx)
+	return nil
 }

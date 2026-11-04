@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
@@ -31,10 +32,10 @@ type Sink struct {
 	statistics *metrics.Statistics
 }
 
-func New(changefeedID common.ChangeFeedID) (*Sink, error) {
+func New(changefeedID common.ChangeFeedID, keyspaceID uint32) (*Sink, error) {
 	return &Sink{
 		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		statistics: metrics.NewStatistics(changefeedID, "sink"),
+		statistics: metrics.NewStatistics(changefeedID, keyspaceID, "sink"),
 	}, nil
 }
 
@@ -47,6 +48,9 @@ func (s *Sink) SinkType() common.SinkType {
 }
 
 func (s *Sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
+}
+
+func (s *Sink) SetWriteGate(_ *writelease.Gate) {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {

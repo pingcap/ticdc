@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tidb/br/pkg/utils"
@@ -36,7 +37,7 @@ type components struct {
 	columnSelector *columnselector.ColumnSelectors
 	eventRouter    *eventrouter.EventRouter
 	topicManager   topicmanager.TopicManager
-	adminClient    kafka.ClusterAdminClient
+	adminClient    kafka.AdminClient
 	factory        kafka.Factory
 	claimCheck     *claimcheck.ClaimCheck
 }
@@ -51,6 +52,9 @@ func (c components) close() {
 	if c.claimCheck != nil {
 		c.claimCheck.Close()
 	}
+	if c.factory != nil {
+		c.factory.Close()
+	}
 }
 
 func newKafkaSinkComponent(
@@ -58,6 +62,7 @@ func newKafkaSinkComponent(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (components, config.Protocol, error) {
 	var (
 		comp components
@@ -85,26 +90,32 @@ func newKafkaSinkComponent(
 	}
 	options.Topic = topic
 
-	comp.factory, err = kafka.NewSaramaFactory(ctx, options, changefeedID)
+	comp.factory, err = kafka.NewFactory(ctx, options, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	isAvroLike := protocol == config.ProtocolAvro
+	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
 	comp.eventRouter, err = eventrouter.NewEventRouter(
-		sinkConfig, topic, false, isAvroLike)
+		sinkConfig, caseSensitive, topic, false, isAvroLike)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	comp.columnSelector, err = columnselector.New(sinkConfig)
+	comp.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(
+		changefeedID, sinkURI, protocol, sinkConfig,
+		options.MaxMessageBytes, options.MaxBatchedBytes,
+	)
 	if err != nil {
 		return comp, protocol, err
+	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
 	}
 
 	comp.claimCheck, err = claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
@@ -112,12 +123,20 @@ func newKafkaSinkComponent(
 		return comp, protocol, err
 	}
 
-	comp.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, comp.claimCheck, changefeedID)
+	var schemaM schemamanager.SchemaManager
+	if isAvroLike {
+		schemaM, err = schemamanager.NewSchemaManager(ctx, encoderConfig)
+		if err != nil {
+			return comp, protocol, err
+		}
+	}
+
+	comp.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, comp.claimCheck, schemaM, changefeedID)
 	if err != nil {
 		return comp, protocol, err
 	}
 
-	comp.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, comp.claimCheck)
+	comp.encoder, err = codec.NewEventEncoder(encoderConfig, comp.claimCheck, schemaM)
 	if err != nil {
 		return comp, protocol, err
 	}

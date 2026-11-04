@@ -71,7 +71,7 @@ function prepare() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	echo "query start ts: $start_ts"
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 	echo started cdc server successfully
 
 	SINK_URI="blackhole:///"
@@ -93,12 +93,13 @@ function check() {
 	fi
 }
 
-trap "stop_tidb_cluster && stop_proxy" EXIT
+trap 'stop_cdc_server_guards; stop_tidb_cluster; stop_proxy' EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare
 	sleep 5
 	check
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_logs $WORK_DIR
 fi
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

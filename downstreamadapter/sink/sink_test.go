@@ -30,7 +30,7 @@ func TestUnknownSchemeMasksSensitiveSinkURI(t *testing.T) {
 		SinkURI: "unknown://127.0.0.1:9092/topic?sasl-password=verysecure&access-key=rawkey",
 	}
 
-	_, err := New(context.Background(), cfg, changefeedID)
+	_, err := New(context.Background(), cfg, changefeedID, common.DefaultKeyspaceID)
 	require.Error(t, err)
 	requireMaskedSinkURIError(t, err)
 
@@ -47,7 +47,7 @@ func TestParseErrorMasksSensitiveSinkURI(t *testing.T) {
 		SinkURI: "mysql://root:verysecure@127.0.0.1/%zz",
 	}
 
-	_, err := New(context.Background(), cfg, changefeedID)
+	_, err := New(context.Background(), cfg, changefeedID, common.DefaultKeyspaceID)
 	require.Error(t, err)
 	requireInvalidSinkURIError(t, err)
 

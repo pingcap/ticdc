@@ -32,6 +32,9 @@ import (
 )
 
 const (
+	PerformanceModeThroughput = "throughput"
+	PerformanceModeLowLatency = "low-latency"
+
 	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
 	minSyncPointInterval = time.Second * 30
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
@@ -44,6 +47,7 @@ const (
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
+	PerformanceMode:    util.AddressOf(PerformanceModeThroughput),
 	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
 	CaseSensitive:      util.AddressOf(false),
 	CheckGCSafePoint:   util.AddressOf(true),
@@ -66,7 +70,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		},
 		EncoderConcurrency:               util.AddressOf(DefaultEncoderGroupConcurrency),
 		Terminator:                       util.AddressOf(CRLF),
-		DateSeparator:                    util.AddressOf(DateSeparatorDay.String()),
+		DateSeparator:                    util.AddressOf(DateSeparatorDay),
 		EnablePartitionSeparator:         util.AddressOf(true),
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
@@ -79,7 +83,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		SendAllBootstrapAtStart:          util.AddressOf(DefaultSendAllBootstrapAtStart),
 		DebeziumDisableSchema:            util.AddressOf(false),
 		OpenProtocol:                     &OpenProtocolConfig{OutputOldValue: true},
-		Debezium:                         &DebeziumConfig{OutputOldValue: DefaultDebeziumOutputOldValue},
+		Debezium:                         &DebeziumConfig{OutputOldValue: true},
 	},
 	Consistent: &ConsistentConfig{
 		Level:                 util.AddressOf("none"),
@@ -91,6 +95,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Storage:               util.AddressOf(""),
 		UseFileBackend:        util.AddressOf(false),
 		Compression:           util.AddressOf(""),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},
@@ -140,6 +145,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
+	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
 	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
@@ -265,6 +271,14 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	performanceMode := util.GetOrZero(c.PerformanceMode)
+	if performanceMode == "" {
+		c.PerformanceMode = util.AddressOf(PerformanceModeThroughput)
+	} else if performanceMode != PerformanceModeThroughput && performanceMode != PerformanceModeLowLatency {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("unknown performance mode: %s", performanceMode))
+	}
+
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck
@@ -363,6 +377,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
 	}
 	return nil
+}
+
+func (c *ReplicaConfig) IsLowLatencyMode() bool {
+	return c != nil && util.GetOrZero(c.PerformanceMode) == PerformanceModeLowLatency
 }
 
 // FixScheduler adjusts scheduler to default value

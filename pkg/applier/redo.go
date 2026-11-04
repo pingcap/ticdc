@@ -168,6 +168,11 @@ func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
 }
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
+	defer func() {
+		if err := ra.updateSplitter.tempStorage.close(); err != nil {
+			log.Warn("close redo transaction temporary files failed", zap.Error(err))
+		}
+	}()
 	checkpointTs, resolvedTs, version, err := ra.rd.ReadMeta(ctx)
 	if err != nil {
 		return err
@@ -484,7 +489,13 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
-		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
+		ra.mysqlSink, err = mysql.New(
+			egCtx,
+			ra.rd.GetChangefeedID(),
+			replicaConfig,
+			sinkURI,
+			commonType.DefaultKeyspaceID,
+		)
 		if err != nil {
 			return err
 		}

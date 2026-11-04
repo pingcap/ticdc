@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -194,6 +196,26 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigPerformanceMode(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	cfg := GetDefaultReplicaConfig()
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+	require.False(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf(PerformanceModeLowLatency)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.True(t, cfg.IsLowLatencyMode())
+
+	cfg.PerformanceMode = util.AddressOf("invalid")
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "unknown performance mode")
+
+	cfg.PerformanceMode = nil
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	require.Equal(t, PerformanceModeThroughput, util.GetOrZero(cfg.PerformanceMode))
+}
+
 // TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
 // explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
@@ -227,6 +249,30 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
 }
 
+func TestConsistentConfigSpoolDiskQuota(t *testing.T) {
+	newConfig := func() *ConsistentConfig {
+		cfg := GetDefaultReplicaConfig().Consistent
+		cfg.Level = util.AddressOf(string(redo.ConsistentLevelEventual))
+		cfg.Storage = util.AddressOf("blackhole://")
+		return cfg
+	}
+
+	cfg := newConfig()
+	cfg.SpoolDiskQuota = nil
+	require.NoError(t, cfg.validateAndAdjust(false))
+	require.Equal(t, redo.DefaultSpoolDiskQuota, util.GetOrZero(cfg.SpoolDiskQuota))
+
+	for _, quota := range []int64{0, -1} {
+		cfg = newConfig()
+		cfg.SpoolDiskQuota = util.AddressOf(quota)
+		require.ErrorContains(t, cfg.validateAndAdjust(false), "consistent.spool-disk-quota")
+	}
+
+	cfg = newConfig()
+	cfg.SpoolDiskQuota = util.AddressOf(int64(1024))
+	require.NoError(t, cfg.validateAndAdjust(false))
+}
+
 func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	config.Consistent.Level = util.AddressOf("eventual")
@@ -235,6 +281,10 @@ func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
 	sinkURI, err := url.Parse("blackhole://")
 	require.NoError(t, err)
 	require.Error(t, config.ValidateAndAdjust(sinkURI))
+	config.Consistent.Storage = util.AddressOf("s3://bucket/%zz?secret-access-key=redo-secret-sentinel")
+	err = config.ValidateAndAdjust(sinkURI)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+	require.NotContains(t, err.Error(), "redo-secret-sentinel")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
