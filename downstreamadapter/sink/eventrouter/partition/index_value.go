@@ -60,9 +60,6 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 			}
 			if tableInfo.IsHandleKey(col.ID) {
 				val := common.ExtractColVal(&rowData, col, idx)
-				if val == nil {
-					continue
-				}
 				r.hasher.Write([]byte(col.Name.O), []byte(common.ColumnValueString(val)))
 			}
 		}
@@ -78,9 +75,6 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 		for idx := 0; idx < len(names); idx++ {
 			colInfo := tableInfo.GetColumns()[offsets[idx]]
 			value := common.ExtractColVal(&rowData, colInfo, offsets[idx])
-			if value == nil {
-				continue
-			}
 			r.hasher.Write([]byte(names[idx]), []byte(common.ColumnValueString(value)))
 		}
 	}
