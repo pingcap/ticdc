@@ -1004,6 +1004,86 @@ func TestGroupEventsByTable(t *testing.T) {
 	})
 }
 
+func TestPrepareDMLsMaxMultiUpdateRowSize(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("CREATE TABLE t (id INT PRIMARY KEY, payload TEXT)")
+	tableInfo := helper.GetTableInfo(job)
+
+	testCases := []struct {
+		name                  string
+		prePayloadSize        int
+		payloadSize           int
+		maxMultiUpdateRowSize int
+		isTiDB                bool
+		expectedStatements    int
+	}{
+		{"large rows default threshold", 16384, 16384, 1024, true, 2},
+		{"large rows maximum threshold", 16384, 16384, 8192, true, 2},
+		{"small rows", 16, 16, 1024, true, 1},
+		{"batch updates disabled", 16, 16, 0, true, 2},
+		// Each row image also contains an eight-byte primary key.
+		{"below threshold", 503, 503, 1024, true, 1},
+		{"at threshold", 504, 504, 1024, true, 2},
+		{"large previous row", 16384, 16, 1024, true, 2},
+		{"large current row", 16, 16384, 1024, true, 2},
+		{"mysql downstream", 16, 16, 1024, false, 2},
+	}
+	for _, rowsPerEvent := range []int{1, 2} {
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("rowsPerEvent=%d/%s", rowsPerEvent, tc.name), func(t *testing.T) {
+				writer, db, _ := newTestMysqlWriter(t)
+				defer db.Close()
+				writer.cfg.BatchDMLEnable = true
+				writer.cfg.SafeMode = false
+				writer.cfg.IsTiDB = tc.isTiDB
+				writer.cfg.MaxMultiUpdateRowCount = 40
+				writer.cfg.MaxMultiUpdateRowSize = tc.maxMultiUpdateRowSize
+
+				prePayload := strings.Repeat("a", tc.prePayloadSize)
+				payload := strings.Repeat("b", tc.payloadSize)
+				dispatcherID := common.NewDispatcherID()
+				var events []*commonEvent.DMLEvent
+				for startID := 1; startID <= 2; startID += rowsPerEvent {
+					commitTs := uint64(100 + startID)
+					event := commonEvent.NewDMLEvent(dispatcherID, tableInfo.TableName.TableID, commitTs-1, commitTs, tableInfo)
+					event.ReplicatingTs = 1
+					event.Length = int32(rowsPerEvent)
+					event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2*rowsPerEvent)
+					for id := startID; id < startID+rowsPerEvent; id++ {
+						event.RowTypes = append(event.RowTypes, common.RowTypeUpdate, common.RowTypeUpdate)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, prePayload)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, payload)
+					}
+					events = append(events, event)
+				}
+
+				require.True(t, writer.shouldGenBatchSQL(tableInfo, events))
+				dmls, err := writer.prepareDMLs(events)
+				require.NoError(t, err)
+				defer dmlsPool.Put(dmls)
+				require.Len(t, dmls.sqls, tc.expectedStatements)
+				require.Len(t, dmls.values, tc.expectedStatements)
+				require.Len(t, dmls.rowTypes, tc.expectedStatements)
+				for i, sql := range dmls.sqls {
+					require.Equal(t, common.RowTypeUpdate, dmls.rowTypes[i])
+					if tc.expectedStatements == 1 {
+						require.Contains(t, sql, "CASE WHEN")
+						require.Equal(t, []any{int64(1), int64(1), int64(2), int64(2), int64(1), payload, int64(2), payload, int64(1), int64(2)}, dmls.values[i])
+					} else {
+						require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `payload` = ? WHERE `id` = ? LIMIT 1", sql)
+						id := int64(i + 1)
+						require.Equal(t, []any{id, payload, id}, dmls.values[i])
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
