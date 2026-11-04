@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -216,7 +215,8 @@ func (r *regionFailureHandler) Report(errInfo regionErrorInfo) {
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		r.onTableDrained(errInfo.subscribedSpan)
+		// defer span cleanup to Run so `Report` never calls back into dynstream.
+		r.cache.addDrainedSpan(errInfo.subscribedSpan)
 		return
 	}
 	r.cache.add(errInfo)
@@ -228,6 +228,9 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 	defer r.cancelRecoveries()
 
 	handleCachedErrors := func() error {
+		for _, span := range r.cache.popDrainedSpans() {
+			r.onTableDrained(span)
+		}
 		for {
 			batch := r.cache.popBatch(errCacheBatchSize)
 			for _, errInfo := range batch {
@@ -285,7 +288,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 	}
 	retryRange := func() {
 		priority := normalizeScanPriority(errInfo.scanPriority)
-		if priority == cdcpb.ScanPriority_SCAN_PRIORITY_LOW {
+		if priority == ScanPriorityLow {
 			priority = errInfo.subscribedSpan.priorityPolicy.resolve(
 				priority,
 				errInfo.resolvedTs(),
@@ -405,8 +408,9 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 
 type errCache struct {
 	sync.Mutex
-	cache  []regionErrorInfo
-	notify chan struct{}
+	cache        []regionErrorInfo
+	drainedSpans []*subscribedSpan
+	notify       chan struct{}
 }
 
 const errCacheBatchSize = 1024
@@ -422,10 +426,29 @@ func (e *errCache) add(errInfo regionErrorInfo) {
 	e.Lock()
 	defer e.Unlock()
 	e.cache = append(e.cache, errInfo)
+	e.signal()
+}
+
+func (e *errCache) addDrainedSpan(span *subscribedSpan) {
+	e.Lock()
+	defer e.Unlock()
+	e.drainedSpans = append(e.drainedSpans, span)
+	e.signal()
+}
+
+func (e *errCache) signal() {
 	select {
 	case e.notify <- struct{}{}:
 	default:
 	}
+}
+
+func (e *errCache) popDrainedSpans() []*subscribedSpan {
+	e.Lock()
+	defer e.Unlock()
+	drainedSpans := e.drainedSpans
+	e.drainedSpans = nil
+	return drainedSpans
 }
 
 func (e *errCache) popBatch(limit int) []regionErrorInfo {

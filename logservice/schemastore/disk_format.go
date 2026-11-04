@@ -688,12 +688,15 @@ func isTableRawKey(key []byte) bool {
 	return strings.HasPrefix(string(key), mTablePrefix)
 }
 
-func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
-	addSchemaInfoToBatchWithEncryption(batch, ts, info, nil, 0)
-}
-
 // addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
-func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *model.DBInfo, encMgr encryption.EncryptionManager, keyspaceID uint32) {
+func addSchemaInfoToBatchWithEncryption(
+	ctx context.Context,
+	batch *pebble.Batch,
+	ts uint64,
+	info *model.DBInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
+) error {
 	schemaKey, err := schemaInfoKey(ts, info.ID)
 	if err != nil {
 		log.Fatal("generate schema key failed", zap.Error(err))
@@ -706,9 +709,9 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
-		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, schemaValue)
+		encryptedValue, err := encMgr.EncryptData(ctx, keyspaceID, schemaValue)
 		if err != nil {
-			log.Fatal("encrypt schema info failed", zap.Error(err))
+			return err
 		}
 		schemaValue = encryptedValue
 		keyMask |= encryptionLayerKeyMask
@@ -716,10 +719,12 @@ func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *mo
 
 	schemaKey = keyWithMask(schemaKey, keyMask)
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
+	return nil
 }
 
 // addTableInfoToBatchWithEncryption encrypts and adds table info to batch if encryption is enabled
 func addTableInfoToBatchWithEncryption(
+	ctx context.Context,
 	batch *pebble.Batch,
 	ts uint64,
 	dbInfo *model.DBInfo,
@@ -751,9 +756,9 @@ func addTableInfoToBatchWithEncryption(
 	keyMask := uint64(0)
 	// Encrypt if encryption is enabled
 	if encMgr != nil {
-		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, tableInfoEntryValue)
+		encryptedValue, err := encMgr.EncryptData(ctx, keyspaceID, tableInfoEntryValue)
 		if err != nil {
-			log.Fatal("encrypt table info entry failed", zap.Error(err))
+			return 0, "", nil, marshalBuf, err
 		}
 		tableInfoEntryValue = encryptedValue
 		keyMask |= encryptionLayerKeyMask
@@ -784,15 +789,17 @@ func addTableInfoToBatchWithEncryption(
 // persistSchemaSnapshot write database/table/partition info to disks.
 // Notes: The GC may happens during the snapshotMeta is using, so the caller must be careful.
 func persistSchemaSnapshot(
+	ctx context.Context,
 	db *pebble.DB,
 	tiStore kv.Storage,
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
-	return persistSchemaSnapshotWithEncryption(db, tiStore, snapTs, collectMetaInfo, nil, 0)
+	return persistSchemaSnapshotWithEncryption(ctx, db, tiStore, snapTs, collectMetaInfo, nil, 0)
 }
 
 func persistSchemaSnapshotWithEncryption(
+	ctx context.Context,
 	db *pebble.DB,
 	tiStore kv.Storage,
 	snapTs uint64,
@@ -801,15 +808,23 @@ func persistSchemaSnapshotWithEncryption(
 	keyspaceID uint32,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		meta := getSnapshotMeta(tiStore, snapTs)
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, nil, ctxErr
+			}
 			// The snapshot is already GC'ed and retrying the same ts cannot recover.
 			if isGCLifeTimeError(err) {
 				return nil, nil, nil, err
 			}
-			time.Sleep(100 * time.Millisecond)
+			if err := waitSchemaSnapshotRetry(ctx); err != nil {
+				return nil, nil, nil, err
+			}
 			log.Warn("list databases failed, retrying", zap.Error(err))
 			continue
 		}
@@ -824,12 +839,20 @@ func persistSchemaSnapshotWithEncryption(
 		}
 		var tableInfoEntryMarshalBuf []byte
 		for _, dbInfo := range dbInfos {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
 			if filter.IsSysSchema(dbInfo.Name.O) {
 				continue
 			}
 			for {
 				batch := db.NewBatch()
-				addSchemaInfoToBatchWithEncryption(batch, snapTs, dbInfo, encMgr, keyspaceID)
+				if err := addSchemaInfoToBatchWithEncryption(
+					ctx, batch, snapTs, dbInfo, encMgr, keyspaceID,
+				); err != nil {
+					_ = batch.Close()
+					return nil, nil, nil, err
+				}
 				var tablesInDB map[int64]bool
 				if collectMetaInfo {
 					tablesInDB = make(map[int64]bool)
@@ -837,8 +860,12 @@ func persistSchemaSnapshotWithEncryption(
 
 				var callbackErr error
 				err := meta.IterTables(dbInfo.ID, func(tableInfo *model.TableInfo) error {
+					if err := ctx.Err(); err != nil {
+						callbackErr = err
+						return err
+					}
 					tableID, tableName, partitionIDs, marshalBuf, err := addTableInfoToBatchWithEncryption(
-						batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
+						ctx, batch, snapTs, dbInfo, tableInfo, encMgr, keyspaceID,
 						tableInfoEntryMarshalBuf)
 					tableInfoEntryMarshalBuf = marshalBuf
 					if err != nil {
@@ -872,6 +899,10 @@ func persistSchemaSnapshotWithEncryption(
 					_ = batch.Close()
 					return nil, nil, nil, callbackErr
 				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					_ = batch.Close()
+					return nil, nil, nil, ctxErr
+				}
 				if err == nil {
 					if err := batch.Commit(pebble.NoSync); err != nil {
 						_ = batch.Close()
@@ -898,16 +929,32 @@ func persistSchemaSnapshotWithEncryption(
 					return nil, nil, nil, err
 				}
 
-				time.Sleep(100 * time.Millisecond)
+				if err := waitSchemaSnapshotRetry(ctx); err != nil {
+					return nil, nil, nil, err
+				}
 				log.Warn("get tables failed", zap.Error(err))
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		writeGcTs(db, snapTs)
 
 		log.Info("finish write schema snapshot",
 			zap.Any("duration", time.Since(start).Seconds()))
 		return databaseMap, tableMap, partitionMap, nil
+	}
+}
+
+func waitSchemaSnapshotRetry(ctx context.Context) error {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

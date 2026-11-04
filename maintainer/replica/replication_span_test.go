@@ -32,6 +32,24 @@ func TestUpdateStatus(t *testing.T) {
 	require.Equal(t, uint64(11), replicaSet.status.Load().CheckpointTs)
 }
 
+func TestUpdateRemovedStatus(t *testing.T) {
+	t.Parallel()
+
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
+	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{ComponentStatus: heartbeatpb.ComponentState_Working, CheckpointTs: 20})
+
+	// A lower checkpointTs still applies the terminal state but keeps the checkpointTs.
+	stopped := &heartbeatpb.TableSpanStatus{ComponentStatus: heartbeatpb.ComponentState_Stopped, CheckpointTs: 15}
+	replicaSet.UpdateRemovedStatus(stopped)
+	require.Equal(t, heartbeatpb.ComponentState_Stopped, replicaSet.GetStatus().ComponentStatus)
+	require.Equal(t, uint64(20), replicaSet.GetStatus().CheckpointTs)
+	require.Equal(t, uint64(15), stopped.CheckpointTs)
+
+	replicaSet.UpdateRemovedStatus(&heartbeatpb.TableSpanStatus{ComponentStatus: heartbeatpb.ComponentState_Removed, CheckpointTs: 30})
+	require.Equal(t, heartbeatpb.ComponentState_Removed, replicaSet.GetStatus().ComponentStatus)
+	require.Equal(t, uint64(30), replicaSet.GetStatus().CheckpointTs)
+}
+
 func TestNewRemoveDispatcherMessage(t *testing.T) {
 	t.Parallel()
 

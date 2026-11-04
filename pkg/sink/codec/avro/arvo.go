@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -494,6 +495,8 @@ func (a *BatchEncoder) value2AvroSchema(
 	input *avroEncodeInput,
 ) (string, error) {
 	if a.config.EnableRowChecksum {
+		// The table schema is shared with row chunks; only reorder this input's copy.
+		input.colInfos = slices.Clone(input.colInfos)
 		sort.Sort(input)
 	}
 

@@ -28,6 +28,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -199,16 +200,50 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
-	s, _ := c.Redacted().Marshal()
+	s, _ := c.MaskedForDisplay().Marshal()
 	return s
 }
 
-// Redacted omits the metering destination from the public configuration view.
-// It does not change the configuration used by clients or Clone.
-func (c *ServerConfig) Redacted() *ServerConfig {
-	clone := *c
-	clone.Metering = nil
-	return &clone
+// MaskedForDisplay returns a copy suitable for logs and API responses.
+// It masks the KMS credentials and drops the metering destination, which
+// carries its own storage credentials.
+// It does not modify the active server configuration.
+func (c *ServerConfig) MaskedForDisplay() *ServerConfig {
+	if c == nil {
+		return nil
+	}
+	masked := *c
+	masked.Metering = nil
+	if c.Encryption != nil {
+		encryption := *c.Encryption
+		masked.Encryption = &encryption
+		if c.Encryption.KMS != nil {
+			kms := *c.Encryption.KMS
+			encryption.KMS = &kms
+			if kms.AWS != nil {
+				aws := *kms.AWS
+				aws.Endpoint = util.MaskSensitiveDataInURIForError(aws.Endpoint)
+				aws.AccessKey = maskConfiguredSecret(aws.AccessKey)
+				aws.SecretAccessKey = maskConfiguredSecret(aws.SecretAccessKey)
+				aws.SessionToken = maskConfiguredSecret(aws.SessionToken)
+				kms.AWS = &aws
+			}
+			if kms.GCP != nil {
+				gcp := *kms.GCP
+				gcp.Endpoint = util.MaskSensitiveDataInURIForError(gcp.Endpoint)
+				gcp.CredentialsJSON = maskConfiguredSecret(gcp.CredentialsJSON)
+				kms.GCP = &gcp
+			}
+		}
+	}
+	return &masked
+}
+
+func maskConfiguredSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "xxxxx"
 }
 
 // Clone clones a replication

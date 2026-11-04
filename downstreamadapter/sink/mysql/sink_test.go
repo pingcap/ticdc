@@ -22,14 +22,23 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestMysqlResult(t *testing.T, rowsAffected ...int64) *mysqlmock.MockResult {
+	t.Helper()
+	result := mysqlmock.NewMockResult(gomock.NewController(t))
+	result.EXPECT().AllRowsAffected().Return(rowsAffected)
+	return result
+}
 
 func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -237,7 +246,7 @@ func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
-func TestMysqlSinkBasicFunctionality(t *testing.T) {
+func TestMysqlSinkFlushEvents(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
 	var count atomic.Int64
@@ -290,13 +299,15 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
 	ddlEvent2.PostFlush()
 
@@ -346,7 +357,7 @@ func TestMysqlSinkUsesSeparateDMLAndControlDBPools(t *testing.T) {
 
 	dmlMock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
@@ -383,7 +394,9 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	sink.AddDMLEvent(dmlEvent)
 
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return !sink.IsNormal()
+	}, 5*time.Second, 10*time.Millisecond, "the sink should stop being normal after the error")
 
 	err := mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -506,18 +519,20 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	// Set up mock expectations for DDL
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test1", 2, "test2", 3, "test3", 4, "test4", 5, "test5", 6, "test6", 7, "test7", 8, "test8", 9, "test9", 10, "test10").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 10, 0))
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(11, "test11", 12, "test12", 13, "test13", 14, "test14", 15, "test15", 16, "test16", 17, "test17", 18, "test18", 19, "test19", 20, "test20").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 10, 0))
 
 	// Add DML events
 	sink.AddDMLEvent(dmlEvent1)
 	sink.AddDMLEvent(dmlEvent2)
 
 	// Wait for processing
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "both DML events should be flushed")
 
 	// Verify all expectations were met
 	err := mock.ExpectationsWereMet()

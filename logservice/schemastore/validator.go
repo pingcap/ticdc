@@ -223,10 +223,9 @@ dbLoop:
 
 	verifier.closeAndWait()
 
-	log.Info("verifyTables completed", zap.Int("tableCount", len(verifier.tableInfos)), zap.Uint64("startTs", startTs))
-
 	if verifier.firstErr != nil {
 		return nil, nil, nil, nil, verifier.firstErr
 	}
+	log.Info("table replication eligibility verified", zap.Int("tableCount", len(verifier.tableInfos)), zap.Uint64("startTs", startTs))
 	return verifier.tableInfos, verifier.ineligibleTables, verifier.eligibleTables, verifier.allTables, nil
 }

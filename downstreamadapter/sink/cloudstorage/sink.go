@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -66,7 +67,7 @@ type sink struct {
 	lastSendCheckpointTsTime time.Time
 
 	cron       *cron.Cron
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -79,7 +80,7 @@ type sink struct {
 	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -89,7 +90,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	if _, err = columnselector.New(sinkConfig); err != nil {
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
@@ -104,9 +105,11 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+// New creates a cloud storage sink using the supplied changefeed configuration.
+//
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
 	keyspaceID uint32,
 ) (*sink, error) {
@@ -129,7 +132,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	columnSelectors, err := columnselector.New(sinkConfig)
+	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
@@ -137,14 +140,17 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "cloudstorage")
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
-			statistics.Close()
+			stats.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics, columnSelectors)
+	dmlWriters, err := newDMLWriters(
+		changefeedID, storage, cfg, encoderConfig,
+		util.GetOrZero(sinkConfig.EncoderConcurrency), ext, stats, columnSelectors,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +164,7 @@ func New(
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
+		statistics:               stats,
 		isNormal:                 atomic.NewBool(true),
 
 		ctx: ctx,
@@ -310,12 +316,8 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.Schema
 	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 		return err
 	}
-	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err := s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
-		if err != nil {
-			return "", err
-		}
-		return v.GetDDLType().String(), nil
+	return s.statistics.RecordDDLExecution(v.GetDDLType().String(), func() error {
+		return s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 	})
 }
 

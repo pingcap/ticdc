@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,9 +32,64 @@ import (
 func newLogCoordinatorForTest() *logCoordinator {
 	c := &logCoordinator{pdClock: pdutil.NewClock4Test()}
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
+	c.eventBrokerStates.m = make(map[node.ID]eventBrokerState)
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 	return c
+}
+
+func TestEventBrokerDispatcherCountReports(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	mc := messaging.NewMockMessageCenter()
+	c.messageCenter = mc
+	target := node.ID("capture")
+	c.nodes.m[target] = &node.Info{ID: target}
+	query := func(target node.ID) *logservicepb.EventBrokerDispatcherCountResponse {
+		t.Helper()
+		message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic,
+			&logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: target.String()})
+		message.From = "coordinator"
+		require.NoError(t, c.handleMessage(t.Context(), message))
+		reply := <-mc.GetMessageChannel()
+		require.Equal(t, message.From, reply.To)
+		require.Equal(t, messaging.CoordinatorTopic, reply.Topic)
+		response := reply.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse)
+		require.Equal(t, target.String(), response.TargetNodeId)
+		return response
+	}
+	// A new log coordinator has no reports, including for captures with no brokers.
+	require.Nil(t, query(target).Report)
+	report := &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 3, RegistrationsStopped: true}
+	message := messaging.NewSingleTargetMessage("log-coordinator", messaging.LogCoordinatorTopic, report)
+	message.From = target
+	require.NoError(t, c.handleMessage(t.Context(), message))
+	require.Equal(t, report, query(target).Report)
+
+	// A late report from before admission closed cannot replace a current
+	// report. The cache owns its copy of the message.
+	report.DispatcherCount = 0
+	c.updateEventBrokerState(target, &logservicepb.EventBrokerDispatcherCount{})
+	require.Equal(t, uint32(3), query(target).Report.DispatcherCount)
+	state := c.eventBrokerStates.m[target]
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
+	c.eventBrokerStates.m[target] = state
+	require.Nil(t, query(target).Report)
+
+	c.updateEventBrokerState(target, report)
+	require.Zero(t, query(target).Report.DispatcherCount)
+	// The replacement capture has a new ID and cannot inherit the old zero.
+	replacement := node.ID("restarted-capture")
+	c.handleNodeChange(map[node.ID]*node.Info{target: {ID: target}, replacement: {ID: replacement}})
+	require.Nil(t, query(replacement).Report)
+	c.handleNodeChange(map[node.ID]*node.Info{replacement: {ID: replacement}})
+	c.updateEventBrokerState(target, report)
+	require.Nil(t, query(target).Report)
+	require.Nil(t, query(replacement).Report)
+	require.Empty(t, c.eventBrokerStates.m)
+
+	c.updateEventBrokerState(replacement, &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 3})
+	require.False(t, query(replacement).Report.RegistrationsStopped)
+	require.Equal(t, uint32(3), query(replacement).Report.DispatcherCount)
 }
 
 func TestGetCandidateNodes(t *testing.T) {
@@ -202,6 +258,13 @@ func TestGetCandidateNodes(t *testing.T) {
 		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
+	// STOPPING brokers keep reusable subscriptions in the event store, but
+	// must no longer be offered as reuse candidates, even after report expiry.
+	coordinator.updateEventBrokerState(nodeID2, &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true})
+	state := coordinator.eventBrokerStates.m[nodeID2]
+	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
+	coordinator.eventBrokerStates.m[nodeID2] = state
+	require.Empty(t, coordinator.getCandidateNodes(nodeID3, &span1, startTs))
 }
 
 func TestGetCandidateNodesIgnoreDifferentKeyspace(t *testing.T) {
@@ -271,6 +334,10 @@ func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
 
 func TestUpdateChangefeedStates(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 
 	cfID1 := common.NewChangefeedID4Test("default", "test1")
 	cfID2 := common.NewChangefeedID4Test("default", "test2")
@@ -363,8 +430,55 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestResolvedTsMetricsAfterDelayedReportFromRemovedNode(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	clock := pdutil.NewClock4Test()
+	clock.(*pdutil.Clock4Test).SetTS(oracle.ComposeTS(400_000, 0))
+	c.pdClock = clock
+
+	cfID := common.NewChangefeedID4Test("default", "delayed-node-report")
+	t.Cleanup(func() {
+		changefeedResolvedTsGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+		changefeedResolvedTsLagGauge.DeleteLabelValues(cfID.Keyspace(), cfID.Name())
+	})
+	removedNode := node.ID("removed-node")
+	liveNode := node.ID("live-node")
+	c.handleNodeChange(map[node.ID]*node.Info{
+		removedNode: {ID: removedNode},
+		liveNode:    {ID: liveNode},
+	})
+	report := func(from node.ID, physicalTs int64) {
+		c.updateChangefeedStates(from, &logservicepb.ChangefeedStates{
+			States: []*logservicepb.ChangefeedStateEntry{
+				{ChangefeedID: cfID.ToPB(), ResolvedTs: oracle.ComposeTS(physicalTs, 0)},
+			},
+		})
+	}
+	report(removedNode, 100_000)
+	report(liveNode, 200_000)
+	require.Equal(t, oracle.ComposeTS(100_000, 0), c.getMinLogServiceResolvedTs(cfID))
+
+	c.handleNodeChange(map[node.ID]*node.Info{liveNode: {ID: liveNode}})
+	require.NotContains(t, c.changefeedStates.m[cfID.ID()].nodeStates, removedNode)
+	// Deliver an in-flight report after node removal to reproduce the race.
+	report(removedNode, 100_000)
+	report(liveNode, 300_000)
+
+	// A departed node must not pin resolved TS or inflate its lag.
+	state := c.changefeedStates.m[cfID.ID()]
+	assert.NotContains(t, state.nodeStates, removedNode)
+	assert.Equal(t, float64(300_000), testutil.ToFloat64(state.resolvedTsGauge),
+		"resolved TS must follow the live node")
+	assert.Equal(t, float64(100), testutil.ToFloat64(state.resolvedTsLagGauge),
+		"lag must be PD time (400s) minus the live resolved TS (300s)")
+}
+
 func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -397,6 +511,11 @@ func TestUpdateChangefeedStatesRefreshesMetricsImmediately(t *testing.T) {
 
 func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+		"node-3": {ID: "node-3"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))
@@ -446,6 +565,10 @@ func TestUpdateChangefeedStatesWaitsForCompleteReportingRound(t *testing.T) {
 
 func TestPartialReportingRoundKeepsLastPublishedMetrics(t *testing.T) {
 	c := newLogCoordinatorForTest()
+	c.handleNodeChange(map[node.ID]*node.Info{
+		"node-1": {ID: "node-1"},
+		"node-2": {ID: "node-2"},
+	})
 	mockPDClock := c.pdClock.(*pdutil.Clock4Test)
 	pdTime := time.Now().Truncate(time.Millisecond)
 	mockPDClock.SetTS(oracle.GoTimeToTS(pdTime))

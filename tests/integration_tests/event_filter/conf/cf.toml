@@ -30,3 +30,10 @@ ignore-event = ["create table"]
 [[filter.event-filters]]
 matcher = ["event_filter.t_rename4"]
 ignore-event = ["rename table"]
+
+# The event filter of t_fk_child is what triggers
+# https://github.com/pingcap/ticdc/issues/6275 , and the test data has no delete
+# on that table, so the filter does not change what is replicated.
+[[filter.event-filters]]
+matcher = ["event_filter.t_fk_child"]
+ignore-event = ["delete"]

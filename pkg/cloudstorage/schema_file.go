@@ -237,15 +237,27 @@ func (t *SchemaFile) TableInfo() *common.TableInfo {
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
+	indexColumns := make([]*model.IndexColumn, 0, 1)
 	for _, col := range t.Columns {
 		tiCol := col.toTiColumnInfo(nextMockID)
+		tiCol.Offset = len(tidbTableInfo.Columns)
 		if mysql.HasPriKeyFlag(tiCol.GetFlag()) {
-			// use PKIsHandle to make sure that the primary keys can be detected
-			tidbTableInfo.PKIsHandle = true
+			indexColumns = append(indexColumns, &model.IndexColumn{Name: tiCol.Name, Offset: tiCol.Offset})
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID++
 	}
+	if len(indexColumns) != 0 {
+		tidbTableInfo.Indices = append(tidbTableInfo.Indices, &model.IndexInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("primary"),
+			Primary: true,
+			Unique:  true,
+			State:   model.StatePublic,
+			Columns: indexColumns,
+		})
+	}
+	common.SetHandleKeyFlags(tidbTableInfo)
 	return common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
 }
 

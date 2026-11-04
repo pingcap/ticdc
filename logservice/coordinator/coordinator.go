@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -41,6 +40,8 @@ const (
 	eventStoreTopic           = messaging.EventStoreTopic
 	logCoordinatorTopic       = messaging.LogCoordinatorTopic
 	logCoordinatorClientTopic = messaging.LogCoordinatorClientTopic
+	// Missing or expired broker reports must not be returned as zero.
+	eventBrokerReportTTL = 3 * time.Second
 )
 
 type LogCoordinator interface {
@@ -50,6 +51,11 @@ type LogCoordinator interface {
 type requestAndTarget struct {
 	req    *logservicepb.ReusableEventServiceRequest
 	target node.ID
+}
+
+type eventBrokerState struct {
+	report     logservicepb.EventBrokerDispatcherCount
+	receivedAt time.Time
 }
 
 type changefeedState struct {
@@ -81,6 +87,11 @@ type logCoordinator struct {
 		m map[node.ID]*logservicepb.EventStoreState
 	}
 
+	eventBrokerStates struct {
+		sync.Mutex
+		m map[node.ID]eventBrokerState
+	}
+
 	changefeedStates struct {
 		sync.Mutex
 		// GID -> changefeedState
@@ -99,6 +110,7 @@ func New() LogCoordinator {
 	}
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
+	c.eventBrokerStates.m = make(map[node.ID]eventBrokerState)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 
 	// recv and handle messages
@@ -124,9 +136,11 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 		case <-broadcastTick.C:
 			// send broadcast message to all nodes
 			c.nodes.Lock()
-			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
+			messages := make([]*messaging.TargetMessage, 0, 3*len(c.nodes.m))
 			for id := range c.nodes.m {
 				messages = append(messages, messaging.NewSingleTargetMessage(id, eventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
+				messages = append(messages, messaging.NewSingleTargetMessage(
+					id, messaging.EventServiceTopic, &common.LogCoordinatorBroadcastRequest{}))
 				messages = append(messages, messaging.NewSingleTargetMessage(id, logCoordinatorClientTopic, &common.LogCoordinatorBroadcastRequest{}))
 			}
 			c.nodes.Unlock()
@@ -155,6 +169,10 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
 			c.updateEventStoreState(targetMessage.From, msg)
+		case *logservicepb.EventBrokerDispatcherCount:
+			c.updateEventBrokerState(targetMessage.From, msg)
+		case *logservicepb.EventBrokerDispatcherCountRequest:
+			c.sendEventBrokerDispatcherCount(targetMessage.From, msg)
 		case *logservicepb.ChangefeedStates:
 			c.updateChangefeedStates(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
@@ -205,6 +223,10 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 			delete(c.eventStoreStates.m, id)
 			c.eventStoreStates.Unlock()
 
+			c.eventBrokerStates.Lock()
+			delete(c.eventBrokerStates.m, id)
+			c.eventBrokerStates.Unlock()
+
 			c.changefeedStates.Lock()
 			for _, state := range c.changefeedStates.m {
 				delete(state.nodeStates, id)
@@ -229,7 +251,46 @@ func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logserv
 	c.eventStoreStates.m[nodeID] = newState
 }
 
+func (c *logCoordinator) updateEventBrokerState(nodeID node.ID, report *logservicepb.EventBrokerDispatcherCount) {
+	c.nodes.Lock()
+	defer c.nodes.Unlock()
+	if _, alive := c.nodes.m[nodeID]; !alive {
+		return
+	}
+	c.eventBrokerStates.Lock()
+	defer c.eventBrokerStates.Unlock()
+	previous, ok := c.eventBrokerStates.m[nodeID]
+	// Capture IDs identify process lifetimes; admission cannot reopen for the same ID.
+	if ok && previous.report.RegistrationsStopped && !report.RegistrationsStopped {
+		return
+	}
+	c.eventBrokerStates.m[nodeID] = eventBrokerState{report: *report, receivedAt: time.Now()}
+}
+
+func (c *logCoordinator) sendEventBrokerDispatcherCount(target node.ID, req *logservicepb.EventBrokerDispatcherCountRequest) {
+	response := &logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: req.TargetNodeId,
+	}
+	c.eventBrokerStates.Lock()
+	state, ok := c.eventBrokerStates.m[node.ID(req.TargetNodeId)]
+	if ok && time.Since(state.receivedAt) < eventBrokerReportTTL {
+		response.Report = &state.report
+	}
+	c.eventBrokerStates.Unlock()
+	// Missing or stale reports remain unknown; the coordinator retries its query.
+	_ = c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(target, messaging.CoordinatorTopic, response))
+}
+
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
+	// Hold the membership lock through the update so node removal cannot
+	// clean up a report and then have an in-flight report recreate it.
+	// Keep the same lock order as handleNodeChange: nodes, then changefeedStates.
+	c.nodes.Lock()
+	defer c.nodes.Unlock()
+	if _, alive := c.nodes.m[from]; !alive {
+		return
+	}
+
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
 	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
@@ -259,8 +320,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					zap.Uint64("changefeedGIDHigh", gid.High))
 				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
 				if len(state.nodeStates) == 0 {
-					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
-					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
 					log.Info("changefeed state removed as it has no active nodes",
 						zap.Stringer("changefeedID", state.cfID),
@@ -286,8 +347,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				nodeStates:                   make(map[node.ID]uint64),
 				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
 				nodeReportPhyTs:              make(map[node.ID]int64),
-				resolvedTsGauge:              metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-				resolvedTsLagGauge:           metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsGauge:              changefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge:           changefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
 		}
 		changefeedState := c.changefeedStates.m[gid]
@@ -427,7 +488,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	if len(candidateSubs) > 0 {
 		c.nodes.Lock()
 		for _, candidate := range candidateSubs {
-			if c.nodes.m[candidate.nodeID] != nil {
+			c.eventBrokerStates.Lock()
+			stopped := c.eventBrokerStates.m[candidate.nodeID].report.RegistrationsStopped
+			c.eventBrokerStates.Unlock()
+			if c.nodes.m[candidate.nodeID] != nil && !stopped {
 				subIDs = append(subIDs, candidate.subscriptionID)
 				candidateNodes = append(candidateNodes, string(candidate.nodeID))
 			}

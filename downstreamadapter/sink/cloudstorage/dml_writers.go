@@ -17,14 +17,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	serverconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/spool"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
@@ -32,11 +32,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const cloudStorageSpoolDirectory = "cloudstorage-sink-spool"
+
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	statistics   *metrics.Statistics
-
 	// msgCh is the only unbounded queue in the storage sink pipeline.
 	// External callers push tasks into it, addTasks consumes it, and
 	// dmlWriters.close is the only place allowed to close it.
@@ -61,20 +61,26 @@ func newDMLWriters(
 	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
+	encoderConcurrency int,
 	extension string,
-	statistics *metrics.Statistics,
+	stats *statistics.Statistics,
 	columnSelector *columnselector.ColumnSelectors,
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
 		encoderConfig,
-		defaultEncodingConcurrency,
+		encoderConcurrency,
 		config.WorkerCount,
 	)
 	spool, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(config.SpoolBaseDir),
+		spool.WithDirectoryNamespace(
+			cloudStorageSpoolDirectory,
+			serverconfig.GetGlobalServerConfig().AdvertiseAddr,
+		),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+		spool.WithMetrics(newSpoolMetrics(changefeedID)),
 	)
 	if err != nil {
 		return nil, err
@@ -82,12 +88,11 @@ func newDMLWriters(
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spool)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, stats, spool)
 	}
 
 	return &dmlWriters{
 		changefeedID:   changefeedID,
-		statistics:     statistics,
 		msgCh:          messageCh,
 		encodeGroup:    encoderGroup,
 		spool:          spool,
@@ -136,14 +141,14 @@ func (d *dmlWriters) run(ctx context.Context) error {
 func (d *dmlWriters) deleteMetrics() {
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
-	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
-	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
+	cloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
+	cloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {
@@ -191,7 +196,7 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
 	defer func() {
-		sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
+		cloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
 			Observe(time.Since(start).Seconds())
 	}()
 

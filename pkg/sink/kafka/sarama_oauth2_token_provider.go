@@ -15,16 +15,9 @@ package kafka
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"net/http"
-	"net/url"
-	"os"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/clientcredentials"
 )
 
 // tokenProvider is a user-defined callback for generating
@@ -56,69 +49,9 @@ func (t *tokenProvider) Token() (*sarama.AccessToken, error) {
 }
 
 func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvider, error) {
-	// grant_type is by default going to be set to 'client_credentials' by the
-	// client credentials library as defined by the spec, however non-compliant
-	// auth server implementations may want a custom type
-	endpointParams := url.Values{}
-	if o.sasl.oauth2.grantType != "" {
-		endpointParams.Set("grant_type", o.sasl.oauth2.grantType)
-	}
-
-	// audience is an optional parameter that can be used to specify the
-	// intended audience of the token.
-	if o.sasl.oauth2.audience != "" {
-		endpointParams.Set("audience", o.sasl.oauth2.audience)
-	}
-
-	tokenURL, err := url.Parse(o.sasl.oauth2.tokenURL)
+	tokenSource, err := newOAuthTokenSource(ctx, o.sasl.oauth2)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, err
 	}
-
-	if o.sasl.oauth2.caPath != "" {
-		ctx, err = contextWithOAuthCA(ctx, o.sasl.oauth2.caPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	cfg := clientcredentials.Config{
-		ClientID:       o.sasl.oauth2.clientID,
-		ClientSecret:   o.sasl.oauth2.clientSecret,
-		TokenURL:       tokenURL.String(),
-		EndpointParams: endpointParams,
-		Scopes:         o.sasl.oauth2.scopes,
-	}
-	return &tokenProvider{
-		tokenSource: cfg.TokenSource(ctx),
-	}, nil
-}
-
-func contextWithOAuthCA(ctx context.Context, caPath string) (context.Context, error) {
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
-	}
-
-	rootCAs, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
-	}
-	if !rootCAs.AppendCertsFromPEM(caPEM) {
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"OAuth2 CA file %q does not contain a valid certificate", caPath)
-	}
-
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
-			"cannot configure OAuth2 CA file %q with HTTP transport type %T",
-			caPath, http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	if transport.TLSClientConfig == nil {
-		transport.TLSClientConfig = &tls.Config{}
-	}
-	transport.TLSClientConfig.RootCAs = rootCAs
-	return context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Transport: transport}), nil
+	return &tokenProvider{tokenSource: tokenSource}, nil
 }

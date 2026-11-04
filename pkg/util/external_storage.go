@@ -66,7 +66,9 @@ func getExternalStorage(
 ) (storeapi.Storage, error) {
 	backEnd, err := objstore.ParseBackend(uri, opts)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
+		// Parser errors can quote the complete URI, including credentials.
+		return nil, errors.ErrExternalStorageAPI.GenWithStack(
+			"invalid external storage URI: %s", MaskSensitiveDataInURIForError(uri))
 	}
 
 	ret, err := objstore.New(ctx, backEnd, &storeapi.Options{

@@ -481,11 +481,11 @@ func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo) *ti
 		}
 	}
 	return &timodel.IndexInfo{
-		ID:      1,
 		Name:    ast.NewCIStr(indexSchema.Name),
 		Columns: indexColumns,
 		Unique:  indexSchema.Unique,
 		Primary: indexSchema.Primary,
+		State:   timodel.StatePublic,
 	}
 }
 
@@ -500,13 +500,16 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 		nextMockID := int64(1)
 		for _, col := range m.Columns {
 			tiCol := newTiColumnInfo(col, nextMockID, m.Indexes)
+			tiCol.Offset = len(tidbTableInfo.Columns)
 			nextMockID += 1
 			tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		}
-		for _, idx := range m.Indexes {
+		for i, idx := range m.Indexes {
 			index := newTiIndexInfo(idx, tidbTableInfo.Columns)
+			index.ID = int64(i) + 1
 			tidbTableInfo.Indices = append(tidbTableInfo.Indices, index)
 		}
+		commonType.SetHandleKeyFlags(tidbTableInfo)
 	}
 	return commonType.NewTableInfo4Decoder(schema, tidbTableInfo)
 }
@@ -655,16 +658,30 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 			Version:   msg.Checksum.Version,
 		}}
 
-		err := common.VerifyChecksum(result, db)
+		err := common.VerifyChecksum(result, db, timestampLocations(msg.Data, columns), timestampLocations(msg.Old, columns))
 		if err != nil || msg.Checksum.Corrupted {
-			log.Warn("consumer detect checksum corrupted",
-				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-			return nil
-
+			log.Panic("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table),
+				zap.Uint64("commitTs", msg.CommitTs), zap.Bool("corrupted", msg.Checksum.Corrupted),
+				zap.Error(err))
 		}
 	}
 
 	return result
+}
+
+func timestampLocations(data map[string]any, columns []*timodel.ColumnInfo) map[string]string {
+	var locations map[string]string
+	for _, col := range columns {
+		if col.GetType() != mysql.TypeTimestamp || data[col.Name.O] == nil {
+			continue
+		}
+		if locations == nil {
+			locations = make(map[string]string)
+		}
+		locations[col.Name.O] = data[col.Name.O].(map[string]any)["location"].(string)
+	}
+	return locations
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {

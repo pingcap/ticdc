@@ -15,6 +15,7 @@ package mysql
 
 import (
 	"bytes"
+	"encoding/binary"
 	"hash/fnv"
 	"strings"
 
@@ -71,8 +72,9 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 			val = strings.ToLower(val)
 		}
 
-		key = append(key, []byte(val)...)
-		key = append(key, 0)
+		// Length-prefix each value so embedded NUL bytes cannot obscure column boundaries.
+		key = binary.AppendUvarint(key, uint64(len(val)))
+		key = append(key, val...)
 	}
 	return key
 }

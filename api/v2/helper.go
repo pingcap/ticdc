@@ -29,18 +29,47 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/server"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
 
-func getChangeFeed(host, keyspaceName, cfName string) (ChangeFeedInfo, error) {
+// registerImportTaskPrefix is where Lightning and BR register running import
+// and restore tasks in the upstream PD's embedded etcd.
+const registerImportTaskPrefix = "/tidb/brie/import"
+
+func hasRunningImport(ctx context.Context, cli etcd.Client, upstreamID uint64) error {
+	resp, err := cli.Get(ctx, registerImportTaskPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+
+	for _, kv := range resp.Kvs {
+		lease, err := cli.TimeToLive(ctx, clientv3.LeaseID(kv.Lease))
+		if err != nil {
+			return errors.WrapError(errors.ErrPDEtcdAPIError, err)
+		}
+		if lease.TTL > 0 {
+			return errors.ErrUpstreamHasRunningImport.GenWithStackByArgs(upstreamID)
+		}
+	}
+	return nil
+}
+
+func (h *OpenAPIV2) getChangeFeed(ctx context.Context, keyspaceName, cfName string) (ChangeFeedInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	coordinator, err := h.server.GetCoordinatorInfo(ctx)
+	if err != nil {
+		return ChangeFeedInfo{}, err
+	}
+	host := coordinator.AdvertiseAddr
 	security := config.GetGlobalServerConfig().Security
 
 	uri := fmt.Sprintf("/api/v2/changefeeds/%s?keyspace=%s", cfName, url.QueryEscape(keyspaceName))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	req, err := http.NewRequestWithContext(
 		ctx, "GET", uri, nil)
 	if err != nil {

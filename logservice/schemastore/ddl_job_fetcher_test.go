@@ -28,6 +28,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDDLJobFetcherSubscribesWithHighPriority(t *testing.T) {
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
+	subClient := newTrackingSubscriptionClient()
+	fetcher := newDDLJobFetcher(
+		context.Background(),
+		subClient,
+		nil,
+		keyspaceID,
+		func(DDLJobWithCommitTs) {},
+		func(uint64) {},
+	)
+
+	require.NoError(t, fetcher.run(1))
+	require.Equal(t,
+		[]logpuller.ScanPriorityLevel{logpuller.ScanPriorityHigh},
+		subClient.subscriptionPriorities())
+}
+
 func TestAdvanceSchemaStoreResolvedTs(t *testing.T) {
 	tsCh := make(chan uint64, 100)
 	advanceResolvedTs := func(resolvedTS uint64) {
@@ -160,7 +181,10 @@ func TestDDLJobFetcherInputLegacyFormat(t *testing.T) {
 }
 
 func TestDDLJobFetcherInputJobTableFormat(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
+	// The test inserts a synthetic row into mysql.tidb_ddl_job, which the DDL
+	// worker of a shared test store cannot process, so it needs a store of its
+	// own.
+	helper := commonEvent.NewEventTestHelperWithPrivateStore(t)
 	t.Cleanup(helper.Close)
 	job := &model.Job{
 		ID:         101,

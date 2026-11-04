@@ -81,6 +81,9 @@ message IntegrityConfig {
 // DispatcherRequest is used to send a dispatcher request to the event service.
 // A request can be a register, remove, reset dispatcher request.
 message DispatcherRequest {
+    reserved 15;
+    reserved "timezone";
+
     // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
     uint64 cluster_id = 1;
     heartbeatpb.ChangefeedID changefeed_id = 2;
@@ -96,7 +99,6 @@ message DispatcherRequest {
     bool only_reuse = 12;
     bool bdr_mode = 13;
     IntegrityConfig integrity = 14;
-	string timezone = 15;
     uint64 epoch = 16;
     bool output_raw_change_event = 17;
     int64 mode = 18;

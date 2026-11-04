@@ -199,6 +199,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
+	if err = hasRunningImport(ctx, h.server.GetEtcdClient().GetEtcdClient(), pdClient.GetClusterID(ctx)); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	tmpInfo := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
 		SinkURI:      cfg.SinkURI,
@@ -303,6 +308,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		KeyspaceID:     keyspaceMeta.GetId(),
 	}
 
+	if util.GetOrZero(cfg.Pause) {
+		info.State = config.StateStopped
+		info.BootstrapPending = new(true)
+	}
+
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
@@ -375,6 +385,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 	changefeeds, statuses, err := co.ListChangefeeds(c, keyspace)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	if len(changefeeds) == 0 {
+		c.JSON(http.StatusOK, toListResponse(c, []ChangefeedCommonInfo{}))
+		return
+	}
+	info := changefeeds[0]
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	state := c.Query(api.APIOpVarChangefeedState)
@@ -455,6 +477,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -535,6 +561,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
@@ -583,7 +616,7 @@ func CfInfoToAPIModel(
 	var replicaConfig *ReplicaConfig
 	if info.Config != nil {
 		replicaConfig = ToAPIReplicaConfig(info.Config)
-		replicaConfig.maskSensitiveData()
+		replicaConfig.omitSensitiveData()
 	}
 
 	apiInfoModel := &ChangeFeedInfo{
@@ -641,6 +674,10 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
+			setKeyspaceInContextForAuthentication(c)
+			if !middleware.AuthenticateRequest(c, h.server) {
+				return
+			}
 			c.JSON(getStatus(c), nil)
 			return
 		}
@@ -648,6 +685,13 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	var previousCheckpointTs uint64
 	if status != nil {
 		previousCheckpointTs = status.CheckpointTs
@@ -660,6 +704,30 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// setKeyspaceInContextForAuthentication restores the keyspace context that the
+// keyspace checker used to provide before authentication was moved into the
+// delete handler. It is needed when an idempotent delete cannot obtain the
+// keyspace ID from a persisted changefeed.
+func setKeyspaceInContextForAuthentication(c *gin.Context) {
+	security := config.GetGlobalServerConfig().Security
+	if !kerneltype.IsNextGen() || security == nil || !security.ClientUserRequired {
+		return
+	}
+	if _, _, ok := c.Request.BasicAuth(); !ok {
+		return
+	}
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	loadKeyspaceInContext(c, keyspaceManager)
+}
+
+func loadKeyspaceInContext(c *gin.Context, keyspaceManager keyspace.Manager) {
+	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), GetKeyspaceValueWithDefault(c))
+	if err == nil {
+		middleware.SetKeyspaceInContext(c, keyspaceMeta)
+	}
 }
 
 // PauseChangefeed handles pause changefeed request
@@ -699,6 +767,13 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 	middleware.SetChangefeedOperationTarget(c, cfInfo.ChangefeedID.Keyspace(), cfInfo.ChangefeedID.Name())
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: cfInfo.KeyspaceID},
+		Name:     cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	middleware.SetChangefeedOperationDetails(c, fmt.Sprintf(
 		"previous_state=%s", cfInfo.State))
 	err = co.PauseChangefeed(ctx, cfInfo.ChangefeedID)
@@ -971,7 +1046,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	updateCfConfig := &ChangefeedConfig{}
+	updateCfConfig := &struct {
+		ChangefeedConfig
+		ReplicaConfig json.RawMessage `json:"replica_config"`
+	}{}
 	if err = c.BindJSON(updateCfConfig); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
@@ -988,9 +1066,16 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 		targetTsUpdated = true
 	}
-	if updateCfConfig.ReplicaConfig != nil {
+	if len(updateCfConfig.ReplicaConfig) != 0 && string(updateCfConfig.ReplicaConfig) != "null" {
 		configUpdated = true
-		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		// Apply supplied fields to a copy of the real configuration. API responses
+		// omit credentials, and explicit replacement values are always used literally.
+		replicaConfig := ToAPIReplicaConfig(oldCfInfo.Config)
+		if err := json.Unmarshal(updateCfConfig.ReplicaConfig, replicaConfig); err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
+		oldCfInfo.Config = replicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true
@@ -1178,7 +1263,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1260,7 +1345,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1332,7 +1417,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1406,7 +1491,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1465,7 +1550,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 	}
 
 	// get changefeedID first
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1533,7 +1618,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 		return
 	}
 
-	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
+	cfInfo, err := h.getChangeFeed(c.Request.Context(), changefeedDisplayName.Keyspace, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1596,6 +1681,13 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 	info, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
+		return
+	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: info.KeyspaceID},
+		Name:     info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
 		return
 	}
 	var (
@@ -1764,7 +1856,7 @@ func verifyTablesForSink(
 	tableInfos []*common.TableInfo,
 ) error {
 	if config.IsStorageScheme(scheme) {
-		selectors, err := columnselector.New(replicaConfig.Sink)
+		selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 		if err != nil {
 			return err
 		}
@@ -1776,7 +1868,7 @@ func verifyTablesForSink(
 	}
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), isAvroLike)
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive), topic, config.IsPulsarScheme(scheme), isAvroLike)
 	if err != nil {
 		return err
 	}
@@ -1784,7 +1876,7 @@ func verifyTablesForSink(
 		return err
 	}
 
-	selectors, err := columnselector.New(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink, util.GetOrZero(replicaConfig.CaseSensitive))
 	if err != nil {
 		return err
 	}
@@ -1797,8 +1889,7 @@ func verifyRouteConflict(
 	ineligibleTables []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
-		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
 	}
 	if util.GetOrZero(replicaCfg.ForceReplicate) {

@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -52,6 +54,10 @@ const (
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
 )
+
+// stopChangefeedWaitInterval is how often the API waits for a stop changefeed
+// operator to finish. Tests shorten it to keep the waits short.
+var stopChangefeedWaitInterval = time.Second
 
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
@@ -238,11 +244,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
-			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+			changefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+			changefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+			changefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+			changefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+			changefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
 			changefeedDownstreamTypes := make(map[common.ChangeFeedDisplayName]struct{})
 			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
@@ -261,7 +267,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				keyspace := displayName.Keyspace
 				name := displayName.Name
 
-				downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
+				_, downstreamType := config.ParseSinkURI(info.SinkURI)
 				if oldType, ok := changefeedDownstreamTypeCache[displayName]; ok && oldType != downstreamType {
 					metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
 				}
@@ -274,16 +280,14 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 					metrics.FormatKeyspaceID(info.KeyspaceID),
 				).Set(float64(info.State.ToInt()))
 
-				if !updateChangefeedCheckpointMetrics(
+				updateChangefeedCheckpointMetrics(
 					keyspace,
 					name,
 					info.KeyspaceID,
 					info.State,
 					cf.GetLastSavedCheckPointTs(),
 					c.pdClock.CurrentTime(),
-				) {
-					return
-				}
+				)
 
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
@@ -337,11 +341,11 @@ func updateChangefeedCheckpointMetrics(
 	state config.FeedState,
 	checkpointTs uint64,
 	pdTime time.Time,
-) bool {
+) {
 	switch state {
-	case config.StateStopped, config.StateFinished, config.StateRemoved:
+	case config.StateFailed, config.StateStopped, config.StateFinished, config.StateRemoved:
 		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
-		return false
+		return
 	}
 
 	pdPhysicalTime := oracle.GetPhysical(pdTime)
@@ -353,7 +357,29 @@ func updateChangefeedCheckpointMetrics(
 		name,
 		metrics.FormatKeyspaceID(keyspaceID),
 	).Set(lag)
-	return true
+}
+
+// updateAllChangefeedCheckpointMetrics publishes checkpoint metrics from the
+// coordinator's in-memory state. It is used after bootstrap so the new owner
+// does not have to wait for the periodic metrics collection tick.
+func (c *Controller) updateAllChangefeedCheckpointMetrics(pdTime time.Time) {
+	c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+		if cf.GetInfo() == nil {
+			return
+		}
+		info, err := cf.GetInfo().Clone()
+		if err != nil {
+			return
+		}
+		updateChangefeedCheckpointMetrics(
+			info.ChangefeedID.Keyspace(),
+			info.ChangefeedID.Name(),
+			info.KeyspaceID,
+			info.State,
+			cf.GetLastSavedCheckPointTs(),
+			pdTime,
+		)
+	})
 }
 
 // HandleEvent implements the event-driven process mode
@@ -404,6 +430,7 @@ func (c *Controller) onPeriodTask() {
 	// Drain liveness transitions and drain-target broadcasts are retry-based
 	// control loops. Drive them from the periodic task so they keep progressing
 	// even when no fresh heartbeat or node-change event arrives.
+	c.requestEventBrokerDispatcherCount()
 	c.advanceActiveDrainLiveness()
 	c.maybeBroadcastDispatcherDrainTarget(false)
 }
@@ -432,6 +459,8 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		c.syncDrainSchedulingPolicy()
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
+	case messaging.TypeEventBrokerDispatcherCountResponse:
+		c.drainController.ObserveEventBrokerDispatcherCountResponse(msg.Message[0].(*logservicepb.EventBrokerDispatcherCountResponse))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
@@ -536,10 +565,10 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *heartbeatpb.NodeHeartbeat) {
 	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(from) {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("uninitialized").Inc()
 		return
 	}
-	metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
+	captureLeaseHeartbeatCounter.WithLabelValues("received").Inc()
 	var initializedNodes []node.ID
 	if from == c.writeLease.selfNodeID {
 		// Only the coordinator capture needs remote membership to select a witness.
@@ -548,9 +577,9 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	}
 	messages := c.writeLease.handleHeartbeat(from, heartbeat, initializedNodes)
 	if len(messages) == 0 {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
+		captureLeaseHeartbeatCounter.WithLabelValues("no_response").Inc()
 	} else {
-		metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
+		captureLeaseHeartbeatCounter.WithLabelValues("response").Add(float64(len(messages)))
 	}
 	hasGrant := false
 	for _, message := range messages {
@@ -597,7 +626,7 @@ func (c *Controller) handleCaptureWriteLeaseHeartbeat(from node.ID, heartbeat *h
 	})
 	for _, message := range messages {
 		if err := c.messageCenter.SendCommand(message); err != nil {
-			metrics.CaptureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
+			captureLeaseHeartbeatCounter.WithLabelValues("send_failed").Inc()
 		}
 	}
 }
@@ -679,19 +708,50 @@ func (c *Controller) handleSingleMaintainerStatus(
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
 ) *changefeedChange {
-	// Update the operator status first
+	cf := c.getChangefeed(cfID)
+	// A paused creation remains new across resume/restart until a current owner
+	// reports successful bootstrap and the acknowledgement is durably stored.
+	if cf != nil && util.GetOrZero(cf.GetInfo().BootstrapPending) &&
+		status.State == heartbeatpb.ComponentState_Working && status.BootstrapDone {
+		if !c.markChangefeedBootstrapped(cf, from, status.MaintainerEpoch) {
+			return nil
+		}
+	}
+	acceptMoveOriginCheckpoint := c.operatorController.AcceptsMoveOriginStopStatus(cfID, from, status)
+	handoffCheckpointAdvanced := false
+	if acceptMoveOriginCheckpoint &&
+		cf != nil &&
+		c.validateMaintainerNode(cf, from, cfID) {
+		// Advance the handoff checkpoint before the operator enters OriginStopped.
+		// This prevents a concurrent Schedule from creating the target maintainer
+		// with the checkpoint that preceded the terminal origin report.
+		handoffCheckpointAdvanced = cf.AdvanceCheckpointTs(status.CheckpointTs)
+	}
+
+	// Do not finish the add operator before the initial marker is persisted;
+	// advance a move only after its handoff checkpoint is visible.
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
-	cf := c.getChangefeed(cfID)
 	if cf == nil {
 		c.handleNonExistentChangefeed(cfID, from, status)
 		return nil
 	}
 
-	if !c.validateMaintainerNode(cf, from, cfID) {
-		return nil
-	}
 	if !common.MaintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch) {
+		// A move bumps the owner epoch before the old maintainer is stopped. Its
+		// fenced terminal report is therefore expected to carry the previous
+		// epoch. Preserve the final committed checkpoint before adding the new
+		// owner, while continuing to reject all other stale-epoch reports.
+		if acceptMoveOriginCheckpoint && handoffCheckpointAdvanced {
+			log.Info("advance checkpoint from stopping maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("nodeID", from),
+				zap.Uint64("checkpointTs", status.CheckpointTs),
+				zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
+			return newChangefeedChange(cf, cf.GetInfo().State, ChangeTs, nil)
+		}
+
 		log.Warn("drop stale maintainer status",
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("node", from),
@@ -699,9 +759,40 @@ func (c *Controller) handleSingleMaintainerStatus(
 			zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
 		return nil
 	}
+	if !c.validateMaintainerNode(cf, from, cfID) {
+		return nil
+	}
 
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
+}
+
+// markChangefeedBootstrapped serializes the acknowledgement with API lifecycle
+// operations. Failed persistence is retried by the next maintainer heartbeat.
+func (c *Controller) markChangefeedBootstrapped(cf *changefeed.Changefeed, from node.ID, epoch uint64) bool {
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
+	info := cf.GetInfo()
+	if cf.GetNodeID() != from || info.Epoch != epoch {
+		return false
+	}
+	if !util.GetOrZero(info.BootstrapPending) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	updated, err := c.backend.FinishInit(ctx, cf.ID, epoch)
+	if err != nil {
+		log.Warn("failed to persist initial bootstrap completion, will retry",
+			zap.Stringer("changefeedID", cf.ID), zap.Error(err))
+		return false
+	}
+	if updated == nil {
+		return false
+	}
+	cf.SetInfo(updated)
+	cf.SetIsNew(false)
+	return true
 }
 
 func (c *Controller) handleNonExistentChangefeed(
@@ -879,6 +970,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 		}
 	}
 
+	c.updateAllChangefeedCheckpointMetrics(c.pdClock.CurrentTime())
+
 	// start operator and scheduler
 	c.taskHandlerMutex.Lock()
 	defer c.taskHandlerMutex.Unlock()
@@ -971,7 +1064,7 @@ func (c *Controller) stopStaleBootstrapMaintainers(
 }
 
 func (c *Controller) Stop() {
-	metrics.CaptureP2PWitnessAvailable.Set(0)
+	captureP2PWitnessAvailable.Set(0)
 	c.taskHandlerMutex.Lock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
@@ -1021,7 +1114,12 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
+	cf := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
+	if info.State == config.StateStopped {
+		c.changefeedDB.AddStoppedChangefeed(cf)
+	} else {
+		c.changefeedDB.AddAbsentChangefeed(cf)
+	}
 	return nil
 }
 
@@ -1042,7 +1140,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for !op.IsFinished() {
 		select {
@@ -1080,7 +1178,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(stopChangefeedWaitInterval)
 	defer ticker.Stop()
 	for !op.IsFinished() {
 		select {
@@ -1226,6 +1324,29 @@ func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.C
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
 	return c.backend.GetChangefeedInfo(ctx, id)
+}
+
+// updateChangefeedCheckpointTs serializes checkpoint persistence with API
+// lifecycle changes. Pause and remove persist a non-none progress while holding
+// apiLock, so a checkpoint collected before that operation must not overwrite
+// the newer progress after the operation releases the lock.
+func (c *Controller) updateChangefeedCheckpointTs(
+	ctx context.Context,
+	checkpointTsMap map[common.ChangeFeedID]uint64,
+) error {
+	c.apiLock.RLock()
+	defer c.apiLock.RUnlock()
+
+	for id := range checkpointTsMap {
+		cf := c.changefeedDB.GetByID(id)
+		if cf == nil || !shouldRunChangefeed(cf.GetInfo().State) {
+			delete(checkpointTsMap, id)
+		}
+	}
+	if len(checkpointTsMap) == 0 {
+		return nil
+	}
+	return c.backend.UpdateChangefeedCheckpointTs(ctx, checkpointTsMap)
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

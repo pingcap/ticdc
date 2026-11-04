@@ -40,7 +40,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -92,6 +91,7 @@ type localFencer interface {
 // 2. subModules     - Business logic modules stop first
 // 3. nodeModules    - Node management stops second
 // 4. networkModules - Network services stop third
+// 5. capture info   - marked write-stopped and removed after all modules close
 //
 // Rationale for this ordering:
 // - preServices provide foundational capabilities (time, messaging) needed by all other modules
@@ -216,7 +216,7 @@ func (c *server) initialize(ctx context.Context) error {
 		c.security,
 	)
 	eventStore := eventstore.New(conf.DataDir, subscriptionClient)
-	eventService := eventservice.New(eventStore, schemaStore)
+	eventService := eventservice.New(eventStore, schemaStore, &c.liveness)
 	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
 		Info:        c.info,
 		GCServiceID: c.EtcdClient.GetGCServiceID(),
@@ -338,6 +338,8 @@ func (c *server) setPreServices(ctx context.Context) error {
 func (c *server) Run(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	registerMetrics()
 
 	err := c.initialize(ctx)
 	if err != nil {
@@ -509,7 +511,7 @@ func (c *server) monitorCaptureWriteGate(ctx context.Context, interval time.Dura
 				continue
 			}
 			if previous.Writable && !current.Writable {
-				metrics.CaptureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
+				captureWriteBlockCounter.WithLabelValues(string(current.Reason)).Inc()
 				log.Warn("capture write gate blocked", zap.String("reason", string(current.Reason)))
 			} else if !previous.Writable && current.Writable {
 				log.Info("capture write gate recovered")
@@ -531,10 +533,10 @@ func (c *server) recordCaptureWriteGateMetrics(status writelease.Status) {
 		if status.Reason == reason {
 			value = 1
 		}
-		metrics.CaptureWriteGateState.WithLabelValues(string(reason)).Set(value)
+		captureWriteGateState.WithLabelValues(string(reason)).Set(value)
 	}
-	metrics.CaptureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
-	metrics.CaptureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
+	captureP2PLeaseRemainingSeconds.Set(status.P2PRemaining.Seconds())
+	captureEtcdProofRemainingSeconds.Set(status.EtcdProofRemaining.Seconds())
 }
 
 func (c *server) localFence(reason string) {
@@ -631,21 +633,21 @@ func (c *server) Close() {
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
-	var closeGroup sync.WaitGroup
-	closeGroup.Add(1)
+	preServicesClosed := make(chan bool, 1)
 	go func() {
-		defer closeGroup.Done()
-		c.closePreServices()
+		preServicesClosed <- c.closePreServices()
 	}()
 
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), GracefulShutdownTimeout)
 	defer closeCancel()
+	cleanShutdown := true
 
 	// There are also some dependencies inside subModules,
 	// so we close subModules in reverse order of their startup.
 	for i := len(c.subModules) - 1; i >= 0; i-- {
 		m := c.subModules[i]
 		if err := m.Close(closeCtx); err != nil {
+			cleanShutdown = false
 			log.Warn("failed to close sub module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -655,6 +657,7 @@ func (c *server) Close() {
 
 	for _, m := range c.nodeModules {
 		if err := m.Close(closeCtx); err != nil {
+			cleanShutdown = false
 			log.Warn("failed to close sub common module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -664,16 +667,36 @@ func (c *server) Close() {
 
 	for _, nm := range c.networkModules {
 		if err := nm.Close(closeCtx); err != nil {
+			cleanShutdown = false
 			log.Warn("failed to close sub base module",
 				zap.String("module", nm.Name()),
 				zap.Error(err))
 		}
 		log.Info("sub base module closed", zap.String("module", nm.Name()))
 	}
+	cleanShutdown = <-preServicesClosed && cleanShutdown
 
-	// delete server info from etcd
+	// Publish a durable proof only after all modules have stopped. The compare on
+	// the lease prevents a slow shutdown from recreating an expired capture key.
 	timeoutCtx, timeoutCancel := context.WithTimeout(closeCtx, cleanMetaDuration)
 	defer timeoutCancel()
+	if cleanShutdown {
+		marked, err := c.markCaptureWriteStopped(timeoutCtx, c.session.Lease())
+		switch {
+		case err != nil:
+			log.Warn("failed to mark capture writes stopped",
+				zap.String("captureID", string(c.info.ID)),
+				zap.Error(err))
+		case !marked:
+			log.Info("skip marking capture writes stopped because registration changed",
+				zap.String("captureID", string(c.info.ID)))
+		default:
+			log.Info("capture writes marked stopped in etcd",
+				zap.String("captureID", string(c.info.ID)))
+		}
+	}
+
+	// Delete server info from etcd after the write-stopped marker is visible.
 	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
@@ -682,11 +705,30 @@ func (c *server) Close() {
 		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
 	}
 
-	closeGroup.Wait()
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
-func (c *server) closePreServices() {
+func (c *server) markCaptureWriteStopped(ctx context.Context, leaseID clientv3.LeaseID) (bool, error) {
+	info := c.captureInfo(true)
+	data, err := info.Marshal()
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	key := etcd.GetEtcdKeyCaptureInfo(c.EtcdClient.GetClusterID(), string(c.info.ID))
+	resp, err := c.EtcdClient.GetEtcdClient().Txn(
+		ctx,
+		[]clientv3.Cmp{clientv3.Compare(clientv3.LeaseValue(key), "=", int64(leaseID))},
+		[]clientv3.Op{clientv3.OpPut(key, string(data), clientv3.WithLease(leaseID))},
+		etcd.TxnEmptyOpsElse,
+	)
+	if err != nil {
+		return false, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+	return resp.Succeeded, nil
+}
+
+func (c *server) closePreServices() bool {
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
 	defer cancel()
 	done := make(chan struct{})
@@ -699,8 +741,10 @@ func (c *server) closePreServices() {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-closeCtx.Done():
 		log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
+		return false
 	}
 }
 

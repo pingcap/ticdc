@@ -44,7 +44,7 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 
 	cd $CUR
 	GO111MODULE=on go run test.go
@@ -80,12 +80,17 @@ function run() {
 	check_contains "Key_name: idx_col"
 
 	# ensure all dml / ddl related to test.t finish
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	ensure 10 "check_logs_contains $WORK_DIR 'DDL replicate success'"
 
 	# indexes should be the same when CDC retries happened
 	# ref: https://github.com/pingcap/tiflow/issues/12128
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
+
 	run_sql "update test.t set col = 55 where id = 5;"
 	run_sql "alter table test.t add index (col);"
 	run_sql "update test.t set col = 66 where id = 6;"
@@ -93,9 +98,11 @@ function run() {
 	run_sql "update test.t set col = 77 where id = 7;"
 	sleep 10
 	cleanup_process $CDC_BINARY
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY
 	# make sure all tables are equal in upstream and downstream
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
 
 	# anonymous add index related ddl
 	run_sql "create table test.t_anon_idx (id int primary key, a int, b int, c int);"
@@ -118,7 +125,10 @@ function run() {
 	check_downstream_indexes_match_upstream test t_anon_idx_like
 
 	# ensure both data and index schema are eventually consistent after anonymous index ddl
+	check_cdc_server_guard --workdir "$WORK_DIR"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

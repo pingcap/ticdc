@@ -98,6 +98,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Storage:               util.AddressOf(""),
 		UseFileBackend:        util.AddressOf(false),
 		Compression:           util.AddressOf(""),
+		SpoolDiskQuota:        util.AddressOf(redo.DefaultSpoolDiskQuota),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},
@@ -149,11 +150,19 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
+	// Pause is a CLI create-only option, forwarded to the API creation request.
+	// It does not control the state of an existing changefeed.
+	Pause            *bool   `toml:"pause" json:"pause,omitempty"`
 	PerformanceMode  *string `toml:"performance-mode" json:"performance-mode,omitempty"`
 	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
 	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	// AllowSameCluster allows the downstream to be the same TiDB logical cluster as the upstream.
+	// By default TiCDC rejects such a changefeed to avoid self-replication loops. Set it to true
+	// only when the changefeed cannot capture its own writes, for example when the downstream
+	// tables are not matched by the changefeed's filter.
+	AllowSameCluster *bool `toml:"allow-same-cluster" json:"allow-same-cluster,omitempty"`
 	// EnableRedoIOCheck controls whether consistency storage validation should
 	// perform an I/O accessibility check. This field is internal only.
 	EnableRedoIOCheck *bool `toml:"-" json:"-"`

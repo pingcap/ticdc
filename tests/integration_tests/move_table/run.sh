@@ -8,16 +8,22 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function check_all_cdc_server_guards() {
+	for suffix in 1 2 3; do
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "$suffix"
+	done
+}
+
 function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
-	start_tidb_cluster --workdir $WORK_DIR
+	SKIP_TIFLASH=1 start_tidb_cluster --workdir $WORK_DIR
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE move_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=move_table
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "1" --addr 127.0.0.1:8300
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "1" --addr 127.0.0.1:8300
 
 	TOPIC_NAME="ticdc-move-table-test-$RANDOM"
 	case $SINK_TYPE in
@@ -37,8 +43,8 @@ function run() {
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "2" --addr 127.0.0.1:8301
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "3" --addr 127.0.0.1:8302
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "2" --addr 127.0.0.1:8301
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --loglevel "debug" --logsuffix "3" --addr 127.0.0.1:8302
 
 	sleep 15
 	# Add a check table to reduce check time, or if we check data with sync diff
@@ -50,16 +56,23 @@ function run() {
 	GO111MODULE=on go run main.go 2>&1 | tee $WORK_DIR/tester.log
 
 	check_table_exists "move_table.check1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_all_cdc_server_guards
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_all_cdc_server_guards
 	run_sql "truncate table move_table.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# move back
 	cd $CUR
 	GO111MODULE=on go run main.go 2>&1 | tee $WORK_DIR/tester.log
+	check_all_cdc_server_guards
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_all_cdc_server_guards
 	run_sql "CREATE table move_table.check2(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "move_table.check2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_all_cdc_server_guards
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_all_cdc_server_guards
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

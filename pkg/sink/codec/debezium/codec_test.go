@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,10 +24,70 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
+
+func TestBigintSchemaDefaultPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		value      string
+		unsigned   bool
+		stringMode bool
+		expected   string
+	}{
+		{value: "9007199254740993", expected: "9007199254740993"},
+		{value: "9223372036854775807", expected: "9223372036854775807"},
+		{value: "-9223372036854775808", expected: "-9223372036854775808"},
+		{value: "9007199254740993", unsigned: true, expected: "9007199254740993"},
+		{value: "18446744073709551615", unsigned: true, expected: "-1"},
+		{value: "18446744073709551615", unsigned: true, stringMode: true, expected: "18446744073709551615"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			col := &timodel.ColumnInfo{FieldType: *types.NewFieldType(mysql.TypeLonglong)}
+			if tc.unsigned {
+				col.AddFlag(mysql.UnsignedFlag)
+			}
+			require.NoError(t, col.SetDefaultValue(tc.value))
+			codec := &dbzCodec{config: common.NewConfig(config.ProtocolDebezium)}
+			var expected any = json.Number(tc.expected)
+			if tc.stringMode {
+				codec.config.DebeziumBigintUnsignedHandlingMode = common.BigintUnsignedHandlingModeString
+				expected = tc.expected
+			}
+			buf := new(bytes.Buffer)
+			writer := util.BorrowJSONWriter(buf)
+			codec.writeDebeziumFieldSchema(writer, col)
+			util.ReturnJSONWriter(writer)
+
+			dec := json.NewDecoder(buf)
+			dec.UseNumber()
+			var schema map[string]any
+			require.NoError(t, dec.Decode(&schema))
+			require.Equal(t, expected, schema["default"])
+
+			// Missing row values use the column default and must preserve it too.
+			rows := chunk.NewChunkWithCapacity([]*types.FieldType{&col.FieldType}, 1)
+			rows.AppendNull(0)
+			row := rows.GetRow(0)
+			buf.Reset()
+			writer = util.BorrowJSONWriter(buf)
+			writer.WriteObject(func() {
+				require.NoError(t, codec.writeDebeziumFieldValue(writer, &row, 0, col))
+			})
+			util.ReturnJSONWriter(writer)
+			dec = json.NewDecoder(buf)
+			dec.UseNumber()
+			var payload map[string]any
+			require.NoError(t, dec.Decode(&payload))
+			require.Equal(t, expected, payload[col.Name.O])
+		})
+	}
+}
 
 func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 	codec := &dbzCodec{
@@ -1223,6 +1284,83 @@ func TestEncodeUpdate(t *testing.T) {
 		}
 	}
 	`, buf.String())
+}
+
+func TestEncodeVirtualColumnSchema(t *testing.T) {
+	helper := NewSQLTestHelper(t, "t", `create table test.t (
+		a bigint primary key,
+		b bigint not null,
+		c bigint generated always as (b) virtual,
+		d bigint generated always as (b) stored
+	)`)
+	defer helper.Close()
+
+	dml := helper.helper.DML2Event("test", "t", `insert into test.t (a, b) values (1, 2)`)
+	insert, ok := dml.GetNextRow()
+	require.True(t, ok)
+	dml = helper.helper.DML2Event("test", "t", `update test.t set b = 3 where a = 1`)
+	update, ok := dml.GetNextRow()
+	require.True(t, ok)
+	update.PreRow = insert.Row
+
+	selectors, err := columnselector.New(&config.SinkConfig{
+		ColumnSelectors: []*config.ColumnSelector{{
+			Matcher: []string{"test.t"},
+			Columns: []string{"*", "!c"},
+		}},
+	}, true)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name     string
+		selector commonEvent.Selector
+		fields   []string
+	}{
+		{
+			name:     "default selector",
+			selector: columnselector.NewDefaultColumnSelector(),
+			fields:   []string{"a", "b", "c", "d"},
+		},
+		{
+			name:     "exclude virtual column",
+			selector: selectors.Get("test", "t"),
+			fields:   []string{"a", "b", "d"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			codec := &dbzCodec{
+				config:    common.NewConfig(config.ProtocolDebezium),
+				clusterID: "test_cluster",
+				nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+			}
+			buf := new(bytes.Buffer)
+			require.NoError(t, codec.EncodeValue(&commonEvent.RowEvent{
+				TableInfo:      helper.tableInfo,
+				CommitTs:       1,
+				Event:          update,
+				ColumnSelector: tc.selector,
+			}, buf))
+
+			var message struct {
+				Payload struct {
+					Before json.RawMessage
+					After  json.RawMessage
+				}
+				Schema map[string]any
+			}
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &message))
+			require.JSONEq(t, `{"a":1,"b":2,"d":2}`, string(message.Payload.Before))
+			require.JSONEq(t, `{"a":1,"b":3,"d":3}`, string(message.Payload.After))
+			for _, name := range []string{"before", "after"} {
+				schema := schemaFieldsByName(t, message.Schema, name)
+				var fields []string
+				for _, field := range schema["fields"].([]any) {
+					fields = append(fields, field.(map[string]any)["field"].(string))
+				}
+				require.Equal(t, tc.fields, fields, name)
+			}
+		})
+	}
 }
 
 func TestEncodeDelete(t *testing.T) {

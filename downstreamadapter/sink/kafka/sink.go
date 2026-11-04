@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -54,7 +55,7 @@ type sink struct {
 	metricsCollector kafka.MetricsCollector
 
 	comp       components
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -75,11 +76,7 @@ func (s *sink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-var createKafkaFactory = func(createSaramaFactory func() (kafka.Factory, error)) (kafka.Factory, error) {
-	return createSaramaFactory()
-}
-
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool) error {
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
@@ -103,6 +100,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	if err != nil {
 		return err
 	}
+	if options.Client == kafka.KafkaClientFranz {
+		encoderConfig.WithKafkaRecordBatchSize()
+	}
 
 	claimCheck, err := claimcheck.New(ctx, encoderConfig.LargeMessageHandle, changefeedID)
 	if err != nil {
@@ -111,20 +111,19 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 	defer claimCheck.Close()
 
 	isAvroLike := protocol == config.ProtocolAvro || protocol == config.ProtocolDebeziumAvro
-	if _, err = eventrouter.NewEventRouter(sinkConfig, topic, false, isAvroLike); err != nil {
+	if _, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, false, isAvroLike); err != nil {
 		return err
 	}
 
-	if _, err = columnselector.New(sinkConfig); err != nil {
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
 		return err
 	}
 
-	factory, err := createKafkaFactory(func() (kafka.Factory, error) {
-		return kafka.NewSaramaFactory(ctx, options, changefeedID)
-	})
+	factory, err := kafka.NewFactory(ctx, options, changefeedID, nil)
 	if err != nil {
 		return err
 	}
+	defer factory.Close()
 
 	adminClient, err := factory.AdminClient(ctx)
 	if err != nil {
@@ -153,23 +152,24 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, keyspaceID uint32,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, keyspaceID uint32,
 ) (*sink, error) {
-	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	stats := statistics.New(changefeedID, keyspaceID)
+	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, stats)
 	if err != nil {
+		stats.Close()
 		return nil, err
 	}
-	return newWithComponents(ctx, changefeedID, keyspaceID, protocol, comp)
+	return newWithComponents(ctx, changefeedID, stats, protocol, comp)
 }
 
 func newWithComponents(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	keyspaceID uint32,
+	stats *statistics.Statistics,
 	protocol config.Protocol,
 	comp components,
 ) (*sink, error) {
-	statistics := metrics.NewStatistics(changefeedID, keyspaceID, "sink")
 	var (
 		err           error
 		asyncProducer kafka.AsyncProducer
@@ -186,7 +186,7 @@ func newWithComponents(
 			asyncProducer.Close()
 		}
 		comp.close()
-		statistics.Close()
+		stats.Close()
 	}()
 
 	asyncProducer, err = comp.factory.AsyncProducer(ctx)
@@ -207,7 +207,7 @@ func newWithComponents(
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stats,
 
 		checkpointChan: make(chan uint64, 16),
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
@@ -229,10 +229,12 @@ func (s *sink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.sendDMLEvent(ctx)
 	})
-	g.Go(func() error {
-		s.metricsCollector.Run(ctx)
-		return nil
-	})
+	if s.metricsCollector != nil {
+		g.Go(func() error {
+			s.metricsCollector.Run(ctx)
+			return nil
+		})
+	}
 	err := g.Wait()
 	s.isNormal.Store(false)
 	return err
@@ -450,17 +452,8 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return err
 				}
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.AsyncSend(
-						ctx,
-						future.Key.Topic,
-						future.Key.Partition,
-						message); err != nil {
-						return 0, 0, err
-					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
+				helper.TrackDMLMessage(message, s.statistics)
+				if err = s.dmlProducer.AsyncSend(ctx, future.Key.Topic, future.Key.Partition, message); err != nil {
 					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
@@ -498,16 +491,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
-		ddlType := e.GetDDLType().String()
-		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessages(topic, partitionNum, message)
-			})
-		} else {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.SendMessage(topic, 0, message)
-			})
-		}
+		err = s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			if s.partitionRule == helper.PartitionAll {
+				return s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
+			}
+			return s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
+		})
 		if err != nil {
 			return err
 		}
@@ -577,7 +566,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if !writelease.CanWrite(s.writeGate) {
 					continue
 				}
-				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
+				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return err
 				}
@@ -591,7 +580,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if !writelease.CanWrite(s.writeGate) {
 						break
 					}
-					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
+					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return err
 					}

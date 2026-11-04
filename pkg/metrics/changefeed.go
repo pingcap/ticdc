@@ -20,53 +20,6 @@ import (
 )
 
 var (
-	MaintainerCheckpointTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "checkpoint_ts",
-			Help:      "checkpoint ts of maintainer",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "checkpoint_ts_lag",
-			Help:      "checkpoint ts lag of maintainer in seconds",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "resolved_ts",
-			Help:      "resolved ts of maintainer",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "maintainer",
-			Name:      "resolved_ts_lag",
-			Help:      "resolved ts lag of maintainer in seconds",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
-	CoordinatorCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "ownership_counter",
-			Help:      "The counter of ownership increases every 5 seconds on a owner capture",
-		})
-
-	MaintainerGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "changefeed",
-			Name:      "maintainer_counter",
-			Help:      "The counter of changefeed maintainer",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
-
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -84,16 +37,6 @@ var (
 			Name:      "changefeed_error_info",
 			Help:      "The current warning or failed reason and occurrence time of changefeeds",
 		}, []string{GetKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
-
-	// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
-	// changefeed operation timestamps for the Grafana investigation panel.
-	ChangefeedOperationTimeGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "changefeed_operation_time",
-			Help:      "Recent user initiated changefeed operation timestamps in Unix milliseconds",
-		}, []string{GetKeyspaceLabel(), "changefeed", "operation", "result", "username", "details", "error", "event_id"})
 
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -124,21 +67,6 @@ var (
 			Name:      "changefeed_downstream_info",
 			Help:      "Downstream type information of changefeeds exposed as labels.",
 		}, []string{GetKeyspaceLabel(), "changefeed", "downstream_type"})
-
-	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
-	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
-	//
-	// This metric is only set when the sink can positively identify TiDB (for
-	// example by executing `SELECT tidb_version()`), and is intentionally absent
-	// for MySQL or unknown downstreams. Dashboards can use it to override the
-	// generic "mysql/tidb" label value with "tidb" for running changefeeds.
-	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "changefeed_downstream_is_tidb",
-			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
 )
 
 func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
@@ -160,17 +88,9 @@ func ResetOwnerChangefeedMetrics() {
 }
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(MaintainerCheckpointTsGauge)
-	registry.MustRegister(MaintainerCheckpointTsLagGauge)
-	registry.MustRegister(MaintainerResolvedTsGauge)
-	registry.MustRegister(MaintainerResolvedTsLagGauge)
-	registry.MustRegister(CoordinatorCounter)
-	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedErrorInfoGauge)
-	registry.MustRegister(ChangefeedOperationTimeGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedDownstreamInfoGauge)
-	registry.MustRegister(ChangefeedDownstreamIsTiDBGauge)
 }

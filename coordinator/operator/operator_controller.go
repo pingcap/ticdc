@@ -26,7 +26,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
@@ -410,6 +409,24 @@ func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
 	}
 }
 
+// AcceptsMoveOriginStopStatus reports whether status is the terminal report
+// currently expected from the old owner of an in-flight maintainer move.
+func (oc *Controller) AcceptsMoveOriginStopStatus(
+	id common.ChangeFeedID,
+	from node.ID,
+	status *heartbeatpb.MaintainerStatus,
+) bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	op, ok := oc.operators[id]
+	if !ok {
+		return false
+	}
+	moveOp, ok := op.OP.(*MoveMaintainerOperator)
+	return ok && moveOp.acceptsOriginStopStatus(from, status)
+}
+
 // OnNodeRemoved is called when a node is offline,
 // the controller will mark all maintainers on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
@@ -531,8 +548,8 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		op.PostFinish()
 		item.IsRemoved.Store(true)
 		delete(oc.operators, opID)
-		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
-		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
+		coordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
+		coordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("operator", opID.String()),
@@ -560,7 +577,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.ChangeFeedID, *he
 	oc.operators[op.ID()] = opWithTime
 	op.Start()
 	heap.Push(&oc.runningQueue, opWithTime)
-	metrics.CoordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
+	coordinatorCreatedOperatorCount.WithLabelValues(op.Type()).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) {

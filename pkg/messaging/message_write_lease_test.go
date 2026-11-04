@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +85,26 @@ func TestNodeHeartbeatResponseIOTypeRoundTrip(t *testing.T) {
 	decoded, err := decodeIOType(TypeNodeHeartbeatResponse, data)
 	require.NoError(t, err)
 	require.Equal(t, response, decoded)
+}
+
+func TestEventBrokerDispatcherCountIOTypeRoundTrip(t *testing.T) {
+	report := &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 7, RegistrationsStopped: true}
+	for _, tc := range []struct {
+		kind    IOType
+		message IOTypeT
+	}{
+		{TypeEventBrokerDispatcherCount, report},
+		{TypeEventBrokerDispatcherCountRequest, &logservicepb.EventBrokerDispatcherCountRequest{TargetNodeId: "capture"}},
+		{TypeEventBrokerDispatcherCountResponse, &logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: "capture", Report: report}},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			message := NewSingleTargetMessage("target", LogCoordinatorTopic, tc.message)
+			require.Equal(t, tc.kind, message.Type)
+			data, err := tc.message.Marshal()
+			require.NoError(t, err)
+			decoded, err := decodeIOType(tc.kind, data)
+			require.NoError(t, err)
+			require.Equal(t, tc.message, decoded)
+		})
+	}
 }

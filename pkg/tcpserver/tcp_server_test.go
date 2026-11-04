@@ -285,6 +285,9 @@ func testWithGrpcWorkload(ctx context.Context, t *testing.T, server TCPServer, a
 	go func() {
 		defer wg.Done()
 		defer grpcServer.GracefulStop()
+		// GracefulStop waits for the open client connection, so close it here
+		// instead of waiting for the 5s context timeout below.
+		defer conn.Close()
 
 		stream, err := client.PingStream(ctx)
 		require.NoError(t, err)
@@ -344,6 +347,7 @@ func TestTcpServerClose(t *testing.T) {
 
 	cli, err := httputil.NewClient(&security.Credential{})
 	require.NoError(t, err)
+	defer cli.CloseIdleConnections()
 
 	uri := fmt.Sprintf("http://%s/", addr)
 	resp, err := cli.Get(context.Background(), uri)
@@ -352,6 +356,8 @@ func TestTcpServerClose(t *testing.T) {
 		_ = resp.Body.Close()
 	}()
 	require.Equal(t, 200, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+	cli.CloseIdleConnections()
 
 	// Close should be idempotent.
 	for i := 0; i < 3; i++ {

@@ -16,9 +16,13 @@ package mysql
 import (
 	"testing"
 
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/leakutil"
 )
 
 func TestMain(m *testing.M) {
+	// The event test helpers share one TiDB mock store for the whole test
+	// binary, so close it before the goroutine leak check runs.
+	leakutil.AddCleanup(commonEvent.CloseSharedEventTestStore)
 	leakutil.SetUpLeakTest(m)
 }

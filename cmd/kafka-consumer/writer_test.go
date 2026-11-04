@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -29,6 +28,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
@@ -61,6 +61,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 	ctx := context.Background()
 	s, ddls := newMockSink(t)
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{partition: 0, watermark: 0},
 		},
@@ -100,6 +101,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -153,6 +155,7 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 0}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -197,6 +200,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	s, ddls := newMockSink(t)
 	p := &partitionProgress{partition: 0, watermark: 944040962}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{p},
 		mysqlSink:  s,
 	}
@@ -281,7 +285,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 	}).Times(2)
 
 	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 	require.NoError(t, err)
 
 	p := &partitionProgress{
@@ -290,6 +294,7 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 		watermark:   0,
 	}
 	w := &writer{
+		spillStore:  util.NewSpillStore(),
 		progresses:  []*partitionProgress{p},
 		mysqlSink:   s,
 		eventRouter: eventRouter,
@@ -298,11 +303,11 @@ func TestWriterWrite_sortsOutOfOrderDMLByWatermark(t *testing.T) {
 
 	for _, item := range []struct {
 		message *codeccommon.DMLMessage
-		offset  kafka.Offset
+		offset  int64
 	}{
-		{newDMLMessageForWriterTest(20), kafka.Offset(1)},
-		{newDMLMessageForWriterTest(10), kafka.Offset(2)},
-		{newDMLMessageForWriterTest(20), kafka.Offset(3)},
+		{newDMLMessageForWriterTest(20, 1), 1},
+		{newDMLMessageForWriterTest(10, 2), 2},
+		{newDMLMessageForWriterTest(20, 3), 3},
 	} {
 		require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(item.message), p, item.offset))
 	}
@@ -336,15 +341,10 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 
 	newMessage := func(tableID int64, table string) *codeccommon.DMLMessage {
 		message := codeccommon.NewDMLMessage(tableID, "test", table, 10, common.RowTypeInsert, func() *commonEvent.DMLEvent {
-			return &commonEvent.DMLEvent{
-				PhysicalTableID: tableID,
-				CommitTs:        10,
-				RowTypes:        []common.RowType{common.RowTypeInsert},
-				Rows:            chunk.NewChunkWithCapacity(nil, 0),
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "test", Table: table, TableID: tableID},
-				},
-			}
+			e := newReplayTestEvent(10, 1)
+			e.PhysicalTableID = tableID
+			e.TableInfo.TableName = common.TableName{Schema: "test", Table: table, TableID: tableID}
+			return e
 		})
 		data := codeccommon.NewDMLMessageData(nil, nil, func([]byte) ([]*codeccommon.DMLMessage, error) {
 			return []*codeccommon.DMLMessage{message}, nil
@@ -359,6 +359,7 @@ func TestPartitionDDLFlushOrder(t *testing.T) {
 	require.NoError(t, unrelatedGroup.AppendMessage(newMessage(unrelatedTableID, "other")))
 
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			{
 				partition: 0,
@@ -411,9 +412,10 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		partition:   0,
 		eventsGroup: make(map[int64]*util.EventsGroup),
 		watermark:   20,
-		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10)}),
+		decoder:     util.NewDMLMessageDecoder(&singleDMLDecoder{message: newDMLMessageForWriterTest(10, 1)}),
 	}
 	w := &writer{
+		spillStore:      util.NewSpillStore(),
 		progresses:      []*partitionProgress{progress},
 		mysqlSink:       s,
 		protocol:        config.ProtocolOpen,
@@ -421,8 +423,9 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 		maxMessageBytes: 1,
 	}
 
-	needCommit, err := w.WriteMessage(ctx, &kafka.Message{
-		TopicPartition: kafka.TopicPartition{Partition: 0, Offset: kafka.Offset(10)},
+	needCommit, err := w.WriteMessage(ctx, &kgo.Record{
+		Partition: 0,
+		Offset:    10,
 	})
 	require.NoError(t, err)
 
@@ -432,7 +435,7 @@ func TestWriteMessageIgnoresFallbackDMLBelowGlobalWatermark(t *testing.T) {
 
 func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 	require.NoError(t, err)
 
 	progress := &partitionProgress{
@@ -441,6 +444,7 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		watermark:   20,
 	}
 	w := &writer{
+		spillStore: util.NewSpillStore(),
 		progresses: []*partitionProgress{
 			progress,
 			{partition: 1, watermark: 5},
@@ -449,8 +453,8 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 		protocol:    config.ProtocolOpen,
 	}
 
-	message := newDMLMessageForWriterTest(10)
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, kafka.Offset(10)))
+	message := newDMLMessageForWriterTest(10, 1)
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(message), progress, 10))
 
 	require.NotNil(t, progress.eventsGroup[1])
 	resolved, err := progress.eventsGroup[1].ResolveInto(20, nil)
@@ -461,10 +465,11 @@ func TestAppendMessageKeepsFallbackDMLAboveGlobalWatermark(t *testing.T) {
 
 func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	replicaCfg := config.GetDefaultReplicaConfig()
-	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, true)
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, true)
 	require.NoError(t, err)
 
 	w := &writer{
+		spillStore:             util.NewSpillStore(),
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolAvro,
@@ -504,8 +509,8 @@ func TestOnDDLMarksRoutedCreateTableLikePartitionTableForAvro(t *testing.T) {
 	progress := w.progresses[0]
 	first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
 	second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
-	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
+	require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
 	resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
 	require.NoError(t, err)
@@ -520,10 +525,11 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	} {
 		t.Run(protocol.String(), func(t *testing.T) {
 			replicaCfg := config.GetDefaultReplicaConfig()
-			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+			eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, false, "test-topic", false, false)
 			require.NoError(t, err)
 
 			w := &writer{
+				spillStore:             util.NewSpillStore(),
 				progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 				eventRouter:            eventRouter,
 				protocol:               protocol,
@@ -555,8 +561,8 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 			progress := w.progresses[0]
 			first := codeccommon.NewDMLMessageFromEvent(newDMLEvent(200))
 			second := codeccommon.NewDMLMessageFromEvent(newDMLEvent(100))
-			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, kafka.Offset(10)))
-			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, kafka.Offset(11)))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(first), progress, 10))
+			require.NoError(t, w.appendMessage2Group(attachDMLMessageDataForWriterTest(second), progress, 11))
 
 			resolved, err := progress.eventsGroup[1].ResolveInto(150, nil)
 			require.NoError(t, err)
@@ -566,18 +572,20 @@ func TestAppendRow2GroupKeepsDebeziumPartitionTableFallback(t *testing.T) {
 	}
 }
 
-func newDMLMessageForWriterTest(commitTs uint64) *codeccommon.DMLMessage {
-	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeUpdate, func() *commonEvent.DMLEvent {
-		return &commonEvent.DMLEvent{
-			PhysicalTableID: 1,
-			StartTs:         commitTs - 1,
-			CommitTs:        commitTs,
-			RowTypes:        []common.RowType{common.RowTypeUpdate},
-			Rows:            chunk.NewChunkWithCapacity(nil, 0),
-			TableInfo: &common.TableInfo{
-				TableName: common.TableName{Schema: "test", Table: "t", TableID: 1},
-			},
-		}
+func newDMLMessageForWriterTest(commitTs uint64, id int64) *codeccommon.DMLMessage {
+	return codeccommon.NewDMLMessage(1, "test", "t", commitTs, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return newReplayTestEvent(commitTs, id)
+	})
+}
+
+func TestMessageWithPartitionCheckRejectsNilEvent(t *testing.T) {
+	w := &writer{}
+	message := codeccommon.NewDMLMessage(1, "test", "t", 100, common.RowTypeInsert, func() *commonEvent.DMLEvent {
+		return nil
+	})
+	checked := w.messageWithPartitionCheck(message, 1, 27)
+	require.PanicsWithValue(t, "DML message decoded to nil event", func() {
+		util.DMLMessagesToEvents([]*codeccommon.DMLMessage{checked})
 	})
 }
 

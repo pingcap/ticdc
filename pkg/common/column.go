@@ -118,7 +118,7 @@ func (b *ColumnFlagType) UnsetIsBinary() {
 
 // IsBinary shows whether BinaryFlag is set
 func (b ColumnFlagType) IsBinary() bool {
-	return (util.Flag)(b).HasAll(util.Flag(BinaryFlag))
+	return util.Flag(b).HasAll(util.Flag(BinaryFlag))
 }
 
 // SetIsHandleKey sets HandleKey
@@ -133,7 +133,7 @@ func (b *ColumnFlagType) UnsetIsHandleKey() {
 
 // IsHandleKey shows whether HandleKey is set
 func (b ColumnFlagType) IsHandleKey() bool {
-	return (util.Flag)(b).HasAll(util.Flag(HandleKeyFlag))
+	return util.Flag(b).HasAll(util.Flag(HandleKeyFlag))
 }
 
 // SetIsGeneratedColumn sets GeneratedColumn
@@ -148,7 +148,7 @@ func (b *ColumnFlagType) UnsetIsGeneratedColumn() {
 
 // IsGeneratedColumn shows whether GeneratedColumn is set
 func (b ColumnFlagType) IsGeneratedColumn() bool {
-	return (util.Flag)(b).HasAll(util.Flag(GeneratedColumnFlag))
+	return util.Flag(b).HasAll(util.Flag(GeneratedColumnFlag))
 }
 
 // SetIsPrimaryKey sets PrimaryKeyFlag
@@ -163,7 +163,7 @@ func (b *ColumnFlagType) UnsetIsPrimaryKey() {
 
 // IsPrimaryKey shows whether PrimaryKeyFlag is set
 func (b ColumnFlagType) IsPrimaryKey() bool {
-	return (util.Flag)(b).HasAll(util.Flag(PrimaryKeyFlag))
+	return util.Flag(b).HasAll(util.Flag(PrimaryKeyFlag))
 }
 
 // SetIsUniqueKey sets UniqueKeyFlag
@@ -178,12 +178,12 @@ func (b *ColumnFlagType) UnsetIsUniqueKey() {
 
 // IsUniqueKey shows whether UniqueKeyFlag is set
 func (b ColumnFlagType) IsUniqueKey() bool {
-	return (util.Flag)(b).HasAll(util.Flag(UniqueKeyFlag))
+	return util.Flag(b).HasAll(util.Flag(UniqueKeyFlag))
 }
 
 // IsMultipleKey shows whether MultipleKeyFlag is set
 func (b ColumnFlagType) IsMultipleKey() bool {
-	return (util.Flag)(b).HasAll(util.Flag(MultipleKeyFlag))
+	return util.Flag(b).HasAll(util.Flag(MultipleKeyFlag))
 }
 
 // SetIsMultipleKey sets MultipleKeyFlag
@@ -198,7 +198,7 @@ func (b *ColumnFlagType) UnsetIsMultipleKey() {
 
 // IsNullable shows whether NullableFlag is set
 func (b ColumnFlagType) IsNullable() bool {
-	return (util.Flag)(b).HasAll(util.Flag(NullableFlag))
+	return util.Flag(b).HasAll(util.Flag(NullableFlag))
 }
 
 // SetIsNullable sets NullableFlag
@@ -213,7 +213,7 @@ func (b *ColumnFlagType) UnsetIsNullable() {
 
 // IsUnsigned shows whether UnsignedFlag is set
 func (b ColumnFlagType) IsUnsigned() bool {
-	return (util.Flag)(b).HasAll(util.Flag(UnsignedFlag))
+	return util.Flag(b).HasAll(util.Flag(UnsignedFlag))
 }
 
 // SetIsUnsigned sets UnsignedFlag

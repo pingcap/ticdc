@@ -14,6 +14,7 @@
 package status
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -51,25 +52,23 @@ func RegisterStatusAPIRoutes(router *gin.Engine, server server.Server) {
 	router.GET("/debug/info", middleware.AuthenticateMiddleware(server), gin.WrapF(statusAPI.handleDebugInfo))
 }
 
-func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w io.Writer) {
+func (h *statusAPI) writeEtcdInfo(ctx context.Context, cli etcd.CDCEtcdClient, w io.Writer) error {
 	kvs, err := cli.GetAllCDCInfo(ctx)
 	if err != nil {
-		fmt.Fprintf(w, "failed to get info: %s\n\n", err.Error())
-		return
+		return err
 	}
 
 	for _, kv := range kvs {
 		value := string(kv.Value)
 		if strings.Contains(string(kv.Key), "/changefeed/info/") {
-			info := new(config.ChangeFeedInfo)
-			if err := info.Unmarshal(kv.Value); err != nil {
-				value = "<redacted>"
-			} else {
-				value = info.String()
+			value, err = config.MaskChangefeedInfo(kv.Value)
+			if err != nil {
+				return err
 			}
 		}
 		_, _ = fmt.Fprintf(w, "%s\n\t%s\n\n", string(kv.Key), value)
 	}
+	return nil
 }
 
 // TODO
@@ -80,22 +79,28 @@ func (h *statusAPI) handleDebugInfo(w http.ResponseWriter, req *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, err)
 		return
 	}
-	fmt.Fprintf(w, "\n\n*** owner info ***:\n\n")
-	fmt.Fprint(w, co.String())
+	// Prepare diagnostic output before sending the response so errors can set its status.
+	var output bytes.Buffer
+	fmt.Fprintf(&output, "\n\n*** owner info ***:\n\n")
+	fmt.Fprint(&output, co.String())
 	self, err := h.server.SelfInfo()
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, err)
 		return
 	}
-	fmt.Fprintf(w, "\n\n*** processors info ***:\n\n")
-	fmt.Fprint(w, self.String())
+	fmt.Fprintf(&output, "\n\n*** processors info ***:\n\n")
+	fmt.Fprint(&output, self.String())
 	maintainers := h.server.GetMaintainerManager().ListMaintainers()
 	for _, m := range maintainers {
 		changefeedID := common.NewChangefeedIDFromPB(m.GetMaintainerStatus().ChangefeedID)
-		fmt.Fprintf(w, "changefeedID: %s\n", changefeedID)
+		fmt.Fprintf(&output, "changefeedID: %s\n", changefeedID)
 	}
-	fmt.Fprintf(w, "\n\n*** etcd info ***:\n\n")
-	h.writeEtcdInfo(ctx, h.server.GetEtcdClient(), w)
+	fmt.Fprintf(&output, "\n\n*** etcd info ***:\n\n")
+	if err := h.writeEtcdInfo(ctx, h.server.GetEtcdClient(), &output); err != nil {
+		api.WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	_, _ = output.WriteTo(w)
 }
 
 func (h *statusAPI) handleStatus(w http.ResponseWriter, _ *http.Request) {

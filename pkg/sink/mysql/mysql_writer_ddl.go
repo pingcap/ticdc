@@ -216,9 +216,8 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
-		err := w.statistics.RecordDDLExecution(func() (string, error) {
-			ddlType := event.GetDDLType().String()
-			return ddlType, w.execDDL(event)
+		err := w.statistics.RecordDDLExecution(event.GetDDLType().String(), func() error {
+			return w.execDDL(event)
 		})
 		if err != nil {
 			if errors.IsIgnorableMySQLDDLError(err) {
@@ -274,7 +273,7 @@ func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
 
 // waitDDLDone wait current ddl
 func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddlCreateTime string) error {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	ticker1 := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	defer ticker1.Stop()
@@ -333,9 +332,9 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 }
 
 // true means the async ddl is still running, false means the async ddl is done.
-func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
+func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 	start := time.Now()
-	rows, err := w.db.QueryContext(w.ctx, query)
+	rows, err := w.db.QueryContext(w.ctx, query, args...)
 	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
@@ -370,8 +369,7 @@ func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
 // if the ddl is still running, we should wait for it.
 func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string) error {
 	checkSQL := getCheckRunningAddIndexSQL(w.cfg)
-	query := fmt.Sprintf(checkSQL, schemaName, tableName)
-	running, err := w.doQueryAsyncDDL(query)
+	running, err := w.doQueryAsyncDDL(checkSQL, schemaName, tableName)
 	if err != nil {
 		return err
 	}
@@ -379,7 +377,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string
 		return nil
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -387,7 +385,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err = w.doQueryAsyncDDL(query)
+			running, err = w.doQueryAsyncDDL(checkSQL, schemaName, tableName)
 			if err != nil {
 				return err
 			}

@@ -63,3 +63,15 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyspaceNameCheckerMiddleware(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	KeyspaceNameCheckerMiddleware()(c)
+
+	require.False(t, c.IsAborted())
+	require.Equal(t, http.StatusOK, w.Code)
+}

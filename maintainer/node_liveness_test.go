@@ -220,6 +220,7 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 	resp := out.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	require.Equal(t, "n2", resp.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(7), resp.DispatcherDrainTargetEpoch)
+	require.Equal(t, uint32(2), resp.DrainProtocolVersion)
 	require.Equal(t, heartbeatpb.CurrentWriteLeaseProtocolVersion, resp.WriteLeaseProtocolVersion)
 }
 

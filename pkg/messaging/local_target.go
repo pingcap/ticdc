@@ -16,8 +16,8 @@ package messaging
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/failpoint"
 	. "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -67,14 +67,14 @@ func newLocalMessageTarget(id node.ID,
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,
 		recvCmdCh:          gatherRecvCmdChan,
-		sendEventCounter:   metrics.MessagingSendMsgCounter.WithLabelValues("event"),
-		dropMessageCounter: metrics.MessagingDropMsgCounter.WithLabelValues("message"),
-		sendCmdCounter:     metrics.MessagingSendMsgCounter.WithLabelValues("command"),
+		sendEventCounter:   messagingSendMsgCounter.WithLabelValues("event"),
+		dropMessageCounter: messagingDropMsgCounter.WithLabelValues("message"),
+		sendCmdCounter:     messagingSendMsgCounter.WithLabelValues("command"),
 	}
 }
 
 func (s *localMessageTarget) recordCongestedMessageError(typeE string) {
-	metrics.MessagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
+	messagingErrorCounter.WithLabelValues(typeE, "message_congested").Inc()
 }
 
 func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*TargetMessage) error {
@@ -82,6 +82,25 @@ func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*Targe
 		m.To = s.localId
 		m.From = s.localId
 		m.Sequence = s.sequence.Add(1)
+		// Exercise the remote serialization path in single-node integration tests.
+		failpoint.Inject("ForceMarshalBatchDMLEvent", func() {
+			if m.Type == TypeBatchDMLEvent {
+				cloned := *m
+				cloned.Message = make([]IOTypeT, len(m.Message))
+				for j, event := range m.Message {
+					data, err := event.Marshal()
+					if err != nil {
+						failpoint.Return(err)
+					}
+					decoded, err := decodeIOType(m.Type, data)
+					if err != nil {
+						failpoint.Return(err)
+					}
+					cloned.Message[j] = decoded
+				}
+				m = &cloned
+			}
+		})
 		select {
 		case ch <- m:
 		default:

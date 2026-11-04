@@ -22,12 +22,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -35,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -52,7 +55,7 @@ func startEventService(
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	appcontext.SetService(appcontext.EventStore, mockStore)
 	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
-	es := New(mockStore, mockSchemaStore)
+	es := New(mockStore, mockSchemaStore, nil)
 	esImpl := es.(*eventService)
 	go func() {
 		err := esImpl.Run(ctx)
@@ -79,7 +82,7 @@ func TestNewEventServiceRemovesOrphanedLargeTxnSpillFiles(t *testing.T) {
 
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	_ = New(newMockEventStore(100), NewMockSchemaStore())
+	_ = New(newMockEventStore(100), NewMockSchemaStore(), nil)
 
 	require.NoFileExists(t, orphanPath)
 }
@@ -181,6 +184,314 @@ func TestEventServiceBasic(t *testing.T) {
 	}
 }
 
+func TestEventServiceDispatcherCount(t *testing.T) {
+	ctx := t.Context()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	es := &eventService{
+		mc:          messaging.NewMockMessageCenter(),
+		eventStore:  newMockEventStore(100),
+		schemaStore: NewMockSchemaStore(),
+		brokers:     make(map[uint64]*eventBroker),
+		tz:          time.UTC,
+	}
+	defer es.Close(ctx)
+	require.Zero(t, es.GetDispatcherCount())
+
+	// Log coordinator reports may read the count while registration creates another broker.
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				es.GetDispatcherCount()
+			}
+		}
+	})
+	defer func() { close(done); wg.Wait() }()
+
+	ordinary := newMockDispatcherInfoForTest(t)
+	es.registerDispatcher(ctx, ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	// Repeated registration replaces the entry without increasing the count.
+	es.registerDispatcher(ctx, ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+
+	ddl := newMockDispatcherInfoForTest(t)
+	ddl.clusterID = ordinary.clusterID + 1
+	ddl.span = common.KeyspaceDDLSpan(0)
+	es.registerDispatcher(ctx, ddl)
+	require.Equal(t, 2, es.GetDispatcherCount())
+	es.registerDispatcher(ctx, ddl)
+	require.Equal(t, 2, es.GetDispatcherCount())
+
+	es.deregisterDispatcher(ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	es.deregisterDispatcher(ordinary)
+	require.Equal(t, 1, es.GetDispatcherCount())
+	es.deregisterDispatcher(ddl)
+	require.Zero(t, es.GetDispatcherCount())
+}
+
+func TestStopAcceptingRegistrations(t *testing.T) {
+	broker, store, schema, _ := newEventBrokerForTest()
+	broker.close()
+	mc := messaging.NewMockMessageCenter()
+	var nodeLiveness liveness.Liveness
+	service := &eventService{mc: mc, brokers: map[uint64]*eventBroker{broker.tidbClusterID: broker}, nodeLiveness: &nodeLiveness}
+	info := newMockDispatcherInfoForTest(t)
+
+	// An admitted registration can block in schema initialization without
+	// delaying the log coordinator report or allowing it to report zero.
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	registered := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	schema.registerTableHook = func() { close(started); <-resume }
+	var wg sync.WaitGroup
+	t.Cleanup(func() { release(); wg.Wait() })
+	wg.Go(func() {
+		service.registerDispatcher(t.Context(), info)
+		close(registered)
+	})
+	<-started
+	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
+	require.True(t, nodeLiveness.Store(liveness.CaptureStopping))
+	broadcast := messaging.NewSingleTargetMessage("capture", messaging.EventServiceTopic, &common.LogCoordinatorBroadcastRequest{})
+	broadcast.From = "log-coordinator"
+	require.NoError(t, service.handleMessage(t.Context(), broadcast))
+	message := <-mc.GetMessageChannel()
+	require.Equal(t, broadcast.From, message.To)
+	require.Equal(t, messaging.LogCoordinatorTopic, message.Topic)
+	report := message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Equal(t, uint32(1), report.DispatcherCount)
+	// Completing an admitted registration must not wait for a report reader
+	// holding the broker map lock.
+	service.brokersMu.RLock()
+	release()
+	select {
+	case <-registered:
+	case <-time.After(5 * time.Second):
+		service.brokersMu.RUnlock()
+		t.Fatal("registration completion blocked on the broker map lock")
+	}
+	service.brokersMu.RUnlock()
+	wg.Wait()
+	service.deregisterDispatcher(info)
+	// Only the next direct report can authorize completion.
+	require.NoError(t, service.handleMessage(t.Context(), broadcast))
+	report = (<-mc.GetMessageChannel()).Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Zero(t, report.DispatcherCount)
+
+	for _, tc := range []struct {
+		name      string
+		onlyReuse bool
+		mode      int64
+		clusterID uint64
+		topic     string
+	}{
+		{name: "local", clusterID: info.clusterID},
+		{name: "remote", onlyReuse: true, clusterID: info.clusterID, topic: messaging.EventCollectorTopic},
+		{name: "redo remote new cluster", onlyReuse: true, mode: common.RedoMode, clusterID: info.clusterID + 1, topic: messaging.RedoEventCollectorTopic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			late := newMockDispatcherInfoForTest(t)
+			late.onlyReuse, late.mode, late.clusterID = tc.onlyReuse, tc.mode, tc.clusterID
+			service.registerDispatcher(t.Context(), late)
+			require.Zero(t, service.GetDispatcherCount())
+			require.Len(t, service.brokers, 1)
+			_, active := store.dispatcherMap.Load(late.id)
+			require.False(t, active)
+			if tc.onlyReuse {
+				response := <-mc.GetMessageChannel()
+				require.Equal(t, tc.topic, response.Topic)
+				require.Equal(t, late.GetID(), response.Message[0].(*commonEvent.NotReusableEvent).GetDispatcherID())
+			} else {
+				require.Empty(t, mc.GetMessageChannel())
+			}
+		})
+	}
+}
+
+func TestEventServiceReportsWithoutBrokers(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	var nodeLiveness liveness.Liveness
+	service := &eventService{mc: mc, nodeLiveness: &nodeLiveness}
+	service.reportDispatcherCount("log-coordinator")
+	report := (<-mc.GetMessageChannel()).Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.Zero(t, report.DispatcherCount)
+	require.False(t, report.RegistrationsStopped)
+
+	require.True(t, nodeLiveness.Store(liveness.CaptureDraining))
+	require.True(t, nodeLiveness.Store(liveness.CaptureStopping))
+	// Admission closes on registration too, without waiting for a broadcast.
+	info := newMockDispatcherInfoForTest(t)
+	info.onlyReuse = true
+	service.registerDispatcher(t.Context(), info)
+	require.Equal(t, messaging.TypeNotReusableEvent, (<-mc.GetMessageChannel()).Type)
+	service.reportDispatcherCount("new-log-coordinator")
+	message := <-mc.GetMessageChannel()
+	require.Equal(t, node.ID("new-log-coordinator"), message.To)
+	report = message.Message[0].(*logservicepb.EventBrokerDispatcherCount)
+	require.Zero(t, report.DispatcherCount)
+	require.True(t, report.RegistrationsStopped)
+	require.Empty(t, service.brokers)
+}
+
+func TestPendingHeartbeatWithoutBroker(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	service := &eventService{mc: mc}
+	id := common.NewDispatcherID()
+	heartbeat := commonEvent.NewDispatcherHeartbeat()
+	heartbeat.ClusterID = 42
+	heartbeat.AddDispatcherProgress(id, 0, 0)
+	service.StopAcceptingRegistrations()
+	service.handleDispatcherHeartbeat(&DispatcherHeartBeatWithServerID{serverID: "consumer", heartbeat: heartbeat})
+	response := (<-mc.GetMessageChannel()).Message[0].(*commonEvent.DispatcherHeartbeatResponse)
+	require.Equal(t, uint64(42), response.ClusterID)
+	require.Equal(t, []commonEvent.DispatcherState{commonEvent.NewDispatcherState(id, commonEvent.DSStateRemoved)}, response.DispatcherStates)
+}
+
+func TestPendingHeartbeatBeforeRegistration(t *testing.T) {
+	for _, handshaked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("handshaked=%t", handshaked), func(t *testing.T) {
+			broker, es, ss, responses := newEventBrokerForTest()
+			// Drive both queues explicitly to reproduce the reordering without
+			// depending on the service loop's select or background scans.
+			broker.close()
+			service := &eventService{
+				brokers:             map[uint64]*eventBroker{broker.tidbClusterID: broker},
+				dispatcherInfoChan:  make(chan DispatcherInfo, 1),
+				dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 1),
+			}
+			info := newMockDispatcherInfoForTest(t)
+			registrations, schemaReferences := 0, 0
+			es.registerDispatcherHook = func() bool {
+				// Registering over an existing ID would overwrite the metadata
+				// needed to detach its original EventStore subscription.
+				_, exists := es.dispatcherMap.Load(info.id)
+				require.False(t, exists)
+				require.Zero(t, schemaReferences)
+				registrations++
+				return true
+			}
+			ss.registerTableHook = func() { schemaReferences++ }
+			ss.unregisterTableHook = func() { schemaReferences-- }
+			heartbeat := commonEvent.NewDispatcherHeartbeat()
+			heartbeat.ClusterID = info.clusterID
+			heartbeat.AddDispatcherProgress(info.id, 0, 0)
+			service.dispatcherInfoChan <- info
+			service.dispatcherHeartbeat <- &DispatcherHeartBeatWithServerID{serverID: info.serverID, heartbeat: heartbeat}
+			service.handleDispatcherHeartbeat(<-service.dispatcherHeartbeat)
+			service.registerDispatcher(t.Context(), <-service.dispatcherInfoChan)
+
+			if handshaked {
+				reset := *info
+				reset.epoch = 3
+				reset.actionType = eventpb.ActionType_ACTION_TYPE_RESET
+				require.NoError(t, broker.resetDispatcher(&reset))
+				broker.getDispatcher(info.id).Load().setHandshaked()
+			}
+			original := broker.getDispatcher(info.id).Load()
+
+			// Deliver the stale Removed response after registration succeeds.
+			// The collector responds by retrying the same REGISTER.
+			response := (<-responses).Message[0].(*commonEvent.DispatcherHeartbeatResponse)
+			require.Equal(t, []commonEvent.DispatcherState{commonEvent.NewDispatcherState(info.id, commonEvent.DSStateRemoved)}, response.DispatcherStates)
+			service.dispatcherInfoChan <- info
+			service.registerDispatcher(t.Context(), <-service.dispatcherInfoChan)
+
+			require.Equal(t, 1, service.GetDispatcherCount())
+			current := broker.getDispatcher(info.id).Load()
+			require.NotSame(t, original, current)
+			require.True(t, original.isRemoved.Load())
+			require.Zero(t, current.epoch)
+			require.Equal(t, 2, registrations)
+			require.Equal(t, 1, schemaReferences)
+			require.Equal(t, uint64(1), es.unregisterCount.Load())
+			// The replacement follows the usual Ready/RESET flow. A recreated
+			// collector can start at epoch one even if the old registration used three.
+			readyCh := broker.getMessageCh(current.messageWorkerIndex, common.IsRedoMode(info.mode))
+			require.Empty(t, readyCh)
+			require.False(t, broker.checkAndSendReady(current))
+			require.Len(t, readyCh, 1)
+			ready := <-readyCh
+			require.Equal(t, commonEvent.TypeReadyEvent, ready.msgType)
+			require.Equal(t, node.ID(info.serverID), ready.serverID)
+			ready.reset()
+			reset := *info
+			reset.epoch = 1
+			require.NoError(t, broker.resetDispatcher(&reset))
+			require.Equal(t, uint64(1), broker.getDispatcher(info.id).Load().epoch)
+
+			service.deregisterDispatcher(info)
+			require.Zero(t, service.GetDispatcherCount())
+			require.Zero(t, schemaReferences)
+			require.Equal(t, uint64(2), es.unregisterCount.Load())
+			_, exists := es.dispatcherMap.Load(info.id)
+			require.False(t, exists)
+			_, exists = es.spansMap.Load(info.span)
+			require.False(t, exists)
+		})
+	}
+}
+
+func TestEventServiceSerializesDispatcherCleanup(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+	synctest.Test(t, func(t *testing.T) {
+		service := &eventService{
+			brokers:            map[uint64]*eventBroker{broker.tidbClusterID: broker},
+			dispatcherInfoChan: make(chan DispatcherInfo, 1),
+		}
+		info := newMockDispatcherInfoForTest(t)
+		require.NoError(t, broker.addDispatcher(info))
+		original := broker.getDispatcher(info.id).Load()
+		original.setHandshaked()
+		original.lastReceivedHeartbeatTime.Store(time.Now().Add(-2 * heartbeatTimeout).Unix())
+
+		cleanupStarted := make(chan struct{})
+		resumeCleanup := make(chan struct{})
+		ss.unregisterTableHook = func() {
+			close(cleanupStarted)
+			<-resumeCleanup
+		}
+		releaseCleanup := sync.OnceFunc(func() { close(resumeCleanup) })
+		ctx, cancel := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		t.Cleanup(func() { releaseCleanup(); cancel(); wg.Wait() })
+		wg.Go(func() { _ = service.Run(ctx) })
+		synctest.Wait()
+		// Advance to the service's cleanup tick without a real-time sleep.
+		time.Sleep(10 * time.Second)
+		<-cleanupStarted
+		require.Nil(t, broker.getDispatcher(info.id))
+		// The map entry is gone, but cleanup still keeps the drain count positive.
+		require.Equal(t, 1, service.GetDispatcherCount())
+
+		service.dispatcherInfoChan <- info
+		synctest.Wait()
+		// REGISTER stays queued until Run finishes unregistering the old resources.
+		require.Len(t, service.dispatcherInfoChan, 1)
+		require.Nil(t, broker.getDispatcher(info.id))
+		releaseCleanup()
+		synctest.Wait()
+		require.Empty(t, service.dispatcherInfoChan)
+		require.NotNil(t, broker.getDispatcher(info.id))
+		require.Equal(t, 1, service.GetDispatcherCount())
+
+		cancel()
+		wg.Wait()
+		ss.unregisterTableHook = nil
+		service.deregisterDispatcher(info)
+		require.Zero(t, service.GetDispatcherCount())
+	})
+}
+
 func TestHandleMessageIgnoresInvalidSingleMessagePayloads(t *testing.T) {
 	es := &eventService{}
 
@@ -209,6 +520,7 @@ type mockEventStore struct {
 	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
 	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
 	unregisterCount          atomic.Uint64
+	registerDispatcherHook   func() bool
 }
 
 func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
@@ -364,6 +676,9 @@ func (m *mockEventStore) RegisterDispatcher(
 	_ bool,
 	_ bool,
 ) bool {
+	if m.registerDispatcherHook != nil && !m.registerDispatcherHook() {
+		return false
+	}
 	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTS),
 		zap.Any("span", common.FormatTableSpan(span)))
@@ -489,6 +804,7 @@ type mockDispatcherInfo struct {
 	actionType        eventpb.ActionType
 	filterConfig      *eventpb.FilterConfig
 	bdrMode           bool
+	onlyReuse         bool
 	integrity         *integrity.Config
 	mode              int64
 	epoch             uint64
@@ -575,7 +891,7 @@ func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 }
 
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
-	return false
+	return m.onlyReuse
 }
 
 func (m *mockDispatcherInfo) GetBdrMode() bool {
