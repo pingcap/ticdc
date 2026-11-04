@@ -134,7 +134,7 @@ function run_protocol_case() {
 	fi
 	cdc_consumer --upstream-uri "$consumer_uri" --consumer-id "${changefeed_id}-$$" \
 		--downstream-uri "mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?enable-ddl-ts=false" \
-		--log-file "$work_dir/cdc_consumer.log" --log-level debug >>"$work_dir/cdc_consumer_stdout.log" 2>&1 &
+		--log-file "$work_dir/cdc_consumer.log" >>"$work_dir/cdc_consumer_stdout.log" 2>&1 &
 	consumer_pid=$!
 	wait_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null"
 

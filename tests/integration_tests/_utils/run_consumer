@@ -17,7 +17,6 @@ args=(
 	--downstream-uri "mysql://root@${DOWN_TIDB_HOST:-127.0.0.1}:${DOWN_TIDB_PORT:-3306}/?enable-ddl-ts=false"
 	--consumer-id "$consumer_id"
 	--log-file "$workdir/cdc_consumer${log_suffix}.log"
-	--log-level debug
 )
 if [ -n "$consumer_config" ]; then
 	args+=(--config "$consumer_config")

@@ -59,7 +59,7 @@ type consumer struct {
 
 func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	if err := logger.InitLogger(&logger.Config{
-		Level: options.logLevel,
+		Level: "info",
 		File:  options.logFile,
 	}); err != nil {
 		log.Panic("consumer logger initialization failed", zap.Error(err))
@@ -83,7 +83,7 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 			log.Panic("Storage configuration is invalid", zap.Error(err))
 		}
 	}
-	decoding := newDecodeConfig(upstreamURI, options.timezone, replicaConfig)
+	decoding := newDecodeConfig(upstreamURI, replicaConfig)
 	log.Info("consumer configuration loaded", zap.String("sourceType", string(sourceType)), zap.String("consumerID", consumerID))
 
 	memory := newMemoryBudget()
@@ -179,7 +179,7 @@ func loadReplicaConfig(configFile string) *config.ReplicaConfig {
 }
 
 // Resolve transport-specific defaults and requirements before constructing the conductor.
-func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *config.ReplicaConfig) *decodeConfig {
+func newDecodeConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *decodeConfig {
 	source := sourceTypeFromURI(upstreamURI)
 	protocolName := upstreamURI.Query().Get(config.ProtocolKey)
 	switch source {
@@ -224,10 +224,6 @@ func newDecodeConfig(upstreamURI *url.URL, timezone string, replicaConfig *confi
 				log.Panic("consumer requires an Avro schema registry")
 			}
 		}
-	}
-	codecConfig.TimeZone, err = putil.GetTimezone(timezone)
-	if err != nil {
-		log.Panic("consumer time zone is invalid", zap.Error(err))
 	}
 	if (protocol == config.ProtocolDebezium || protocol == config.ProtocolDebeziumAvro) && codecConfig.DebeziumDisableSchema {
 		log.Panic("consumer requires Debezium schemas")

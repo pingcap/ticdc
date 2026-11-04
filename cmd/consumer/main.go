@@ -33,9 +33,7 @@ type options struct {
 	downstreamURI   string
 	configFile      string
 	consumerID      string
-	timezone        string
 	logFile         string
-	logLevel        string
 	enableProfiling bool
 }
 
@@ -67,9 +65,7 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.downstreamURI, "downstream-uri", "", "downstream sink URI")
 	flags.StringVar(&options.configFile, "config", "", "consumer configuration file")
 	flags.StringVar(&options.consumerID, "consumer-id", "", "Kafka group ID (random if omitted) or Pulsar subscription name (default pulsar-test-subscription)")
-	flags.StringVar(&options.timezone, "tz", "System", "consumer time zone")
 	flags.StringVar(&options.logFile, "log-file", "cdc_consumer.log", "log file path")
-	flags.StringVar(&options.logLevel, "log-level", "info", "log level")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
 	return command
 }
