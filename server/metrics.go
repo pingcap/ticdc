@@ -14,6 +14,7 @@
 package server
 
 import (
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
@@ -26,4 +27,72 @@ func init() {
 	metrics.InitMetrics(registry)
 	mysql.InitMetrics(registry)
 	event.InitEventMetrics(registry)
+=======
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
+	// It is used by dashboards to identify the exact binary running on each TiCDC server,
+	// including whether the process is running in TiCDC's new or old architecture mode.
+	buildInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "build_info",
+			Help:      "TiCDC build information as labels.",
+		},
+		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type", "ticdc_arch"},
+	)
+
+	captureWriteGateState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_write_gate_state",
+			Help:      "Whether the capture write gate is in the labeled state.",
+		}, []string{"state"})
+
+	captureP2PLeaseRemainingSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_p2p_lease_remaining_seconds",
+			Help:      "Remaining lifetime of the capture P2P write lease.",
+		})
+
+	captureEtcdProofRemainingSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_etcd_proof_remaining_seconds",
+			Help:      "Remaining lifetime of the capture etcd write proof.",
+		})
+
+	captureWriteBlockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "capture_write_block_total",
+			Help:      "Number of capture write gate transitions from writable to blocked.",
+		}, []string{"reason"})
+)
+
+// RecordBuildInfo records the server build metadata.
+func RecordBuildInfo() {
+	buildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name(), "newarch").Set(1)
+}
+
+// RegisterMetrics registers capture and process metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(captureWriteGateState)
+	registry.MustRegister(captureP2PLeaseRemainingSeconds)
+	registry.MustRegister(captureEtcdProofRemainingSeconds)
+	registry.MustRegister(captureWriteBlockCounter)
+	registry.MustRegister(buildInfo)
+	metrics.RegisterMetrics(registry)
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663))
 }

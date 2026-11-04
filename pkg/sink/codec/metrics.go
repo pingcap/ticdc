@@ -14,7 +14,10 @@
 package codec
 
 import (
+<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+=======
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663))
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -36,9 +39,16 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
+<<<<<<< HEAD
 // InitMetrics registers all metrics in this file
 func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(encoderGroupInputChanSizeGauge)
 	registry.MustRegister(encoderGroupOutputChanSizeGauge)
 	common.InitMetrics(registry)
+=======
+// RegisterMetrics registers all metrics in this file
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(encoderGroupInputChanSizeGauge)
+	registry.MustRegister(encoderGroupOutputChanSizeGauge)
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663))
 }

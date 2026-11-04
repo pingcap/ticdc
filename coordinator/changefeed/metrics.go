@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package changefeed
 
 import (
-	"strconv"
-
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -73,17 +72,7 @@ var (
 			Subsystem: "owner",
 			Name:      "status",
 			Help:      "The status of changefeeds",
-		}, []string{GetKeyspaceLabel(), "changefeed", "keyspace_id"})
-
-	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
-	// for each changefeed.
-	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "changefeed_error_info",
-			Help:      "The current warning or failed reason and occurrence time of changefeeds",
-		}, []string{GetKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
 	// changefeed operation timestamps for the Grafana investigation panel.
@@ -101,7 +90,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
-		}, []string{GetKeyspaceLabel(), "changefeed", "keyspace_id"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// it's a metrics used in a large number of tcms, we should always keep this metrics
 	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -110,7 +99,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
-		}, []string{GetKeyspaceLabel(), "changefeed"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// ChangefeedDownstreamInfoGauge is a metric with a constant '1' value,
 	// labeled by the downstream type of each changefeed.
@@ -123,6 +112,7 @@ var (
 			Subsystem: "owner",
 			Name:      "changefeed_downstream_info",
 			Help:      "Downstream type information of changefeeds exposed as labels.",
+<<<<<<< HEAD:pkg/metrics/changefeed.go
 		}, []string{GetKeyspaceLabel(), "changefeed", "downstream_type"})
 
 	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
@@ -139,26 +129,24 @@ var (
 			Name:      "changefeed_downstream_is_tidb",
 			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
 		}, []string{GetKeyspaceLabel(), "changefeed"})
+=======
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "downstream_type"})
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663)):coordinator/changefeed/metrics.go
 )
 
 func DeleteChangefeedCheckpointMetrics(keyspace, changefeed string, keyspaceID uint32) {
 	ChangefeedCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
-	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, FormatKeyspaceID(keyspaceID))
-}
-
-// FormatKeyspaceID formats a keyspace ID as a metric label value.
-func FormatKeyspaceID(keyspaceID uint32) string {
-	return strconv.FormatUint(uint64(keyspaceID), 10)
+	ChangefeedCheckpointTsLagGauge.DeleteLabelValues(keyspace, changefeed, metrics.FormatKeyspaceID(keyspaceID))
 }
 
 func ResetOwnerChangefeedMetrics() {
 	ChangefeedStatusGauge.Reset()
-	ChangefeedErrorInfoGauge.Reset()
 	ChangefeedCheckpointTsGauge.Reset()
 	ChangefeedCheckpointTsLagGauge.Reset()
 	ChangefeedDownstreamInfoGauge.Reset()
 }
 
+<<<<<<< HEAD:pkg/metrics/changefeed.go
 func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerCheckpointTsGauge)
 	registry.MustRegister(MaintainerCheckpointTsLagGauge)
@@ -169,6 +157,11 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedErrorInfoGauge)
 	registry.MustRegister(ChangefeedOperationTimeGauge)
+=======
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(ChangefeedStatusGauge)
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663)):coordinator/changefeed/metrics.go
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedDownstreamInfoGauge)
