@@ -217,19 +217,7 @@ func (d *JSONDuration) UnmarshalText(text []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-<<<<<<< HEAD
-	PerformanceMode          *string `json:"performance_mode,omitempty"`
-	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
-	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
-	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
-	CaseSensitive            *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate           *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
-=======
+	PerformanceMode          *string `json:"performance_mode,omitempty" toml:"performance-mode,omitempty"`
 	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
 	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
@@ -240,18 +228,6 @@ type ReplicaConfig struct {
 	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
 	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
 	BDRMode                  *bool   `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
-	// EnableActiveActive enables active-active replication mode on top of BDR.
-	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
-	EnableActiveActive *bool `json:"enable_active_active,omitempty" toml:"enable-active-active,omitempty"`
-	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
-	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
-	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty" toml:"active-active-progress-interval,omitempty"`
-	// ActiveActiveSyncStatsInterval controls how often the MySQL/TiDB sink queries
-	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
-	// Set it to 0 to disable metric collection.
-	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
-	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty" toml:"active-active-sync-stats-interval,omitempty"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty" toml:"sync-point-interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty" toml:"sync-point-retention,omitempty"`
@@ -1139,18 +1115,10 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-<<<<<<< HEAD
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
-=======
-	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr" toml:"ignore-insert-value-expr"`
-	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr" toml:"ignore-update-new-value-expr"`
-	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr" toml:"ignore-update-old-value-expr"`
-	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr" toml:"ignore-delete-value-expr"`
-	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty" toml:"ignore-update-only-columns,omitempty"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
+	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr" toml:"ignore-insert-value-expr"`
+	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr" toml:"ignore-update-new-value-expr"`
+	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr" toml:"ignore-update-old-value-expr"`
+	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr" toml:"ignore-delete-value-expr"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule
@@ -1208,7 +1176,6 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-<<<<<<< HEAD
 	Protocol                 *string               `json:"protocol,omitempty" toml:"protocol,omitempty"`
 	SchemaRegistry           *string               `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
 	CSVConfig                *CSVConfig            `json:"csv,omitempty" toml:"csv,omitempty"`
@@ -1220,19 +1187,6 @@ type SinkConfig struct {
 	DateSeparator            *config.DateSeparator `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
 	EnablePartitionSeparator *bool                 `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
 	FileIndexWidth           *int                  `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
-=======
-	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`
@@ -1269,17 +1223,10 @@ type CSVConfig struct {
 // LargeMessageHandleConfig denotes the large message handling config
 // This is the same as config.LargeMessageHandleConfig
 type LargeMessageHandleConfig struct {
-<<<<<<< HEAD
 	LargeMessageHandleOption      string  `json:"large_message_handle_option" toml:"large-message-handle-option"`
 	LargeMessageHandleCompression string  `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
 	ClaimCheckStorageURI          *string `json:"claim_check_storage_uri,omitempty" toml:"claim-check-storage-uri,omitempty"`
 	ClaimCheckRawValue            bool    `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
-=======
-	LargeMessageHandleOption      string `json:"large_message_handle_option" toml:"large-message-handle-option"`
-	LargeMessageHandleCompression string `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
-	ClaimCheckStorageURI          string `json:"claim_check_storage_uri" toml:"claim-check-storage-uri"`
-	ClaimCheckRawValue            bool   `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 }
 
 // DispatchRule represents partition rule for a table
@@ -1327,10 +1274,7 @@ type ConsistentConfig struct {
 	UseFileBackend        *bool                  `json:"use_file_backend,omitempty" toml:"use-file-backend,omitempty"`
 	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
 	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
-<<<<<<< HEAD
 	SpoolDiskQuota        *int64                 `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
-=======
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
 	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
@@ -1647,19 +1591,11 @@ type PulsarConfig struct {
 
 // PulsarOAuth2 is the configuration for OAuth2
 type PulsarOAuth2 struct {
-<<<<<<< HEAD
 	OAuth2IssuerURL  *string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
 	OAuth2Audience   string  `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
 	OAuth2PrivateKey *string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
 	OAuth2ClientID   string  `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
 	OAuth2Scope      string  `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
-=======
-	OAuth2IssuerURL  string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
-	OAuth2Audience   string `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
-	OAuth2PrivateKey string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
-	OAuth2ClientID   string `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
-	OAuth2Scope      string `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 }
 
 // KafkaConfig represents a kafka sink configuration
@@ -1717,10 +1653,7 @@ type MySQLConfig struct {
 	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
 	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
 	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
-<<<<<<< HEAD
 	AsyncDDLTimeout              *string `json:"async_ddl_timeout,omitempty" toml:"async-ddl-timeout,omitempty"`
-=======
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
@@ -1757,17 +1690,10 @@ type GlueSchemaRegistryConfig struct {
 	// Region of the schema registry
 	Region string `json:"region" toml:"region"`
 	// AccessKey of the schema registry
-<<<<<<< HEAD
 	AccessKey *string `json:"access_key,omitempty" toml:"access-key,omitempty"`
 	// SecretAccessKey of the schema registry
 	SecretAccessKey *string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
 	Token           *string `json:"token,omitempty" toml:"token,omitempty"`
-=======
-	AccessKey string `json:"access_key,omitempty" toml:"access-key,omitempty"`
-	// SecretAccessKey of the schema registry
-	SecretAccessKey string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
-	Token           string `json:"token,omitempty" toml:"token,omitempty"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding
@@ -1777,14 +1703,10 @@ type OpenProtocolConfig struct {
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-<<<<<<< HEAD
 	OutputOldValue             bool    `json:"output_old_value" toml:"output-old-value"`
 	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
 	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
 	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
-=======
-	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 }
 
 type DispatcherCount struct {

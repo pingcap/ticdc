@@ -15,24 +15,17 @@ package v2
 
 import (
 	"bytes"
-<<<<<<< HEAD
-	"testing"
-
-	"github.com/BurntSushi/toml"
-=======
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gin-gonic/gin"
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
 func TestDebeziumHandlingModesTOMLRoundTrip(t *testing.T) {
 	cfg := DebeziumConfig{
 		OutputOldValue:             true,
@@ -50,7 +43,8 @@ func TestDebeziumHandlingModesTOMLRoundTrip(t *testing.T) {
 	require.Equal(t, "string", util.GetOrZero(internal.DecimalHandlingMode))
 	require.Equal(t, "string", util.GetOrZero(internal.BigintUnsignedHandlingMode))
 	require.Equal(t, "hex", util.GetOrZero(internal.BinaryHandlingMode))
-=======
+}
+
 // TestJSONDurationTextRoundTrip verifies JSONDuration serializes to and parses
 // from a human-readable string, which is what makes TOML output round-trippable.
 func TestJSONDurationTextRoundTrip(t *testing.T) {
@@ -219,5 +213,4 @@ func TestRespondWithFormat(t *testing.T) {
 			require.Contains(t, w.Body.String(), tc.wantContain)
 		})
 	}
->>>>>>> 27c8e551b (api/v2: support TOML output for changefeed query via content negotiation (#5357))
 }
