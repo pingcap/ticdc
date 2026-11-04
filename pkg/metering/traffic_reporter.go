@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metering uploads traffic records through Metering SDK.
+// Package metering uploads caller-defined records through Metering SDK.
 package metering
 
 import (
@@ -38,26 +38,32 @@ const (
 	writeAttempts  = 6
 )
 
-// TrafficRecord is a changefeed's metering result. The producer defines whether
-// TrafficBytes represents a total or a delta; the reporter does not aggregate it.
-// Additional business fields belong here when the metering contract is finalized.
-type TrafficRecord struct {
-	ChangefeedGID string
-	TrafficBytes  uint64
+// Batch is one caller-defined metering batch. The reporter adds only SDK batch
+// metadata; it does not interpret or aggregate the records.
+type Batch struct {
+	// Category is the SDK category and must be a single path component.
+	Category string
+	// Timestamp selects the SDK minute directory. It is truncated to the minute.
+	Timestamp time.Time
+	// Records are serialized as provided. The caller must not mutate them until
+	// Report returns.
+	Records []map[string]any
 }
 
-// TrafficReporter uploads caller-provided records synchronously. It owns no
-// collection loop or pending queue. The caller retains responsibility for durable
-// state and scheduling, including recovery after an unsuccessful Report.
-type TrafficReporter struct {
+// Reporter uploads caller-provided batches synchronously. It owns no collection
+// loop or pending queue. The caller retains responsibility for durable state and
+// scheduling, including recovery after an unsuccessful Report.
+type Reporter struct {
 	mu     sync.Mutex
 	inner  *meteringwriter.MeteringWriter
 	closed bool
 }
 
-// NewTrafficReporter initializes the SDK without starting a goroutine. The owner
-// must call Close after all Report calls have returned.
-func NewTrafficReporter(c *config.MeteringConfig) (*TrafficReporter, error) {
+// NewReporter initializes the SDK without starting a goroutine. It reuses the
+// SDK metering configuration, including provider-specific fields and
+// credentials, and does not interpret them itself. The owner must call Close
+// after all Report calls have returned.
+func NewReporter(c *config.MeteringConfig) (*Reporter, error) {
 	if err := ValidateConfig(c); err != nil {
 		return nil, err
 	}
@@ -68,50 +74,55 @@ func NewTrafficReporter(c *config.MeteringConfig) (*TrafficReporter, error) {
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
-	return &TrafficReporter{
+	return &Reporter{
 		// SDK defaults disable pagination and refuse overwrites.
 		inner: meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig(), c),
 	}, nil
 }
 
-// Report uploads one batch. Records must not be mutated until this call returns.
-// Retries within this call preserve batch identity and contents. Separate calls
-// create separate batches, even with identical inputs; success does not acknowledge
-// producer state. Errors, including ambiguous upload outcomes, are returned to the
-// caller. The timestamp selects the SDK minute directory, not a billing interval.
-func (w *TrafficReporter) Report(ctx context.Context, reportedAt time.Time, records []TrafficRecord) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed {
-		return errors.ErrInvalidServerOption.GenWithStack("metering: traffic reporter is closed")
+// Report uploads one batch synchronously. Retries within this call preserve
+// batch identity and contents. Separate calls create separate objects, even with
+// identical inputs. A nil error means the SDK reported a successful upload.
+//
+// A non-nil error means success was not confirmed; it is not proof that nothing
+// was written. If an upload response is lost, a retry can find the object and
+// return writer.ErrFileExists, which does not compare the existing contents.
+// Callers must treat such errors as indeterminate and reconcile from their own
+// durable state. Success does not acknowledge producer state.
+//
+// The caller's context bounds the whole call, including retries and backoff.
+// Concurrent calls are serialized. After Close, Report returns
+// errors.ErrMeteringReporterClosed.
+func (r *Reporter) Report(ctx context.Context, batch Batch) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.ErrMeteringReporterClosed.GenWithStackByArgs()
+	}
+	if len(batch.Records) == 0 {
+		return nil
+	}
+	if !validPathComponent(batch.Category) {
+		return errors.ErrMeteringInvalidBatch.GenWithStackByArgs(
+			"category must be a single path component")
+	}
+	ts := batch.Timestamp.Truncate(reportInterval).Unix()
+	if ts <= 0 {
+		return errors.ErrMeteringInvalidBatch.GenWithStackByArgs("timestamp must be positive")
 	}
 	if err := ctx.Err(); err != nil {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
-	if len(records) == 0 {
-		return nil
-	}
-	ts := reportedAt.Truncate(reportInterval).Unix()
-	if ts <= 0 {
-		return errors.ErrInvalidServerOption.GenWithStack("metering: sampling timestamp must be positive")
-	}
-	data := make([]map[string]any, len(records))
-	for i, record := range records {
-		data[i] = map[string]any{
-			"changefeed_gid": record.ChangefeedGID,
-			"traffic_bytes":  common.MeteringValue{Value: record.TrafficBytes, Unit: "Bytes"},
-		}
-	}
-	batch := &common.MeteringData{
+	data := &common.MeteringData{
 		SelfID:    "ticdc" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 		Timestamp: ts,
-		Category:  "ticdc",
-		Data:      data,
+		Category:  batch.Category,
+		Data:      batch.Records,
 	}
 	err := retry.Do(ctx, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 		defer cancel()
-		return w.inner.Write(attemptCtx, batch)
+		return r.inner.Write(attemptCtx, data)
 	}, retry.WithMaxTries(writeAttempts),
 		retry.WithBackoffBaseDelay(1000), retry.WithBackoffMaxDelay(10000),
 		retry.WithIsRetryableErr(func(err error) bool {
@@ -122,12 +133,14 @@ func (w *TrafficReporter) Report(ctx context.Context, reportedAt time.Time, reco
 }
 
 // Close releases the SDK after an in-flight Report finishes. It is idempotent.
-func (w *TrafficReporter) Close() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.closed {
-		w.closed = true
-		if err := w.inner.Close(); err != nil {
+// It does not cancel an in-flight Report; cancel its context first if shutdown
+// needs to be bounded.
+func (r *Reporter) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.closed {
+		r.closed = true
+		if err := r.inner.Close(); err != nil {
 			log.Warn("metering writer close failed", zap.Error(errors.WrapError(errors.ErrExternalStorageAPI, err)))
 		}
 	}

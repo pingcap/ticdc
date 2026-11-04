@@ -23,6 +23,7 @@ import (
 	meteringconfig "github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -46,9 +47,14 @@ func TestMeteringInitializationFailure(t *testing.T) {
 			cfg := original.Clone()
 			cfg.Metering = tc.cfg
 			config.StoreGlobalServerConfig(cfg)
-			// Initialization must fail before starting any coordinator loops.
 			c := &coordinator{}
-			err := c.Run(context.Background())
+			if !kerneltype.IsNextGen() {
+				require.NoError(t, c.initializeMetering())
+				require.Nil(t, c.trafficReporter)
+				return
+			}
+			// Initialization must fail before starting any coordinator loops.
+			err := c.Run(t.Context())
 			require.ErrorContains(t, err, tc.code)
 			require.Nil(t, c.trafficReporter)
 		})
@@ -100,13 +106,18 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("coordinator did not stop")
 			}
-			if tc.cfg == nil || tc.cfg.Type == "" {
+			if !kerneltype.IsNextGen() || tc.cfg == nil || tc.cfg.Type == "" {
 				require.Nil(t, c.trafficReporter)
+				require.NoDirExists(t, dir)
 			} else {
 				require.NotNil(t, c.trafficReporter)
 				_, err := os.Stat(dir)
 				require.NoError(t, err)
-				require.ErrorContains(t, c.trafficReporter.Report(context.Background(), time.Now(), []metering.TrafficRecord{{ChangefeedGID: "gid1", TrafficBytes: 1}}), "closed")
+				require.ErrorContains(t, c.trafficReporter.Report(context.Background(), metering.Batch{
+					Category:  "ticdc",
+					Timestamp: time.Now(),
+					Records:   []map[string]any{{"changefeed_gid": "gid1", "traffic_bytes": 1}},
+				}), "closed")
 			}
 		})
 	}

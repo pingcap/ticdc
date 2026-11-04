@@ -87,7 +87,7 @@ type coordinator struct {
 
 	// trafficReporter belongs to this coordinator term and is never shared with
 	// followers or the next coordinator instance.
-	trafficReporter *metering.TrafficReporter
+	trafficReporter *metering.Reporter
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -203,12 +203,15 @@ func (c *coordinator) Run(ctx context.Context) error {
 }
 
 func (c *coordinator) initializeMetering() error {
+	if !kerneltype.IsNextGen() {
+		return nil
+	}
 	destination := config.GetGlobalServerConfig().Metering
 	if destination == nil || destination.Type == "" {
 		return nil
 	}
 	var err error
-	c.trafficReporter, err = metering.NewTrafficReporter(destination)
+	c.trafficReporter, err = metering.NewReporter(destination)
 	return err
 }
 

@@ -29,30 +29,43 @@ import (
 	"github.com/pingcap/metering_sdk/common"
 	"github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/metering_sdk/writer"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
 
-func TestTrafficReporterRecords(t *testing.T) {
+const testCategory = "custom-category"
+
+func TestReporterRecords(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := t.TempDir()
 	cfg := config.NewMeteringConfig().WithLocalFS(dir).WithPrefix("test").WithSharedPoolID("pool1")
 	const total = uint64(1<<53 + 1)
-	records := []metering.TrafficRecord{{ChangefeedGID: "gid1", TrafficBytes: total}, {ChangefeedGID: "gid2", TrafficBytes: 0}}
-	w, err := metering.NewTrafficReporter(cfg)
+	records := []map[string]any{
+		{
+			"changefeed_gid": "gid1",
+			"traffic_bytes":  common.MeteringValue{Value: total, Unit: "Bytes"},
+			"extra":          "kept as provided",
+		},
+		{
+			"changefeed_gid": "gid2",
+			"traffic_bytes":  common.MeteringValue{Value: 0, Unit: "Bytes"},
+		},
+	}
+	batch := metering.Batch{Category: testCategory, Timestamp: time.Unix(1788912010, 0), Records: records}
+	r, err := metering.NewReporter(cfg)
 	require.NoError(t, err)
-	defer w.Close()
-	now := time.Unix(1788912010, 0)
-	require.NoError(t, w.Report(context.Background(), now, records))
+	defer r.Close()
+	require.NoError(t, r.Report(context.Background(), batch))
 	// Same-minute reports and a restarted reporter must use separate paths.
-	require.NoError(t, w.Report(context.Background(), now, records))
-	other, err := metering.NewTrafficReporter(cfg)
+	require.NoError(t, r.Report(context.Background(), batch))
+	other, err := metering.NewReporter(cfg)
 	require.NoError(t, err)
-	require.NoError(t, other.Report(context.Background(), now, records))
+	require.NoError(t, other.Report(context.Background(), batch))
 	other.Close()
 
-	paths, err := filepath.Glob(filepath.Join(dir, "test/metering/ru/1788912000/ticdc/pool1/*.json.gz"))
+	paths, err := filepath.Glob(filepath.Join(dir, "test/metering/ru/1788912000", testCategory, "pool1/*.json.gz"))
 	require.NoError(t, err)
 	require.Len(t, paths, 3)
 	for _, path := range paths {
@@ -62,35 +75,43 @@ func TestTrafficReporterRecords(t *testing.T) {
 		require.NoError(t, err)
 		var payload struct {
 			Timestamp    int64  `json:"timestamp"`
+			Category     string `json:"category"`
 			SelfID       string `json:"self_id"`
 			SharedPoolID string `json:"shared_pool_id"`
 			Part         int    `json:"part"`
 			Data         []struct {
 				GID     string               `json:"changefeed_gid"`
 				Traffic common.MeteringValue `json:"traffic_bytes"`
+				Extra   string               `json:"extra"`
 			} `json:"data"`
 		}
 		require.NoError(t, json.NewDecoder(gz).Decode(&payload))
 		require.NoError(t, gz.Close())
 		require.NoError(t, f.Close())
 		require.Equal(t, int64(1788912000), payload.Timestamp)
+		require.Equal(t, testCategory, payload.Category)
+		require.NotEmpty(t, payload.SelfID)
 		require.NotContains(t, payload.SelfID, "-")
 		require.Equal(t, "pool1", payload.SharedPoolID)
 		require.Zero(t, payload.Part)
 		require.Len(t, payload.Data, 2)
 		require.Equal(t, "gid1", payload.Data[0].GID)
+		require.Equal(t, "kept as provided", payload.Data[0].Extra)
+		require.Equal(t, common.MeteringValue{Value: total, Unit: "Bytes"}, payload.Data[0].Traffic)
 		require.Equal(t, "gid2", payload.Data[1].GID)
 		require.Equal(t, common.MeteringValue{Value: 0, Unit: "Bytes"}, payload.Data[1].Traffic)
-		require.Equal(t, common.MeteringValue{Value: total, Unit: "Bytes"}, payload.Data[0].Traffic)
 	}
-	w.Close()
-	w.Close()
-	require.Error(t, w.Report(context.Background(), now, records))
+
+	r.Close()
+	r.Close()
+	require.ErrorIs(t,
+		r.Report(context.Background(), batch),
+		errors.ErrMeteringReporterClosed)
 }
 
 // Exercise the public reporter through an HTTP storage boundary. Returning 400
 // prevents the AWS SDK's own retries from masking a missing reporter retry.
-func TestTrafficReporterUploadFailures(t *testing.T) {
+func TestReporterUploadFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		failures     int
@@ -149,10 +170,14 @@ func TestTrafficReporterUploadFailures(t *testing.T) {
 			defer server.Close()
 			cfg := config.NewMeteringConfig().WithS3("us-east-1", "bucket").WithEndpoint(server.URL).
 				WithAWSConfig(&config.MeteringAWSConfig{AccessKey: "test", SecretAccessKey: "test", S3ForcePathStyle: true})
-			reporter, err := metering.NewTrafficReporter(cfg)
+			reporter, err := metering.NewReporter(cfg)
 			require.NoError(t, err)
 			defer reporter.Close()
-			err = reporter.Report(ctx, time.Now(), []metering.TrafficRecord{{ChangefeedGID: "gid1", TrafficBytes: 42}})
+			err = reporter.Report(ctx, metering.Batch{
+				Category:  testCategory,
+				Timestamp: time.Now(),
+				Records:   []map[string]any{{"changefeed_gid": "gid1", "traffic_bytes": common.MeteringValue{Value: 42, Unit: "Bytes"}}},
+			})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -178,20 +203,78 @@ func TestTrafficReporterUploadFailures(t *testing.T) {
 	}
 }
 
-func TestTrafficReporterCancellationAndEmpty(t *testing.T) {
+func TestReporterCancellationAndEmpty(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := t.TempDir()
-	w, err := metering.NewTrafficReporter(config.NewMeteringConfig().WithLocalFS(dir))
+	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir))
 	require.NoError(t, err)
-	defer w.Close()
+	defer r.Close()
 	now := time.Now()
-	records := []metering.TrafficRecord{{ChangefeedGID: "gid1", TrafficBytes: 1}}
-	require.NoError(t, w.Report(context.Background(), now, nil))
+	records := []map[string]any{{"changefeed_gid": "gid1"}}
+	require.NoError(t, r.Report(context.Background(), metering.Batch{Category: testCategory, Timestamp: now}))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.ErrorIs(t, w.Report(ctx, now, records), context.Canceled)
-	require.Error(t, w.Report(context.Background(), time.Unix(0, 0), records))
+	require.ErrorIs(t,
+		r.Report(ctx, metering.Batch{Category: testCategory, Timestamp: now, Records: records}),
+		context.Canceled)
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+func TestReporterRejectsInvalidBatch(t *testing.T) {
+	dir := t.TempDir()
+	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir))
+	require.NoError(t, err)
+	defer r.Close()
+	now := time.Unix(1788912000, 0)
+	records := []map[string]any{{"changefeed_gid": "gid1"}}
+	for _, tc := range []struct {
+		name  string
+		batch metering.Batch
+	}{
+		{name: "missing category", batch: metering.Batch{Timestamp: now, Records: records}},
+		{name: "category traversal", batch: metering.Batch{Category: "../ticdc", Timestamp: now, Records: records}},
+		{name: "zero timestamp", batch: metering.Batch{Category: testCategory, Records: records}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, r.Report(context.Background(), tc.batch), errors.ErrMeteringInvalidBatch)
+		})
+	}
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestReporterConcurrentCalls(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	dir := t.TempDir()
+	r, err := metering.NewReporter(config.NewMeteringConfig().WithLocalFS(dir))
+	require.NoError(t, err)
+	defer r.Close()
+	const calls = 4
+	start := make(chan struct{})
+	errCh := make(chan error, calls)
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errCh <- r.Report(context.Background(), metering.Batch{
+				Category:  testCategory,
+				Timestamp: time.Unix(1788912000, 0),
+				Records:   []map[string]any{{"call": i}},
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, "metering/ru/1788912000", testCategory, "default-shared-pool/*.json.gz"))
+	require.NoError(t, err)
+	require.Len(t, paths, calls)
 }
