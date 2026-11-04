@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +36,34 @@ func TestServerConfigMarshal(t *testing.T) {
 	err = conf2.Unmarshal([]byte(b))
 	require.NoError(t, err)
 	require.Equal(t, conf, conf2)
+}
+
+func TestServerConfigStringMasksKMSCredentials(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+	conf := GetDefaultServerConfig()
+	conf.Encryption.KMS.AWS.AccessKey = "aws-access-secret"
+	conf.Encryption.KMS.AWS.SecretAccessKey = "aws-private-secret"
+	conf.Encryption.KMS.AWS.SessionToken = "aws-session-secret"
+	conf.Encryption.KMS.AWS.Endpoint = "https://kms.example.com/path?authorization=Bearer%20aws-authorization-secret&region=west"
+	conf.Encryption.KMS.GCP.CredentialsJSON = `{"private_key":"gcp-private-secret"}`
+
+	for _, mode := range []string{errors.RedactLogDisable, errors.RedactLogMarker, errors.RedactLogEnable} {
+		errors.RedactLogEnabled.Store(mode)
+		logged := conf.String()
+		for _, secret := range []string{
+			"aws-access-secret", "aws-private-secret", "aws-session-secret",
+			"aws-authorization-secret", "gcp-private-secret",
+		} {
+			require.NotContains(t, logged, secret)
+		}
+		require.Contains(t, logged, `"secret_access_key":"xxxxx"`)
+		require.Contains(t, logged, `"credentials_json":"xxxxx"`)
+		require.Contains(t, logged, `authorization=xxxxx`)
+		require.Contains(t, logged, `region=west`)
+	}
+	require.Equal(t, "aws-private-secret", conf.Encryption.KMS.AWS.SecretAccessKey)
+	require.Equal(t, `{"private_key":"gcp-private-secret"}`, conf.Encryption.KMS.GCP.CredentialsJSON)
 }
 
 func TestServerConfigDecodeEnableLegacySafePoint(t *testing.T) {
