@@ -138,7 +138,7 @@ func (w *Writer) generateSQLsWithDeleteFilter(events []*commonEvent.DMLEvent) ([
 			vals  [][]any
 			types []common.RowType
 		)
-		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 		if canBatch && event.Len() > 1 {
 			if inSafeMode {
 				sqls, vals, types = w.generateSafeBatchSQLForSingleEvent(event)
