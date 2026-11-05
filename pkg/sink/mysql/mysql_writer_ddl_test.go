@@ -166,7 +166,7 @@ func TestFlushDDLEventCreateTablesWaitsForCurrentStatement(t *testing.T) {
 		if i == 1 {
 			mock.ExpectExec(query).WillReturnError(mysql.ErrInvalidConn)
 			mock.ExpectRollback()
-			mock.ExpectQuery(checkRunningSQL).WithArgs(createTime, query).
+			mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, createTime, query)).
 				WillReturnRows(sqlmock.NewRows([]string{"QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE"}).
 					AddRow(query, "synced", "1", "create table", "public"))
 		} else {
