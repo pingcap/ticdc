@@ -369,6 +369,7 @@ func TestSQLGenerationSafeModeBoundary(t *testing.T) {
 		} {
 			t.Run(generator.name+"/"+tc.name, func(t *testing.T) {
 				for _, event := range events {
+					event.Rewind()
 					event.CommitTs = tc.commitTs
 					event.StartTs = tc.commitTs - 1
 					event.ReplicatingTs = 100
@@ -425,6 +426,7 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("batchDML=%t/%s", batchDML, tc.name), func(t *testing.T) {
 				for i, event := range events {
+					event.Rewind()
 					event.ReplicatingTs = tc.replicatingTs[i]
 				}
 				require.Equal(t, batchDML && tc.canBatch, writer.shouldGenBatchSQL(events[0].TableInfo, events))
@@ -445,6 +447,8 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 		}
 	}
 
+	// Keep both events in one batch to exercise cross-event safe-mode updates.
+	writer.cfg.MaxTxnRow = 2
 	update, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (3, 'old')", "update t set name = 'new' where id = 3")
 	update.CommitTs = 100
 	update.StartTs = 99
@@ -452,6 +456,8 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 	for _, batchDML := range []bool{false, true} {
 		t.Run(fmt.Sprintf("batchDML=%t/update at replicating ts", batchDML), func(t *testing.T) {
 			writer.cfg.BatchDMLEnable = batchDML
+			update.Rewind()
+			events[1].Rewind()
 			events[1].ReplicatingTs = events[1].CommitTs
 			dmls, err := writer.prepareDMLs([]*commonEvent.DMLEvent{update, events[1]})
 			require.NoError(t, err)
@@ -460,8 +466,10 @@ func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
 			for i, query := range dmls.sqls {
 				require.NotEqual(t, common.RowTypeUpdate, dmls.rowTypes[i], query)
 				if dmls.rowTypes[i] == common.RowTypeInsert {
-					require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)", query)
-					rows = append(rows, dmls.values[i])
+					require.True(t, strings.HasPrefix(query, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES "), query)
+					for j := 0; j < len(dmls.values[i]); j += 2 {
+						rows = append(rows, dmls.values[i][j:j+2])
+					}
 				}
 			}
 			require.ElementsMatch(t, [][]any{{int64(3), "new"}, {int64(2), "second"}}, rows)
