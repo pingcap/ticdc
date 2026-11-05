@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -40,7 +39,8 @@ func ColumnValueString(c interface{}) string {
 	var data string
 	switch v := c.(type) {
 	case nil:
-		log.Panic("should not reach here when column value is nil")
+		// Preserve the legacy representation of SQL NULL in partition hashes.
+		data = "null"
 	case bool:
 		if v {
 			data = "1"
