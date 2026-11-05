@@ -426,7 +426,7 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 	}
 }
 
-func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
+func TestWaitForFirstRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
@@ -439,7 +439,7 @@ func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	}
 	resultCh := make(chan waitResult, 1)
 	go func() {
-		req, err := worker.waitForRegionRequest(t.Context())
+		req, err := worker.waitForFirstRegionRequest(t.Context())
 		resultCh <- waitResult{req: req, err: err}
 	}()
 

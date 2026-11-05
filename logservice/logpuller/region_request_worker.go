@@ -158,7 +158,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 
 	for {
 		// Do not connect an idle worker to an unavailable store indefinitely.
-		firstReq, err := s.waitForRegionRequest(ctx)
+		firstReq, err := s.waitForFirstRegionRequest(ctx)
 		if err != nil {
 			return err
 		}
@@ -179,7 +179,7 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 	}
 }
 
-func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
+func (s *regionRequestWorker) waitForFirstRegionRequest(ctx context.Context) (*regionReq, error) {
 	for {
 		// Without a stream there are no remote registrations to deregister.
 		s.controlQueue.drain()
