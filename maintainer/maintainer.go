@@ -1032,13 +1032,29 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	if !m.initialized.Load() || m.removing.Load() {
 		return
 	}
-	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+	if len(msg.Message) != 1 {
+		log.Warn("ignore block status request with invalid payload count",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Int("payloadCount", len(msg.Message)))
+		return
+	}
+	req, ok := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+	if !ok || req == nil {
+		log.Warn("ignore invalid block status request",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
 
 	var ackMsg []*messaging.TargetMessage
 	if common.IsDefaultMode(req.Mode) {
 		ackMsg = m.controller.barrier.HandleStatus(msg.From, req)
-	} else {
+	} else if common.IsRedoMode(req.Mode) && m.enableRedo && m.controller.redoBarrier != nil {
 		ackMsg = m.controller.redoBarrier.HandleStatus(msg.From, req)
+	} else {
+		log.Warn("ignore block status request with unsupported mode",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Int64("mode", req.Mode))
+		return
 	}
 	if ackMsg != nil {
 		m.sendMessages(ackMsg)

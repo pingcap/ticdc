@@ -84,6 +84,24 @@ func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
 	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
 }
 
+func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.filterConfig = nil
+	status, err := broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
+
+	info.filterConfig = &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+		Rules: []string{"["},
+	}}
+	status, err = broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
+}
+
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	t.Helper()
 	task, ok := broker.scanTaskQueues[workerIndex].pop()

@@ -433,6 +433,23 @@ func TestPendingRegistrationRecoversAfterExpiry(t *testing.T) {
 	require.Empty(t, c.groupHeartbeat())
 }
 
+func TestHandleDispatcherHeartbeatResponseRejectsMultiplePayloads(t *testing.T) {
+	c := &EventCollector{}
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	msg := messaging.NewSingleTargetMessage("local", messaging.EventCollectorTopic, response)
+	msg.Message = append(msg.Message, response)
+	require.NotPanics(t, func() {
+		c.handleDispatcherHeartbeatResponse(msg)
+	})
+	require.NotPanics(t, func() {
+		c.handleDispatcherHeartbeatResponse(nil)
+	})
+	msg.Message = []messaging.IOTypeT{&commonEvent.DispatcherHeartbeat{}}
+	require.NotPanics(t, func() {
+		c.handleDispatcherHeartbeatResponse(msg)
+	})
+}
+
 func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	ctx := context.Background()
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")

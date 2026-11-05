@@ -17,6 +17,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -428,16 +431,8 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		return err
 	}
 
-	if msg.Type != int32(TypeMessageHandShake) {
-		log.Panic("Received unexpected message type, should be handshake",
-			zap.Stringer("localID", s.messageCenter.id),
-			zap.String("localAddr", s.messageCenter.addr),
-			zap.String("remoteID", msg.From),
-			zap.Int32("type", msg.Type))
-	}
-
-	handshake := &HandshakeMessage{}
-	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
+	handshake, err := decodeHandshakeMessage(msg)
+	if err != nil {
 		log.Warn("failed to unmarshal handshake message", zap.Error(err))
 		return err
 	}
@@ -477,6 +472,16 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		log.Error("Failed to get remote target", zap.Error(err))
 		return err
 	}
+	if err := validateIncomingPeer(stream.Context(), target.targetAddr); err != nil {
+		log.Warn("reject incoming stream from unexpected network peer",
+			zap.Stringer("claimedRemoteID", targetId),
+			zap.String("expectedRemoteAddr", target.targetAddr),
+			zap.Error(err))
+		return errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: "handshake sender does not match the registered node address",
+		}
+	}
 
 	log.Info("Start to receive messages from remote target",
 		zap.String("streamType", handshake.StreamType),
@@ -486,6 +491,80 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		zap.String("remoteAddr", target.targetAddr))
 
 	return target.handleIncomingStream(stream, handshake)
+}
+
+func validateIncomingPeer(ctx context.Context, targetAddr string) error {
+	remotePeer, ok := peer.FromContext(ctx)
+	if !ok || remotePeer.Addr == nil {
+		return fmt.Errorf("gRPC peer address is unavailable")
+	}
+	remoteHost, _, err := net.SplitHostPort(remotePeer.Addr.String())
+	if err != nil {
+		return fmt.Errorf("parse gRPC peer address %q: %w", remotePeer.Addr.String(), err)
+	}
+	targetHost, _, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return fmt.Errorf("parse registered node address %q: %w", targetAddr, err)
+	}
+
+	remoteIP := net.ParseIP(stripIPv6Zone(remoteHost))
+	if remoteIP == nil {
+		return fmt.Errorf("gRPC peer host %q is not an IP address", remoteHost)
+	}
+	if targetIP := net.ParseIP(stripIPv6Zone(targetHost)); targetIP != nil {
+		if remoteIP.Equal(targetIP) {
+			return nil
+		}
+		return fmt.Errorf("peer IP %s does not match registered IP %s", remoteIP, targetIP)
+	}
+
+	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, targetHost)
+	if err != nil {
+		return fmt.Errorf("resolve registered node host %q: %w", targetHost, err)
+	}
+	for _, addr := range resolved {
+		if remoteIP.Equal(addr.IP) {
+			return nil
+		}
+	}
+	return fmt.Errorf("peer IP %s does not match registered host %q", remoteIP, targetHost)
+}
+
+func stripIPv6Zone(host string) string {
+	if i := strings.LastIndexByte(host, '%'); i >= 0 {
+		return host[:i]
+	}
+	return host
+}
+
+func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
+	if msg == nil {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: "handshake message is nil",
+		}
+	}
+	if msg.Type != int32(TypeMessageHandShake) {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: fmt.Sprintf("unexpected handshake message type %d", msg.Type),
+		}
+	}
+	if len(msg.Payload) != 1 {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: fmt.Sprintf("handshake must contain exactly one payload, got %d", len(msg.Payload)),
+		}
+	}
+
+	handshake := &HandshakeMessage{}
+	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: err.Error(),
+		}
+	}
+	return handshake, nil
 }
 
 type HandshakeMessage struct {
