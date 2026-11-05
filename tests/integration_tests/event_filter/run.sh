@@ -144,6 +144,22 @@ function run() {
 	sleep 10
 	check_table_not_exists "filter.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+	# Regression for #6774: ignore-sql must match the original ordinary DDL text.
+	run_sql_file $CUR/data/test_ignore_sql.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 20 "run_sql \"SELECT COUNT(*) AS finished FROM information_schema.statistics
+		WHERE table_schema = 'event_filter' AND index_name = 'ignore_sql_done';\" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT};
+		check_contains 'finished: 4'"
+
+	run_sql "SELECT COUNT(*) AS ignored_columns FROM information_schema.columns
+		WHERE table_schema = 'event_filter' AND table_name = 't_ignore_sql_original' AND column_name = 'c';" \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "ignored_columns: 0"
+	run_sql "SELECT COUNT(*) AS replicated_columns FROM information_schema.columns
+		WHERE table_schema = 'event_filter' AND table_name IN
+		('t_ignore_sql_quoted', 't_ignore_sql_keyword', 't_ignore_sql_whitespace') AND column_name = 'c';" \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "replicated_columns: 3"
+
 	cleanup_process $CDC_BINARY
 }
 
