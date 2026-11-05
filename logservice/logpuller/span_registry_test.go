@@ -62,3 +62,52 @@ func TestSpanRegistryUpdateMetrics(t *testing.T) {
 	require.Equal(t, float64(3), testutil.ToFloat64(subscriptionClientSubscribedRegionCount))
 	require.InDelta(t, 5.0, testutil.ToFloat64(logPullerResolvedTsLag), 0.001)
 }
+
+func TestSummarizeSpanHealth(t *testing.T) {
+	currentTime := time.Unix(1_700_000_000, 0)
+	newSpan := func(subscriptionID SubscriptionID) *subscribedSpan {
+		return &subscribedSpan{
+			subID: subscriptionID,
+			rangeLock: regionlock.NewRangeLock(
+				uint64(subscriptionID), []byte("a"), []byte("z"), 100),
+		}
+	}
+	lockFullRange := func(span *subscribedSpan, regionID uint64) *regionlock.LockedRangeState {
+		result := span.rangeLock.LockRange(
+			context.Background(), []byte("a"), []byte("z"), regionID, 100)
+		require.Equal(t, regionlock.LockRangeStatusSuccess, result.Status)
+		return result.LockedRangeState
+	}
+
+	emptySpan := newSpan(1)
+	initializedSlowSpan := newSpan(2)
+	initializedState := lockFullRange(initializedSlowSpan, 2)
+	initializedState.Initialized.Store(true)
+	initializedState.ResolvedTs.Store(
+		oracle.GoTimeToTS(currentTime.Add(-7 * resolveLockMinInterval)))
+
+	initializingSlowSpan := newSpan(3)
+	initializingState := lockFullRange(initializingSlowSpan, 3)
+	initializingState.Created = currentTime.Add(-11 * time.Minute)
+	initializingState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime))
+
+	uninitializedSlowSpan := newSpan(4)
+	uninitializedState := lockFullRange(uninitializedSlowSpan, 4)
+	uninitializedState.Created = currentTime
+	uninitializedState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime.Add(-11 * time.Minute)))
+
+	summary := summarizeSpanHealth([]spanHealthSnapshot{
+		{subscriptionID: 1, span: emptySpan},
+		{subscriptionID: 2, span: initializedSlowSpan},
+		{subscriptionID: 3, span: initializingSlowSpan},
+		{subscriptionID: 4, span: uninitializedSlowSpan},
+	}, currentTime)
+
+	require.Equal(t, 1, summary.slowInitializedSubscriptionCount)
+	require.Equal(t, 1, summary.slowInitializingSubscriptionCount)
+	require.Equal(t, 1, summary.slowUninitializedSubscriptionCount)
+	require.Equal(t, 1, summary.subscriptionWithHolesCount)
+	require.Equal(t, 1, summary.uncoveredRangeCount)
+	require.Equal(t, []uint64{2, 3, 4}, summary.slowSubscriptionIDs)
+	require.Equal(t, []uint64{1}, summary.holeSubscriptionIDs)
+}

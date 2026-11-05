@@ -29,10 +29,14 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
-const kvEventsCacheMaxSize = 32
+const (
+	kvEventsCacheMaxSize    = 32
+	slowRegionLogSampleSize = 3
+)
 
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
@@ -187,12 +191,14 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Int("lockedRegionCount", res.LockedRegionCount),
-		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
-		zap.Any("fastestRegion", res.FastestRegion),
-		zap.Any("slowestRegion", res.SlowestRegion))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("subscription client finds slow locked ranges",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("lockedRegionCount", res.LockedRegionCount),
+			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+			zap.Any("fastestRegion", res.FastestRegion),
+			zap.Any("slowestRegion", res.SlowestRegion))
+	}
 }
 
 // formatUnlockedRanges formats unlocked ranges for logging. The span keys may
@@ -326,6 +332,70 @@ func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
 	}
 }
 
+type spanHealthSnapshot struct {
+	subscriptionID SubscriptionID
+	span           *subscribedSpan
+}
+
+type spanHealthSummary struct {
+	slowInitializedSubscriptionCount   int
+	slowInitializingSubscriptionCount  int
+	slowUninitializedSubscriptionCount int
+	subscriptionWithHolesCount         int
+	uncoveredRangeCount                int
+	slowSubscriptionIDs                []uint64
+	holeSubscriptionIDs                []uint64
+}
+
+func (s *spanHealthSummary) addSlowSubscription(subscriptionID SubscriptionID) {
+	if len(s.slowSubscriptionIDs) < slowRegionLogSampleSize {
+		s.slowSubscriptionIDs = append(s.slowSubscriptionIDs, uint64(subscriptionID))
+	}
+}
+
+func summarizeSpanHealth(spans []spanHealthSnapshot, currentTime time.Time) spanHealthSummary {
+	summary := spanHealthSummary{
+		slowSubscriptionIDs: make([]uint64, 0, slowRegionLogSampleSize),
+		holeSubscriptionIDs: make([]uint64, 0, slowRegionLogSampleSize),
+	}
+	for _, snapshot := range spans {
+		attr := snapshot.span.rangeLock.IterAll(nil)
+		if attr.LockedRegionCount > 0 {
+			checkpointTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
+			switch {
+			case attr.SlowestRegion.Initialized &&
+				currentTime.Sub(checkpointTime) > 6*resolveLockMinInterval:
+				summary.slowInitializedSubscriptionCount++
+				summary.addSlowSubscription(snapshot.subscriptionID)
+			case !attr.SlowestRegion.Initialized &&
+				currentTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute:
+				summary.slowInitializingSubscriptionCount++
+				summary.addSlowSubscription(snapshot.subscriptionID)
+			case !attr.SlowestRegion.Initialized &&
+				currentTime.Sub(checkpointTime) > 10*time.Minute:
+				summary.slowUninitializedSubscriptionCount++
+				summary.addSlowSubscription(snapshot.subscriptionID)
+			}
+		}
+		if len(attr.UnLockedRanges) > 0 {
+			summary.subscriptionWithHolesCount++
+			summary.uncoveredRangeCount += len(attr.UnLockedRanges)
+			if len(summary.holeSubscriptionIDs) < slowRegionLogSampleSize {
+				summary.holeSubscriptionIDs = append(
+					summary.holeSubscriptionIDs, uint64(snapshot.subscriptionID))
+			}
+		}
+	}
+	return summary
+}
+
+func (s spanHealthSummary) hasAbnormalSpan() bool {
+	return s.slowInitializedSubscriptionCount > 0 ||
+		s.slowInitializingSubscriptionCount > 0 ||
+		s.slowUninitializedSubscriptionCount > 0 ||
+		s.subscriptionWithHolesCount > 0
+}
+
 func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -336,32 +406,29 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		currTime := r.pdClock.CurrentTime()
+		spans := make([]spanHealthSnapshot, 0)
 		r.RLock()
 		for subscriptionID, rt := range r.spans {
-			attr := rt.rangeLock.IterAll(nil)
-			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
-						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Any("slowRegion", attr.SlowestRegion))
-				}
-			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				log.Info("subscription client initializes a region too slow",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			} else if currTime.Sub(ckptTime) > 10*time.Minute {
-				log.Info("subscription client finds a uninitialized slow region",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
+			if rt.stopped.Load() {
+				continue
 			}
-			if len(attr.UnLockedRanges) > 0 {
-				log.Info("subscription client holes exist",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
-			}
+			spans = append(spans, spanHealthSnapshot{
+				subscriptionID: subscriptionID,
+				span:           rt,
+			})
 		}
 		r.RUnlock()
+
+		summary := summarizeSpanHealth(spans, r.pdClock.CurrentTime())
+		if summary.hasAbnormalSpan() {
+			log.Info("subscription client detects slow or uncovered regions",
+				zap.Int("slowInitializedSubscriptionCount", summary.slowInitializedSubscriptionCount),
+				zap.Int("slowInitializingSubscriptionCount", summary.slowInitializingSubscriptionCount),
+				zap.Int("slowUninitializedSubscriptionCount", summary.slowUninitializedSubscriptionCount),
+				zap.Int("subscriptionWithHolesCount", summary.subscriptionWithHolesCount),
+				zap.Int("uncoveredRangeCount", summary.uncoveredRangeCount),
+				zap.Uint64s("sampleSlowSubscriptionIDs", summary.slowSubscriptionIDs),
+				zap.Uint64s("sampleHoleSubscriptionIDs", summary.holeSubscriptionIDs))
+		}
 	}
 }

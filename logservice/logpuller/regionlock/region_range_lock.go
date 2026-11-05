@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -485,13 +486,15 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
 		l.unlockedRanges.unset(startKey, endKey)
-		log.Debug("range locked",
-			zap.Uint64("lockID", l.id),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("version", regionVersion),
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.String("startKey", hex.EncodeToString(startKey)),
-			zap.String("endKey", hex.EncodeToString(endKey)))
+		if log.GetLevel() <= zapcore.DebugLevel {
+			log.Debug("range locked",
+				zap.Uint64("lockID", l.id),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("version", regionVersion),
+				zap.Uint64("resolvedTs", resolvedTs),
+				zap.String("startKey", hex.EncodeToString(startKey)),
+				zap.String("endKey", hex.EncodeToString(endKey)))
+		}
 
 		return LockRangeResult{
 			Status:           LockRangeStatusSuccess,
@@ -499,11 +502,13 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		}, nil
 	}
 
-	// Format overlapping ranges for printing log
+	debugEnabled := log.GetLevel() <= zapcore.DebugLevel
 	var overlapStr []string
-	for _, r := range overlappedRangeLocks {
-		overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
-			r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey))) // DEBUG
+	if debugEnabled {
+		for _, r := range overlappedRangeLocks {
+			overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
+				r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey)))
+		}
 	}
 
 	// Check if the current acuqiring range is stale,
@@ -521,11 +526,13 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		retryRanges := make([]heartbeatpb.TableSpan, 0)
 		currentRangeStartKey := startKey
 
-		log.Info("try lock range staled",
-			zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
-			zap.String("startKey", hex.EncodeToString(startKey)),
-			zap.String("endKey", hex.EncodeToString(endKey)),
-			zap.Strings("allOverlapping", overlapStr)) // DEBUG
+		if debugEnabled {
+			log.Debug("try lock range staled",
+				zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+				zap.String("startKey", hex.EncodeToString(startKey)),
+				zap.String("endKey", hex.EncodeToString(endKey)),
+				zap.Strings("allOverlapping", overlapStr))
+		}
 
 		for _, r := range overlappedRangeLocks {
 			// Ignore the totally-disjointed range which may be added to the list because of
@@ -559,11 +566,13 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		r.waiterSignalChs = append(r.waiterSignalChs, ch)
 	}
 
-	log.Info("lock range blocked",
-		zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
-		zap.String("startKey", hex.EncodeToString(startKey)),
-		zap.String("endKey", hex.EncodeToString(endKey)),
-		zap.Strings("blockedBy", overlapStr)) // DEBUG
+	if debugEnabled {
+		log.Debug("lock range blocked",
+			zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+			zap.String("startKey", hex.EncodeToString(startKey)),
+			zap.String("endKey", hex.EncodeToString(endKey)),
+			zap.Strings("blockedBy", overlapStr))
+	}
 
 	return LockRangeResult{
 		Status: LockRangeStatusWait,
