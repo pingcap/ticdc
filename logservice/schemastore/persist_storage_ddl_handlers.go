@@ -668,7 +668,6 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		SchemaID:       job.SchemaID,
 		TableID:        job.TableID,
 		Query:          query,
-		OriginalQuery:  job.Query,
 		SchemaVersion:  job.BinlogInfo.SchemaVersion,
 		DBInfo:         job.BinlogInfo.DBInfo,
 		TableInfo:      job.BinlogInfo.TableInfo,
@@ -2246,7 +2245,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.queryForFilter(),
+			rawEvent.Query,
 			model.ActionType(rawEvent.Type),
 			filterTableInfo,
 			rawEvent.StartTs,
@@ -2260,7 +2259,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 				tableFilter,
 				rawEvent.ExtraSchemaName,
 				rawEvent.ExtraTableName,
-				rawEvent.queryForFilter(),
+				rawEvent.Query,
 				model.ActionType(rawEvent.Type),
 				rawEvent.TableInfo,
 				rawEvent.StartTs,
@@ -2382,7 +2381,7 @@ func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filt
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{}
 	for _, tableInfo := range rawEvent.MultipleTableInfos {
 		filtered, notSync, err := filterDDL(
-			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.queryForFilter(),
+			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.Query,
 			model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 		if err != nil {
 			return commonEvent.DDLEvent{}, false, err
@@ -2777,7 +2776,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.queryForFilter(),
+			rawEvent.Query,
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -2789,7 +2788,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.queryForFilter(),
+			rawEvent.Query,
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -3078,7 +3077,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.queryForFilter(),
+			rawEvent.Query,
 			model.ActionExchangeTablePartition,
 			// rawEvent.ExtraTableInfo is the normal table info before exchange.
 			rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
@@ -3091,7 +3090,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.queryForFilter(),
+			rawEvent.Query,
 			model.ActionExchangeTablePartition,
 			// rawEvent.TableInfo is the partition table info after exchange,
 			// typically, we should use the table info before exchange to do filtering,
@@ -3215,17 +3214,13 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		ignorePrevTable, ignoreCurrentTable := false, false
 		notSyncPrevTable := false
 		if tableInfo != nil {
-			// The old architecture filters each rebuilt rename without a semicolon.
-			query := strings.TrimSuffix(querys[i], ";")
 			ignorePrevTable, notSyncPrevTable, err = filterDDL(
-				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], query,
-				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
 			ignoreCurrentTable, _, err = filterDDL(
-				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, query,
-				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
@@ -3452,8 +3447,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		filtered, notSync := false, false
 		if tableFilter != nil {
 			filtered, notSync, err = filterDDL(
-				tableFilter, rawEvent.SchemaName, info.Name.O, querys[i],
-				model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaName, info.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
