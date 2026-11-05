@@ -16,6 +16,7 @@ package coordinator
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -79,11 +80,17 @@ func (l changefeedErrorMetricLabels) labelValues() []string {
 }
 
 func normalizeChangefeedErrorMetricMessage(message string) string {
+	message = strings.ToValidUTF8(message, "\uFFFD")
 	message = strings.Join(strings.Fields(message), " ")
 	if len(message) <= changefeedErrorMetricMsgLimit {
 		return message
 	}
-	return message[:changefeedErrorMetricMsgLimit-3] + "..."
+
+	cutoff := changefeedErrorMetricMsgLimit - len("...")
+	for cutoff > 0 && !utf8.RuneStart(message[cutoff]) {
+		cutoff--
+	}
+	return message[:cutoff] + "..."
 }
 
 func normalizeChangefeedErrorMetricTime(errorTime time.Time) string {
