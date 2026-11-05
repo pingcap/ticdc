@@ -37,3 +37,21 @@ ignore-event = ["rename table"]
 [[filter.event-filters]]
 matcher = ["event_filter.t_fk_child"]
 ignore-event = ["delete"]
+
+# Match ordinary DDLs before identifier, keyword, and whitespace normalization.
+# https://github.com/pingcap/ticdc/issues/6774
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_original"]
+ignore-sql = ["^ALTER TABLE t_ignore_sql_original ADD COLUMN"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_quoted"]
+ignore-sql = ["^ALTER TABLE `t_ignore_sql_quoted` ADD COLUMN"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_keyword"]
+ignore-sql = ["add column"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_whitespace"]
+ignore-sql = ["^ALTER TABLE"]
