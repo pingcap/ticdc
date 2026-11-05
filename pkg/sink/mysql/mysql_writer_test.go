@@ -344,7 +344,7 @@ func TestMysqlWriterFlushFilteredEvents(t *testing.T) {
 							expectation.WillReturnError(execErr)
 							mock.ExpectExec("ROLLBACK").WillReturnResult(sqlmock.NewResult(0, 0))
 						} else {
-							expectation.WillReturnResult(sqlmock.NewResult(1, 3))
+							expectation.WillReturnResult(newTestMysqlResult(t, 0, 1, 1, 2, 0))
 						}
 					} else {
 						mock.ExpectBegin()
