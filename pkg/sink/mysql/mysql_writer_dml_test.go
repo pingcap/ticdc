@@ -579,6 +579,35 @@ func TestDeleteFilterSelectsTableDMLMode(t *testing.T) {
 	}
 }
 
+func TestGenerateBatchSQLKeyMismatch(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	require.NotNil(t, helper.DDL2Job("create table t (id int primary key, name varchar(32));"))
+
+	updateEvent, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (1, 'before')", "update t set name = 'after' where id = 1")
+	insertEvent := helper.DML2Event("test", "t", "insert into t values (2, 'other')")
+	// A primary-key change must have been split before reaching the batch merger.
+	updateEvent.Rows.TruncateTo(1)
+	updateEvent.Rows.AppendRow(insertEvent.Rows.GetRow(0))
+	for _, event := range []*commonEvent.DMLEvent{updateEvent, insertEvent} {
+		event.CommitTs = 2
+		event.ReplicatingTs = 1
+	}
+
+	for _, events := range [][]*commonEvent.DMLEvent{
+		{updateEvent, insertEvent},
+		{insertEvent, insertEvent, updateEvent},
+	} {
+		require.PanicsWithValue(t, "invalid rows when generating batch SQL in unsafe mode", func() {
+			writer.generateBatchSQL(events)
+		})
+	}
+}
+
 func TestSQLGenerationSafeModeBoundary(t *testing.T) {
 	writer, db, _ := newTestMysqlWriter(t)
 	defer db.Close()
