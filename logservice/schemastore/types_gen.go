@@ -223,6 +223,12 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Query")
 				return
 			}
+		case "original_query":
+			z.OriginalQuery, err = dc.ReadString()
+			if err != nil {
+				err = msgp.WrapError(err, "OriginalQuery")
+				return
+			}
 		case "schema_version":
 			z.SchemaVersion, err = dc.ReadInt64()
 			if err != nil {
@@ -328,9 +334,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 29
+	// map header, size 30
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x1d, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x1e, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -558,6 +564,16 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "Query")
 		return
 	}
+	// write "original_query"
+	err = en.Append(0xae, 0x6f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x61, 0x6c, 0x5f, 0x71, 0x75, 0x65, 0x72, 0x79)
+	if err != nil {
+		return
+	}
+	err = en.WriteString(z.OriginalQuery)
+	if err != nil {
+		err = msgp.WrapError(err, "OriginalQuery")
+		return
+	}
 	// write "schema_version"
 	err = en.Append(0xae, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e)
 	if err != nil {
@@ -688,9 +704,9 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 29
+	// map header, size 30
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x1d, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x1e, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
@@ -764,6 +780,9 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "query"
 	o = append(o, 0xa5, 0x71, 0x75, 0x65, 0x72, 0x79)
 	o = msgp.AppendString(o, z.Query)
+	// string "original_query"
+	o = append(o, 0xae, 0x6f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x61, 0x6c, 0x5f, 0x71, 0x75, 0x65, 0x72, 0x79)
+	o = msgp.AppendString(o, z.OriginalQuery)
 	// string "schema_version"
 	o = append(o, 0xae, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e)
 	o = msgp.AppendInt64(o, z.SchemaVersion)
@@ -1023,6 +1042,12 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "Query")
 				return
 			}
+		case "original_query":
+			z.OriginalQuery, bts, err = msgp.ReadStringBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "OriginalQuery")
+				return
+			}
 		case "schema_version":
 			z.SchemaVersion, bts, err = msgp.ReadInt64Bytes(bts)
 			if err != nil {
@@ -1141,7 +1166,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0005 := range z.ExtraTableNames {
 		s += msgp.StringPrefixSize + len(z.ExtraTableNames[za0005])
 	}
-	s += 16 + msgp.ArrayHeaderSize + (len(z.PrevPartitions) * (msgp.Int64Size)) + 23 + msgp.ArrayHeaderSize + (len(z.ReferTablePartitionIDs) * (msgp.Int64Size)) + 6 + msgp.StringPrefixSize + len(z.Query) + 15 + msgp.Int64Size + 12 + msgp.Uint64Size + 9 + msgp.Uint64Size + 17 + msgp.BytesPrefixSize + len(z.TableInfoValue) + 23 + msgp.BytesPrefixSize + len(z.ExtraTableInfoValue) + 23 + msgp.ArrayHeaderSize
+	s += 16 + msgp.ArrayHeaderSize + (len(z.PrevPartitions) * (msgp.Int64Size)) + 23 + msgp.ArrayHeaderSize + (len(z.ReferTablePartitionIDs) * (msgp.Int64Size)) + 6 + msgp.StringPrefixSize + len(z.Query) + 15 + msgp.StringPrefixSize + len(z.OriginalQuery) + 15 + msgp.Int64Size + 12 + msgp.Uint64Size + 9 + msgp.Uint64Size + 17 + msgp.BytesPrefixSize + len(z.TableInfoValue) + 23 + msgp.BytesPrefixSize + len(z.ExtraTableInfoValue) + 23 + msgp.ArrayHeaderSize
 	for za0008 := range z.MultipleTableInfosValue {
 		s += msgp.BytesPrefixSize + len(z.MultipleTableInfosValue[za0008])
 	}
