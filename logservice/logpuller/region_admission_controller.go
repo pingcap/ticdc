@@ -48,7 +48,7 @@ func (r *regionReq) finish() bool {
 	cost := time.Since(r.createTime).Seconds()
 	if cost > 0 && cost < abnormalRequestDurationInSec {
 		log.Debug("cdc resolve region request",
-			zap.Uint64("subID", uint64(r.regionInfo.subscribedSpan.subID)),
+			zap.Uint64("subscriptionID", uint64(r.regionInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", r.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
 			zap.Int("inflightCount", r.controller.stats().inflight))

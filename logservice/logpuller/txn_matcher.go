@@ -18,8 +18,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/util"
-	"go.uber.org/zap"
 )
 
 const (
@@ -28,8 +26,10 @@ const (
 )
 
 var (
-	prewriteCacheRowNum = logPullerPrewriteCacheRowNum
-	matcherCount        = logPullerMatcherCount
+	prewriteCacheRowNum                 = logPullerPrewriteCacheRowNum
+	matcherCount                        = logPullerMatcherCount
+	ignoredCommitWithoutPrewriteCounter = pullerEventCounter.WithLabelValues(
+		"ignored_commit_without_prewrite")
 )
 
 type matchKey struct {
@@ -126,9 +126,7 @@ func (m *matcher) matchCachedRow(initialized bool) []*cdcpb.Event_Row {
 			// when cdc receives a commit log without a corresponding
 			// prewrite log before initialized, a committed log  with
 			// the same key and start-ts must have been received.
-			log.Info("ignore commit event without prewrite",
-				zap.String("key", util.RedactKey(cacheEntry.GetKey())),
-				zap.Uint64("startTs", cacheEntry.GetStartTs()))
+			ignoredCommitWithoutPrewriteCounter.Inc()
 			continue
 		}
 		cachedCommit[top] = cacheEntry

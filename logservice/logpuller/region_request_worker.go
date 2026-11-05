@@ -33,14 +33,20 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 )
 
-const storeReconnectBackoff = time.Second
+const (
+	storeReconnectBackoff = time.Second
+	logRegionIDSampleSize = 3
+)
 
 // To generate a workerID in `newRegionRequestWorker`.
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount  = pullerEventCounter.WithLabelValues("resolved_ts")
-	metricBatchResolvedSize = batchResolvedEventSize.WithLabelValues("event-store")
+	metricsResolvedTsCount            = pullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize           = batchResolvedEventSize.WithLabelValues("event-store")
+	metricUntrackedRegionEventCounter = eventFeedErrorCounter.WithLabelValues("UntrackedRegionEvent")
+	metricUntrackedResolvedTsCounter  = eventFeedErrorCounter.WithLabelValues("UntrackedResolvedTs")
+	metricZeroResolvedTsCounter       = eventFeedErrorCounter.WithLabelValues("ZeroResolvedTs")
 )
 
 type deregisterRequest struct {
@@ -217,20 +223,10 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 	return &storeStreamErr{}
 }
 
-func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) (err error) {
+func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) error {
 	if err := s.checkStoreVersion(ctx); err != nil {
 		return err
 	}
-
-	log.Info("region request worker going to create grpc stream",
-		zap.Uint64("workerID", s.workerID),
-		zap.String("addr", s.storeAddr))
-	defer func() {
-		log.Info("region request worker exits",
-			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.storeAddr),
-			zap.Error(err))
-	}()
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
@@ -251,7 +247,7 @@ func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq
 	}
 	defer func() { _ = conn.Conn.Close() }()
 
-	g.Go(func() error { return s.receiveAndDispatchChangeEvents(conn) })
+	g.Go(func() error { return s.receiveAndDispatchChangeEvents(gctx, conn) })
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn, firstReq) })
 
 	failpoint.Inject("InjectForceReconnect", func() {
@@ -281,15 +277,20 @@ func normalizeStreamError(err error) error {
 	return errors.Trace(err)
 }
 
-func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
+func (s *regionRequestWorker) receiveAndDispatchChangeEvents(
+	ctx context.Context,
+	conn *ConnAndClient,
+) error {
 	for {
 		changeEvent, err := conn.Client.Recv()
 		if err != nil {
-			log.Info("region request worker receive from grpc stream failed",
-				zap.Uint64("workerID", s.workerID),
-				zap.String("addr", s.storeAddr),
-				zap.String("code", grpcstatus.Code(err).String()),
-				zap.Error(err))
+			if ctx.Err() == nil {
+				log.Warn("region request worker receive from grpc stream failed",
+					zap.Uint64("workerID", s.workerID),
+					zap.String("addr", s.storeAddr),
+					zap.String("code", grpcstatus.Code(err).String()),
+					zap.Error(err))
+			}
 			return normalizeStreamError(err)
 		}
 		if len(changeEvent.Events) > 0 {
@@ -302,6 +303,9 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 }
 
 func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) {
+	untrackedCount := 0
+	sampleRegionIDs := make([]uint64, 0, logRegionIDSampleSize)
+	sampleSubscriptionIDs := make([]uint64, 0, logRegionIDSampleSize)
 	for _, event := range events {
 		regionID := event.RegionId
 		subscriptionID := SubscriptionID(event.RequestId)
@@ -339,18 +343,23 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
-				// it is normal to receive region error after deregister a subscription
-				log.Debug("region request worker receives an error for a stale region, ignore it",
-					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId))
+				// It is normal to receive a region error after deregistering a subscription.
 			default:
-				log.Warn("region request worker receives a region event for an untracked region",
-					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId))
+				untrackedCount++
+				if len(sampleRegionIDs) < logRegionIDSampleSize {
+					sampleRegionIDs = append(sampleRegionIDs, regionID)
+					sampleSubscriptionIDs = append(sampleSubscriptionIDs, uint64(subscriptionID))
+				}
 			}
 		}
+	}
+	if untrackedCount > 0 {
+		metricUntrackedRegionEventCounter.Add(float64(untrackedCount))
+		log.Warn("region request worker receives events for untracked regions",
+			zap.Uint64("workerID", s.workerID),
+			zap.Int("untrackedRegionCount", untrackedCount),
+			zap.Uint64s("sampleRegionIDs", sampleRegionIDs),
+			zap.Uint64s("sampleSubscriptionIDs", sampleSubscriptionIDs))
 	}
 }
 
@@ -360,10 +369,13 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	metricBatchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
+		metricZeroResolvedTsCounter.Inc()
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
-			zap.Any("regionIDs", resolvedTsEvent.Regions))
+			zap.Int("regionCount", len(resolvedTsEvent.Regions)),
+			zap.Uint64s("sampleRegionIDs",
+				resolvedTsEvent.Regions[:min(len(resolvedTsEvent.Regions), logRegionIDSampleSize)]))
 		return
 	}
 
@@ -372,6 +384,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	capHint := min(len(resolvedTsEvent.Regions), resolvedTsStateBatchSize)
 	resolvedStates := make([]*regionFeedState, 0, capHint)
+	untrackedCount := 0
+	sampleRegionIDs := make([]uint64, 0, logRegionIDSampleSize)
 	flush := func() {
 		if len(resolvedStates) == 0 {
 			return
@@ -394,13 +408,21 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			}
 			continue
 		}
-		log.Warn("region request worker receives a resolved ts event for an untracked region",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subscriptionID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+		untrackedCount++
+		if len(sampleRegionIDs) < logRegionIDSampleSize {
+			sampleRegionIDs = append(sampleRegionIDs, regionID)
+		}
 	}
 	flush()
+	if untrackedCount > 0 {
+		metricUntrackedResolvedTsCounter.Add(float64(untrackedCount))
+		log.Warn("region request worker receives resolved ts for untracked regions",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", uint64(subscriptionID)),
+			zap.Int("untrackedRegionCount", untrackedCount),
+			zap.Uint64s("sampleRegionIDs", sampleRegionIDs),
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+	}
 }
 
 func (s *regionRequestWorker) sendChangeDataRequest(
