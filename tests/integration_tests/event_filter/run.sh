@@ -8,6 +8,87 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function wait_ignore_sql_ddl() {
+	local marker=$1
+	local target_ts
+	target_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	ensure 20 "cdc_cli_changefeed query --server='127.0.0.1:8300' --changefeed-id=event-filter |
+		grep -v 'Command to ticdc' | jq -e '.checkpoint_tso > $target_ts'"
+	# Insert the marker after the sink has handled the DDLs, then wait for MQ and
+	# storage consumers to apply the preceding events before checking absences.
+	run_sql "INSERT INTO event_filter.sql_query_barrier VALUES ($marker);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 20 "run_sql 'SELECT COUNT(*) AS marker_count FROM event_filter.sql_query_barrier WHERE id = $marker;' \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'marker_count: 1'"
+}
+
+function test_rewritten_query_filter() {
+	run_sql_file $CUR/data/prepare_ignore_sql_rewrite.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	wait_ignore_sql_ddl 0
+	run_sql_file $CUR/data/test_ignore_sql_rewrite.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	wait_ignore_sql_ddl 1
+
+	run_sql "SELECT COUNT(*) AS retained_objects FROM information_schema.tables
+		WHERE table_schema = 'event_filter' AND table_name IN
+		('sql_rename_raw', 'sql_alter_rename_raw', 'sql_view_rename_raw',
+		'sql_multi_ignored', 'sql_drop_ignored', 'sql_drop_view_ignored');" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'retained_objects: 6'
+	run_sql "SELECT COUNT(*) AS renamed_objects FROM information_schema.tables
+		WHERE table_schema = 'event_filter' AND table_name IN
+		('sql_rename_restored_done', 'sql_alter_rename_restored_done',
+		'sql_view_rename_restored_done', 'sql_multi_kept_done');" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'renamed_objects: 4'
+	run_sql "SELECT COUNT(*) AS unexpected_objects FROM information_schema.tables
+		WHERE table_schema = 'event_filter' AND table_name IN
+		('sql_rename_raw_done', 'sql_alter_rename_raw_done', 'sql_view_rename_raw_done', 'sql_multi_ignored_done',
+		'sql_rename_restored', 'sql_alter_rename_restored', 'sql_view_rename_restored', 'sql_multi_kept',
+		'sql_drop_kept', 'sql_drop_view_kept');" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'unexpected_objects: 0'
+
+	run_sql "SELECT
+		(SELECT id FROM event_filter.sql_exchange_ignored) AS ignored_partition,
+		(SELECT id FROM event_filter.sql_exchange_ignored_normal) AS ignored_normal,
+		(SELECT id FROM event_filter.sql_exchange_kept) AS kept_partition,
+		(SELECT id FROM event_filter.sql_exchange_kept_normal) AS kept_normal;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'ignored_partition: 1'
+	check_contains 'ignored_normal: 2'
+	check_contains 'kept_partition: 2'
+	check_contains 'kept_normal: 1'
+
+	run_sql "SELECT COUNT(*) AS ignored_creates FROM information_schema.tables
+		WHERE table_schema = 'filter' AND table_name IN ('sql_like_ignored', 'sql_view_ignored');" \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'ignored_creates: 0'
+	check_table_exists filter.sql_like_kept ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "SELECT (SELECT id FROM filter.sql_view_kept) AS view_id,
+		(SELECT id FROM filter.sql_view_replace_ignored) AS ignored_replacement,
+		(SELECT id FROM filter.sql_view_replace_kept) AS kept_replacement;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'view_id: 7'
+	check_contains 'ignored_replacement: 7'
+	check_contains 'kept_replacement: 17'
+
+	run_sql "SET GLOBAL tidb_enable_fast_create_table = ON;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	local pids=()
+	local i kind pid
+	for i in $(seq 1 8); do
+		for kind in ignored kept; do
+			mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -D event_filter \
+				-e "CREATE TABLE sql_batch_${kind}_$i (id INT PRIMARY KEY);" &
+			pids+=("$!")
+		done
+	done
+	for pid in "${pids[@]}"; do
+		wait "$pid"
+	done
+	run_sql "SET GLOBAL tidb_enable_fast_create_table = OFF;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	wait_ignore_sql_ddl 2
+	run_sql "SELECT COUNT(*) AS kept_creates FROM information_schema.tables
+		WHERE table_schema = 'event_filter' AND table_name LIKE 'sql_batch_kept_%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'kept_creates: 8'
+	run_sql "SELECT COUNT(*) AS ignored_creates FROM information_schema.tables
+		WHERE table_schema = 'event_filter' AND table_name LIKE 'sql_batch_ignored_%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains 'ignored_creates: 0'
+}
+
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
@@ -27,7 +108,8 @@ function run() {
 	esac
 
 	# create changefeed
-	cdc_cli_changefeed create --sink-uri="$SINK_URI" --server="127.0.0.1:8300" --config=$CUR/conf/cf.toml
+	cdc_cli_changefeed create --changefeed-id=event-filter --sink-uri="$SINK_URI" \
+		--server="127.0.0.1:8300" --config=$CUR/conf/cf.toml
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/cf.toml" ;;
@@ -143,6 +225,24 @@ function run() {
 	check_table_exists "filter.t2" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	sleep 10
 	check_table_not_exists "filter.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
+	# Regression for #6774: ignore-sql must match the original ordinary DDL text.
+	run_sql_file $CUR/data/test_ignore_sql.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	ensure 20 "run_sql \"SELECT COUNT(*) AS finished FROM information_schema.statistics
+		WHERE table_schema = 'event_filter' AND index_name = 'ignore_sql_done';\" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT};
+		check_contains 'finished: 4'"
+
+	run_sql "SELECT COUNT(*) AS ignored_columns FROM information_schema.columns
+		WHERE table_schema = 'event_filter' AND table_name = 't_ignore_sql_original' AND column_name = 'c';" \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "ignored_columns: 0"
+	run_sql "SELECT COUNT(*) AS replicated_columns FROM information_schema.columns
+		WHERE table_schema = 'event_filter' AND table_name IN
+		('t_ignore_sql_quoted', 't_ignore_sql_keyword', 't_ignore_sql_whitespace') AND column_name = 'c';" \
+		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_contains "replicated_columns: 3"
+
+	test_rewritten_query_filter
 
 	cleanup_process $CDC_BINARY
 }

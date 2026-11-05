@@ -23,13 +23,13 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -105,6 +105,8 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+// New creates a cloud storage sink using the supplied changefeed configuration.
+//
 //nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
@@ -145,7 +147,10 @@ func New(
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, stats, columnSelectors)
+	dmlWriters, err := newDMLWriters(
+		changefeedID, storage, cfg, encoderConfig,
+		util.GetOrZero(sinkConfig.EncoderConcurrency), ext, stats, columnSelectors,
+	)
 	if err != nil {
 		return nil, err
 	}

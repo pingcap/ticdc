@@ -11,69 +11,69 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package logger
 
 import (
-	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	LoggerWriteBytesTotal = prometheus.NewCounterFunc(
+	loggerWriteBytesTotal = prometheus.NewCounterFunc(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
 			Name:      "write_bytes_total",
 			Help:      "Total number of bytes written to TiCDC log file.",
 		},
-		func() float64 { return float64(logger.LogWriteBytesTotal()) },
+		func() float64 { return float64(LogWriteBytesTotal()) },
 	)
 
-	LoggerFileSizeBytes = prometheus.NewGaugeFunc(
+	loggerFileSizeBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
 			Name:      "file_size_bytes",
 			Help:      "Size of the current TiCDC log file.",
 		},
-		func() float64 { return float64(logger.LogFileSizeBytes()) },
+		func() float64 { return float64(LogFileSizeBytes()) },
 	)
 
-	LoggerTotalSizeBytes = prometheus.NewGaugeFunc(
+	loggerTotalSizeBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
 			Name:      "total_size_bytes",
 			Help:      "Total size of the TiCDC log file and its rotated backups in the same directory.",
 		},
-		func() float64 { return float64(logger.LogTotalSizeBytes()) },
+		func() float64 { return float64(LogTotalSizeBytes()) },
 	)
 
-	LoggerDiskTotalBytes = prometheus.NewGaugeFunc(
+	loggerDiskTotalBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
 			Name:      "disk_total_bytes",
 			Help:      "Total size of the filesystem containing TiCDC log file directory.",
 		},
-		func() float64 { return float64(logger.LogDiskTotalBytes()) },
+		func() float64 { return float64(LogDiskTotalBytes()) },
 	)
 
-	LoggerDiskUsedBytes = prometheus.NewGaugeFunc(
+	loggerDiskUsedBytes = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "logger",
 			Name:      "disk_used_bytes",
 			Help:      "Used bytes of the filesystem containing TiCDC log file directory.",
 		},
-		func() float64 { return float64(logger.LogDiskUsedBytes()) },
+		func() float64 { return float64(LogDiskUsedBytes()) },
 	)
 )
 
-func initLoggerMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(LoggerWriteBytesTotal)
-	registry.MustRegister(LoggerFileSizeBytes)
-	registry.MustRegister(LoggerTotalSizeBytes)
-	registry.MustRegister(LoggerDiskTotalBytes)
-	registry.MustRegister(LoggerDiskUsedBytes)
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(loggerWriteBytesTotal)
+	registry.MustRegister(loggerFileSizeBytes)
+	registry.MustRegister(loggerTotalSizeBytes)
+	registry.MustRegister(loggerDiskTotalBytes)
+	registry.MustRegister(loggerDiskUsedBytes)
 }

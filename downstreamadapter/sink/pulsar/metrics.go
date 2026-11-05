@@ -11,49 +11,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package pulsar
 
 import (
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/prometheus/client_golang/prometheus"
-)
-
-const (
-	pulsarPublishedDDLSchemaTableCount      = "published_DDL_schema_table_count"
-	pulsarPublishedDMLSchemaTableCount      = "published_DML_schema_table_count"
-	pulsarPublishedMessageTypeResolvedCount = "published_message_type_resolved_count"
 )
 
 var (
 	// pulsar producer DDL scheme, type: count/success/fail, May there are too many tables
-	PublishedDDLSchemaTableCount = prometheus.NewCounterVec(
+	publishedDDLSchemaTableCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedDDLSchemaTableCount,
+			Name:      "published_DDL_schema_table_count",
 			Help:      "pulsar published schema count",
 		}, []string{"topic", "changefeed", "type"})
 
 	// pulsar producer DML scheme, type:count/success/fail , May there are too many tables
-	PublishedDMLSchemaTableCount = prometheus.NewCounterVec(
+	publishedDMLSchemaTableCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedDMLSchemaTableCount,
+			Name:      "published_DML_schema_table_count",
 			Help:      "pulsar published dml message count",
 		}, []string{"topic", "changefeed", "type"})
 
 	// pulsar producer WATER count, type:count/success/fail , May there are too many tables
-	PulsarPublishedMessageTypeResolvedCount = prometheus.NewCounterVec(
+	publishedMessageTypeResolvedCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "pulsar",
-			Name:      pulsarPublishedMessageTypeResolvedCount,
+			Name:      "published_message_type_resolved_count",
 			Help:      "pulsar published message type resolved count ",
 		}, []string{"topic", "changefeed", "type"})
 )
 
-func initPulsarMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(PublishedDDLSchemaTableCount)
-	registry.MustRegister(PublishedDMLSchemaTableCount)
-	registry.MustRegister(PulsarPublishedMessageTypeResolvedCount)
+// RegisterMetrics registers Pulsar sink metrics and configures client metrics.
+func RegisterMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(publishedDDLSchemaTableCount)
+	registry.MustRegister(publishedDMLSchemaTableCount)
+	registry.MustRegister(publishedMessageTypeResolvedCount)
+	pulsar.RegisterMetrics(registry)
 }

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -115,9 +114,9 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	}
 	observers = batchMetricObservers{
-		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
-		count:    metrics.DynamicStreamBatchCount.WithLabelValues(s.module, label),
-		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
+		duration: dynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    dynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    dynamicStreamBatchBytes.WithLabelValues(s.module, label),
 	}
 	s.batchMetricCache[label] = observers
 	return observers

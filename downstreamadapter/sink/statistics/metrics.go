@@ -14,7 +14,7 @@
 package statistics
 
 import (
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -28,7 +28,7 @@ var (
 			Name:      "batch_row_count",
 			Help:      "Row count number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "keyspace_id"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "keyspace_id"})
 
 	// execBatchWriteBytesHistogram records the write bytes of each successfully delivered DML batch.
 	execBatchWriteBytesHistogram = prometheus.NewHistogramVec(
@@ -38,7 +38,7 @@ var (
 			Name:      "batch_write_bytes",
 			Help:      "Bytes number for a given batch.",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// executionErrorCounter is the counter of execution errors.
 	executionErrorCounter = prometheus.NewCounterVec(
@@ -47,7 +47,7 @@ var (
 			Subsystem: "sink",
 			Name:      "execution_error",
 			Help:      "Total count of execution errors.",
-		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "event_type"})
 )
 
 var (
@@ -59,7 +59,7 @@ var (
 			Name:      "exec_duration",
 			Help:      "Bucketed histogram of processing time (s) of a ddl.",
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// execDDLRunningGauge records the count of running DDL.
 	execDDLRunningGauge = prometheus.NewGaugeVec(
@@ -68,7 +68,7 @@ var (
 			Subsystem: "ddl",
 			Name:      "exec_running",
 			Help:      "Total count of running ddl.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed"})
 
 	// execDDLCounter records the execution count of different DDL types
 	execDDLCounter = prometheus.NewCounterVec(
@@ -77,22 +77,15 @@ var (
 			Subsystem: "ddl",
 			Name:      "execution",
 			Help:      "Total execution count of different DDL types.",
-		}, []string{getKeyspaceLabel(), "changefeed", "ddl_type"})
+		}, []string{metrics.GetKeyspaceLabel(), "changefeed", "ddl_type"})
 )
 
-// InitMetrics registers the metrics maintained by Statistics.
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers the metrics maintained by Statistics.
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(execBatchHistogram)
 	registry.MustRegister(execBatchWriteBytesHistogram)
 	registry.MustRegister(executionErrorCounter)
 	registry.MustRegister(execDDLHistogram)
 	registry.MustRegister(execDDLRunningGauge)
 	registry.MustRegister(execDDLCounter)
-}
-
-func getKeyspaceLabel() string {
-	if kerneltype.IsNextGen() {
-		return "keyspace_name"
-	}
-	return "namespace"
 }

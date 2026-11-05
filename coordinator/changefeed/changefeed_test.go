@@ -225,15 +225,26 @@ func TestBootstrapDoneRetryableError(t *testing.T) {
 }
 
 func TestChangefeed_IsMQSink(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		SinkURI: "kafka://127.0.0.1:9092",
-		State:   config.StateNormal,
-		Config:  config.GetDefaultReplicaConfig(),
-	}
-	cf := NewChangefeed(cfID, info, 100, true)
+	for _, tc := range []struct {
+		sinkURI  string
+		sinkType common.SinkType
+	}{
+		{sinkURI: "kafka://127.0.0.1:9092", sinkType: common.KafkaSinkType},
+		{sinkURI: "pulsar://127.0.0.1:6650", sinkType: common.PulsarSinkType},
+	} {
+		t.Run(tc.sinkURI, func(t *testing.T) {
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			info := &config.ChangeFeedInfo{
+				SinkURI: tc.sinkURI,
+				State:   config.StateNormal,
+				Config:  config.GetDefaultReplicaConfig(),
+			}
+			cf := NewChangefeed(cfID, info, 100, true)
 
-	require.True(t, cf.NeedCheckpointTsMessage())
+			require.Equal(t, tc.sinkType, cf.sinkType)
+			require.True(t, cf.NeedCheckpointTsMessage())
+		})
+	}
 }
 
 func TestChangefeed_NeedCheckpointMysqlActiveActive(t *testing.T) {

@@ -323,8 +323,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateView,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateView,
-		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		updateFullTableInfoFunc:    updateFullTableInfoForCreateView,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateView,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForCreateView,
@@ -350,8 +350,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropView,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
-		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForDropView,
@@ -668,6 +668,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		SchemaID:       job.SchemaID,
 		TableID:        job.TableID,
 		Query:          query,
+		OriginalQuery:  job.Query,
 		SchemaVersion:  job.BinlogInfo.SchemaVersion,
 		DBInfo:         job.BinlogInfo.DBInfo,
 		TableInfo:      job.BinlogInfo.TableInfo,
@@ -715,13 +716,18 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) (P
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	// CREATE OR REPLACE VIEW invalidates the old ID. Snapshot views may still
+	// have catalog entries even though incremental views are not registered.
+	if oldID, ok := findTableIDByName(args.tableMap, event.SchemaID, event.TableName); ok {
+		event.ExtraTableID = oldID
+	}
 	return event, nil
 }
 
 func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
-	// We don't store the relationship: view_id -> table_name, get table name from args.job
+	// Incremental views are absent from tableMap; the job carries their name.
 	event.TableName = args.job.TableName
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
@@ -1024,6 +1030,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) (
 	// through SQL. For malformed or unsupported jobs, fall back to the complete snapshot
 	// identity instead of combining fields from different sources.
 	if oldSchemaID == 0 || oldSchemaName == "" || oldTableName == "" {
+		if event.TableInfo.IsView() && args.tableMap[event.TableID] == nil {
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
+		}
 		oldSchemaID = getSchemaID(args.tableMap, event.TableID)
 		oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
 		oldTableName = getTableName(args.tableMap, event.TableID)
@@ -1086,19 +1095,32 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	// Note: event.ExtraTableInfo is set somewhere else,
 	// because it is hard to get the table info of the normal table in this func.
 	if event.Query != "" {
-		upperQuery := strings.ToUpper(event.Query)
-		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
-		idx2 := strings.Index(upperQuery, "WITH TABLE")
+		stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+		if err != nil {
+			return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrDDLEventError, err)
+		}
+		alterTable, ok := stmt.(*ast.AlterTableStmt)
+		if !ok {
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
+		}
 
-		// Note that partition name should be parsed from original query, not the upperQuery.
-		partName := strings.TrimSpace(event.Query[idx1:idx2])
-		partName = common.UnquoteName(partName)
+		var exchangeSpec *ast.AlterTableSpec
+		for _, spec := range alterTable.Specs {
+			if spec.Tp == ast.AlterTableExchangePartition && len(spec.PartitionNames) == 1 {
+				exchangeSpec = spec
+				break
+			}
+		}
+		if exchangeSpec == nil {
+			return PersistedDDLEvent{}, cerror.ErrDDLEventError.GenWithStackByArgs()
+		}
+
 		event.Query = fmt.Sprintf("ALTER TABLE %s EXCHANGE PARTITION %s WITH TABLE %s",
 			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
-			common.QuoteName(partName),
+			common.QuoteName(exchangeSpec.PartitionNames[0].O),
 			common.QuoteSchema(event.SchemaName, event.TableName))
 
-		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
+		if !exchangeSpec.WithValidation {
 			event.Query += " WITHOUT VALIDATION"
 		}
 	} else {
@@ -1360,6 +1382,9 @@ func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 
 func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	if args.ddlEvent.TableInfo != nil && args.ddlEvent.TableInfo.IsView() {
+		return args.tableTriggerDDLHistory
+	}
 	// Note: for create table, this ddl event will not be sent to table dispatchers by default.
 	// adding it to ddl history is just for building table info store.
 	if isPartitionTable(args.ddlEvent.TableInfo) {
@@ -1493,7 +1518,7 @@ func updateDDLHistoryForRenameTables(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	// it won't be send to table dispatchers, just for build version store
 	for _, info := range args.ddlEvent.MultipleTableInfos {
-		if info.ID == InvalidTableID {
+		if info.ID == InvalidTableID || info.IsView() {
 			continue
 		}
 		if isPartitionTable(info) {
@@ -1557,6 +1582,11 @@ func updateDDLHistoryForAlterTableTTL(args updateDDLHistoryFuncArgs) []uint64 {
 }
 
 func updateFullTableInfoIgnore(args updateFullTableInfoFuncArgs) {}
+
+func updateFullTableInfoForCreateView(args updateFullTableInfoFuncArgs) {
+	// View definitions are carried by DDL events. Remove the replaced snapshot entry.
+	delete(args.tableInfoMap, args.event.ExtraTableID)
+}
 
 func updateFullTableInfoForDropSchema(args updateFullTableInfoFuncArgs) {
 	for tableID := range args.databaseMap[args.event.SchemaID].Tables {
@@ -1656,6 +1686,13 @@ func updateSchemaMetadataForDropTable(args updateSchemaMetadataFuncArgs) {
 
 func updateSchemaMetadataIgnore(args updateSchemaMetadataFuncArgs) {}
 
+func updateSchemaMetadataForCreateView(args updateSchemaMetadataFuncArgs) {
+	if args.event.ExtraTableID != 0 {
+		args.removeTableFromDB(args.event.ExtraTableID, args.event.SchemaID)
+		delete(args.tableMap, args.event.ExtraTableID)
+	}
+}
+
 func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 	oldTableID := args.event.TableID
 	newTableID := args.event.ExtraTableID
@@ -1676,6 +1713,11 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 }
 
 func updateSchemaMetadataForRenameTable(args updateSchemaMetadataFuncArgs) {
+	// Incrementally created views are absent from tableMap. Views loaded from
+	// a snapshot still need their existing metadata updated.
+	if args.event.TableInfo != nil && args.event.TableInfo.IsView() && args.tableMap[args.event.TableID] == nil {
+		return
+	}
 	if filter.IsSysSchema(args.event.ExtraSchemaName) {
 		// The old table was filtered out. Register its metadata in the new schema.
 		updateSchemaMetadataForNewTableDDL(args)
@@ -1746,6 +1788,9 @@ func updateSchemaMetadataForRenameTables(args updateSchemaMetadataFuncArgs) {
 	}
 	for i, info := range args.event.MultipleTableInfos {
 		if info.ID == InvalidTableID {
+			continue
+		}
+		if info.IsView() && args.tableMap[info.ID] == nil {
 			continue
 		}
 		if filter.IsSysSchema(args.event.ExtraSchemaNames[i]) {
@@ -1857,6 +1902,9 @@ func iterateEventTablesForDropSchema(args iterateEventTablesFuncArgs) {
 
 func iterateEventTablesForSingleTableDDL(args iterateEventTablesFuncArgs) {
 	event, apply := args.event, args.apply
+	if event.TableInfo != nil && event.TableInfo.IsView() {
+		return
+	}
 	if isPartitionTable(event.TableInfo) {
 		apply(getAllPartitionIDs(event.TableInfo)...)
 	} else {
@@ -1905,7 +1953,7 @@ func iterateEventTablesForExchangeTablePartition(args iterateEventTablesFuncArgs
 func iterateEventTablesForRenameTables(args iterateEventTablesFuncArgs) {
 	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
-		if info.ID == InvalidTableID {
+		if info.ID == InvalidTableID || info.IsView() {
 			continue
 		}
 		if isPartitionTable(info) {
@@ -1919,6 +1967,9 @@ func iterateEventTablesForRenameTables(args iterateEventTablesFuncArgs) {
 func iterateEventTablesForCreateTables(args iterateEventTablesFuncArgs) {
 	event, apply := args.event, args.apply
 	for _, info := range event.MultipleTableInfos {
+		if info.IsView() {
+			continue
+		}
 		if isPartitionTable(info) {
 			apply(getAllPartitionIDs(info)...)
 		} else {
@@ -2195,7 +2246,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionType(rawEvent.Type),
 			filterTableInfo,
 			rawEvent.StartTs,
@@ -2209,7 +2260,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 				tableFilter,
 				rawEvent.ExtraSchemaName,
 				rawEvent.ExtraTableName,
-				rawEvent.Query,
+				rawEvent.queryForFilter(),
 				model.ActionType(rawEvent.Type),
 				rawEvent.TableInfo,
 				rawEvent.StartTs,
@@ -2331,12 +2382,18 @@ func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filt
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{}
 	for _, tableInfo := range rawEvent.MultipleTableInfos {
 		filtered, notSync, err := filterDDL(
-			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.Query,
+			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.queryForFilter(),
 			model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 		if err != nil {
 			return commonEvent.DDLEvent{}, false, err
 		}
 		if filtered {
+			continue
+		}
+		if tableInfo.IsView() {
+			if !notSync {
+				ddlEvent.MultipleTableInfos = append(ddlEvent.MultipleTableInfos, common.WrapTableInfo(rawEvent.SchemaName, tableInfo))
+			}
 			continue
 		}
 		if isPartitionTable(tableInfo) {
@@ -2720,7 +2777,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -2732,7 +2789,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -2740,6 +2797,19 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 		if err != nil {
 			return commonEvent.DDLEvent{}, false, err
 		}
+	}
+	if rawEvent.TableInfo != nil && rawEvent.TableInfo.IsView() {
+		// Views have no physical dispatcher. Only the table trigger participates
+		// in the barrier, as it does for DROP VIEW.
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		}
+		if ignorePrevTable {
+			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.TableID, rawEvent.Query).Error()
+		}
+		ddlEvent.NotSync = notSyncPrevTable
+		return ddlEvent, true, nil
 	}
 	if isPartitionTable(rawEvent.TableInfo) {
 		allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
@@ -3008,7 +3078,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionExchangeTablePartition,
 			// rawEvent.ExtraTableInfo is the normal table info before exchange.
 			rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
@@ -3021,7 +3091,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionExchangeTablePartition,
 			// rawEvent.TableInfo is the partition table info after exchange,
 			// typically, we should use the table info before exchange to do filtering,
@@ -3133,7 +3203,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
-	var addNames, dropNames []commonEvent.SchemaTableName
+	var addNames, dropNames, notSyncDropNames []commonEvent.SchemaTableName
 	allFiltered := true
 	resultQuerys := make([]string, 0)
 	tableInfos := make([]*common.TableInfo, 0)
@@ -3145,13 +3215,17 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		ignorePrevTable, ignoreCurrentTable := false, false
 		notSyncPrevTable := false
 		if tableInfo != nil {
+			// The old architecture filters each rebuilt rename without a semicolon.
+			query := strings.TrimSuffix(querys[i], ";")
 			ignorePrevTable, notSyncPrevTable, err = filterDDL(
-				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], query,
+				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
 			ignoreCurrentTable, _, err = filterDDL(
-				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, query,
+				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
@@ -3160,6 +3234,21 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			continue
 		}
 		allFiltered = false
+		if tableInfo != nil && tableInfo.IsView() {
+			if ignorePrevTable {
+				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(tableInfo.ID, rawEvent.Query).Error()
+			} else if !notSyncPrevTable {
+				resultQuerys = append(resultQuerys, querys[i])
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
+				// GetEvents uses DropName to recover the source identity of each
+				// emitted rename. Do not add the view to the physical table names.
+				dropNames = append(dropNames, commonEvent.SchemaTableName{
+					SchemaName: rawEvent.ExtraSchemaNames[i],
+					TableName:  rawEvent.ExtraTableNames[i],
+				})
+			}
+			continue
+		}
 		if isPartitionTable(tableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(tableInfo)
 			if !ignorePrevTable {
@@ -3291,10 +3380,17 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 				}
 			}
 		}
+		if !ignorePrevTable && notSyncPrevTable {
+			// Keep the first DropName entries aligned with the emitted queries.
+			// Ignored SQL still carries the table's name lifecycle change.
+			notSyncDropNames = append(notSyncDropNames, dropNames[len(dropNames)-1])
+			dropNames = dropNames[:len(dropNames)-1]
+		}
 	}
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false, err
 	}
+	dropNames = append(dropNames, notSyncDropNames...)
 	if addNames != nil || dropNames != nil {
 		ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 			AddName:  addNames,
@@ -3356,7 +3452,8 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		filtered, notSync := false, false
 		if tableFilter != nil {
 			filtered, notSync, err = filterDDL(
-				tableFilter, rawEvent.SchemaName, info.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaName, info.Name.O, querys[i],
+				model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}

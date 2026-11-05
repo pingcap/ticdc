@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -92,9 +91,9 @@ func initRedoComponet(
 		}
 	}
 	// register redo metrics
-	manager.metricTableTriggerRedoDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricTableTriggerRedoDispatcherCount = tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoEventDispatcherCount = eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoCreateDispatcherDuration = createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoMessageDs need register on every node
 	manager.writePathMu.Lock()

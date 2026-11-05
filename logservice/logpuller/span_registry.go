@@ -20,12 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
@@ -76,7 +74,7 @@ type subscribedSpan struct {
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
 	// baseScanPriority is the minimum priority for every Region in this subscription.
-	baseScanPriority cdcpb.ScanPriority
+	baseScanPriority ScanPriorityLevel
 	priorityPolicy   scanPriorityPolicy
 }
 
@@ -145,7 +143,7 @@ func newSubscribedSpan(
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
 			resolveLockRateLimiter.cancel(key)
-			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
+			subscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
 	return rt
@@ -253,14 +251,14 @@ func (r *spanRegistry) UpdateMetrics() {
 		}
 	}
 	r.RUnlock()
-	metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
+	subscriptionClientSubscribedRegionCount.Set(float64(count))
 
 	if pullerMinResolvedTs != 0 {
 		pdTime := r.pdClock.CurrentTime()
 		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
 		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 		if resolvedTsLag > 0 {
-			metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
+			logPullerResolvedTsLag.Set(resolvedTsLag)
 		}
 	}
 }
