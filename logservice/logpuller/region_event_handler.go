@@ -252,11 +252,19 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	}
 
 	state := event.states[0]
+	span := state.region.subscribedSpan
+	// Removing a subscription or closing the sink drops any events that are
+	// still queued in dynstream. These drops are expected and can be numerous.
+	if (span != nil && span.stopped.Load()) ||
+		(h.eventSink.ctx != nil && h.eventSink.ctx.Err() != nil) {
+		return nil
+	}
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
 		zap.Int("states", len(event.states)),
 		zap.Uint64("regionID", state.getRegionID()),
+		zap.Uint64("subscriptionID", uint64(state.requestID)),
 		zap.Uint64("requestID", state.requestID),
 		zap.Bool("stateIsStale", state.isStale()),
 		zap.Uint64("workerID", state.worker.workerID),

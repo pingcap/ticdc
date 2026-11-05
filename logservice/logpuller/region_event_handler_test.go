@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,6 +28,9 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // For UPDATE SQL, its prewrite event has both value and old value.
@@ -489,6 +493,41 @@ func TestOnDropInvalidEventReleasesMemory(t *testing.T) {
 			require.Zero(t, getMemoryQuotaTestState(quota).used)
 		})
 	}
+}
+
+func TestOnDropLogsOnlyForActiveSubscription(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.WarnLevel)
+	restore := log.ReplaceGlobals(zap.New(core), nil)
+	t.Cleanup(restore)
+
+	quota := newMemoryQuotaController(1024, 8)
+	span := newTestQuotaSpan(1)
+	state := &regionFeedState{
+		region: regionInfo{
+			verID:          tikv.NewRegionVerID(2, 1, 1),
+			subscribedSpan: span,
+		},
+		requestID: uint64(span.subID),
+		worker:    &regionRequestWorker{workerID: 3},
+	}
+	handler := &regionEventHandler{eventSink: &regionEventSink{memoryQuota: quota}}
+
+	span.stopped.Store(true)
+	handler.OnDrop(regionEvent{states: []*regionFeedState{state}})
+	require.Zero(t, observedLogs.FilterMessage("drop region event").Len())
+
+	span.stopped.Store(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	handler.eventSink.ctx = ctx
+	handler.OnDrop(regionEvent{states: []*regionFeedState{state}})
+	require.Zero(t, observedLogs.FilterMessage("drop region event").Len())
+
+	handler.eventSink.ctx = t.Context()
+	handler.OnDrop(regionEvent{states: []*regionFeedState{state}})
+	entries := observedLogs.FilterMessage("drop region event").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(span.subID), entries[0].ContextMap()["subscriptionID"])
 }
 
 func TestSpanInitializedAfterFullRangeCoverage(t *testing.T) {
