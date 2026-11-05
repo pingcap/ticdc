@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"runtime/debug"
 	"sync"
@@ -74,8 +75,36 @@ func (m *memoryBudget) used() int64 {
 	return m.bytes.Load()
 }
 
-// Already admitted work can reserve space without waiting so it can finish.
-func (m *memoryBudget) reserve(bytes int64) {
+// Acquire blocks until the budget can admit n bytes. Read callers use it after
+// reading an input so a full budget stops the read loop without blocking owners
+// that already hold data.
+func (m *memoryBudget) Acquire(ctx context.Context, n int64) error {
+	if n < 0 {
+		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", n))
+	}
+	for {
+		used := m.bytes.Load()
+		if used+n <= m.limit {
+			if m.bytes.CAS(used, used+n) {
+				return nil
+			}
+			continue
+		}
+		changed := m.changes()
+		if m.bytes.Load()+n <= m.limit {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-changed:
+		}
+	}
+}
+
+// ForceAcquire records memory that is already allocated or must be admitted for
+// a dependency. It never blocks.
+func (m *memoryBudget) ForceAcquire(bytes int64) {
 	if bytes < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))
 	}
@@ -94,7 +123,7 @@ func (m *memoryBudget) changes() <-chan struct{} {
 	return m.changed
 }
 
-func (m *memoryBudget) release(bytes int64) {
+func (m *memoryBudget) Release(bytes int64) {
 	if bytes == 0 {
 		return
 	}

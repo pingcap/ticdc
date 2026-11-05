@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -50,11 +51,11 @@ type pulsarPartition struct {
 }
 
 type pulsarReader struct {
-	*readLimit
 	client      pulsar.Client
 	consumer    pulsar.Consumer
 	topic       string
 	memory      *memoryBudget
+	continuing  atomic.Bool
 	partitions  map[string]*pulsarPartition
 	confirmable chan<- struct{}
 }
@@ -66,17 +67,8 @@ func newPulsarReader(
 	replicaConfig *config.ReplicaConfig,
 	memory *memoryBudget,
 	confirmable chan<- struct{},
-) (reader *pulsarReader) {
-	if err := context.Cause(ctx); err != nil {
-		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
-	}
-	if upstreamURI.Host == "" {
-		log.Panic("Pulsar upstream URI must include an endpoint")
-	}
+) *pulsarReader {
 	topic := strings.Trim(upstreamURI.Path, "/")
-	if topic == "" {
-		log.Panic("Pulsar upstream URI must include a topic")
-	}
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Pulsar topic", zap.String("topic", topic))
 	}
@@ -160,11 +152,6 @@ func newPulsarReader(
 	if err != nil {
 		log.Panic("Pulsar client initialization failed", zap.Error(err))
 	}
-	defer func() {
-		if reader == nil {
-			client.Close()
-		}
-	}()
 	topics, err := client.TopicPartitions(topic)
 	if err != nil {
 		log.Panic("Pulsar partition discovery failed", zap.String("topic", topic), zap.Error(err))
@@ -188,7 +175,6 @@ func newPulsarReader(
 		partitions[partitionTopic] = &pulsarPartition{stream: int32(id)}
 	}
 	c := &pulsarReader{
-		readLimit:   newReadLimit(memory),
 		client:      client,
 		consumer:    consumer,
 		topic:       topic,
@@ -200,14 +186,13 @@ func newPulsarReader(
 	return c
 }
 
-type pulsarInput struct {
-	message pulsar.ConsumerMessage
-}
-
 func (c *pulsarReader) Streams() []streamSpec {
 	streams := make([]streamSpec, 0, len(c.partitions))
 	for _, partition := range c.partitions {
-		streams = append(streams, streamSpec{id: partition.stream, topic: c.topic})
+		streams = append(streams, streamSpec{
+			id:    partition.stream,
+			topic: c.topic,
+		})
 	}
 	return streams
 }
@@ -216,12 +201,18 @@ func (c *pulsarReader) Run(ctx context.Context, decoder *inputDecoder, tasks cha
 	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
 }
 
-func (c *pulsarReader) decode(ctx context.Context, decoder *inputDecoder, input pulsarInput) iter.Seq2[task, error] {
-	partition := c.partitions[input.message.Topic()]
-	scope := inputScope{stream: partition.stream, dmlBoundary: &readBoundary{reached: true}, ddlOrder: commitOrder}
+func (c *pulsarReader) decode(ctx context.Context, decoder *inputDecoder, message pulsar.ConsumerMessage) iter.Seq2[task, error] {
+	partition := c.partitions[message.Topic()]
+	scope := inputScope{
+		stream: partition.stream,
+		dmlBoundary: &readBoundary{
+			reached: true,
+		},
+		ddlOrder: commitOrder,
+	}
 	return func(yield func(task, error) bool) {
-		defer c.memory.release(int64(len(input.message.Key()) + len(input.message.Payload())))
-		for work, err := range decoder.decodeMessage(ctx, scope, []byte(input.message.Key()), input.message.Payload(), c.memory) {
+		defer c.memory.Release(int64(len(message.Key()) + len(message.Payload())))
+		for work, err := range decoder.decodeMessage(ctx, scope, []byte(message.Key()), message.Payload(), c.memory) {
 			if err == nil {
 				through := taskTimestamp(work)
 				partition.parsedTs = max(partition.parsedTs, through)
@@ -238,17 +229,20 @@ func (c *pulsarReader) decode(ctx context.Context, decoder *inputDecoder, input 
 			}
 		}
 		partition.mu.Lock()
-		c.memory.reserve(pulsarRecordBytes)
-		partition.records = append(partition.records, pulsarRecord{through: partition.parsedTs, messageID: input.message.ID()})
+		c.memory.ForceAcquire(pulsarRecordBytes)
+		partition.records = append(
+			partition.records,
+			pulsarRecord{
+				through:   partition.parsedTs,
+				messageID: message.ID(),
+			},
+		)
 		partition.mu.Unlock()
 		notifyConfirmation(c.confirmable)
 	}
 }
 
-func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+func (c *pulsarReader) Read(ctx context.Context) ([]pulsar.ConsumerMessage, error) {
 	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
@@ -256,7 +250,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 	case message = <-c.consumer.Chan():
 	}
 	var (
-		batch []pulsarInput
+		batch []pulsar.ConsumerMessage
 		bytes int64
 	)
 	for {
@@ -265,8 +259,12 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 		}
 		size := int64(len(message.Key()) + len(message.Payload()))
-		c.memory.reserve(size)
-		batch = append(batch, pulsarInput{message: message})
+		if c.continuing.Load() {
+			c.memory.ForceAcquire(size)
+		} else if err := c.memory.Acquire(ctx, size); err != nil {
+			return nil, err
+		}
+		batch = append(batch, message)
 		bytes += size
 		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
 			return batch, nil
@@ -279,6 +277,10 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsarInput, error) {
 			return batch, nil
 		}
 	}
+}
+
+func (c *pulsarReader) ContinueReading(enabled bool) {
+	c.continuing.Store(enabled)
 }
 
 func (c *pulsarReader) Advance(_ []readUpdate) {
@@ -318,7 +320,7 @@ func (c *pulsarReader) Confirm(ctx context.Context, checkpoint uint64) error {
 		records := partition.records
 		clear(records[:count])
 		partition.records = records[count:]
-		c.memory.release(int64(count) * pulsarRecordBytes)
+		c.memory.Release(int64(count) * pulsarRecordBytes)
 		partition.mu.Unlock()
 	}
 	return nil
@@ -328,7 +330,7 @@ func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
 	for _, partition := range c.partitions {
-		c.memory.release(int64(len(partition.records)) * pulsarRecordBytes)
+		c.memory.Release(int64(len(partition.records)) * pulsarRecordBytes)
 		partition.records = nil
 	}
 }

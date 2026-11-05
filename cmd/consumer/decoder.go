@@ -29,7 +29,6 @@ import (
 // Protocol cursors and schema updates remain with the source decoder. Workers only
 // use captured messages; their number does not depend on input partitions.
 type decoderGroup struct {
-	g         *errgroup.Group
 	input     chan *decodeTask
 	workers   int
 	memory    *memoryBudget
@@ -79,21 +78,14 @@ func (d *decoderGroup) submit(ctx context.Context, task *decodeTask) error {
 }
 
 func (d *decoderGroup) start(ctx context.Context) error {
-	d.g, ctx = errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	for range d.workers {
-		d.g.Go(func() error {
+		g.Go(func() error {
 			return d.decodeRows(ctx)
 		})
 	}
-	// The caller cancels shared input resources before close joins workers.
 	<-ctx.Done()
-	return context.Cause(ctx)
-}
-
-func (d *decoderGroup) close() {
-	if d.g != nil {
-		_ = d.g.Wait()
-	}
+	return g.Wait()
 }
 
 func (d *decoderGroup) decodeRows(ctx context.Context) error {
@@ -124,11 +116,11 @@ func (d *decoderGroup) decodeRows(ctx context.Context) error {
 			d.validator.validateDML(task, dml)
 		}
 		bytes := dml.Rows.MemoryUsage()
-		d.memory.reserve(bytes)
+		d.memory.ForceAcquire(bytes)
 		capturedBytes := task.bytes
 		task.dml, task.bytes = dml, bytes
 		task.message, task.table = nil, nil
-		d.memory.release(capturedBytes)
+		d.memory.Release(capturedBytes)
 		close(task.done)
 		select {
 		case d.completed <- struct{}{}:

@@ -57,12 +57,21 @@ type inputScope struct {
 	ddlOrder readOrder
 }
 
-type task interface{ isTask() }
+type task interface {
+	isTask()
+}
 
-func (*decodeTask) isTask()     {}
-func (*inputDDL) isTask()       {}
-func (*inputWatermark) isTask() {}
-func (*watermark) isTask()      {}
+func (*decodeTask) isTask() {
+}
+
+func (*inputDDL) isTask() {
+}
+
+func (*inputWatermark) isTask() {
+}
+
+func (*watermark) isTask() {
+}
 
 type inputDDL struct {
 	ddl          *event.DDLEvent
@@ -136,9 +145,17 @@ func (p *inputDecoder) close() {
 
 func (p *inputDecoder) messageTask(scope inputScope, message *codecCommon.DMLMessage) *decodeTask {
 	return &decodeTask{
-		message: message, name: event.SchemaTableName{SchemaName: message.Schema, TableName: message.Table},
-		commitTs: message.GetCommitTs(), tableID: message.TableID, stream: scope.stream,
-		boundary: scope.dmlBoundary, bytes: message.ApproximateSize, done: make(chan struct{}),
+		message: message,
+		name: event.SchemaTableName{
+			SchemaName: message.Schema,
+			TableName:  message.Table,
+		},
+		commitTs: message.GetCommitTs(),
+		tableID:  message.TableID,
+		stream:   scope.stream,
+		boundary: scope.dmlBoundary,
+		bytes:    message.ApproximateSize,
+		done:     make(chan struct{}),
 	}
 }
 
@@ -168,10 +185,10 @@ func (p *inputDecoder) decodeMessage(
 					// Simple holds the row until its schema version arrives. Account
 					// its captured size now and transfer it to the task at the DDL.
 					pending := stream.(*simple.Decoder).PendingDMLMessage
-					memory.reserve(pending.ApproximateSize)
+					memory.ForceAcquire(pending.ApproximateSize)
 					continue
 				}
-				memory.reserve(message.ApproximateSize)
+				memory.ForceAcquire(message.ApproximateSize)
 				task := p.messageTask(scope, message)
 				if !yield(task, nil) {
 					return
@@ -191,11 +208,17 @@ func (p *inputDecoder) decodeMessage(
 						continue
 					}
 				}
-				if !yield(&inputDDL{ddl: ddl, scope: scope}, nil) {
+				if !yield(&inputDDL{
+					ddl:   ddl,
+					scope: scope,
+				}, nil) {
 					return
 				}
 			case codecCommon.MessageTypeResolved:
-				if !yield(&inputWatermark{watermark: stream.NextResolvedEvent(), stream: scope.stream}, nil) {
+				if !yield(&inputWatermark{
+					watermark: stream.NextResolvedEvent(),
+					stream:    scope.stream,
+				}, nil) {
 					return
 				}
 			}
@@ -242,14 +265,6 @@ func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
 	if err != nil {
 		log.Panic("consumer upstream database open failed", zap.Error(err))
 	}
-	defer func() {
-		if err == nil {
-			return
-		}
-		if closeErr := upstreamDB.Close(); closeErr != nil {
-			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
-		}
-	}()
 	upstreamDB.SetMaxOpenConns(10)
 	upstreamDB.SetMaxIdleConns(10)
 	upstreamDB.SetConnMaxLifetime(10 * time.Minute)

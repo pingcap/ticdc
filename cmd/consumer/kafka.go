@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -64,12 +65,12 @@ type kafkaPartition struct {
 }
 
 type kafkaReader struct {
-	*readLimit
 	router           *eventrouter.EventRouter
 	client           *kgo.Client
 	topic            string
 	protocol         config.Protocol
 	memory           *memoryBudget
+	continuing       atomic.Bool
 	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
 	confirmable      chan<- struct{}
 	partitions       map[int32]*kafkaPartition
@@ -93,14 +94,8 @@ func newKafkaReader(
 	memory *memoryBudget,
 	replicaConfig *config.ReplicaConfig,
 	confirmable chan<- struct{},
-) (reader *kafkaReader) {
-	if upstreamURI.Host == "" {
-		log.Panic("Kafka upstream URI must include an endpoint")
-	}
+) *kafkaReader {
 	topic := strings.Trim(upstreamURI.Path, "/")
-	if topic == "" {
-		log.Panic("Kafka upstream URI must include a topic")
-	}
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
 	}
@@ -131,7 +126,9 @@ func newKafkaReader(
 	}
 	ca, cert, key := query.Get("ca"), query.Get("cert"), query.Get("key")
 	if upstreamURI.Scheme == config.KafkaSSLScheme || ca != "" || cert != "" || key != "" {
-		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
 		if ca != "" {
 			pem, err := os.ReadFile(ca)
 			if err != nil {
@@ -148,7 +145,9 @@ func newKafkaReader(
 			if err != nil {
 				log.Panic("Kafka client certificate loading failed", zap.Error(errors.WrapError(errors.ErrKafkaInvalidConfig, err)))
 			}
-			tlsConfig.Certificates = []tls.Certificate{certificate}
+			tlsConfig.Certificates = []tls.Certificate{
+				certificate,
+			}
 		}
 		kafkaOptions = append(kafkaOptions, kgo.DialTLSConfig(tlsConfig))
 	}
@@ -156,12 +155,6 @@ func newKafkaReader(
 	if err != nil {
 		log.Panic("Kafka client initialization failed", zap.Error(err))
 	}
-	defer func() {
-		if reader == nil {
-			client.Close()
-		}
-	}()
-
 	admin := kadm.NewClient(client)
 	metadata, err := admin.Metadata(ctx, topic)
 	if err != nil {
@@ -178,7 +171,6 @@ func newKafkaReader(
 	}
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
-		readLimit:   newReadLimit(memory),
 		client:      client,
 		topic:       topic,
 		protocol:    protocol,
@@ -195,14 +187,13 @@ func newKafkaReader(
 	}
 }
 
-type kafkaInput struct {
-	message *kgo.Record
-}
-
 func (c *kafkaReader) Streams() []streamSpec {
 	streams := make([]streamSpec, 0, len(c.partitions))
 	for partitionID := range c.partitions {
-		streams = append(streams, streamSpec{id: partitionID, topic: c.topic})
+		streams = append(streams, streamSpec{
+			id:    partitionID,
+			topic: c.topic,
+		})
 	}
 	return streams
 }
@@ -214,21 +205,30 @@ func (c *kafkaReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan
 	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
 }
 
-func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, input kafkaInput) iter.Seq2[task, error] {
-	id := input.message.Partition
-	offset := input.message.Offset
-	scope := inputScope{stream: id, ddlCopy: id != 0, dmlBoundary: c.control}
+func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, record *kgo.Record) iter.Seq2[task, error] {
+	id := record.Partition
+	offset := record.Offset
+	scope := inputScope{
+		stream:      id,
+		ddlCopy:     id != 0,
+		dmlBoundary: c.control,
+	}
 	if id == 0 {
-		scope.dmlBoundary = &readBoundary{reached: true, watermark: c.control.watermark}
+		scope.dmlBoundary = &readBoundary{
+			reached:   true,
+			watermark: c.control.watermark,
+		}
 	}
 	if len(c.partitions) == 1 {
-		scope.ddlBoundary = &readBoundary{reached: true}
+		scope.ddlBoundary = &readBoundary{
+			reached: true,
+		}
 	}
 	return func(yield func(task, error) bool) {
-		defer c.memory.release(int64(len(input.message.Key) + len(input.message.Value)))
+		defer c.memory.Release(int64(len(record.Key) + len(record.Value)))
 		partition := c.partitions[id]
 		rows := 0
-		for result, err := range decoder.decodeMessage(ctx, scope, input.message.Key, input.message.Value, c.memory) {
+		for result, err := range decoder.decodeMessage(ctx, scope, record.Key, record.Value, c.memory) {
 			if err != nil {
 				yield(nil, err)
 				return
@@ -238,12 +238,12 @@ func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, input k
 			if task, ok := result.(*decodeTask); ok {
 				rows++
 				if rows > c.maxBatchSize {
-					log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
+					log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", record.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 				}
-				if size := len(input.message.Key) + len(input.message.Value); rows > 1 && size > c.maxMessageBytes {
-					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
+				if size := len(record.Key) + len(record.Value); rows > 1 && size > c.maxMessageBytes {
+					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", record.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
-				task.offset = input.message.Offset
+				task.offset = record.Offset
 				task.skipKeyOnlyDelete = c.protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
 			}
 			if !yield(result, nil) {
@@ -251,8 +251,14 @@ func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, input k
 			}
 		}
 		partition.mu.Lock()
-		c.memory.reserve(kafkaRecordBytes)
-		partition.records = append(partition.records, kafkaRecord{through: partition.parsedTs, offset: offset})
+		c.memory.ForceAcquire(kafkaRecordBytes)
+		partition.records = append(
+			partition.records,
+			kafkaRecord{
+				through: partition.parsedTs,
+				offset:  offset,
+			},
+		)
 		partition.mu.Unlock()
 		notifyConfirmation(c.confirmable)
 	}
@@ -283,27 +289,27 @@ func (c *kafkaReader) checkPartition(dml *event.DMLEvent, partition int32, offse
 	}
 }
 
-func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
+func (c *kafkaReader) Read(ctx context.Context) ([]*kgo.Record, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
 		prefetched := c.client.BufferedFetchBytes()
 		if prefetched > c.prefetchedBytes {
-			c.memory.reserve(prefetched - c.prefetchedBytes)
+			c.memory.ForceAcquire(prefetched - c.prefetchedBytes)
 		}
 		if prefetched < c.prefetchedBytes {
-			c.memory.release(c.prefetchedBytes - prefetched)
+			c.memory.Release(c.prefetchedBytes - prefetched)
 		}
 		c.prefetchedBytes = prefetched
 		c.limitReads()
 		if partitionID := c.nextPartition(); partitionID >= 0 {
 			partition := c.partitions[partitionID]
 			queue := partition.polled
-			var batch []kafkaInput
+			var batch []*kgo.Record
 			var size int64
 			for _, record := range queue {
-				batch = append(batch, kafkaInput{message: record})
+				batch = append(batch, record)
 				size += int64(len(record.Key) + len(record.Value))
 				if len(batch) == batchRows || size >= batchBytes {
 					break
@@ -318,10 +324,11 @@ func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 			partition.sequence = c.readSequence
 			return batch, nil
 		}
-		if err := c.wait(ctx); err != nil {
-			return nil, err
+		if !c.continuing.Load() {
+			if err := c.memory.Acquire(ctx, 0); err != nil {
+				return nil, err
+			}
 		}
-		// Budget releases can wake this reader without a conductor update.
 		c.limitReads()
 		pollCtx, cancel := context.WithCancel(ctx)
 		c.progressMu.Lock()
@@ -346,17 +353,26 @@ func (c *kafkaReader) Read(ctx context.Context) ([]kafkaInput, error) {
 		for _, fetchError := range fetchErrors {
 			return nil, errors.WrapError(errors.ErrInternalCheckFailed, fetchError.Err, "read Kafka partition")
 		}
-		var bytes int64
+		var (
+			records []*kgo.Record
+			bytes   int64
+		)
 		for iterator := fetches.RecordIter(); !iterator.Done(); {
 			record := iterator.Next()
-			partition := c.partitions[record.Partition]
-			if partition == nil {
+			if c.partitions[record.Partition] == nil {
 				return nil, errors.ErrKafkaInvalidConfig.GenWithStackByArgs("Kafka partitions changed; restart the consumer")
 			}
-			partition.polled = append(partition.polled, record)
+			records = append(records, record)
 			bytes += int64(len(record.Key) + len(record.Value))
 		}
-		c.memory.reserve(bytes)
+		if c.continuing.Load() {
+			c.memory.ForceAcquire(bytes)
+		} else if err := c.memory.Acquire(ctx, bytes); err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			c.partitions[record.Partition].polled = append(c.partitions[record.Partition].polled, record)
+		}
 	}
 }
 
@@ -379,7 +395,7 @@ func (c *kafkaReader) Advance(updates []readUpdate) {
 }
 
 func (c *kafkaReader) ContinueReading(enabled bool) {
-	c.readLimit.ContinueReading(enabled)
+	c.continuing.Store(enabled)
 	c.limitReads()
 }
 
@@ -419,7 +435,9 @@ func (c *kafkaReader) tablePartitions(names []event.SchemaTableName) []int32 {
 func (c *kafkaReader) Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary {
 	partitionIDs := c.tablePartitions(tables)
 	if tables != nil && len(tables) == 0 {
-		partitionIDs = []int32{0}
+		partitionIDs = []int32{
+			0,
+		}
 	}
 	c.progressMu.Lock()
 	defer c.progressMu.Unlock()
@@ -493,7 +511,7 @@ func (c *kafkaReader) Confirm(ctx context.Context, checkpoint uint64) error {
 		inputs := partition.records
 		clear(inputs[:count])
 		partition.records = inputs[count:]
-		c.memory.release(int64(count) * kafkaRecordBytes)
+		c.memory.Release(int64(count) * kafkaRecordBytes)
 		partition.mu.Unlock()
 	}
 	return nil
@@ -512,7 +530,11 @@ func (c *kafkaReader) limitReads() {
 		if pause == partition.fetchPaused {
 			continue
 		}
-		partitions := map[string][]int32{c.topic: {partitionID}}
+		partitions := map[string][]int32{
+			c.topic: {
+				partitionID,
+			},
+		}
 		switch {
 		case pause:
 			c.client.PauseFetchPartitions(partitions)
@@ -559,12 +581,12 @@ func (c *kafkaReader) nextPartition() int32 {
 
 func (c *kafkaReader) Close() {
 	c.client.Close()
-	c.memory.release(c.prefetchedBytes)
+	c.memory.Release(c.prefetchedBytes)
 	for _, partition := range c.partitions {
-		c.memory.release(int64(len(partition.records)) * kafkaRecordBytes)
+		c.memory.Release(int64(len(partition.records)) * kafkaRecordBytes)
 		partition.records = nil
 		for _, record := range partition.polled {
-			c.memory.release(int64(len(record.Key) + len(record.Value)))
+			c.memory.Release(int64(len(record.Key) + len(record.Value)))
 		}
 	}
 }

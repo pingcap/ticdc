@@ -36,10 +36,15 @@ import (
 
 // pendingTask is private scheduling state. Only decodeTask has a conversion
 // result; DDL and checkpoint tasks never carry row-conversion fields.
-type pendingTask interface{ pendingTask() }
+type pendingTask interface {
+	pendingTask()
+}
 
-func (*decodeTask) pendingTask() {}
-func (*ddlTask) pendingTask()    {}
+func (*decodeTask) pendingTask() {
+}
+
+func (*ddlTask) pendingTask() {
+}
 
 type ddlTask struct {
 	ddl         *event.DDLEvent
@@ -50,7 +55,7 @@ type ddlTask struct {
 }
 
 func (t *ddlTask) release() {
-	t.memory.release(t.bytes)
+	t.memory.Release(t.bytes)
 }
 
 type watermark struct {
@@ -61,8 +66,17 @@ type watermark struct {
 // One loop owns dependency selection, conversion collection and writer queues.
 // Protocol decoding and sink execution run independently of that state.
 func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) error {
-	c.g, ctx = errgroup.WithContext(ctx)
-	c.g.Go(func() error { return c.decoder.start(ctx) })
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return c.decoder.start(ctx)
+	})
+	g.Go(func() error {
+		return c.run(ctx, tasks, w)
+	})
+	return g.Wait()
+}
+
+func (c *conductor) run(ctx context.Context, tasks <-chan []task, w *writer) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,13 +112,6 @@ func (c *conductor) start(ctx context.Context, tasks <-chan []task, w *writer) e
 	}
 }
 
-func (c *conductor) close() {
-	if c.g != nil {
-		_ = c.g.Wait()
-	}
-	c.decoder.close()
-}
-
 // Resolve only a bounded, converted prefix into the writer. Unselected work
 // stays in its input/table group and contributes its head to progress.
 func (c *conductor) flush(ctx context.Context, w *writer) error {
@@ -135,7 +142,10 @@ func (c *conductor) flush(ctx context.Context, w *writer) error {
 		}
 		delivery.flush()
 		if control != nil {
-			w.addDDL(&ddlWrite{ddl: control.ddl, task: control})
+			w.addDDL(&ddlWrite{
+				ddl:  control.ddl,
+				task: control,
+			})
 		}
 	}
 }
@@ -176,7 +186,11 @@ func (d *delivery) admit(task *decodeTask) bool {
 		(d.writer.inFlightEvents+d.events+1 > maxInFlightEvents || d.writer.inFlightBytes+d.bytes+task.bytes > maxInFlightBytes) {
 		return false
 	}
-	row := &dmlWrite{dml: task.dml, bytes: task.bytes, sequential: d.merge}
+	row := &dmlWrite{
+		dml:        task.dml,
+		bytes:      task.bytes,
+		sequential: d.merge,
+	}
 	if !d.writer.canWrite(row, d.active, d.tables) {
 		return false
 	}
@@ -198,7 +212,7 @@ func (d *delivery) flush() {
 
 // conductor coordinates row conversion, write ordering and completion progress.
 type conductor struct {
-	reader            Reader
+	reader            *reader
 	confirmable       chan<- struct{}
 	readThrough       uint64 // Largest observed source marker still needing global coverage.
 	ddlInputs         map[ddlKey]*ddlInput
@@ -207,7 +221,6 @@ type conductor struct {
 	boundaryDDL       *ddlTask
 	checkpoint        *atomic.Uint64
 	cleanedCheckpoint uint64
-	g                 *errgroup.Group
 	memory            *memoryBudget
 	streams           map[int32]*streamWatermark
 	decoder           *decoderGroup
@@ -307,7 +320,7 @@ func setDDLTableNames(ddl *event.DDLEvent) error {
 
 func (c *conductor) queueDDL(ddl *event.DDLEvent) *ddlInput {
 	bytes := int64(len(ddl.Query) + len(ddl.SchemaName) + len(ddl.TableName))
-	c.memory.reserve(bytes)
+	c.memory.ForceAcquire(bytes)
 	task := &ddlTask{
 		ddl:    ddl,
 		memory: c.memory,
@@ -529,29 +542,24 @@ func ddlBlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string)
 
 func newConductor(
 	memory *memoryBudget,
-	reader Reader,
-	streamIDs []int32,
+	source *reader,
 	codecConfig *codecCommon.Config,
 	checkpoint *atomic.Uint64,
 	confirmable chan struct{},
 ) *conductor {
-	streams := make(map[int32]*streamWatermark, len(streamIDs))
-	for _, id := range streamIDs {
-		streams[id] = &streamWatermark{}
-	}
-	_, orderedDML := reader.(*kafkaReader)
-	var validator dmlValidator
-	if v, ok := reader.(dmlValidator); ok {
-		validator = v
+	specs := source.Streams()
+	streams := make(map[int32]*streamWatermark, len(specs))
+	for _, stream := range specs {
+		streams[stream.id] = &streamWatermark{}
 	}
 	c := &conductor{
-		orderedDML:  orderedDML,
-		reader:      reader,
+		orderedDML:  source.orderedDML,
+		reader:      source,
 		confirmable: confirmable,
 		checkpoint:  checkpoint,
 		memory:      memory,
 		streams:     streams,
-		decoder:     newDecoderGroup(memory, make(chan struct{}, 1), validator),
+		decoder:     newDecoderGroup(memory, make(chan struct{}, 1), source.validator),
 		merger:      newRowMerger(codecConfig, memory),
 	}
 	return c
@@ -677,7 +685,7 @@ func (c *conductor) needsMoreInput(w *writer) bool {
 	// reach markers that release retained transport positions.
 	return len(c.pendingDML) == 0 && len(c.pendingDDL) == 0 &&
 		len(w.pendingDML) == 0 && len(w.inFlight) == 0 &&
-		len(w.pendingDDL) == 0 && w.ddlInFlight == nil
+		len(w.pendingDDL) == 0
 }
 
 // Partition markers establish a global watermark when every stream is covered.
@@ -735,7 +743,7 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 		c.readThrough = max(c.readThrough, result.commitTs)
 		if result.table != nil && result.commitTs > 0 && result.commitTs <= c.checkpoint.Load() {
 			result.message = nil
-			c.memory.release(result.bytes)
+			c.memory.Release(result.bytes)
 			return nil
 		}
 		c.queueDML(result)
@@ -753,7 +761,12 @@ func (c *conductor) accept(ctx context.Context, work task) error {
 			stream := c.streams[result.stream]
 			stream.watermark = max(stream.watermark, result.watermark)
 			stream.hasWatermark = true
-			c.reader.Advance([]readUpdate{{stream: result.stream, watermark: result.watermark}})
+			c.reader.Advance([]readUpdate{
+				{
+					stream:    result.stream,
+					watermark: result.watermark,
+				},
+			})
 		}
 	case *inputDDL:
 		c.readThrough = max(c.readThrough, result.ddl.GetCommitTs())
@@ -810,6 +823,11 @@ func (c *conductor) crossBoundary(stream int32, commitTs uint64, effect *event.D
 	crossed := effect != nil && effect.GetCommitTs() == ddl.ddl.GetCommitTs() && effect.SchemaName == ddl.ddl.SchemaName && effect.TableName == ddl.ddl.TableName && effect.Query == ddl.ddl.Query
 	crossed = crossed || (row != nil && commitTs > ddl.ddl.GetCommitTs() && ddlBlocksTask(ddl.ddl, row))
 	if crossed {
-		c.reader.Advance([]readUpdate{{stream: stream, boundary: ddl.boundary}})
+		c.reader.Advance([]readUpdate{
+			{
+				stream:   stream,
+				boundary: ddl.boundary,
+			},
+		})
 	}
 }

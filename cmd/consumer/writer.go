@@ -42,9 +42,8 @@ const (
 )
 
 func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.ReplicaConfig, memory *memoryBudget) *writer {
-	replicaConfig.Sink.TiDBSourceID = 1
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
-	downstream, err := sink.New(ctx, &config.ChangefeedConfig{
+	target, err := sink.New(ctx, &config.ChangefeedConfig{
 		ChangefeedID:           changefeedID,
 		SinkURI:                downstreamURI,
 		SinkConfig:             replicaConfig.Sink,
@@ -55,22 +54,17 @@ func newWriter(ctx context.Context, downstreamURI string, replicaConfig *config.
 		log.Panic("consumer downstream sink initialization failed", zap.Error(err))
 	}
 	return &writer{
-		downstream: downstream,
-		memory:     memory,
-		completed:  make(chan struct{}, 1),
-		mutations:  make(map[mutationKey]*writeBatch),
-		ddlJobs:    make(chan *ddlWrite, 1),
-		ddlDone:    make(chan struct{}, 1),
+		target:    target,
+		memory:    memory,
+		completed: make(chan struct{}, 1),
+		mutations: make(map[mutationKey]*writeBatch),
 	}
 }
 
 func (w *writer) start(ctx context.Context) error {
-	w.g, ctx = errgroup.WithContext(ctx)
-	w.g.Go(func() error {
-		return w.executeDDL(ctx)
-	})
-	w.g.Go(func() error {
-		err := w.downstream.Run(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		err := w.target.Run(ctx)
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
 		}
@@ -82,52 +76,17 @@ func (w *writer) start(ctx context.Context) error {
 		return nil
 	})
 	<-ctx.Done()
-	return context.Cause(ctx)
-}
-
-func (w *writer) close() {
 	// Close also wakes sinks whose input channel is blocked while idle.
-	w.downstream.Close()
-	if w.g != nil {
-		_ = w.g.Wait()
-	}
-}
-
-func (w *writer) executeDDL(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case result := <-w.ddlJobs:
-			if err := w.writeDDL(ctx, result); err != nil {
-				if ctx.Err() == nil {
-					log.Error("consumer DDL write failed", zap.String("schema", result.ddl.SchemaName), zap.String("table", result.ddl.TableName), zap.Uint64("commitTs", result.ddl.GetCommitTs()), zap.Error(err))
-				}
-				return err
-			}
-			select {
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			case w.ddlDone <- struct{}{}:
-			}
-			select {
-			case w.completed <- struct{}{}:
-			default:
-			}
-		}
-	}
+	w.target.Close()
+	return g.Wait()
 }
 
 type writer struct {
-	g                 *errgroup.Group
-	downstream        sink.Sink
+	target            sink.Sink
 	memory            *memoryBudget
 	completed         chan struct{}
 	pendingDML        []*dmlWrite
 	pendingDDL        []*ddlWrite
-	ddlInFlight       *ddlWrite
-	ddlJobs           chan *ddlWrite
-	ddlDone           chan struct{}
 	inFlight          []*writeBatch
 	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations awaiting checkpoint advancement.
 	ddlWrites         map[ddlKey]bool
@@ -174,7 +133,7 @@ type dmlWrite struct {
 }
 
 func (r *dmlWrite) release() {
-	r.memory.release(r.bytes)
+	r.memory.Release(r.bytes)
 }
 
 type ddlWrite struct {
@@ -202,10 +161,10 @@ func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	if err := w.downstream.FlushDMLBeforeBlock(result.ddl); err != nil {
+	if err := w.target.FlushDMLBeforeBlock(result.ddl); err != nil {
 		return err
 	}
-	if err := w.downstream.WriteBlockEvent(result.ddl); err != nil {
+	if err := w.target.WriteBlockEvent(result.ddl); err != nil {
 		return err
 	}
 	result.release()
@@ -213,15 +172,7 @@ func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 }
 
 func (w *writer) flushDDL(ctx context.Context) error {
-	if w.ddlInFlight != nil {
-		select {
-		case <-w.ddlDone:
-			w.ddlInFlight = nil
-			w.progressChanged = true
-		default:
-		}
-	}
-	for w.ddlInFlight == nil && len(w.pendingDDL) != 0 {
+	for len(w.pendingDDL) != 0 {
 		result := w.pendingDDL[0]
 		ddl := result.ddl
 		// Failover can resend an old DDL after a newer one. Query is part of
@@ -233,7 +184,6 @@ func (w *writer) flushDDL(ctx context.Context) error {
 			query:    ddl.Query,
 		}
 		if w.ddlWrites[key] || (key.commitTs > 0 && key.commitTs <= w.checkpoint) {
-			// No DDL is in flight, so the original write has succeeded.
 			result.release()
 			w.pendingDDL[0] = nil
 			w.pendingDDL = w.pendingDDL[1:]
@@ -252,18 +202,18 @@ func (w *writer) flushDDL(ctx context.Context) error {
 				return nil
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case w.ddlJobs <- result:
-			if w.ddlWrites == nil {
-				w.ddlWrites = make(map[ddlKey]bool)
+		w.pendingDDL[0] = nil
+		w.pendingDDL = w.pendingDDL[1:]
+		w.progressChanged = true
+		if w.ddlWrites == nil {
+			w.ddlWrites = make(map[ddlKey]bool)
+		}
+		w.ddlWrites[key] = true
+		if err := w.writeDDL(ctx, result); err != nil {
+			if ctx.Err() == nil {
+				log.Error("consumer DDL write failed", zap.String("schema", ddl.SchemaName), zap.String("table", ddl.TableName), zap.Uint64("commitTs", ddl.GetCommitTs()), zap.Error(err))
 			}
-			w.ddlWrites[key] = true
-			w.ddlInFlight = result
-			w.pendingDDL[0] = nil
-			w.pendingDDL = w.pendingDDL[1:]
-			return nil
+			return err
 		}
 	}
 	w.advanceCheckpoint()
@@ -348,8 +298,7 @@ func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool,
 
 func (w *writer) canWrite(item *dmlWrite, active, tables map[int64]*dmlWrite) bool {
 	id := item.dml.PhysicalTableID
-	fenced := w.ddlInFlight != nil && item.dml.CommitTs > w.ddlInFlight.ddl.GetCommitTs() && ddlBlocksTable(w.ddlInFlight.ddl, item.dml)
-	if fenced || slices.ContainsFunc(w.pendingDDL, func(control *ddlWrite) bool {
+	if slices.ContainsFunc(w.pendingDDL, func(control *ddlWrite) bool {
 		return item.dml.CommitTs > control.ddl.GetCommitTs() && ddlBlocksTable(control.ddl, item.dml)
 	}) {
 		return false
@@ -382,8 +331,10 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 		if filtered != item.dml {
 			// The original chunk stays alive through its decoder callbacks.
 			copyBytes := filtered.Rows.MemoryUsage()
-			w.memory.reserve(copyBytes)
-			filtered.AddPostFlushFunc(func() { w.memory.release(copyBytes) })
+			w.memory.ForceAcquire(copyBytes)
+			filtered.AddPostFlushFunc(func() {
+				w.memory.Release(copyBytes)
+			})
 			batch.bytes += copyBytes
 		}
 		batch.events = append(batch.events, filtered)
@@ -420,7 +371,7 @@ func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 				}
 			}
 		})
-		w.downstream.AddDMLEvent(dml)
+		w.target.AddDMLEvent(dml)
 	}
 	return nil
 }
@@ -535,9 +486,6 @@ func (w *writer) advanceCheckpoint() {
 		maps.Copy(unfinishedTables, w.unsubmittedTables)
 	}
 	for _, control := range w.pendingDDL {
-		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
-	}
-	if control := w.ddlInFlight; control != nil {
 		unfinished, pending = min(unfinished, control.ddl.GetCommitTs()), true
 	}
 	for _, item := range w.pendingDML {

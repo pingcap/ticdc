@@ -40,6 +40,7 @@ import (
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -73,11 +74,11 @@ type storageTableKey struct {
 }
 
 type storageReader struct {
-	*readLimit
 	tableIDs         map[storageTableKey]int64
 	nextTableID      int64
 	storage          storeapi.Storage
 	memory           *memoryBudget
+	continuing       atomic.Bool
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -100,18 +101,11 @@ func newStorageReader(
 	protocol config.Protocol,
 	memory *memoryBudget,
 ) *storageReader {
-	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
-		log.Panic("file upstream URI must include a path")
-	}
-	if upstreamURI.Scheme != config.FileScheme && upstreamURI.Host == "" {
-		log.Panic("object storage upstream URI must include a bucket")
-	}
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
 	c := &storageReader{
-		readLimit:      newReadLimit(memory),
 		storage:        storage,
 		memory:         memory,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
@@ -264,7 +258,9 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 }
 
 type (
-	storageRead interface{ storageRead() }
+	storageRead interface {
+		storageRead()
+	}
 	storageFile struct {
 		contents []byte
 		schema   *readSchema
@@ -288,9 +284,14 @@ func (r storageDDLRegistration) done() {
 
 type storageWatermark uint64
 
-func (*storageFile) storageRead()     {}
-func (*storageDDL) storageRead()      {}
-func (storageWatermark) storageRead() {}
+func (*storageFile) storageRead() {
+}
+
+func (*storageDDL) storageRead() {
+}
+
+func (storageWatermark) storageRead() {
+}
 
 func (*storageReader) Streams() []streamSpec {
 	return nil
@@ -308,8 +309,19 @@ func (c *storageReader) decode(ctx context.Context, decoder *inputDecoder, input
 		switch input := input.(type) {
 		case *storageDDL:
 			input.ddl.TableInfo = input.schema.tableInfo()
-			registration := storageDDLRegistration{reader: c, ddl: input}
-			if !yield(&inputDDL{ddl: input.ddl, scope: inputScope{ddlBoundary: &readBoundary{reached: true}}, registration: registration}, nil) {
+			registration := storageDDLRegistration{
+				reader: c,
+				ddl:    input,
+			}
+			if !yield(&inputDDL{
+				ddl: input.ddl,
+				scope: inputScope{
+					ddlBoundary: &readBoundary{
+						reached: true,
+					},
+				},
+				registration: registration,
+			}, nil) {
 				return
 			}
 		case storageWatermark:
@@ -368,9 +380,6 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			continue
 		}
 		if key.IsSchemaFileDMLPathKey() {
-			if err := c.wait(ctx); err != nil {
-				return nil, err
-			}
 			ddl := c.readDDL(schema)
 			return []storageRead{ddl}, nil
 		}
@@ -384,9 +393,6 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			c.nextTableID++
 			tableID = c.nextTableID
 			c.tableIDs[idKey] = tableID
-		}
-		if err := c.wait(ctx); err != nil {
-			return nil, err
 		}
 		data, err := c.readDMLFile(ctx, input, schema, tableID)
 		if err != nil {
@@ -461,7 +467,11 @@ func (c *storageReader) readDDL(schema *readSchema) *storageDDL {
 		TableName:     schema.file.Table,
 		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
 	}
-	return &storageDDL{schema: schema, ddl: ddl, registered: c.pendingSchema}
+	return &storageDDL{
+		schema:     schema,
+		ddl:        ddl,
+		registered: c.pendingSchema,
+	}
 }
 
 func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema, tableID int64) (*storageFile, error) {
@@ -479,17 +489,29 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
-	c.memory.reserve(size)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(file, data); err != nil {
-		c.memory.release(size)
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
+	if c.continuing.Load() {
+		c.memory.ForceAcquire(size)
+	} else if err := c.memory.Acquire(ctx, size); err != nil {
+		return nil, err
+	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &storageFile{contents: data, schema: schema, tableID: tableID}, nil
+	return &storageFile{
+		contents: data,
+		schema:   schema,
+		tableID:  tableID,
+	}, nil
 }
 
-func (c *storageReader) Advance(_ []readUpdate) {}
+func (c *storageReader) ContinueReading(enabled bool) {
+	c.continuing.Store(enabled)
+}
+
+func (c *storageReader) Advance(_ []readUpdate) {
+}
 
 // The source can read the next schema only after the conductor registers this DDL.
 func (c *storageReader) registerDDL(input *storageDDL) {
@@ -536,7 +558,7 @@ func (s *readSchema) tableInfo() *common.TableInfo {
 
 func (p *inputDecoder) decodeStorageFile(ctx context.Context, file *storageFile, memory *memoryBudget) iter.Seq2[task, error] {
 	return func(yield func(task, error) bool) {
-		defer memory.release(int64(len(file.contents)))
+		defer memory.Release(int64(len(file.contents)))
 		table := file.schema.tableInfo()
 		var decoder codecCommon.Decoder
 		switch p.codecConfig.Protocol {
@@ -568,7 +590,7 @@ func (p *inputDecoder) decodeStorageFile(ctx context.Context, file *storageFile,
 				continue
 			}
 			message := decoder.NextDMLMessage()
-			memory.reserve(message.ApproximateSize)
+			memory.ForceAcquire(message.ApproximateSize)
 			task := p.messageTask(scope, message)
 			task.table, task.tableID = table, file.tableID
 			if !yield(task, nil) {

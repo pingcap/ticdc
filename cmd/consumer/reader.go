@@ -54,51 +54,12 @@ type Reader interface {
 
 // reader owns transport access, reading admission and upstream confirmation.
 type reader struct {
-	g           *errgroup.Group
 	client      Reader
 	confirmable <-chan struct{}
 	checkpoint  *atomic.Uint64
-}
-
-// readLimit admits new input against the shared soft budget. An unfinished
-// dependency can request more input without exposing its protocol to the reader.
-type readLimit struct {
-	memory     *memoryBudget
-	continuing atomic.Bool
-	changed    chan struct{}
-}
-
-func newReadLimit(memory *memoryBudget) *readLimit {
-	return &readLimit{
-		memory:  memory,
-		changed: make(chan struct{}, 1),
-	}
-}
-
-func (l *readLimit) ContinueReading(enabled bool) {
-	if l.continuing.Swap(enabled) == enabled {
-		return
-	}
-	select {
-	case l.changed <- struct{}{}:
-	default:
-	}
-}
-
-func (l *readLimit) wait(ctx context.Context) error {
-	for l.memory.used() >= l.memory.limit && !l.continuing.Load() {
-		changed := l.memory.changes()
-		if l.memory.used() < l.memory.limit || l.continuing.Load() {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-changed:
-		case <-l.changed:
-		}
-	}
-	return nil
+	streams     []streamSpec
+	orderedDML  bool
+	validator   dmlValidator
 }
 
 func newReader(
@@ -120,25 +81,48 @@ func newReader(
 	default:
 		client = newStorageReader(ctx, upstreamURI, replicaConfig, codecConfig.Protocol, memory)
 	}
+	_, orderedDML := client.(*kafkaReader)
+	validator, _ := client.(dmlValidator)
 	return &reader{
 		client:      client,
 		confirmable: confirmable,
 		checkpoint:  checkpoint,
+		streams:     client.Streams(),
+		orderedDML:  orderedDML,
+		validator:   validator,
 	}
 }
 
+func (r *reader) Streams() []streamSpec {
+	return r.streams
+}
+
+func (r *reader) Advance(updates []readUpdate) {
+	r.client.Advance(updates)
+}
+
+func (r *reader) Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary {
+	return r.client.Boundary(tables, commitTs)
+}
+
+func (r *reader) ContinueReading(enabled bool) {
+	r.client.ContinueReading(enabled)
+}
+
 func (r *reader) start(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
-	r.g, ctx = errgroup.WithContext(ctx)
-	r.g.Go(func() error { return r.confirm(ctx) })
-	defer close(tasks)
-	err := r.client.Run(ctx, decoder, tasks)
-	if ctx.Err() != nil {
-		return context.Cause(ctx)
-	}
-	if err != nil {
-		log.Error("consumer read failed", zap.Error(err))
-	}
-	return err
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return r.confirm(ctx)
+	})
+	g.Go(func() error {
+		err := r.client.Run(ctx, decoder, tasks)
+		close(tasks)
+		cancel()
+		return err
+	})
+	return g.Wait()
 }
 
 // Each source keeps its native input type through reading and decoding. The
@@ -247,9 +231,6 @@ func notifyConfirmation(ch chan<- struct{}) {
 }
 
 func (r *reader) close() {
-	if r.g != nil {
-		_ = r.g.Wait()
-	}
 	r.client.Close()
 }
 

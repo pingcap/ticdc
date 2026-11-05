@@ -21,15 +21,22 @@ type rowMerger interface {
 
 type noopMerger struct{}
 
-func (noopMerger) merge(items []*dmlWrite) []*dmlWrite { return items }
-func (noopMerger) sequential() bool                    { return false }
+func (noopMerger) merge(items []*dmlWrite) []*dmlWrite {
+	return items
+}
+
+func (noopMerger) sequential() bool {
+	return false
+}
 
 type csvMerger struct {
 	memory *memoryBudget
 	sort   bool
 }
 
-func (m *csvMerger) sequential() bool { return true }
+func (m *csvMerger) sequential() bool {
+	return true
+}
 
 func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	if m.sort {
@@ -108,8 +115,8 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 			part.Rows = nil
 		}
 		bytes := dml.Rows.MemoryUsage()
-		m.memory.reserve(bytes)
-		m.memory.release(retained)
+		m.memory.ForceAcquire(bytes)
+		m.memory.Release(retained)
 		prepared = append(prepared, &dmlWrite{
 			dml:        dml,
 			bytes:      bytes,

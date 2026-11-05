@@ -83,25 +83,19 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 		}
 		reader.close()
 	}()
-	streams := reader.client.Streams()
-	decoder := newInputDecoder(ctx, codecConfig, replicaConfig, streams, upstreamURI, checkpoint)
+	decoder := newInputDecoder(ctx, codecConfig, replicaConfig, reader.Streams(), upstreamURI, checkpoint)
 	defer func() {
 		if c != nil {
 			return
 		}
 		decoder.close()
 	}()
-	streamIDs := make([]int32, len(streams))
-	for index, stream := range streams {
-		streamIDs[index] = stream.id
-	}
-	conductor := newConductor(memory, reader.client, streamIDs, codecConfig, checkpoint, confirmable)
-	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
+
 	return &consumer{
 		reader:        reader,
 		decoder:       decoder,
-		conductor:     conductor,
-		writer:        writer,
+		conductor:     newConductor(memory, reader, codecConfig, checkpoint, confirmable),
+		writer:        newWriter(ctx, options.downstreamURI, replicaConfig, memory),
 		profileServer: newProfileServer(options.enableProfiling),
 	}
 }
@@ -277,8 +271,6 @@ func (c *consumer) start(ctx context.Context) error {
 }
 
 func (c *consumer) stop() {
-	c.writer.close()
-	c.conductor.close()
 	c.reader.close()
 	c.decoder.close()
 }
