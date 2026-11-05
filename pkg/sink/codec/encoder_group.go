@@ -25,7 +25,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -64,21 +67,24 @@ type encoderGroup struct {
 
 // NewEncoderGroup creates a new EncoderGroup instance
 func NewEncoderGroup(
-	ctx context.Context,
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
+	claimCheck *claimcheck.ClaimCheck,
+	schemaM schemamanager.SchemaManager,
 	changefeedID commonType.ChangeFeedID,
 ) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
+
 	inputCh := make([]chan *future, concurrency)
 	rowEventEncoders := make([]common.EventEncoder, concurrency)
+
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
-		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
+		rowEventEncoders[i], err = NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -88,7 +94,7 @@ func NewEncoderGroup(
 
 	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		encoder, err := NewEventEncoder(ctx, encoderConfig)
+		encoder, err := NewEventEncoder(encoderConfig, claimCheck, schemaM)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
 			return nil, errors.Trace(err)
@@ -129,6 +135,9 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 			return g.runEncoder(ctx, idx)
 		})
 	}
+	eg.Go(func() error {
+		return g.collectMetrics(ctx)
+	})
 
 	if g.bootstrapWorker != nil {
 		eg.Go(func() error {
@@ -139,10 +148,12 @@ func (g *encoderGroup) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
-	inputCh := g.inputCh[idx]
-	metric := encoderGroupInputChanSizeGauge.
-		WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
+func (g *encoderGroup) collectMetrics(ctx context.Context) error {
+	inputMetrics := make([]prometheus.Gauge, len(g.inputCh))
+	for idx := range g.inputCh {
+		inputMetrics[idx] = encoderGroupInputChanSizeGauge.WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
+	}
+	outputMetric := encoderGroupOutputChanSizeGauge.WithLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	ticker := time.NewTicker(defaultMetricInterval)
 	defer ticker.Stop()
 	for {
@@ -150,7 +161,20 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			metric.Set(float64(len(inputCh)))
+			for idx, inputCh := range g.inputCh {
+				inputMetrics[idx].Set(float64(len(inputCh)))
+			}
+			outputMetric.Set(float64(len(g.outputCh)))
+		}
+	}
+}
+
+func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
+	inputCh := g.inputCh[idx]
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
 		case future := <-inputCh:
 			for _, event := range future.events {
 				err := g.rowEventEncoders[idx].AppendRowChangedEvent(ctx, future.Key.Topic, event)
@@ -205,10 +229,10 @@ func (g *encoderGroup) Output() <-chan *future {
 }
 
 func (g *encoderGroup) cleanMetrics() {
-	encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
-	for _, encoder := range g.rowEventEncoders {
-		encoder.Clean()
+	for idx := range g.inputCh {
+		encoderGroupInputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name(), strconv.Itoa(idx))
 	}
+	encoderGroupOutputChanSizeGauge.DeleteLabelValues(g.changefeedID.Keyspace(), g.changefeedID.Name())
 	common.CleanMetrics(g.changefeedID)
 }
 

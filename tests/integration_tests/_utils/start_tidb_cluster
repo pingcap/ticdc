@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
 
+workdir=
+for ((i = 1; i <= $#; i++)); do
+	if [ "${!i}" = "--workdir" ]; then
+		next=$((i + 1))
+		workdir=${!next}
+		break
+	fi
+done
+
+if [ -n "$workdir" ]; then
+	if [ "${LEGACY_SAFEPOINT:-0}" = "1" ]; then
+		cat >"$workdir/cdc_legacy_safepoint.toml" <<EOF
+enable-legacy-safepoint = true
+EOF
+	else
+		rm -f "$workdir/cdc_legacy_safepoint.toml"
+	fi
+fi
+
 if [ "$NEXT_GEN" = "1" ]; then
 	start_tidb_cluster_nextgen $@
 else

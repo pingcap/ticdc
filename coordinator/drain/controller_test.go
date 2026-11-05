@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -42,7 +43,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	require.Equal(t, uint64(42), req.NodeEpoch)
 
 	// Before draining observed, it should retry after the resend interval.
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	select {
 	case <-mc.GetMessageChannel():
 		require.FailNow(t, "unexpected command before resend interval")
@@ -53,7 +54,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	c.mu.Lock()
 	c.ensureNodeStateLocked(target).lastDrainCmdSentAt = time.Now().Add(-resendInterval - 10*time.Millisecond)
 	c.mu.Unlock()
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
@@ -64,7 +65,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	})
 
 	// Once readyToStop, it should send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool { return true })
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool { return true })
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
@@ -126,6 +127,99 @@ func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	c.mu.Unlock()
 }
 
+func TestDrainControllerEventBrokerDispatcherCount(t *testing.T) {
+	c := NewController(messaging.NewMockMessageCenter())
+	target := node.ID("n1")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_DRAINING, NodeEpoch: 42})
+	// Broker counts must not prevent progressing to STOPPING and closing admission.
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	c.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{Applied: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 42})
+	_, observed := c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+
+	req := c.NewEventBrokerDispatcherCountRequest(target)
+	require.NotNil(t, req)
+	// The periodic task can retry without waiting for a lost reply to time out.
+	require.Equal(t, req, c.NewEventBrokerDispatcherCountRequest(target))
+	response := &logservicepb.EventBrokerDispatcherCountResponse{
+		TargetNodeId: req.TargetNodeId,
+		Report:       &logservicepb.EventBrokerDispatcherCount{DispatcherCount: 2, RegistrationsStopped: true},
+	}
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed := c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
+
+	// An unknown reply must not erase an already reported positive count.
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Equal(t, 2, count)
+
+	response.Report.DispatcherCount = 0
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	// Late positive and unknown reports cannot undo an admission-closed zero.
+	response.Report.DispatcherCount = 3
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	c.ObserveEventBrokerDispatcherCountResponse(&logservicepb.EventBrokerDispatcherCountResponse{TargetNodeId: target.String()})
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+	require.Nil(t, c.NewEventBrokerDispatcherCountRequest(target))
+
+	// Restarting creates a new capture ID. Delayed reports for the old capture
+	// must not change the replacement capture's count.
+	c.RemoveNode(target)
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+	target = node.ID("n2")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: heartbeatpb.NodeLiveness_STOPPING, NodeEpoch: 43})
+	response.Report.DispatcherCount = 0
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	_, observed = c.GetEventBrokerDispatcherCount(target)
+	require.False(t, observed)
+	require.NotNil(t, c.NewEventBrokerDispatcherCountRequest(target))
+	response.TargetNodeId = target.String()
+	c.ObserveEventBrokerDispatcherCountResponse(response)
+	count, observed = c.GetEventBrokerDispatcherCount(target)
+	require.True(t, observed)
+	require.Zero(t, count)
+}
+
+func TestDrainControllerRejectsUnusableBrokerReports(t *testing.T) {
+	for _, name := range []string{"missing", "admission open", "different capture", "not stopping"} {
+		t.Run(name, func(t *testing.T) {
+			c := NewController(messaging.NewMockMessageCenter())
+			target := node.ID("n1")
+			state := heartbeatpb.NodeLiveness_STOPPING
+			if name == "not stopping" {
+				state = heartbeatpb.NodeLiveness_DRAINING
+			}
+			c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{Liveness: state, NodeEpoch: 42})
+			response := &logservicepb.EventBrokerDispatcherCountResponse{
+				TargetNodeId: target.String(),
+				Report:       &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true},
+			}
+			switch name {
+			case "missing":
+				response.Report = nil
+			case "admission open":
+				response.Report.RegistrationsStopped = false
+			case "different capture":
+				response.TargetNodeId = "another-capture"
+			}
+			c.ObserveEventBrokerDispatcherCountResponse(response)
+			_, observed := c.GetEventBrokerDispatcherCount(target)
+			require.False(t, observed)
+		})
+	}
+}
+
 func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	c := NewController(mc)
@@ -138,7 +232,7 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 
 	// Simulate a node restart after AdvanceLiveness snapshots the old draining
 	// observation but before it tries to send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool {
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool {
 		c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 			Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 			NodeEpoch: 43,
@@ -152,4 +246,183 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 		t.Fatalf("unexpected liveness command sent for new epoch: target=%s epoch=%d", req.Target.String(), req.NodeEpoch)
 	default:
 	}
+}
+
+func TestDrainControllerSchedulerGateRequiresTargetAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	acked := node.ID("acked")
+	pending := node.ID("pending")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(acked, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.False(t, c.IsSchedulableDest(target))
+	require.True(t, c.IsSchedulableDest(acked))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.SwitchDrainTargetSchedulerGateToClear(target, epoch, nil)
+	require.True(t, c.IsSchedulableDest(pending))
+}
+
+func TestDrainControllerSchedulerGateRequiresReackAfterNodeRestart(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	dest := node.ID("dest")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+
+	// A replacement process with a newer node epoch must re-ack the active
+	// drain target before the destination becomes schedulable again.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 2,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	// A stale heartbeat from the old process must not resurrect the old ack.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   2,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerSchedulingFreezeBlocksDestinations(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.True(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(true)
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(false)
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerClearGateBlocksPendingNodesUntilAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	ready := node.ID("ready")
+	pending := node.ID("pending")
+	target := node.ID("target")
+	epoch := uint64(77)
+
+	c.ObserveHeartbeat(ready, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	c.StartDrainTargetClearGate(target, epoch, map[node.ID]struct{}{
+		pending: {},
+	})
+
+	require.True(t, c.IsSchedulableDest(ready))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.RemoveDrainTargetClearPendingNode(pending, target, epoch)
+	require.True(t, c.IsSchedulableDest(pending))
+}
+
+func TestDrainControllerNewActiveGateSupersedesOldClearGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetClearGate(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+	// The new active gate should replace the old clear-pending restriction, but
+	// the destination still needs to acknowledge the new target before reuse.
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerStaleClearDoesNotOverrideNewActiveGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetSchedulerGate(oldTarget, 10)
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+
+	c.SwitchDrainTargetSchedulerGateToClear(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
 }

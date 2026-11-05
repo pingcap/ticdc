@@ -15,6 +15,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		ddlTs := event.GetCommitTs()
 		flag, err := w.isDDLExecuted(tableID, ddlTs)
 		if err != nil {
-			return nil
+			return err
 		}
 		if flag {
 			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
@@ -100,13 +101,14 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	})
 
-	tx, err := w.db.BeginTx(ctx, nil)
+	db := w.getDDLExecDB(event)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -212,38 +214,47 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 // If the downstream is TiDB, it will query the DDL and wait until it finishes.
 // For 'add index' ddl, it will return immediately without waiting and will query it during the next DDL execution.
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
+	if event.GetDDLType() == timodel.ActionCreateTables {
+		// Retry each CREATE separately so an ignorable error cannot skip the
+		// remaining statements. DDL ts bookkeeping still uses the original event.
+		for _, ddl := range event.GetEvents() {
+			if err := w.execDDLWithMaxRetries(ddl); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
-		err := w.statistics.RecordDDLExecution(func() (string, error) {
-			ddlType := event.GetDDLType().String()
-			return ddlType, w.execDDL(event)
+		err := w.statistics.RecordDDLExecution(event.GetDDLType().String(), func() error {
+			return w.execDDL(event)
 		})
 		if err != nil {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
-					zap.String("ddl", event.Query),
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.Error(err))
+					zap.String("ddl", event.Query), zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
-			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
-				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Is(errors.Cause(err), mysql.ErrInvalidConn) {
+				log.Warn("Wait the asynchronous ddl to synchronize",
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
+					zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+					zap.String("readTimeout", w.getDDLReadTimeout(event)), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
-				zap.String("ddl", event.Query),
 				zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Error(err))
+				zap.String("ddl", event.Query), zap.Error(err))
 			return errors.WrapError(errors.ErrExecDDLFailed, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
-			zap.String("changefeed", w.ChangefeedID.String()), zap.String("query", event.GetDDLQuery()),
+			zap.String("changefeed", w.ChangefeedID.String()),
 			zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.Any("ddl", event))
+			zap.String("query", event.GetDDLQuery()))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
@@ -251,9 +262,29 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 		retry.WithIsRetryableErr(errors.IsRetryableDDLError))
 }
 
+func (w *Writer) getDDLExecDB(event *commonEvent.DDLEvent) *sql.DB {
+	if w.useAsyncDB(event) {
+		return w.asyncDB
+	}
+	return w.db
+}
+
+func (w *Writer) getDDLReadTimeout(event *commonEvent.DDLEvent) string {
+	if w.useAsyncDB(event) {
+		return w.cfg.AsyncDDLTimeout
+	}
+	return w.cfg.ReadTimeout
+}
+
+func (w *Writer) useAsyncDB(event *commonEvent.DDLEvent) bool {
+	return w.asyncDB != nil &&
+		w.cfg.IsTiDB &&
+		event.GetDDLType() == timodel.ActionAddIndex
+}
+
 // waitDDLDone wait current ddl
 func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddlCreateTime string) error {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	ticker1 := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	defer ticker1.Stop()
@@ -312,9 +343,9 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 }
 
 // true means the async ddl is still running, false means the async ddl is done.
-func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
+func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 	start := time.Now()
-	rows, err := w.db.QueryContext(w.ctx, query)
+	rows, err := w.db.QueryContext(w.ctx, query, args...)
 	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
@@ -349,8 +380,7 @@ func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
 // if the ddl is still running, we should wait for it.
 func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string) error {
 	checkSQL := getCheckRunningAddIndexSQL(w.cfg)
-	query := fmt.Sprintf(checkSQL, schemaName, tableName)
-	running, err := w.doQueryAsyncDDL(query)
+	running, err := w.doQueryAsyncDDL(checkSQL, schemaName, tableName)
 	if err != nil {
 		return err
 	}
@@ -358,7 +388,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string
 		return nil
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(w.ddlPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -366,7 +396,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err = w.doQueryAsyncDDL(query)
+			running, err = w.doQueryAsyncDDL(checkSQL, schemaName, tableName)
 			if err != nil {
 				return err
 			}

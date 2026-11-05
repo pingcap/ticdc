@@ -20,12 +20,15 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-const BlockLenInPendingQueue = 32
+const (
+	BlockLenInPendingQueue     = 32
+	maxBatchMetricCacheEntries = 1024
+)
 
 // A stream has two goroutines: receiver and handleLoop.
 // The receiver receives the events and buffers them.
@@ -47,8 +50,11 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	eventChan chan eventWrap[A, P, T, D, H]
 
 	// The queue to store the pending events of this stream.
-	eventQueue eventQueue[A, P, T, D, H]
-	batcher    *batcher[T]
+	eventQueue            eventQueue[A, P, T, D, H]
+	batcher               *batcher[T]
+	batchMetricCache      map[string]batchMetricObservers
+	batchMetricCacheOrder []string
+	batchMetricCacheNext  int
 
 	option Option
 
@@ -69,13 +75,14 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
-		module:     component,
-		id:         id,
-		handler:    handler,
-		eventQueue: newEventQueue(handler, batchConfigRegistry),
-		batcher:    newDefaultBatcher[T](),
-		option:     option,
-		startTime:  time.Now(),
+		module:           component,
+		id:               id,
+		handler:          handler,
+		eventQueue:       newEventQueue(handler, batchConfigRegistry),
+		batcher:          newDefaultBatcher[T](),
+		batchMetricCache: make(map[string]batchMetricObservers),
+		option:           option,
+		startTime:        time.Now(),
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
@@ -88,6 +95,40 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		s.eventChan = make(chan eventWrap[A, P, T, D, H], 1024*16)
 	}
 	return s
+}
+
+type batchMetricObservers struct {
+	duration prometheus.Observer
+	count    prometheus.Observer
+	bytes    prometheus.Observer
+}
+
+func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetricObservers {
+	observers, ok := s.batchMetricCache[label]
+	if ok {
+		return observers
+	}
+	if len(s.batchMetricCache) >= maxBatchMetricCacheEntries {
+		s.evictOldestBatchMetricCache(label)
+	} else {
+		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
+	}
+	observers = batchMetricObservers{
+		duration: dynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    dynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    dynamicStreamBatchBytes.WithLabelValues(s.module, label),
+	}
+	s.batchMetricCache[label] = observers
+	return observers
+}
+
+func (s *stream[A, P, T, D, H]) evictOldestBatchMetricCache(label string) {
+	if len(s.batchMetricCacheOrder) == 0 {
+		return
+	}
+	delete(s.batchMetricCache, s.batchMetricCacheOrder[s.batchMetricCacheNext])
+	s.batchMetricCacheOrder[s.batchMetricCacheNext] = label
+	s.batchMetricCacheNext = (s.batchMetricCacheNext + 1) % len(s.batchMetricCacheOrder)
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
@@ -211,10 +252,11 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
 		case e.release:
-			s.eventQueue.releasePath(e.pathInfo)
+			s.eventQueue.releasePath(e.pathInfo, false)
+		case e.removePath:
+			s.eventQueue.releasePath(e.pathInfo, true)
 		case e.pathInfo.removed.Load():
-			// The path is removed, so we don't need to handle its events.
-			return
+			s.handler.OnDrop(e.event)
 		default:
 			s.eventQueue.appendEvent(e)
 		}
@@ -291,14 +333,15 @@ Loop:
 					eventQueueEmpty = true
 					continue Loop
 				}
-				if path.removed.Load() {
+				if s.dropBatchIfPathRemoved(path, eventBuf) {
 					cleanUpEventBuf()
 					continue Loop
 				}
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
-				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
-				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
+				batchMetrics := s.getBatchMetricObservers(path.metricLabel)
+				batchMetrics.duration.Observe(duration.Seconds())
+				batchMetrics.count.Observe(float64(len(eventBuf)))
+				batchMetrics.bytes.Observe(float64(nBytes))
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
@@ -311,6 +354,19 @@ Loop:
 			}
 		}
 	}
+}
+
+func (s *stream[A, P, T, D, H]) dropBatchIfPathRemoved(
+	path *pathInfo[A, P, T, D, H],
+	events []T,
+) bool {
+	if !path.removed.Load() {
+		return false
+	}
+	for _, event := range events {
+		s.handler.OnDrop(event)
+	}
+	return true
 }
 
 // ====== internal types ======
@@ -366,9 +422,13 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
-// appendEvent appends an event to the pending queue.
-// It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+// appendEvent adds an event to the pending queue or merges it into the last
+// periodic signal. accepted reports whether the event was accepted, while
+// appended reports whether the pending queue grew by one event.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(
+	event eventWrap[A, P, T, D, H],
+	handler H,
+) (accepted bool, appended bool) {
 	if pi.areaMemStat != nil {
 		return pi.areaMemStat.appendEvent(pi, event, handler)
 	}
@@ -376,7 +436,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 
 	back, ok := pi.pendingQueue.BackRef()
@@ -384,11 +444,11 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		// If the last event is a periodic signal, we only need to keep the latest one.
 		// And we don't need to add a new signal.
 		*back = event
-		return true
+		return true, false
 	} else {
 		pi.pendingQueue.PushBack(event)
 		pi.updatePendingSize(int64(event.eventSize))
-		return true
+		return true, true
 	}
 }
 
@@ -416,13 +476,13 @@ func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 	}
 }
 
-// eventWrap contains the event and the path info.
-// It can be a event or a wake signal.
+// eventWrap contains either a data event or a control signal and its path info.
 type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	event   T
-	wake    bool
-	newPath bool
-	release bool
+	event      T
+	wake       bool
+	newPath    bool
+	release    bool
+	removePath bool
 
 	pathInfo *pathInfo[A, P, T, D, H]
 

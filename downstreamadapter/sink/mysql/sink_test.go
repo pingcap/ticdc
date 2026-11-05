@@ -17,17 +17,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	dmysql "github.com/go-sql-driver/mysql"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestMysqlResult(t *testing.T, rowsAffected ...int64) *mysqlmock.MockResult {
+	t.Helper()
+	result := mysqlmock.NewMockResult(gomock.NewController(t))
+	result.EXPECT().AllRowsAffected().Return(rowsAffected)
+	return result
+}
 
 func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -39,7 +52,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
 	return ctx, sink, mock
 }
 
@@ -55,8 +68,119 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
 	return ctx, sink, mock
+}
+
+func getMysqlSinkWithSeparateDBs(t *testing.T) (context.Context, *Sink, sqlmock.Sqlmock, sqlmock.Sqlmock) {
+	t.Helper()
+
+	dmlDB, dmlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlDB, controlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+
+	sink := newMySQLSinkWithControlDB(ctx, changefeedID, cfg, dmlDB, controlDB, false, false, time.Minute, common.DefaultKeyspaceID)
+	return ctx, sink, dmlMock, controlMock
+}
+
+func TestMysqlSinkControlAsyncDBOnlyForTiDB(t *testing.T) {
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+
+	t.Run("mysql downstream has no control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = false
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Nil(t, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("tidb downstream has control async db", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+
+		cfg := mysql.New()
+		cfg.WorkerCount = 1
+		cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+		cfg.CachePrepStmts = false
+		cfg.IsTiDB = true
+
+		sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+		require.Same(t, db, sink.controlAsyncDB)
+
+		mock.ExpectClose()
+		sink.Close()
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestMysqlSinkUsesControlAsyncDBForTiDBAddIndex(t *testing.T) {
+	dmlDB, dmlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlDB, controlMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	controlAsyncDB, controlAsyncMock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+	cfg.EnableDDLTs = false
+	cfg.IsTiDB = true
+
+	sink := newMySQLSinkWithControlAsyncDB(ctx, changefeedID, cfg, dmlDB, controlDB, controlAsyncDB, false, false, time.Minute, common.DefaultKeyspaceID)
+
+	ddl := &commonEvent.DDLEvent{
+		Type:       byte(timodel.ActionAddIndex),
+		Query:      "alter table t add index idx_name(name);",
+		SchemaName: "test",
+		TableName:  "t",
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	controlMock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
+	controlAsyncMock.ExpectBegin()
+	controlAsyncMock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectExec("alter table t add index idx_name(name);").WillReturnResult(sqlmock.NewResult(1, 1))
+	controlAsyncMock.ExpectCommit()
+
+	require.NoError(t, sink.WriteBlockEvent(ddl))
+
+	dmlMock.ExpectClose()
+	controlMock.ExpectClose()
+	controlAsyncMock.ExpectClose()
+	sink.Close()
+
+	require.NoError(t, dmlMock.ExpectationsWereMet())
+	require.NoError(t, controlMock.ExpectationsWereMet())
+	require.NoError(t, controlAsyncMock.ExpectationsWereMet())
 }
 
 func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
@@ -88,8 +212,43 @@ func TestMysqlSinkBatchConfig(t *testing.T) {
 	require.Equal(t, 4096, sink.BatchBytes())
 }
 
+func expectCreateTableDDLFlow(mock sqlmock.Sqlmock) {
+	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+		(
+			ticdc_cluster_id varchar (255),
+			changefeed varchar(255),
+			ddl_ts varchar(18),
+			table_id bigint(21),
+			finished bool,
+			is_syncpoint bool,
+			INDEX (ticdc_cluster_id, changefeed, table_id),
+			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+		);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 0, 0), ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+}
+
 // Test callback and tableProgress works as expected after AddDMLEvent
-func TestMysqlSinkBasicFunctionality(t *testing.T) {
+func TestMysqlSinkFlushEvents(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
 	var count atomic.Int64
@@ -138,48 +297,19 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
-	mock.ExpectBegin()
-	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
-		(
-			ticdc_cluster_id varchar (255),
-			changefeed varchar(255),
-			ddl_ts varchar(18),
-			table_id bigint(21),
-			finished bool,
-			is_syncpoint bool,
-			INDEX (ticdc_cluster_id, changefeed, table_id),
-			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
-		);`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 0, 0), ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
-	mock.ExpectBegin()
-	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectCreateTableDDLFlow(mock)
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
 
 	err := sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "the DML event should be flushed")
 
 	ddlEvent2.PostFlush()
 
@@ -187,6 +317,58 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, count.Load(), int64(3))
+}
+
+func TestMysqlSinkUsesSeparateDMLAndControlDBPools(t *testing.T) {
+	ctx, sink, dmlMock, controlMock := getMysqlSinkWithSeparateDBs(t)
+	go sink.Run(ctx)
+	defer sink.Close()
+
+	var count atomic.Int64
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      job.Query,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		FinishedTs: 1,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		PostTxnFlushed: []func(){
+			func() { count.Add(1) },
+		},
+	}
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent.PostTxnFlushed = []func(){
+		func() { count.Add(1) },
+	}
+	dmlEvent.CommitTs = 2
+
+	expectCreateTableDDLFlow(controlMock)
+
+	dmlMock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
+		WithArgs(1, "test", 2, "test2").
+		WillReturnResult(newTestMysqlResult(t, 0, 2, 0))
+
+	err := sink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+	require.NoError(t, controlMock.ExpectationsWereMet())
+
+	sink.AddDMLEvent(dmlEvent)
+	require.Eventually(t, func() bool {
+		return dmlMock.ExpectationsWereMet() == nil && count.Load() == 2
+	}, time.Second, 10*time.Millisecond)
 }
 
 // test the situation meets error when executing DML
@@ -214,7 +396,9 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	sink.AddDMLEvent(dmlEvent)
 
-	time.Sleep(1 * time.Second)
+	require.Eventually(t, func() bool {
+		return !sink.IsNormal()
+	}, 5*time.Second, 10*time.Millisecond, "the sink should stop being normal after the error")
 
 	err := mock.ExpectationsWereMet()
 	require.NoError(t, err)
@@ -292,6 +476,73 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	require.Equal(t, sink.IsNormal(), false)
 }
 
+func TestMysqlSinkBatchCreateTablesAcknowledgement(t *testing.T) {
+	for _, failLastCreate := range []bool{false, true} {
+		name := "all creates accepted"
+		if failLastCreate {
+			name = "last create fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			_, sink, mock := getMysqlSink()
+			defer sink.Close()
+			sink.cfg.EnableDDLTs = false
+			queries := []string{
+				"CREATE TABLE `t1` (`id` INT);",
+				"CREATE TABLE `t2` (`id` INT);",
+			}
+			event := &commonEvent.DDLEvent{
+				Type:       byte(timodel.ActionCreateTables),
+				SchemaName: "upstream",
+				Query:      strings.Join(queries, ""),
+				StartTs:    1,
+				FinishedTs: 2,
+			}
+			for _, tableName := range []string{"t1", "t2"} {
+				event.MultipleTableInfos = append(event.MultipleTableInfos, &common.TableInfo{
+					TableName: common.TableName{
+						Schema: "upstream", Table: tableName,
+						TargetSchema: "test", TargetTable: tableName,
+					},
+				})
+			}
+			flushCount := 0
+			event.AddPostFlushFunc(func() {
+				require.NoError(t, mock.ExpectationsWereMet())
+				flushCount++
+			})
+
+			for i, query := range queries {
+				mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+					WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
+				mock.ExpectBegin()
+				mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+				switch {
+				case i == 0:
+					mock.ExpectExec(query).WillReturnError(&dmysql.MySQLError{Number: 1050, Message: "Table already exists"})
+					mock.ExpectRollback()
+				case failLastCreate:
+					mock.ExpectExec(query).WillReturnError(&dmysql.MySQLError{Number: 1045, Message: "Access denied"})
+					mock.ExpectRollback()
+				default:
+					mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(0, 0))
+					mock.ExpectCommit()
+				}
+			}
+
+			err := sink.WriteBlockEvent(event)
+			if failLastCreate {
+				require.Error(t, err)
+				require.Zero(t, flushCount)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, flushCount)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	sink, mock := MysqlSinkForTestWithMaxTxnRows(4)
 
@@ -337,18 +588,20 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	// Set up mock expectations for DDL
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test1", 2, "test2", 3, "test3", 4, "test4", 5, "test5", 6, "test6", 7, "test7", 8, "test8", 9, "test9", 10, "test10").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 10, 0))
 
 	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(11, "test11", 12, "test12", 13, "test13", 14, "test14", 15, "test15", 16, "test16", 17, "test17", 18, "test18", 19, "test19", 20, "test20").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(newTestMysqlResult(t, 0, 10, 0))
 
 	// Add DML events
 	sink.AddDMLEvent(dmlEvent1)
 	sink.AddDMLEvent(dmlEvent2)
 
 	// Wait for processing
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, 5*time.Second, 10*time.Millisecond, "both DML events should be flushed")
 
 	// Verify all expectations were met
 	err := mock.ExpectationsWereMet()
@@ -432,8 +685,35 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectClose() // Expect database close when sink.Close() is called
 
-	// Call GetTableRecoveryInfo with removeDDLTs=true
-	resultStartTsList, skipSyncpointList, skipDMLList, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+	gate := writelease.NewGate()
+	gate.SetP2PRequired(true)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	sink.SetWriteGate(gate)
+
+	type recoveryResult struct {
+		startTsList   []int64
+		skipSyncpoint []bool
+		skipDML       []bool
+		err           error
+	}
+	resultCh := make(chan recoveryResult, 1)
+	go func() {
+		startTsList, skipSyncpoint, skipDML, err := sink.GetTableRecoveryInfo(tableIDs, inputStartTsList, true)
+		resultCh <- recoveryResult{startTsList, skipSyncpoint, skipDML, err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("DDL-ts cleanup passed through a closed capture write gate: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	result := <-resultCh
+	resultStartTsList := result.startTsList
+	skipSyncpointList := result.skipSyncpoint
+	skipDMLList := result.skipDML
+	err := result.err
 
 	require.NoError(t, err)
 	require.Len(t, resultStartTsList, 3)

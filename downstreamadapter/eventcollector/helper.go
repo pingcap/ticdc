@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -71,12 +72,15 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
-	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventLen", len(events)))
+	if logger.IsDebugEnabled() {
+		log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Int("eventLen", len(events)))
+	}
 	if len(events) == 0 {
 		return false
 	}
 	// Only check the first event type, because all events in the same batch should be in the same type group.
-	switch events[0].GetType() {
+	firstEvent := events[0]
+	switch firstEvent.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent,
 		commonEvent.TypeDDLEvent,
@@ -89,22 +93,19 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 			log.Panic("unexpected multiple events for TypeReadyEvent or TypeNotReusableEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleSignalEvent(events[0])
-		return false
+		stat.handleSignalEvent(firstEvent)
 	case commonEvent.TypeDropEvent:
 		if len(events) > 1 {
 			log.Panic("unexpected multiple events for TypeDropEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleDropEvent(events[0])
-		return false
+		stat.handleDropEvent(firstEvent)
 	case commonEvent.TypeHandshakeEvent:
 		if len(events) > 1 {
 			log.Panic("unexpected multiple events for TypeHandshakeEvent",
 				zap.Int("count", len(events)))
 		}
-		stat.handleHandshakeEvent(events[0])
-		return false
+		stat.handleHandshakeEvent(firstEvent)
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
 	}
@@ -169,11 +170,15 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent, commonEvent.TypeSyncPointEvent:
-		log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Uint64("seq", event.GetSeq()), zap.String("type", commonEvent.TypeToString(event.GetType())), zap.Uint64("epoch", event.GetEpoch()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()))
+		if logger.IsDebugEnabled() {
+			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Uint64("seq", event.GetSeq()), zap.String("type", commonEvent.TypeToString(event.GetType())), zap.Uint64("epoch", event.GetEpoch()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()))
+		}
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	default:
-		log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
+		if logger.IsDebugEnabled() {
+			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
+		}
 	}
 	return nil
 }

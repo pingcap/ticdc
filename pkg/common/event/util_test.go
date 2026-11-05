@@ -53,19 +53,19 @@ func TestIsSplitable(t *testing.T) {
 		},
 		{
 			name:        "table_with_varchar_pk",
-			createSQL:   "CREATE TABLE t4 (id VARCHAR(32) PRIMARY KEY, name VARCHAR(32));",
+			createSQL:   "CREATE TABLE t4 (id VARCHAR(32) PRIMARY KEY CLUSTERED, name VARCHAR(32));",
 			expected:    true,
 			description: "Table with varchar primary key and no unique key should be splitable",
 		},
 		{
 			name:        "table_with_nonclustered_pk",
 			createSQL:   "CREATE TABLE t5 (a VARCHAR(200), b INT, PRIMARY KEY(a) NONCLUSTERED);",
-			expected:    true,
-			description: "Table with nonclustered primary key and no unique key should be splitable",
+			expected:    false,
+			description: "Nonclustered primary keys can be reused across record spans and must not be split",
 		},
 		{
 			name:        "table_with_composite_pk",
-			createSQL:   "CREATE TABLE t6 (a INT, b INT, PRIMARY KEY(a, b));",
+			createSQL:   "CREATE TABLE t6 (a INT, b INT, PRIMARY KEY(a, b) CLUSTERED);",
 			expected:    true,
 			description: "Table with composite primary key and no unique key should be splitable",
 		},
@@ -87,6 +87,18 @@ func TestIsSplitable(t *testing.T) {
 			expected:    true,
 			description: "Table with primary key and non-unique index should be splitable",
 		},
+		{
+			name:        "table_with_nonclustered_integer_pk",
+			createSQL:   "CREATE TABLE t10 (id BIGINT PRIMARY KEY NONCLUSTERED, v INT);",
+			expected:    false,
+			description: "Integer nonclustered primary keys must not be split",
+		},
+		{
+			name:        "table_with_nonclustered_composite_pk",
+			createSQL:   "CREATE TABLE t11 (a INT, b INT, PRIMARY KEY(a, b) NONCLUSTERED);",
+			expected:    false,
+			description: "Composite nonclustered primary keys must not be split",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -103,8 +115,16 @@ func TestIsSplitable(t *testing.T) {
 			// Verify the result matches expected value
 			require.Equal(t, tc.expected, commonResult,
 				"Test case: %s - %s", tc.name, tc.description)
+
+			// Dispatcher DDL checks also consume table metadata after serialization.
+			data, err := commonTableInfo.Marshal()
+			require.NoError(t, err)
+			decoded, err := common.UnmarshalJSONToTableInfo(data)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, IsSplitable(decoded))
 		})
 	}
+	require.True(t, IsSplitable(nil))
 }
 
 func TestDDL2EventFillsSingleTableMetadata(t *testing.T) {
@@ -148,6 +168,27 @@ func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
 
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+
+	helper.Tk().MustExec("CREATE DATABASE `extra_db`")
+	helper.Tk().MustExec("USE `test_db`")
+	ddlEvent = helper.DDL2Event("CREATE TABLE `extra_db`.`dst` LIKE `src`")
+
+	require.Equal(t, "CREATE TABLE `extra_db`.`dst` LIKE `test_db`.`src`", ddlEvent.Query)
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
+	require.Equal(t, []SchemaTableName{{SchemaName: "extra_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+}
+
+func TestDDL2EventNormalizesCrossSchemaCreateView(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE DATABASE `extra_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`src` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("USE `test_db`")
+	ddlEvent := helper.DDL2Event("CREATE VIEW `extra_db`.`v` AS SELECT `id` FROM `src`")
+
+	require.Contains(t, ddlEvent.Query, "FROM `test_db`.`src`")
 }
 
 func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {

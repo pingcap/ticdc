@@ -87,8 +87,9 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 // 4. Verify that the move is aborted and the span is marked absent after origin is stopped
 func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -109,6 +110,7 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 	require.Equal(t, replicaSet.ID.ToPB(), scheduleMsg.Config.DispatcherID)
+	require.Equal(t, uint64(7), scheduleMsg.MaintainerEpoch)
 
 	absentSizeBefore := spanController.GetAbsentSize()
 	nonWorkingStatus := &heartbeatpb.TableSpanStatus{
@@ -130,8 +132,9 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 // 5. Verify that the span is marked as absent for rescheduling
 func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -153,6 +156,32 @@ func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
+func TestMoveOperator_UsesOriginFinalCheckpointForDestination(t *testing.T) {
+	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
+	op.Start()
+
+	finalStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, finalStatus)
+
+	require.Equal(t, moveStateAddDest, op.state)
+	require.Equal(t, uint64(1500), replicaSet.GetStatus().CheckpointTs)
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeB.String(), msg.To.String())
+	scheduleMsg, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, scheduleMsg.ScheduleAction)
+	require.Equal(t, uint64(1500), scheduleMsg.Config.StartTs)
+}
+
 // TestMoveOperator_OriginNodeRemovedBeforeOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
@@ -161,7 +190,7 @@ func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -204,7 +233,7 @@ func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -254,7 +283,7 @@ func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNo
 	setAliveNodes(nodeManager, map[node.ID]*node.Info{})
 
 	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.True(t, oc.AddOperator(op))
 
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -269,8 +298,9 @@ func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNo
 // 4. Verify that the move is aborted and the span becomes absent for rescheduling
 func TestMoveOperator_DestThenOriginRemovedAbortsToAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -298,7 +328,7 @@ func TestMoveOperator_TaskRemovedByDDL(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)
 	require.NotNil(t, op)
 
 	op.Start()

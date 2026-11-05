@@ -124,8 +124,8 @@ type Credential struct {
 
 	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
 	// Accepts boolean (true→ON, false→OFF) or string values ("off", "on", "marker").
-	// Default: OFF (no redaction). The omitempty tag ensures backward compatibility by
-	// omitting this field from JSON output when unset.
+	// The new-architecture server defaults to ON when unset. The omitempty tag
+	// omits this field from JSON output when unset for old-architecture compatibility.
 	RedactInfoLog RedactInfoLogType `toml:"redact-info-log" json:"redact-info-log,omitempty"`
 }
 
@@ -169,6 +169,11 @@ func (s *Credential) ToGRPCDialOption() (grpc.DialOption, error) {
 	if err != nil || tlsCfg == nil {
 		return grpc.WithInsecure(), err
 	}
+	// gRPC requires HTTP/2 over TLS and enforces ALPN ("h2") in newer versions
+	// of grpc-go. Ensure we only advertise "h2" so the server can't negotiate
+	// "http/1.1" when it prefers it for non-gRPC traffic.
+	tlsCfg = tlsCfg.Clone()
+	tlsCfg.NextProtos = []string{"h2"}
 	return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
 }
 

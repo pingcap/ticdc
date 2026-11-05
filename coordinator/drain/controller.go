@@ -18,8 +18,10 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +42,13 @@ const (
 )
 
 type nodeState struct {
+	// drainProtocolObserved marks whether coordinator has received a bootstrap
+	// capability response for this node. Unknown capability must not silently
+	// degrade to the legacy fallback because that would hide bootstrap failures.
+	drainProtocolObserved bool
+	// drainProtocolVersion is the node-scoped drain capability reported during
+	// bootstrap. Zero means the node only supports the legacy hard-restart path.
+	drainProtocolVersion uint32
 	// drainRequested indicates this node has entered the drain workflow.
 	drainRequested bool
 	// drainingObserved indicates the node has reported DRAINING.
@@ -56,13 +65,38 @@ type nodeState struct {
 	lastSeen    time.Time
 	nodeEpoch   uint64
 	liveness    heartbeatpb.NodeLiveness
+
+	// Only an observed, admission-closed zero can authorize drain completion.
+	// Such a zero is terminal for this capture ID.
+	eventBrokerDispatcherCount         int
+	eventBrokerDispatcherCountObserved bool
+}
+
+type drainTargetSchedulerGate struct {
+	// target/epoch identify the active dispatcher drain target that a node must
+	// acknowledge before it can receive newly placed maintainers.
+	target node.ID
+	epoch  uint64
+	// ackedNodes records the node epoch whose heartbeat already reported the
+	// active drain target snapshot. The target node itself is never schedulable.
+	ackedNodes map[node.ID]uint64
+}
+
+type drainTargetClearGate struct {
+	// target/epoch identify the cleared drain target that some nodes may still
+	// cache locally. Those nodes must not receive new maintainers until they
+	// have acknowledged the clear or disappeared from membership.
+	target node.ID
+	epoch  uint64
+	// pendingNodes tracks the destinations that are still blocked by the clear
+	// handshake for this target epoch.
+	pendingNodes map[node.ID]struct{}
 }
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
 //
-// It is in-memory only. Observations come from either:
-// - NodeHeartbeat, or
-// - SetNodeLivenessResponse.
+// It is in-memory only. Liveness observations come from NodeHeartbeat or
+// SetNodeLivenessResponse; broker counts come from LogCoordinator responses.
 type Controller struct {
 	mu sync.Mutex
 
@@ -70,6 +104,18 @@ type Controller struct {
 	ttl time.Duration
 
 	nodes map[node.ID]*nodeState
+
+	// targetSchedulerGate blocks maintainer placement onto nodes that have not
+	// yet reported the active dispatcher drain target in node heartbeat.
+	targetSchedulerGate *drainTargetSchedulerGate
+	// clearSchedulerGate blocks placement onto nodes that may still cache a
+	// stale drain target after coordinator has already cleared the active
+	// drain session.
+	clearSchedulerGate *drainTargetClearGate
+	// schedulingFrozen pauses all coordinator-side scheduling destinations when
+	// coordinator has observed an in-flight drain but cannot prove which active
+	// dispatcher drain target every maintainer should follow.
+	schedulingFrozen bool
 }
 
 // NewController creates a drain controller with in-memory state only.
@@ -88,6 +134,15 @@ func (c *Controller) RemoveNode(nodeID node.ID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.nodes, nodeID)
+	if c.targetSchedulerGate != nil {
+		delete(c.targetSchedulerGate.ackedNodes, nodeID)
+	}
+	if c.clearSchedulerGate != nil {
+		delete(c.clearSchedulerGate.pendingNodes, nodeID)
+		if len(c.clearSchedulerGate.pendingNodes) == 0 {
+			c.clearSchedulerGate = nil
+		}
+	}
 }
 
 // ensureNodeStateLocked returns existing node state or creates one.
@@ -111,13 +166,31 @@ func (c *Controller) RequestDrain(nodeID node.ID) {
 	c.trySendDrainCommand(nodeID)
 }
 
+// ObserveBootstrapResponse records the node-scoped drain capability reported
+// by a maintainer manager during bootstrap.
+func (c *Controller) ObserveBootstrapResponse(nodeID node.ID, resp *heartbeatpb.CoordinatorBootstrapResponse) {
+	if resp == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.ensureNodeStateLocked(nodeID)
+	st.drainProtocolObserved = true
+	st.drainProtocolVersion = resp.GetDrainProtocolVersion()
+}
+
 // ObserveHeartbeat updates drain progression from node heartbeat liveness.
 func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartbeat) {
 	if hb == nil {
 		return
 	}
 
-	c.observeLiveness(nodeID, hb.NodeEpoch, hb.Liveness)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
+	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
 
 // ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
@@ -133,6 +206,10 @@ func (c *Controller) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartb
 func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.observeLivenessLocked(nodeID, nodeEpoch, liveness)
+}
+
+func (c *Controller) observeLivenessLocked(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness) {
 	st := c.ensureNodeStateLocked(nodeID)
 
 	if st.observedSet {
@@ -141,7 +218,7 @@ func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness 
 			return
 		}
 		if nodeEpoch > st.nodeEpoch {
-			resetObservedStateForNewEpoch(st)
+			resetObservedStateForNewEpoch(c.targetSchedulerGate, nodeID, st)
 		}
 		if nodeEpoch == st.nodeEpoch && liveness < st.liveness {
 			return
@@ -156,12 +233,163 @@ func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness 
 	applyObservedLiveness(st, liveness)
 }
 
+func (c *Controller) observeTargetSchedulerAckLocked(nodeID node.ID, hb *heartbeatpb.NodeHeartbeat) {
+	gate := c.targetSchedulerGate
+	if gate == nil || nodeID == gate.target {
+		return
+	}
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet || hb.NodeEpoch != st.nodeEpoch {
+		return
+	}
+	if node.ID(hb.GetDispatcherDrainTargetNodeId()) != gate.target ||
+		hb.GetDispatcherDrainTargetEpoch() != gate.epoch {
+		return
+	}
+	gate.ackedNodes[nodeID] = hb.NodeEpoch
+}
+
+// StartDrainTargetSchedulerGate blocks new maintainer placement onto nodes
+// until their node heartbeat has reported the active dispatcher drain target.
+func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64) {
+	if target.IsEmpty() || epoch == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.targetSchedulerGate = &drainTargetSchedulerGate{
+		target:     target,
+		epoch:      epoch,
+		ackedNodes: make(map[node.ID]uint64),
+	}
+	// A newer active drain target supersedes any older clear handshake.
+	c.clearSchedulerGate = nil
+}
+
+// SwitchDrainTargetSchedulerGateToClear atomically replaces the matching
+// active drain-target gate with a clear gate. A stale clear from an old session
+// must not overwrite a newer active drain gate.
+func (c *Controller) SwitchDrainTargetSchedulerGateToClear(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if target.IsEmpty() || epoch == 0 {
+		return
+	}
+
+	clonedPendingNodes := cloneNodeSet(pendingNodes)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.targetSchedulerGate == nil ||
+		c.targetSchedulerGate.target != target ||
+		c.targetSchedulerGate.epoch != epoch {
+		return
+	}
+	c.targetSchedulerGate = nil
+	if len(clonedPendingNodes) == 0 {
+		return
+	}
+	c.startDrainTargetClearGateLocked(target, epoch, clonedPendingNodes)
+}
+
+// StartDrainTargetClearGate blocks scheduling onto nodes that may still retain
+// the cleared drain target snapshot locally.
+func (c *Controller) StartDrainTargetClearGate(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if target.IsEmpty() || epoch == 0 || len(pendingNodes) == 0 {
+		return
+	}
+
+	clonedPendingNodes := cloneNodeSet(pendingNodes)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.targetSchedulerGate != nil {
+		return
+	}
+	c.startDrainTargetClearGateLocked(target, epoch, clonedPendingNodes)
+}
+
+// startDrainTargetClearGateLocked installs or extends a clear gate without
+// allowing older epochs to override a newer clear handshake.
+func (c *Controller) startDrainTargetClearGateLocked(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if c.clearSchedulerGate != nil {
+		if c.clearSchedulerGate.epoch > epoch {
+			return
+		}
+		if c.clearSchedulerGate.epoch == epoch {
+			if c.clearSchedulerGate.target != target {
+				return
+			}
+			utils.CopySetToSet(pendingNodes, c.clearSchedulerGate.pendingNodes)
+			return
+		}
+	}
+	c.clearSchedulerGate = &drainTargetClearGate{
+		target:       target,
+		epoch:        epoch,
+		pendingNodes: pendingNodes,
+	}
+}
+
+func cloneNodeSet(nodes map[node.ID]struct{}) map[node.ID]struct{} {
+	cloned := make(map[node.ID]struct{}, len(nodes))
+	utils.CopySetToSet(nodes, cloned)
+	return cloned
+}
+
+// RemoveDrainTargetClearPendingNode unblocks one destination after it either
+// acknowledged the cleared drain target or left the cluster.
+func (c *Controller) RemoveDrainTargetClearPendingNode(nodeID node.ID, target node.ID, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.clearSchedulerGate == nil ||
+		c.clearSchedulerGate.target != target ||
+		c.clearSchedulerGate.epoch != epoch {
+		return
+	}
+	delete(c.clearSchedulerGate.pendingNodes, nodeID)
+	if len(c.clearSchedulerGate.pendingNodes) == 0 {
+		c.clearSchedulerGate = nil
+	}
+}
+
+// ClearDrainTargetClearGate removes the clear-pending placement gate for the
+// matching cleared drain target.
+func (c *Controller) ClearDrainTargetClearGate(target node.ID, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.clearSchedulerGate == nil ||
+		c.clearSchedulerGate.target != target ||
+		c.clearSchedulerGate.epoch != epoch {
+		return
+	}
+	c.clearSchedulerGate = nil
+}
+
+// SetSchedulingFrozen updates the coordinator-side scheduling freeze flag.
+func (c *Controller) SetSchedulingFrozen(frozen bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.schedulingFrozen = frozen
+}
+
 // resetObservedStateForNewEpoch clears per-epoch observations when the node
 // restarts with a newer epoch, while preserving the drain request so the
 // coordinator can continue driving the drain workflow for the replacement
 // process.
-func resetObservedStateForNewEpoch(st *nodeState) {
+//
+// It also drops any scheduler-gate acknowledgement cached for the old process
+// lifetime. The replacement process must report the active drain target again
+// before coordinator can safely place new maintainers on it.
+func resetObservedStateForNewEpoch(gate *drainTargetSchedulerGate, nodeID node.ID, st *nodeState) {
 	drainRequested := st.drainRequested
+	if gate != nil {
+		delete(gate.ackedNodes, nodeID)
+	}
 	*st = nodeState{
 		drainRequested: drainRequested,
 	}
@@ -192,23 +420,84 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
 }
 
+// NewEventBrokerDispatcherCountRequest queries the log coordinator only after
+// STOPPING, so broker registrations do not prevent closing registration admission.
+// The coordinator's periodic task retries until an admission-closed zero is observed.
+func (c *Controller) NewEventBrokerDispatcherCountRequest(nodeID node.ID) *logservicepb.EventBrokerDispatcherCountRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.stoppingObserved || (st.eventBrokerDispatcherCountObserved && st.eventBrokerDispatcherCount == 0) {
+		return nil
+	}
+	return &logservicepb.EventBrokerDispatcherCountRequest{
+		TargetNodeId: nodeID.String(),
+	}
+}
+
+// ObserveEventBrokerDispatcherCountResponse records reports for a stopping capture.
+// Capture IDs identify process lifetimes, and a closed registration gate cannot
+// reopen, so an admission-closed zero remains valid even if its reply was delayed.
+func (c *Controller) ObserveEventBrokerDispatcherCountResponse(resp *logservicepb.EventBrokerDispatcherCountResponse) {
+	if resp == nil || resp.Report == nil || !resp.Report.RegistrationsStopped {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[node.ID(resp.TargetNodeId)]
+	if !ok || !st.stoppingObserved {
+		return
+	}
+	// A delayed positive report must not undo an already observed terminal zero.
+	if st.eventBrokerDispatcherCountObserved && st.eventBrokerDispatcherCount == 0 {
+		return
+	}
+	st.eventBrokerDispatcherCount = int(resp.Report.DispatcherCount)
+	st.eventBrokerDispatcherCountObserved = true
+}
+
+// GetEventBrokerDispatcherCount returns the last admission-closed count for the
+// requested capture. An absent report cannot authorize completion.
+func (c *Controller) GetEventBrokerDispatcherCount(nodeID node.ID) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.eventBrokerDispatcherCountObserved {
+		return 0, false
+	}
+	return st.eventBrokerDispatcherCount, true
+}
+
+// GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.
+func (c *Controller) GetDrainProtocolVersion(nodeID node.ID) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.drainProtocolObserved {
+		return 0, false
+	}
+	return st.drainProtocolVersion, true
+}
+
 // GetState returns coordinator-derived liveness state.
 func (c *Controller) GetState(nodeID node.ID) State {
 	c.mu.Lock()
+	state := c.getStateLocked(nodeID, time.Now())
+	c.mu.Unlock()
+	return state
+}
+
+func (c *Controller) getStateLocked(nodeID node.ID, now time.Time) State {
 	st, ok := c.nodes[nodeID]
 	if !ok || !st.observedSet {
-		c.mu.Unlock()
 		// Never observed: keep compatibility during rollout.
 		return StateAlive
 	}
-	lastSeen := st.lastSeen
-	liveness := st.liveness
-	c.mu.Unlock()
-
-	if time.Since(lastSeen) > c.ttl {
+	if now.Sub(st.lastSeen) > c.ttl {
 		return StateUnknown
 	}
-	switch liveness {
+	switch st.liveness {
 	case heartbeatpb.NodeLiveness_ALIVE:
 		return StateAlive
 	case heartbeatpb.NodeLiveness_DRAINING:
@@ -234,7 +523,32 @@ func (c *Controller) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
 
 // IsSchedulableDest returns true only when the node is eligible as a scheduling destination.
 func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
-	return c.GetState(nodeID) == StateAlive
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.schedulingFrozen {
+		return false
+	}
+	if c.getStateLocked(nodeID, time.Now()) != StateAlive {
+		return false
+	}
+	if c.clearSchedulerGate != nil {
+		if _, ok := c.clearSchedulerGate.pendingNodes[nodeID]; ok {
+			return false
+		}
+	}
+	if c.targetSchedulerGate == nil {
+		return true
+	}
+	if nodeID == c.targetSchedulerGate.target {
+		return false
+	}
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet {
+		return false
+	}
+	ackedEpoch, ok := c.targetSchedulerGate.ackedNodes[nodeID]
+	return ok && ackedEpoch == st.nodeEpoch
 }
 
 // GetDrainingOrStoppingNodes returns non-stale nodes observed as draining or stopping.
@@ -249,25 +563,29 @@ func (c *Controller) GetDrainingOrStoppingNodes() []node.ID {
 	}
 
 	res := make([]node.ID, 0, len(c.nodes))
-	for id, st := range c.nodes {
-		if !st.observedSet || now.Sub(st.lastSeen) > c.ttl {
-			continue
-		}
-		if st.liveness == heartbeatpb.NodeLiveness_DRAINING ||
-			st.liveness == heartbeatpb.NodeLiveness_STOPPING {
+	for id := range c.nodes {
+		switch c.getStateLocked(id, now) {
+		case StateDraining, StateStopping:
 			res = append(res, id)
 		}
 	}
 	return res
 }
 
-// AdvanceLiveness advances liveness commands:
+// AdvanceLiveness advances liveness commands for the node set selected by
+// shouldManage:
 // - Request DRAINING until observed
 // - Once readyToStop and DRAINING observed, request STOPPING until observed
-func (c *Controller) AdvanceLiveness(readyToStop func(node.ID) bool) {
+func (c *Controller) AdvanceLiveness(
+	shouldManage func(node.ID) bool,
+	readyToStop func(node.ID) bool,
+) {
 	nodeIDs := c.listDrainRequestedNodeIDs()
 
 	for _, nodeID := range nodeIDs {
+		if shouldManage != nil && !shouldManage(nodeID) {
+			continue
+		}
 		drainRequested, drainingObserved, stoppingObserved := c.GetStatus(nodeID)
 		if !drainRequested {
 			continue

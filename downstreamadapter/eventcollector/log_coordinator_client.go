@@ -63,7 +63,7 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 			dispatcherID := common.NewDispatcherIDFromPB(msg.ID)
 			dispatcher := l.eventCollector.getDispatcherStatByID(dispatcherID)
 			if dispatcher != nil && l.enableRemoteEventService {
-				dispatcher.setRemoteCandidates(msg.Nodes)
+				dispatcher.startRemoteProbing(msg.Nodes)
 			}
 		default:
 			log.Warn("unknown message type, ignore it",
@@ -84,8 +84,13 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 				log.Info("coordinator info is empty, try send request later")
 				l.logCoordinatorRequestChan.In() <- req
 				// Since the log coordinator isn't ready and won't be available soon, processing later requests would be pointless.
-				// Thus, we apply a longer sleep interval here.
-				time.Sleep(1 * time.Second)
+				// Thus, we apply a longer sleep interval here. It has to stay
+				// interruptible, otherwise closing the client waits for it.
+				select {
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				case <-time.After(1 * time.Second):
+				}
 				continue
 			}
 			retryNum := 20 // 20 * 100ms = 2s

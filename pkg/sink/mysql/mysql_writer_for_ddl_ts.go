@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
 
@@ -185,6 +186,17 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 		}
 
 		dropTables := event.GetNeedDroppedTables()
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			switch ddl.GetDDLType() {
+			case model.ActionDropColumn, model.ActionDropPrimaryKey, model.ActionDropIndex,
+				model.ActionModifyColumn, model.ActionMultiSchemaChange:
+				// These column/index ALTERs preserve physical table IDs. They only
+				// remove dispatchers when the last replication key is lost, not the
+				// physical tables. Keep the completed per-table DDL-ts so redo can
+				// skip old-schema rows and this ALTER if its checkpoint still lags.
+				dropTables = nil
+			}
+		}
 		if dropTables != nil {
 			switch dropTables.InfluenceType {
 			case commonEvent.InfluenceTypeNormal:
@@ -395,7 +407,9 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 		}
 	}
 
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type ddlTsRow struct {
 		ddlTs       int64
@@ -510,6 +524,10 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 }
 
 func (w *Writer) RemoveDDLTsItem() error {
+	if !w.grantWrite() {
+		return w.ctx.Err()
+	}
+
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
@@ -663,7 +681,9 @@ func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	if rows.Next() {
 		return true, nil
 	}

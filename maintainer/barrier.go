@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"slices"
 	"time"
 
 	"github.com/pingcap/log"
@@ -23,6 +24,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +49,15 @@ type Barrier struct {
 	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
 	// and logs must stay in the same mode.
 	mode int64
+
+	// routeAdmin gates route-affecting DDLs before Barrier emits WRITE/PASS
+	// actions. A nil value keeps Barrier on the normal non-route path.
+	routeAdmin *routing.Admin
+
+	// lastSyncPointTs is the commitTs of the latest syncpoint whose writer dispatcher
+	// reported it done, i.e. it has been written to the downstream. It is read by the
+	// maintainer's checkpoint goroutine for metrics, so it must be atomic.
+	lastSyncPointTs atomic.Uint64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -54,6 +66,7 @@ func NewBarrier(spanController *span.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
+	admin *routing.Admin,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -62,6 +75,7 @@ func NewBarrier(spanController *span.Controller,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
 		mode:               mode,
+		routeAdmin:         admin,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -71,51 +85,81 @@ func NewBarrier(spanController *span.Controller,
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
 ) []*messaging.TargetMessage {
+	if request == nil || request.ChangefeedID == nil {
+		log.Warn("ignore invalid block status request",
+			zap.String("from", from.String()),
+			zap.Int64("mode", b.mode))
+		return nil
+	}
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
+	invalidStatusCount := 0
 	for _, status := range request.BlockStatuses {
+		if status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 ||
+			(status.State.IsBlocked &&
+				status.State.Stage != heartbeatpb.BlockStage_DONE &&
+				status.State.BlockTables == nil) {
+			invalidStatusCount++
+			continue
+		}
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+		task := b.spanController.GetTaskByID(dispatcherID)
+		if task == nil {
+			log.Info("Get block status from unexisted dispatcher, ignore it",
+				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		ownerNodeID := task.GetNodeID()
+		if ownerNodeID != from {
+			log.Warn("ignore block status from non-owner dispatcher",
+				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.String("ownerNodeID", ownerNodeID.String()),
+				zap.String("fromNodeID", from.String()),
+				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
-			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it",
+			if !b.spanController.IsReplicating(task) {
+				log.Info("Get block status from unreplicating dispatcher, ignore it",
 					zap.String("changefeed", request.ChangefeedID.GetName()),
 					zap.String("dispatcher", dispatcherID.String()),
 					zap.Uint64("commitTs", status.State.BlockTs),
 					zap.Int64("mode", b.mode))
+				// A newly added dispatcher may report its first WAITING barrier before the add
+				// operator moves it from scheduling to replicating. We still cannot admit that
+				// status into barrier, but silently dropping it would leave dispatcher waiting
+				// for the slow 5s resend timer. Return IgnoredBlockStatus so it keeps the live
+				// WAITING state locally and schedules a fast retry instead.
+				dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
+					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						DispatcherIDs: []*heartbeatpb.DispatcherID{status.ID},
+					},
+					IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+						CommitTs:    status.State.BlockTs,
+						IsSyncPoint: status.State.IsSyncPoint,
+					},
+				})
 				continue
-			} else {
-				if !b.spanController.IsReplicating(task) {
-					log.Info("Get block status from unreplicating dispatcher, ignore it",
-						zap.String("changefeed", request.ChangefeedID.GetName()),
-						zap.String("dispatcher", dispatcherID.String()),
-						zap.Uint64("commitTs", status.State.BlockTs),
-						zap.Int64("mode", b.mode))
-					// A newly added dispatcher may report its first WAITING barrier before the add
-					// operator moves it from scheduling to replicating. We still cannot admit that
-					// status into barrier, but silently dropping it would leave dispatcher waiting
-					// for the slow 5s resend timer. Return IgnoredBlockStatus so it keeps the live
-					// WAITING state locally and schedules a fast retry instead.
-					dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
-						InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
-							InfluenceType: heartbeatpb.InfluenceType_Normal,
-							DispatcherIDs: []*heartbeatpb.DispatcherID{status.ID},
-						},
-						IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
-							CommitTs:    status.State.BlockTs,
-							IsSyncPoint: status.State.IsSyncPoint,
-						},
-					})
-					continue
-				}
 			}
 		}
 
+		// Only replicating non-DDL dispatchers can reach handleOneStatus.
+		// handleOneStatus updates SpanReplication directly instead of going
+		// through spanController.UpdateStatus, so admitting absent or scheduling
+		// spans here would bypass nonReplicatingCheckpointTs maintenance.
+		// Keep the filter above in sync with that invariant.
+		//
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
@@ -136,6 +180,13 @@ func (b *Barrier) HandleStatus(from node.ID,
 				actions[targetID] = append(actions[targetID], action)
 			}
 		}
+	}
+	if invalidStatusCount > 0 {
+		log.Warn("ignore invalid block statuses",
+			zap.String("from", from.String()),
+			zap.String("changefeed", request.ChangefeedID.GetName()),
+			zap.Int("invalidStatusCount", invalidStatusCount),
+			zap.Int64("mode", b.mode))
 	}
 	for event, dispatchers := range eventDispatcherIDsMap {
 		dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
@@ -161,6 +212,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
+			MaintainerEpoch:    b.operatorController.MaintainerEpoch(),
 		})
 	msgs := []*messaging.TargetMessage{msg}
 
@@ -172,6 +224,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 					ChangefeedID:       request.ChangefeedID,
 					DispatcherStatuses: action,
 					Mode:               b.mode,
+					MaintainerEpoch:    b.operatorController.MaintainerEpoch(),
 				})
 			msgs = append(msgs, msg)
 		}
@@ -228,7 +281,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.allDispatcherReported() {
 			// it means the dispatchers involved in the block event are all in the cached resp, not restarted.
-			// so we don't do speical check for this event
+			// so we don't do special check for this event
 			// just use usual logic to handle it
 			// Besides, is the dispatchers are all reported waiting status, it means at least one dispatcher
 			// is not get acked, so it must be resent by dispatcher later.
@@ -245,12 +298,23 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
-		// todo: we can limit the number of messages to send in one round here
-		msgs = append(msgs, barrierEvent.resend(b.mode)...)
-
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
+	if b.routeAdmin != nil {
+		// blockedEvents is map-backed. Route replay must scan recovered events in
+		// barrier event order before resend can emit WRITE/PASS actions. Syncpoint
+		// is part of the barrier key only to disambiguate events with the same ts;
+		// route precheck/apply still skips syncpoint events.
+		sortBarrierEventsByKey(eventList)
+	}
+	for _, barrierEvent := range eventList {
+		if !b.prepareRouteEventForResend(barrierEvent) {
+			continue
+		}
+		// todo: we can limit the number of messages to send in one round here
+		msgs = append(msgs, barrierEvent.resend(b.mode)...)
+	}
 
 	for _, event := range eventList {
 		if event != nil {
@@ -259,6 +323,36 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		}
 	}
 	return msgs
+}
+
+func sortBarrierEventsByKey(eventList []*BarrierEvent) {
+	slices.SortFunc(eventList, func(a, b *BarrierEvent) int {
+		return compareEventKey(
+			getEventKey(a.commitTs, a.isSyncPoint),
+			getEventKey(b.commitTs, b.isSyncPoint),
+		)
+	})
+}
+
+func (b *Barrier) prepareRouteEventForResend(event *BarrierEvent) bool {
+	if b.routeAdmin == nil {
+		return true
+	}
+	if !event.selected.Load() {
+		// checkBlockedDispatchers may promote a recovered WAITING event when
+		// one related dispatcher has already checkpointed past this DDL.
+		event.checkBlockedDispatchers()
+	}
+	if !event.selected.Load() {
+		return true
+	}
+	if !b.precheckRouteEvent(event) {
+		return false
+	}
+	if !event.writerDispatcherAdvanced {
+		return true
+	}
+	return b.applyRouteEvent(event)
 }
 
 // ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
@@ -288,6 +382,9 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 }
 
 func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
+	if changefeedID == nil || status == nil || status.ID == nil || status.State == nil || status.State.BlockTs == 0 {
+		return nil, nil, "", false
+	}
 	cfID := common.NewChangefeedIDFromPB(changefeedID)
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
@@ -301,9 +398,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			Mode:            status.Mode,
 		})
-		if status.State != nil {
-			span.UpdateBlockState(*status.State)
-		}
+		span.UpdateBlockState(*status.State)
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
 		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true
@@ -330,6 +425,15 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
+		// Do not consume writer DONE until this route transition is ready. A false
+		// precheck may mean an earlier route event is still pending; real route
+		// conflicts are reported through routeAdmin.
+		if !b.precheckRouteEvent(event) {
+			return event
+		}
+		if !b.applyRouteEvent(event) {
+			return event
+		}
 		if event.needSchedule {
 			// we need do schedule when writerDispatcherAdvanced
 			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
@@ -345,6 +449,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
+		}
+		if event.isSyncPoint {
+			b.updateLastSyncPointTs(event.commitTs)
 		}
 	}
 
@@ -364,6 +471,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// insert an event, or get the old one event check if the event is already tracked
 		event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
+			// A table dispatcher may create the BarrierEvent before the table
+			// trigger dispatcher reports the same DDL. Route admissions are only
+			// carried by the table trigger dispatcher, so refresh them here when
+			// that authoritative status arrives.
+			if len(event.routeAdmissions) == 0 && len(blockState.RouteTableAdmissions) > 0 {
+				event.routeAdmissions = routeTableAdmissionsFromPB(blockState.RouteTableAdmissions)
+			}
 			log.Info("the block event is sent by ddl dispatcher",
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
@@ -410,8 +524,25 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			}
 		}
 
+		// The table trigger dispatcher is the authoritative source of route
+		// admissions. Check them as soon as they arrive so conflicts can be
+		// reported early; WRITE is still gated by allDispatcherReported below.
+		if dispatcherID == b.spanController.GetDDLDispatcherID() {
+			if !b.precheckRouteEvent(event) {
+				return event, nil, "", false
+			}
+		}
+
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
+		if event.allDispatcherReported() {
+			// Re-precheck when all dispatchers have reported. Between the DDL dispatcher's
+			// first report and now, an earlier route transition may have been applied
+			// (releasing the old owner), which can make this event pass a check it previously failed.
+			if !b.precheckRouteEvent(event) {
+				return event, nil, "", false
+			}
+		}
 		status, targetID := event.checkEventAction(dispatcherID)
 		if status != nil && event.needSchedule {
 			// scheduling is only required for ddl that changes tables, enqueue the event
@@ -419,8 +550,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		}
 		return event, status, targetID, true
 	}
-	// it's not a blocked event, it must be sent by table event trigger event dispatcher, just for doing scheduler
-	// and the ddl already synced to downstream , e.g.: create table
+	// Non-blocking metadata updates are reported by the table trigger dispatcher
+	// after it has written the DDL downstream. Route admission precheck here is
+	// a maintainer-side fence: on conflict, do not apply the route registry
+	// transition and do not schedule newly added dispatchers.
+	//
+	// These events still need maintainer ACK for table scheduling and/or route
+	// admission.
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
 	//
 	// Besides, we need to add the event into the blockedEvents map first, and then delete after finish scheduler
@@ -428,6 +564,14 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.writerDispatcher = dispatcherID
+	if !b.precheckRouteEvent(event) {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", false
+	}
+	if !b.applyRouteEvent(event) {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", false
+	}
 	if !event.needSchedule {
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", true
@@ -444,6 +588,23 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	}
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 	return event, nil, "", true
+}
+
+// updateLastSyncPointTs advances lastSyncPointTs to ts if ts is larger.
+// The writer DONE status can be resent, so this must be idempotent and never move backwards.
+func (b *Barrier) updateLastSyncPointTs(ts uint64) {
+	for {
+		old := b.lastSyncPointTs.Load()
+		if ts <= old || b.lastSyncPointTs.CompareAndSwap(old, ts) {
+			return
+		}
+	}
+}
+
+// GetLastSyncPointTs returns the commitTs of the latest syncpoint written to the downstream,
+// or 0 if no syncpoint has been written since the barrier was created.
+func (b *Barrier) GetLastSyncPointTs() uint64 {
+	return b.lastSyncPointTs.Load()
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
@@ -467,7 +628,7 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("committs", be.commitTs),
+			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("mode", b.mode))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
@@ -509,6 +670,20 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	event.writerDispatcherAdvanced = true
 	event.lastResendTime = time.Now().Add(-20 * time.Second)
 	return true
+}
+
+func (b *Barrier) precheckRouteEvent(event *BarrierEvent) bool {
+	if b.routeAdmin == nil || event.isSyncPoint {
+		return true
+	}
+	return b.routeAdmin.Precheck(event.commitTs, event.routeAdmissions)
+}
+
+func (b *Barrier) applyRouteEvent(event *BarrierEvent) bool {
+	if b.routeAdmin == nil || event.isSyncPoint {
+		return true
+	}
+	return b.routeAdmin.Apply(event.commitTs, event.routeAdmissions)
 }
 
 // ackEvent creates an ack event

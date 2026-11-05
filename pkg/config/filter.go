@@ -39,8 +39,9 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore-sql" json:"ignore-sql"`
 	// sql expression
-	IgnoreInsertValueExpr    *string `toml:"ignore-insert-value-expr" json:"ignore-insert-value-expr,omitempty"`
-	IgnoreUpdateNewValueExpr *string `toml:"ignore-update-new-value-expr" json:"ignore-update-new-value-expr,omitempty"`
-	IgnoreUpdateOldValueExpr *string `toml:"ignore-update-old-value-expr" json:"ignore-update-old-value-expr,omitempty"`
-	IgnoreDeleteValueExpr    *string `toml:"ignore-delete-value-expr" json:"ignore-delete-value-expr,omitempty"`
+	IgnoreInsertValueExpr    *string  `toml:"ignore-insert-value-expr" json:"ignore-insert-value-expr,omitempty"`
+	IgnoreUpdateNewValueExpr *string  `toml:"ignore-update-new-value-expr" json:"ignore-update-new-value-expr,omitempty"`
+	IgnoreUpdateOldValueExpr *string  `toml:"ignore-update-old-value-expr" json:"ignore-update-old-value-expr,omitempty"`
+	IgnoreDeleteValueExpr    *string  `toml:"ignore-delete-value-expr" json:"ignore-delete-value-expr,omitempty"`
+	IgnoreUpdateOnlyColumns  []string `toml:"ignore-update-only-columns" json:"ignore-update-only-columns,omitempty"`
 }

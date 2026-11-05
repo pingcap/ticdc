@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,7 +31,6 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -179,12 +179,14 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		return errors.Trace(err)
 	}
 	defer func() {
-		var errs error
+		var closeErr error
 		for _, r := range fileReaders {
-			errs = multierr.Append(errs, r.Close())
+			if err := r.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
 		}
-		if errs != nil {
-			log.Error("close row reader failed", zap.Error(errs))
+		if closeErr != nil {
+			log.Error("close row reader failed", zap.Error(closeErr))
 		}
 	}()
 
@@ -223,7 +225,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		// read next and push again
 		rl, err := fileReaders[item.idx].Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return errors.Trace(err)
 			}
 			continue
@@ -338,7 +340,7 @@ func newLogHeap(fileReaders []fileReader) (logHeap, error) {
 	for i := 0; i < len(fileReaders); i++ {
 		rl, err := fileReaders[i].Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return nil, err
 			}
 			continue
@@ -410,8 +412,10 @@ func (h *logHeap) Pop() interface{} {
 }
 
 func getChangefeedFromMetaPath(path string) commonType.ChangeFeedID {
-	parts := strings.Split(path, "_")
-	keyspace := parts[1]
-	name := parts[2]
+	parts := strings.Split(filepath.Base(path), "_")
+	// Changefeed names cannot contain underscores, but keyspaces can.
+	nameIdx := len(parts) - 3
+	keyspace := strings.Join(parts[1:nameIdx], "_")
+	name := parts[nameIdx]
 	return commonType.NewChangeFeedIDWithName(name, keyspace)
 }

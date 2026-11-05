@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -52,21 +52,36 @@ func initRedoComponet(
 	if !manager.IsRedoEnabled() {
 		return nil
 	}
+	if manager.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	var err error
-	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink, err = redo.New(ctx, changefeedID, manager.config.Consistent)
+	redoDispatcherMap := newDispatcherMap[*dispatcher.RedoDispatcher]()
+	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent)
 	if err != nil {
 		return err
 	}
-	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+	redoSchemaIDToDispatchers := dispatcher.NewSchemaIDToDispatchers()
 
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
 	if consistentMemoryUsage == nil {
 		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
 	}
-	manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-	manager.sinkQuota = totalQuota - manager.redoQuota
+	redoQuota := totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		redoSink.Close()
+		return newWritePathClosedError()
+	}
+	manager.redoDispatcherMap = redoDispatcherMap
+	manager.redoSink = withCaptureWriteGate(ctx, redoSink)
+	manager.redoSchemaIDToDispatchers = redoSchemaIDToDispatchers
+	manager.redoQuota = redoQuota
+	manager.sinkQuota = totalQuota - redoQuota
+	manager.writePathMu.Unlock()
 
 	// init table trigger redo dispatcher when tableTriggerRedoDispatcherID is not nil
 	if tableTriggerRedoDispatcherID != nil {
@@ -76,12 +91,21 @@ func initRedoComponet(
 		}
 	}
 	// register redo metrics
-	manager.metricTableTriggerRedoDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
-	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricTableTriggerRedoDispatcherCount = tableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoEventDispatcherCount = eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoCreateDispatcherDuration = createDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoMessageDs need register on every node
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		return newWritePathClosedError()
+	}
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
+	manager.writePathMu.Unlock()
+	if manager.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()
@@ -101,7 +125,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
 	infos[dispatcherID] = dispatcherCreateInfo{
-		Id:        dispatcherID,
+		ID:        dispatcherID,
 		TableSpan: common.KeyspaceDDLSpan(e.keyspaceID),
 		StartTs:   startTs,
 		SchemaID:  0,
@@ -113,6 +137,13 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
+	if redoDispatcher == nil {
+		if e.writePathClosed.Load() {
+			return newWritePathClosedError()
+		}
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			FastGenByArgs("table trigger redo dispatcher was not created")
+	}
 	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
 	e.wg.Add(1)
 	go func() {
@@ -128,7 +159,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	return nil
 }
 
-func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
+func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink sink.Sink) (int, int) {
 	var (
 		batchCount = redoSink.BatchCount()
 		batchBytes = redoSink.BatchBytes()
@@ -139,7 +170,10 @@ func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *re
 	return batchCount, batchBytes
 }
 
-func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	start := time.Now()
 	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
@@ -180,6 +214,12 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
+		e.writePathMu.Lock()
+		if e.writePathClosed.Load() {
+			e.writePathMu.Unlock()
+			rd.Remove()
+			return newWritePathClosedError()
+		}
 		if rd.IsTableTriggerDispatcher() {
 			e.SetTableTriggerRedoDispatcher(rd)
 		} else {
@@ -189,6 +229,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
 		rd.SetSeq(redoSeq)
+		e.writePathMu.Unlock()
 
 		if rd.IsTableTriggerDispatcher() {
 			e.metricTableTriggerRedoDispatcherCount.Inc()
@@ -249,7 +290,14 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		mergedDispatcher.Remove()
+		return nil
+	}
 	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, mergedDispatcher, e.redoSchemaIDToDispatchers, e.metricRedoEventDispatcherCount, e.redoQuota)
+	e.writePathMu.Unlock()
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
@@ -290,21 +338,30 @@ func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.GetTableTriggerRedoDispatcher() == nil {
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
+	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
+	if tableTriggerRedoDispatcher == nil {
 		return nil
 	}
-	needAddDispatcher, err := e.GetTableTriggerRedoDispatcher().InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := tableTriggerRedoDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if !needAddDispatcher {
 		return nil
 	}
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerRedoDispatcher(), e.redoQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(tableTriggerRedoDispatcher, e.redoQuota)
 	return nil
 }
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
+	if e.writePathClosed.Load() {
+		return
+	}
 	// only update meta on the one node
 	d := e.GetTableTriggerRedoDispatcher()
 	if d == nil {
@@ -319,7 +376,7 @@ func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(*e.config.Consistent.MetaFlushIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	var preResolvedTs uint64

@@ -27,7 +27,7 @@ function run() {
 
 	run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_replicate_ddl.server1
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_replicate_ddl.server1
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" | grep '^ID:' | head -n1 | awk '{print $2}')
@@ -38,6 +38,14 @@ function run() {
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable2 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable3 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable_bak like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE DATABASE consistent_replicate_ddl_like_src" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE consistent_replicate_ddl_like_src.src (id INT PRIMARY KEY, value VARCHAR(32))" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "USE consistent_replicate_ddl_like_src; CREATE TABLE consistent_replicate_ddl.table_cross_db_like_dst LIKE src" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE consistent_replicate_ddl_like_src.src_partition (id INT PRIMARY KEY, value VARCHAR(32)) PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (MAXVALUE))" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "USE consistent_replicate_ddl_like_src; CREATE TABLE consistent_replicate_ddl.table_cross_db_partition_like_dst LIKE src_partition" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO consistent_replicate_ddl.table_cross_db_partition_like_dst VALUES (1, 'before truncate'), (11, 'p1')" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "ALTER TABLE consistent_replicate_ddl.table_cross_db_partition_like_dst TRUNCATE PARTITION p0" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO consistent_replicate_ddl.table_cross_db_partition_like_dst VALUES (2, 'after truncate')" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	for i in {1..100}; do
 		run_sql "CREATE TABLE IF NOT EXISTS consistent_replicate_ddl.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
@@ -45,15 +53,20 @@ function run() {
 	check_table_exists "consistent_replicate_ddl.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable_bak" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	check_table_exists "consistent_replicate_ddl.table_cross_db_like_dst" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	check_table_exists "consistent_replicate_ddl.table_cross_db_partition_like_dst" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	for i in {1..100}; do
 		check_table_exists "consistent_replicate_ddl.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	done
 	sleep 5
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "consistent_replicate_ddl.server1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "consistent_replicate_ddl.server2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_replicate_ddl.server2
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_replicate_ddl.server2
 
 	# case 1:
 	# global ddl tests -> ActionRenameTable
@@ -104,6 +117,9 @@ function run() {
 	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	export GO_FAILPOINTS=''
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "consistent_replicate_ddl.server1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "consistent_replicate_ddl.server2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 
 	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')

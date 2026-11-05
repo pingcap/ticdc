@@ -47,7 +47,7 @@ func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
@@ -80,7 +80,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-4", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
@@ -118,7 +118,7 @@ func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T)
 	addReplicatingMaintainer(t, db, "cf-a-4", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	s.drainBalanceBlockedUntil = time.Time{}
 
@@ -171,13 +171,38 @@ func TestBalanceSchedulerUsesBalanceIntervalAsDrainBlockWindow(t *testing.T) {
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	interval := 200 * time.Millisecond
 	s := NewBalanceScheduler("test", 10, oc, db, interval, drainController)
 
 	start := time.Now()
 	_ = s.Execute()
 	require.WithinDuration(t, start.Add(interval), s.drainBalanceBlockedUntil, 50*time.Millisecond)
+}
+
+func TestBalanceSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	nodeA := node.ID("node-a")
+	nodeB := node.ID("node-b")
+	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
+	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
+
+	drainController := drain.NewController(mc)
+	drainController.SetSchedulingFrozen(true)
+
+	db := changefeed.NewChangefeedDB(1)
+	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
+	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
+	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
+	_ = s.Execute()
+
+	require.Equal(t, 0, oc.OperatorSize())
 }
 
 func setupCoordinatorSchedulerTestServices() {

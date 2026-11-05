@@ -24,12 +24,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -49,7 +50,7 @@ type RedoMeta struct {
 
 	// This fields are used to process meta files and perform
 	// garbage collection of logs.
-	extStorage    storage.ExternalStorage
+	extStorage    storeapi.Storage
 	uuidGenerator uuid.Generator
 	preMetaFile   string
 
@@ -62,6 +63,7 @@ type RedoMeta struct {
 	metricResolvedTs       prometheus.Gauge
 
 	flushIntervalInMs int64
+	writeGate         *writelease.Gate
 }
 
 // NewRedoMeta creates a new redo meta.
@@ -78,9 +80,9 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
-		metricCheckpointTs: metrics.RedoCheckpointTsGauge.
+		metricCheckpointTs: redoCheckpointTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs: metrics.RedoResolvedTsGauge.
+		metricResolvedTs: redoResolvedTsGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
@@ -100,8 +102,12 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
+func (m *RedoMeta) SetWriteGate(gate *writelease.Gate) {
+	m.writeGate = gate
+}
+
 func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
-	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+	uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
 	}
@@ -109,7 +115,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	redo.FixLocalScheme(uri)
 	// blackhole scheme is converted to "noop" scheme here, so we can use blackhole for testing
 	if redo.IsBlackholeStorage(uri.Scheme) {
-		uri, _ = storage.ParseRawURL("noop://")
+		uri, _ = objstore.ParseRawURL("noop://")
 	}
 
 	extStorage, err := redo.InitExternalStorage(ctx, *uri)
@@ -123,7 +129,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 		}
 	}()
 
-	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
+	m.metricFlushLogDuration = redoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 
 	err = m.preCleanupExtStorage(ctx)
@@ -262,6 +268,11 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 		zap.Uint64("checkpointTs", flushedMeta.CheckpointTs),
 		zap.Uint64("resolvedTs", flushedMeta.ResolvedTs))
 
+	if len(toRemoveMetaFiles) != 0 {
+		if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+			return err
+		}
+	}
 	return util.DeleteFilesInExtStorage(ctx, m.extStorage, toRemoveMetaFiles)
 }
 
@@ -273,6 +284,9 @@ func (m *RedoMeta) preCleanupExtStorage(ctx context.Context) error {
 	}
 	if !ret {
 		return nil
+	}
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
 	}
 
 	changefeedMatcher := getChangefeedMatcher(m.changeFeedID)
@@ -286,6 +300,9 @@ func (m *RedoMeta) preCleanupExtStorage(ctx context.Context) error {
 		return err
 	}
 
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	err = m.extStorage.DeleteFile(ctx, deleteMarker)
 	if err != nil && !util.IsNotExistInExtStorage(err) {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
@@ -331,7 +348,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
 	if m.extStorage == nil {
-		uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
+		uri, err := objstore.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 		redo.FixLocalScheme(uri)
 		if err != nil {
 			return err
@@ -344,6 +361,9 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	}
 	// Write deleted mark before clean any files.
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	if err := m.extStorage.WriteFile(ctx, deleteMarker, []byte("D")); err != nil {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
@@ -351,6 +371,9 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
 		zap.String("changefeed", m.changeFeedID.Name()))
 
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	changefeedMatcher := getChangefeedMatcher(m.changeFeedID)
 	return util.RemoveFilesIf(ctx, m.extStorage, func(path string) bool {
 		if path == deleteMarker || !strings.Contains(path, changefeedMatcher) {
@@ -397,11 +420,9 @@ func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 	unflushed.CheckpointTs = m.metaCheckpointTs.getUnflushed()
 	unflushed.ResolvedTs = m.metaResolvedTs.getUnflushed()
 
-	hasChange := false
-	if flushed.CheckpointTs < unflushed.CheckpointTs ||
-		flushed.ResolvedTs < unflushed.ResolvedTs {
-		hasChange = true
-	}
+	hasChange := flushed.CheckpointTs < unflushed.CheckpointTs ||
+		flushed.ResolvedTs < unflushed.ResolvedTs
+
 	return hasChange, unflushed
 }
 
@@ -419,6 +440,9 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 		return errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	metaFile := getMetafileName(m.captureID, m.changeFeedID, m.uuidGenerator)
+	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
+		return err
+	}
 	if err := m.extStorage.WriteFile(ctx, metaFile, data); err != nil {
 		log.Error("redo: meta manager flush meta write file failed",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
@@ -427,7 +451,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
-	if m.preMetaFile != "" {
+	if m.preMetaFile != "" && writelease.CanWrite(m.writeGate) {
 		if m.preMetaFile == metaFile {
 			// This should only happen when use a constant uuid generator in test.
 			return nil
@@ -453,9 +477,9 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 }
 
 func (m *RedoMeta) CleanupMetrics() {
-	metrics.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
-	metrics.RedoFlushLogDurationHistogram.
+	redoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	redoFlushLogDurationHistogram.
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 
@@ -516,6 +540,9 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 		case <-ticker.C:
 			ckpt := m.metaCheckpointTs.getFlushed()
 			if ckpt == preCkpt {
+				continue
+			}
+			if !writelease.CanWrite(m.writeGate) {
 				continue
 			}
 			preCkpt = ckpt

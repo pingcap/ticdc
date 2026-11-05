@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -29,8 +28,16 @@ import (
 )
 
 var (
-	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+	metricsEventCount = pullerEventCounter.WithLabelValues("event")
+
+	metricRegionEventHandleDurationEntries  = subscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
+	metricRegionEventHandleDurationResolved = subscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
+	metricRegionEventHandleDurationMixed    = subscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
+	metricRegionEventHandleDurationError    = subscriptionClientRegionEventHandleDuration.WithLabelValues("error")
+
+	metricConsumeKVEventsCallbackDurationClearCache        = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
+	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
+	metricConsumeKVEventsCallbackDurationWakeSubscription  = subscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
 )
 
 const (
@@ -47,6 +54,13 @@ type regionEvent struct {
 
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+	// memoryBytes is released when this event is dropped or when the derived KV
+	// events no longer need to be retained by the log puller.
+	memoryBytes uint64
+}
+
+func (event *regionEvent) needsMemoryAccounting() bool {
+	return event.entries != nil
 }
 
 func (event *regionEvent) getSize() int {
@@ -78,7 +92,8 @@ func (event regionEvent) mustFirstState() *regionFeedState {
 }
 
 type regionEventHandler struct {
-	subClient *subscriptionClient
+	eventSink      *regionEventSink
+	failureHandler *regionFailureHandler
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -91,18 +106,18 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	hasResolved := false
 	hasError := false
 	defer func() {
-		eventType := "error"
+		observer := metricRegionEventHandleDurationError
 		switch {
 		case hasEntries && hasResolved:
-			eventType = "mixed"
+			observer = metricRegionEventHandleDurationMixed
 		case hasEntries:
-			eventType = "entries"
+			observer = metricRegionEventHandleDurationEntries
 		case hasResolved:
-			eventType = "resolved"
+			observer = metricRegionEventHandleDurationResolved
 		case hasError:
-			eventType = "error"
+			observer = metricRegionEventHandleDurationError
 		}
-		metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues(eventType).Observe(time.Since(startTime).Seconds())
+		observer.Observe(time.Since(startTime).Seconds())
 	}()
 
 	if len(span.kvEventsCache) != 0 {
@@ -112,7 +127,9 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	newResolvedTs := uint64(0)
+	memoryBytes := uint64(0)
 	for _, event := range events {
+		memoryBytes += event.memoryBytes
 		if len(event.states) == 1 && event.states[0].isStale() {
 			hasError = true
 			h.handleRegionError(event.states[0])
@@ -138,29 +155,35 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			span.advanceResolvedTs(newResolvedTs)
 		}
 	}
+	releaseMemoryQuota := func() {
+		h.eventSink.memoryQuota.ReleaseEvent(memoryBytes)
+	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			defer releaseMemoryQuota()
 			start := time.Now()
 			span.clearKVEventsCache()
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache").Observe(time.Since(start).Seconds())
+			metricConsumeKVEventsCallbackDurationClearCache.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
 			tryAdvanceResolvedTs()
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(start).Seconds())
+			metricConsumeKVEventsCallbackDurationAdvanceResolvedTs.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
-			h.subClient.wakeSubscription(span.subID)
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(start).Seconds())
+			h.eventSink.Wake(span.subID)
+			metricConsumeKVEventsCallbackDurationWakeSubscription.Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {
 			span.clearKVEventsCache()
 			tryAdvanceResolvedTs()
+			releaseMemoryQuota()
 		}
 		return await
 	} else {
 		tryAdvanceResolvedTs()
+		releaseMemoryQuota()
 	}
 	return false
 }
@@ -169,7 +192,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
+func (h *regionEventHandler) GetArea(_ SubscriptionID, _ *subscribedSpan) int {
 	return 0
 }
 
@@ -198,7 +221,7 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 		return dynstream.Timestamp(event.resolvedTs)
 	}
 }
-func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
+func (h *regionEventHandler) IsPaused(_ regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {
@@ -217,8 +240,18 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+	h.eventSink.memoryQuota.ReleaseEvent(event.memoryBytes)
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
-	state := event.mustFirstState()
+	if len(event.states) == 0 || event.states[0] == nil {
+		log.Error("drop invalid region event",
+			zap.Bool("hasEntries", event.entries != nil),
+			zap.Uint64("resolvedTs", event.resolvedTs),
+			zap.Int("states", len(event.states)),
+			zap.Uint64("memoryBytes", event.memoryBytes))
+		return nil
+	}
+
+	state := event.states[0]
 	fields := []zap.Field{
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
@@ -245,8 +278,8 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 			zap.Error(err))
 	}
 	if stepsToRemoved {
-		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
-		h.subClient.onRegionFail(newRegionErrorInfo(state.getRegionInfo(), err))
+		worker.tracker.RemoveIf(SubscriptionID(state.requestID), state.getRegionID(), state)
+		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
 	}
 }
 
@@ -276,7 +309,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	for _, entry := range entries.Entries.GetEntries() {
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
-			state.setInitialized()
+			span.markRegionInitialized(state)
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -383,12 +416,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	if shouldAdvance {
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
 		lastResolvedTs := span.resolvedTs.Load()
 		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
 		// Generally, we don't want to send duplicate resolved ts,
@@ -396,7 +423,16 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		// but when `ts` == `lastResolvedTs` == `span.startTs`,
 		// the span may just be initialized and have not receive any resolved ts before,
 		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+		if ts > lastResolvedTs ||
+			(span.initialized.Load() && ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+			if lastResolvedTs == span.startTs && ts > span.startTs && !span.initialized.Load() {
+				log.Warn("should not happen: resolved ts advances before span is initialized",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("startTs", span.startTs),
+					zap.Uint64("resolvedTs", ts))
+			}
 			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsAdvanceStepInSecs = 30
@@ -409,8 +445,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 					zap.Uint64("lastResolvedTs", lastResolvedTs),
 					zap.Float64("decreaseLag(s)", decreaseLag))
 			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
+			span.recordResolvedTs(ts)
 			return ts
 		}
 	}

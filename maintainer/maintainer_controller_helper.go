@@ -212,7 +212,14 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 	}
 	splitTableSpans := splitter.Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
-	op := operator.NewSplitDispatcherOperator(spanController, replications[0], splitTableSpans, []node.ID{}, nil)
+	op := operator.NewSplitDispatcherOperator(
+		spanController,
+		replications[0],
+		splitTableSpans,
+		[]node.ID{},
+		operatorController.MaintainerEpoch(),
+		nil,
+	)
 	ret := operatorController.AddOperator(op)
 	if !ret {
 		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create split dispatcher operator")

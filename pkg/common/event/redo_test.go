@@ -21,9 +21,78 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRedoDMLEventPreservesStoredGeneratedColumn(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+	helper.DDL2Job("create table test.redo_generated(id int primary key, g int as (id + 1) stored, v int)")
+	const insertSQL = "insert into test.redo_generated(id, v) values (1, 10)"
+
+	for _, tc := range []struct {
+		sql     string
+		rowType commonType.RowType
+		value   int64
+	}{
+		{insertSQL, commonType.RowTypeInsert, 10},
+		{"update test.redo_generated set v = 20 where id = 1", commonType.RowTypeUpdate, 20},
+		{"delete from test.redo_generated where id = 1", commonType.RowTypeDelete, 10},
+	} {
+		helper.Tk().MustExec("delete from test.redo_generated")
+		var dml *DMLEvent
+		switch tc.rowType {
+		case commonType.RowTypeInsert:
+			dml = helper.DML2Event("test", "redo_generated", insertSQL)
+		case commonType.RowTypeUpdate:
+			dml, _ = helper.DML2UpdateEvent("test", "redo_generated", insertSQL, tc.sql)
+		case commonType.RowTypeDelete:
+			dml = helper.DML2DeleteEvent("test", "redo_generated", insertSQL, tc.sql)
+		}
+		row, ok := dml.GetNextRow()
+		require.True(t, ok)
+		redoLog := (&RedoRowEvent{
+			StartTs: dml.StartTs, CommitTs: dml.CommitTs,
+			PhysicalTableID: dml.PhysicalTableID, TableInfo: dml.TableInfo, Event: row,
+		}).ToRedoLog()
+		data, err := redoLog.MarshalMsg(nil)
+		require.NoError(t, err)
+		var decoded RedoLog
+		_, err = decoded.UnmarshalMsg(data)
+		require.NoError(t, err)
+		restored := decoded.RedoRow.ToDMLEvent()
+		defer restored.PostFlush()
+
+		generated := restored.TableInfo.GetColumns()[1]
+		require.True(t, generated.IsGenerated(), tc.sql)
+		require.True(t, generated.GeneratedStored)
+		require.True(t, commonType.IsColCDCVisible(generated))
+		for _, sql := range []string{
+			restored.TableInfo.GetPreInsertSQL(),
+			restored.TableInfo.GetPreReplaceSQL(),
+			restored.TableInfo.GetPreUpdateSQL(),
+		} {
+			require.NotContains(t, sql, "`g`")
+			require.Contains(t, sql, "`v`")
+		}
+		restoredRow, ok := restored.GetNextRow()
+		require.True(t, ok)
+		require.Equal(t, tc.rowType, restoredRow.RowType)
+		values := restoredRow.Row
+		if tc.rowType == commonType.RowTypeDelete {
+			values = restoredRow.PreRow
+		}
+		require.Equal(t, int64(2), values.GetInt64(1))
+		require.Equal(t, tc.value, values.GetInt64(2))
+		if tc.rowType == commonType.RowTypeInsert {
+			helper.Tk().MustExec("delete from test.redo_generated")
+			helper.Tk().MustExec(restored.TableInfo.GetPreInsertSQL(), int64(1), tc.value)
+			helper.Tk().MustQuery("select id, g, v from test.redo_generated").Check(testkit.Rows("1 2 10"))
+		}
+	}
+}
 
 func TestRedoUsesRoutedTableNames(t *testing.T) {
 	helper := NewEventTestHelper(t)
@@ -37,13 +106,15 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
 
 	redoDDLEvent := (&DDLEvent{
-		Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
-		Type:       byte(model.ActionAddColumn),
-		SchemaName: "test",
-		TableName:  "t",
-		TableInfo:  routedTableInfo,
-		FinishedTs: 200,
-		StartTs:    100,
+		Query:            "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		Type:             byte(model.ActionAddColumn),
+		SchemaName:       "test",
+		TableName:        "t",
+		targetSchemaName: "target_db",
+		targetTableName:  "target_table",
+		TableInfo:        routedTableInfo,
+		FinishedTs:       200,
+		StartTs:          100,
 	}).ToRedoLog().RedoDDL
 
 	require.Equal(t, "target_db", redoDDLEvent.TableName.Schema)
@@ -95,6 +166,40 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
 }
 
+// TestRedoDDLEventToRedoLogWithoutRouting verifies that a DDL event with a
+// non-routed TableInfo writes the source schema/table names into the redo log.
+func TestRedoDDLEventToRedoLogWithoutRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
+	require.NotNil(t, job)
+	sourceTableInfo := helper.GetTableInfo(job)
+
+	redoDDL := (&DDLEvent{
+		Query:      "ALTER TABLE `test`.`t` ADD COLUMN age INT",
+		Type:       byte(model.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t",
+		TableInfo:  sourceTableInfo,
+		FinishedTs: 200,
+		StartTs:    100,
+	}).ToRedoLog().RedoDDL
+
+	require.Equal(t, "test", redoDDL.TableName.Schema)
+	require.Equal(t, "t", redoDDL.TableName.Table)
+	require.Equal(t, sourceTableInfo.TableName.TableID, redoDDL.TableName.TableID)
+	require.False(t, redoDDL.TableName.IsPartition)
+
+	// Round-trip through ToDDLEvent must preserve the names.
+	roundTrip := redoDDL.ToDDLEvent()
+	require.Equal(t, "test", roundTrip.SchemaName)
+	require.Equal(t, "t", roundTrip.TableName)
+	require.Equal(t, "test", roundTrip.GetTargetSchemaName())
+	require.Equal(t, "t", roundTrip.GetTargetTableName())
+}
+
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 	originalTableInfo := commonType.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID:   1001,
@@ -111,6 +216,8 @@ func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 	ddlEvent := &DDLEvent{
 		Type:              byte(timodel.ActionCreateTable),
 		Query:             "create table test.t_redo(id bigint, status varchar(16) default 'ready')",
+		SchemaName:        "test",
+		TableName:         "t_redo",
 		TableInfo:         originalTableInfo,
 		StartTs:           11,
 		FinishedTs:        22,
@@ -147,10 +254,12 @@ func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 
 func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionCreateSchema),
-		Query:      "create database test_redo",
-		StartTs:    33,
-		FinishedTs: 44,
+		Type:             byte(timodel.ActionCreateSchema),
+		SchemaName:       "source_db",
+		targetSchemaName: "target_db",
+		Query:            "create database target_db",
+		StartTs:          33,
+		FinishedTs:       44,
 	}
 
 	require.NotPanics(t, func() {
@@ -159,6 +268,16 @@ func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 		require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
 		require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
 		require.Nil(t, redoLog.RedoDDL.DDL.Columns)
+		require.Equal(t, "target_db", redoLog.RedoDDL.TableName.Schema)
+		require.Empty(t, redoLog.RedoDDL.TableName.Table)
+
+		roundTrip := redoLog.RedoDDL.ToDDLEvent()
+		require.Equal(t, "target_db", roundTrip.SchemaName)
+		require.Equal(t, "target_db", roundTrip.GetTargetSchemaName())
+		require.Equal(t, []SchemaTableName{{
+			SchemaName: "target_db",
+			TableName:  "",
+		}}, roundTrip.BlockedTableNames)
 	})
 }
 
@@ -176,6 +295,72 @@ func TestDDLEventToRedoLogHandlesUninitializedTableInfo(t *testing.T) {
 	require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
 	require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
 	require.Empty(t, redoLog.RedoDDL.DDL.Columns)
+	// TableName falls back to event SchemaName/TableName via GetTargetSchemaName/GetTargetTableName,
+	// both of which are empty for an uninitialized TableInfo without explicit names.
+	require.Empty(t, redoLog.RedoDDL.TableName.Schema)
+	require.Empty(t, redoLog.RedoDDL.TableName.Table)
+	require.Equal(t, int64(0), redoLog.RedoDDL.TableName.TableID)
+	require.False(t, redoLog.RedoDDL.TableName.IsPartition)
+}
+
+// TestRedoRowEventToRedoLogHandlesNilTableInfo verifies that a DML redo event
+// with nil TableInfo does not panic and produces a minimal redo log.
+func TestRedoRowEventToRedoLogHandlesNilTableInfo(t *testing.T) {
+	redoRow := (&RedoRowEvent{
+		StartTs:  100,
+		CommitTs: 200,
+	}).ToRedoLog().RedoRow
+
+	require.NotNil(t, redoRow)
+	require.NotNil(t, redoRow.Row)
+	require.Equal(t, uint64(100), redoRow.Row.StartTs)
+	require.Equal(t, uint64(200), redoRow.Row.CommitTs)
+	require.Nil(t, redoRow.Row.Table)
+	require.Nil(t, redoRow.Row.Columns)
+	require.Nil(t, redoRow.Row.PreColumns)
+	require.Nil(t, redoRow.Row.IndexColumns)
+	require.Nil(t, redoRow.Columns)
+	require.Nil(t, redoRow.PreColumns)
+}
+
+// TestRedoRowEventToRedoLogWithoutRouting verifies that a DML event with a
+// non-routed TableInfo writes the source schema/table names into the redo log.
+func TestRedoRowEventToRedoLogWithoutRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32), age int)`)
+	require.NotNil(t, job)
+	sourceTableInfo := helper.GetTableInfo(job)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'alice', 25)`)
+	dmlEvent.TableInfo = sourceTableInfo
+
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	redoRow := (&RedoRowEvent{
+		StartTs:         dmlEvent.StartTs,
+		CommitTs:        dmlEvent.CommitTs,
+		PhysicalTableID: dmlEvent.PhysicalTableID,
+		TableInfo:       sourceTableInfo,
+		Event:           row,
+	}).ToRedoLog().RedoRow
+
+	require.Equal(t, "test", redoRow.Row.Table.Schema)
+	require.Equal(t, "t", redoRow.Row.Table.Table)
+	require.Equal(t, sourceTableInfo.TableName.TableID, redoRow.Row.Table.TableID)
+	require.False(t, redoRow.Row.Table.IsPartition)
+	require.Empty(t, redoRow.Row.Table.TargetSchema)
+	require.Empty(t, redoRow.Row.Table.TargetTable)
+
+	// Round-trip through ToDMLEvent must preserve the names.
+	decoded := redoRow.ToDMLEvent()
+	require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "t", decoded.TableInfo.GetTableName())
+	require.Equal(t, "test", decoded.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "t", decoded.TableInfo.GetTargetTableName())
 }
 
 func newRedoDDLTestColumn(

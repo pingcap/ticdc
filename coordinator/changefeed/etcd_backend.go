@@ -124,6 +124,21 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 	return cfMap, nil
 }
 
+// GetChangefeedInfo returns the latest persisted changefeed info from etcd.
+func (b *EtcdBackend) GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// Old metadata may not embed ChangefeedID in the value. Keep the backend
+	// lookup key as the source of truth so callers can safely use the returned
+	// info for validation and in-memory replacement.
+	if info.ChangefeedID.Name() == "" {
+		info.ChangefeedID = id
+	}
+	return info, nil
+}
+
 func (b *EtcdBackend) CreateChangefeed(ctx context.Context,
 	info *config.ChangeFeedInfo,
 ) error {
@@ -192,6 +207,180 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 	return nil
 }
 
+// FinishInit acknowledges initialization without overwriting status
+// or metadata concurrently changed by pause, resume, removal, or another owner.
+func (b *EtcdBackend) FinishInit(
+	ctx context.Context, id common.ChangeFeedID, epoch uint64,
+) (*config.ChangeFeedInfo, error) {
+	key := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
+	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, key)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	info := &config.ChangeFeedInfo{}
+	if err := info.Unmarshal(resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	if info.ChangefeedID != id || info.Epoch != epoch {
+		return nil, nil
+	}
+	if info.BootstrapPending == nil || !*info.BootstrapPending {
+		return info, nil
+	}
+	info.BootstrapPending = nil
+	value, err := info.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	txn, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+		[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", resp.Kvs[0].ModRevision)},
+		[]clientv3.Op{clientv3.OpPut(key, value)}, nil)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+	if !txn.Succeeded {
+		return nil, cerror.ErrMetaOpFailed.GenWithStackByArgs("acknowledge changefeed bootstrap")
+	}
+	return info, nil
+}
+
+// BumpChangefeedEpoch atomically persists a strictly newer ownership epoch.
+// It can optionally update status in the same transaction so state changes and
+// the new owner fence are observed together after coordinator failover.
+func (b *EtcdBackend) BumpChangefeedEpoch(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	candidateEpoch uint64,
+	options EpochBumpOptions,
+) (*config.ChangeFeedInfo, error) {
+	// The epoch bump must be serialized at the persisted metadata boundary.
+	// Otherwise independent in-memory bumps can generate the same epoch or
+	// overwrite a newer epoch written by another coordinator.
+	const (
+		bumpEpochMaxRetries = 10
+		bumpEpochRetryDelay = 25 * time.Millisecond
+	)
+	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
+
+	for range bumpEpochMaxRetries {
+		infoResp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if len(infoResp.Kvs) == 0 {
+			return nil, errors.Trace(cerror.ErrChangeFeedNotExists.GenWithStackByArgs(id.Name()))
+		}
+
+		info := &config.ChangeFeedInfo{}
+		if err := info.Unmarshal(infoResp.Kvs[0].Value); err != nil {
+			return nil, errors.Trace(err)
+		}
+		if info.ChangefeedID.Name() == "" {
+			info.ChangefeedID = id
+		}
+		// Keep compatibility defaults when the bumped info replaces the
+		// coordinator's in-memory copy after an upgrade.
+		info.VerifyAndComplete()
+		epoch, err := common.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		info.Epoch = epoch
+		if options.State != nil {
+			info.State = *options.State
+		}
+		if options.UpdateError {
+			info.Error = options.Error
+		}
+		infoValue, err := info.Marshal()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		if !options.UpdateStatus {
+			putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+				[]clientv3.Cmp{
+					clientv3.Compare(clientv3.ModRevision(infoKey), "=", infoResp.Kvs[0].ModRevision),
+				},
+				[]clientv3.Op{
+					clientv3.OpPut(infoKey, infoValue),
+				},
+				[]clientv3.Op{})
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if putResp.Succeeded {
+				return info, nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil, errors.Trace(ctx.Err())
+			case <-time.After(bumpEpochRetryDelay):
+			}
+			continue
+		}
+
+		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
+		status, statusModRevision, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		status.CheckpointTs = options.CheckpointTs
+		status.Progress = options.Progress
+		statusValue, err := status.Marshal()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+			[]clientv3.Cmp{
+				clientv3.Compare(clientv3.ModRevision(infoKey), "=", infoResp.Kvs[0].ModRevision),
+				clientv3.Compare(clientv3.ModRevision(jobKey), "=", statusModRevision),
+			},
+			[]clientv3.Op{
+				clientv3.OpPut(infoKey, infoValue),
+				clientv3.OpPut(jobKey, statusValue),
+			},
+			[]clientv3.Op{})
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if putResp.Succeeded {
+			return info, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, errors.Trace(ctx.Err())
+		case <-time.After(bumpEpochRetryDelay):
+		}
+	}
+
+	err := cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("bump changefeed epoch %s failed", id.Name()))
+	return nil, errors.Trace(err)
+}
+
+// ResumeChangefeed persists the resumed state with a new owner epoch.
+func (b *EtcdBackend) ResumeChangefeed(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	candidateEpoch uint64,
+	checkpointTs uint64,
+) (*config.ChangeFeedInfo, error) {
+	normalState := config.StateNormal
+	return b.BumpChangefeedEpoch(ctx, id, candidateEpoch, EpochBumpOptions{
+		CheckpointTs: checkpointTs,
+		Progress:     config.ProgressNone,
+		UpdateStatus: true,
+		State:        &normalState,
+		UpdateError:  true,
+	})
+}
+
 func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
 	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
 	if err != nil {
@@ -204,10 +393,10 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 		return errors.Trace(err)
 	}
 	status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-	status.Progress = config.ProgressStopping
 	if err != nil {
 		return errors.Trace(err)
 	}
+	status.Progress = config.ProgressStopping
 	jobValue, err := status.Marshal()
 	if err != nil {
 		return errors.Trace(err)
@@ -248,48 +437,6 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 	return nil
 }
 
-func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
-	id common.ChangeFeedID, newCheckpointTs uint64,
-) error {
-	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	info.State = config.StateNormal
-	newStr, err := info.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
-	opsThen := []clientv3.Op{
-		clientv3.OpPut(infoKey, newStr),
-	}
-	if newCheckpointTs > 0 {
-		status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		status.CheckpointTs = newCheckpointTs
-		status.Progress = config.ProgressNone
-		jobValue, err := status.Marshal()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
-		opsThen = append(opsThen, clientv3.OpPut(jobKey, jobValue))
-	}
-
-	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, nil, opsThen, []clientv3.Op{})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("resume changefeed %s", info.ChangefeedID.Name()))
-		return errors.Trace(err)
-	}
-	return nil
-}
-
 func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error {
 	// SetChangefeedProgress uses etcd ModRevision compare-and-swap (CAS) to avoid
 	// overwriting a newer checkpointTs written by the checkpoint updater.
@@ -308,6 +455,10 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 		}
 		if status.Progress == progress {
 			// Another goroutine (or a previous retry) already persisted the desired progress.
+			return nil
+		}
+		if progress == config.ProgressNone && status.Progress == config.ProgressRemoving {
+			// ProgressRemoving is a durable removal intent and must not be cleared.
 			return nil
 		}
 
@@ -393,7 +544,7 @@ func logEtcdOps(ops []clientv3.Op, committed bool) {
 		if op.IsDelete() {
 			logFn("[etcd] delete key", zap.ByteString("key", op.KeyBytes()))
 		} else {
-			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()), zap.ByteString("value", op.ValueBytes()))
+			logFn("[etcd] put key", zap.ByteString("key", op.KeyBytes()))
 		}
 	}
 	logFn("[etcd] ============State Commit=============", zap.Bool("committed", committed))

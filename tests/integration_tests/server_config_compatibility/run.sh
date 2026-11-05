@@ -20,6 +20,9 @@ function prepare() {
 	run_sql "CREATE table test.simple2(id int primary key, val int);"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
+	if [ "${LEGACY_SAFEPOINT:-0}" = "1" ]; then
+		ensure 30 "grep -q 'enable-legacy-safepoint.*true' $WORK_DIR/cdc.log"
+	fi
 
 	SINK_URI="mysql+ssl://normal:123456@127.0.0.1:3306/"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"

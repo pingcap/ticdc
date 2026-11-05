@@ -1,0 +1,10 @@
+# `allow-same-cluster` is only allowed together with table routing, so this changefeed must be
+# rejected before it is created.
+allow-same-cluster = true
+
+[filter]
+rules = ['allow_same_cluster_src.*']
+
+# Updates merge into the existing config; explicitly remove the previous routes.
+[sink]
+dispatchers = []

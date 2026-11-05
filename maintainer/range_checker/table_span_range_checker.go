@@ -79,7 +79,7 @@ func (rc *TableSpanRangeChecker) Detail() string {
 	buf.WriteString("uncovered tables: ")
 	for id, span := range rc.tableSpans {
 		if !span.IsFullyCovered() {
-			buf.WriteString(fmt.Sprintf("%d,\n", id))
+			fmt.Fprintf(buf, "%d,\n", id)
 		}
 	}
 	return buf.String()

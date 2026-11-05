@@ -15,10 +15,14 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +57,25 @@ func TestBuildTiFlowServerOptionsPropagatesTLSFlags(t *testing.T) {
 	require.Equal(t, []string{"cn1", "cn2"}, oldOptions.ServerConfig.Security.CertAllowedCN)
 
 	require.Equal(t, strings.Join(o.pdEndpoints, ","), oldOptions.ServerPdAddr)
+}
+
+func TestCompleteLoadsEnableLegacySafePointFromConfig(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("enable-legacy-safepoint = true\n"), 0o644))
+
+	o := newOptions()
+	cmd := &cobra.Command{}
+	o.addFlags(cmd)
+	require.NoError(t, cmd.Flags().Set("config", configPath))
+
+	require.NoError(t, o.complete(cmd))
+	require.True(t, o.serverConfig.EnableLegacySafePoint)
+	require.True(t, config.GetGlobalServerConfig().EnableLegacySafePoint)
 }
 
 func TestGetCredential(t *testing.T) {

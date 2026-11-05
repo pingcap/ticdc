@@ -24,14 +24,14 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/ticdc/pkg/writelease"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -111,6 +111,45 @@ func TestInitAndWriteMeta(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestRedoMetaFlushWaitsForWriteGate(t *testing.T) {
+	ctx := t.Context()
+	changefeedID := common.NewChangeFeedIDWithName(t.Name(), common.DefaultKeyspaceName)
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	m := NewRedoMeta(changefeedID, 1, testutil.NewConsistentConfig(uri.String()))
+	gate := writelease.NewGate()
+	m.SetWriteGate(gate)
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, m.PreStart(ctx))
+	t.Cleanup(func() {
+		m.closeExtStorage()
+		m.CleanupMetrics()
+	})
+	initialMetaFile := m.preMetaFile
+	require.NotEmpty(t, initialMetaFile)
+	gate.SetP2PRequired(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- m.flush(ctx, misc.NewMeta(2, 3))
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, initialMetaFile, m.preMetaFile)
+
+	require.True(t, gate.RenewP2P(time.Now(), writelease.P2PLeaseDuration))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("redo metadata flush did not resume after the capture write gate reopened")
+	}
+	require.NotEqual(t, initialMetaFile, m.preMetaFile)
+	exists, err := m.extStorage.FileExists(ctx, initialMetaFile)
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 func TestPreCleanupAndWriteMeta(t *testing.T) {
@@ -333,8 +372,8 @@ func TestRedoMetaMetrics(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test-redo-meta-metrics", common.DefaultKeyspaceName)
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
-	defer metrics.RedoCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
-	defer metrics.RedoResolvedTsGauge.DeleteLabelValues(keyspace, changefeed)
+	defer redoCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
+	defer redoResolvedTsGauge.DeleteLabelValues(keyspace, changefeed)
 
 	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
@@ -351,15 +390,15 @@ func TestRedoMetaMetrics(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(redoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(redoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == float64(10_000) && resolvedTs == float64(10_000)
 	}, time.Second, 50*time.Millisecond)
 
 	m.UpdateMeta(oracle.ComposeTS(20_000, 0), oracle.ComposeTS(21_000, 0))
 	require.Eventually(t, func() bool {
-		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(redoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(redoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == 20_000 && resolvedTs == 21_000
 	}, time.Second, 50*time.Millisecond)
 
@@ -369,7 +408,7 @@ func TestRedoMetaMetrics(t *testing.T) {
 
 func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 	mockStorage.EXPECT().FileExists(gomock.Any(), gomock.Any()).Return(false, context.DeadlineExceeded)
 	mockStorage.EXPECT().Close().Times(1)
 
@@ -377,7 +416,7 @@ func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 	defer func() {
 		redo.InitExternalStorage = oldInitExternalStorage
 	}()
-	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
 		return mockStorage, nil
 	}
 
@@ -386,7 +425,7 @@ func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
 
 	cfg := &config.ConsistentConfig{
 		Storage:               util.AddressOf(storageURI.String()),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs)),
 	}
 	m := NewRedoMeta(common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName), 1, cfg)
 	err = m.PreStart(context.Background())

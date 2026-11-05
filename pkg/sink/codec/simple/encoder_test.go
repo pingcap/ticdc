@@ -19,22 +19,28 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,7 +69,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 			compression.LZ4,
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			checkpoint := 446266400629063682
@@ -108,7 +114,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -146,7 +152,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			// decodedRow:= decoder.NextDMLEvent()
+			// decodedRow:= decoder.NextDMLMessage().ToDMLEvent()
 			// require.NoError(t, err)
 			// require.Equal(t, updateEvent.Checksum.Current, decodedRow.Checksum.Current)
 			// require.Equal(t, updateEvent.Checksum.Previous, decodedRow.Checksum.Previous)
@@ -158,7 +164,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	// updateEvent.Checksum.Current = 1
 	// updateEvent.Checksum.Previous = 2
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -189,9 +195,59 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	// decodedRow:= decoder.NextDMLEvent()
+	// decodedRow:= decoder.NextDMLMessage().ToDMLEvent()
 	// require.Error(t, err)
 	// require.Nil(t, decodedRow)
+}
+
+func TestEncodeRoutedEventsUsesTargetNames(t *testing.T) {
+	ctx := context.Background()
+	for _, format := range []common.EncodingFormatType{
+		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
+	} {
+		codecConfig := common.NewConfig(config.ProtocolSimple)
+		codecConfig.EncodingFormat = format
+
+		encIface, err := NewEncoder(codecConfig, nil)
+		require.NoError(t, err)
+		encoder := encIface.(*Encoder)
+
+		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
+		require.NoError(t, err)
+		decoder := rowEventDecoder.(*Decoder)
+
+		routedDDL := common.NewRoutedDDLEvent4Test()
+		ddlMessage, err := encoder.EncodeDDLEvent(routedDDL)
+		require.NoError(t, err)
+		decoder.AddKeyValue(ddlMessage.Key, ddlMessage.Value)
+
+		messageType, hasNext := decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, messageType)
+
+		decodedDDL := decoder.NextDDLEvent()
+		require.Equal(t, "target_db", decodedDDL.SchemaName)
+		require.Equal(t, "target_table", decodedDDL.TableName)
+		require.Equal(t, routedDDL.Query, decodedDDL.Query)
+		require.Equal(t, "target_db", decodedDDL.TableInfo.GetSchemaName())
+		require.Equal(t, "target_table", decodedDDL.TableInfo.GetTableName())
+
+		rowEvent := common.NewRoutedRowEvent4Test()
+		require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+
+		messages := encoder.Build()
+		require.Len(t, messages, 1)
+		decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+		messageType, hasNext = decoder.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+
+		decodedDML := decoder.NextDMLMessage().ToDMLEvent()
+		require.Equal(t, "target_db", decodedDML.TableInfo.GetSchemaName())
+		require.Equal(t, "target_table", decodedDML.TableInfo.GetTableName())
+	}
 }
 
 func TestE2EPartitionTable(t *testing.T) {
@@ -229,7 +285,7 @@ func TestE2EPartitionTable(t *testing.T) {
 		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 		dec, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
@@ -268,7 +324,7 @@ func TestE2EPartitionTable(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, tp)
 
-			decodedEvent := dec.NextDMLEvent()
+			decodedEvent := dec.NextDMLMessage().ToDMLEvent()
 			// table id should be set to the partition table id, the PhysicalTableID
 			require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
 
@@ -376,7 +432,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -812,7 +868,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			insertEvent.Rewind()
 			insertEvent2.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -877,7 +933,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow := dec.NextDMLEvent()
+			decodedRow := dec.NextDMLMessage().ToDMLEvent()
 			require.Equal(t, decodedRow.CommitTs, insertEvent.GetCommitTs())
 			require.Equal(t, decodedRow.TableInfo.GetSchemaName(), insertEvent.TableInfo.GetSchemaName())
 			require.Equal(t, decodedRow.TableInfo.GetTableName(), insertEvent.TableInfo.GetTableName())
@@ -926,7 +982,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow = dec.NextDMLEvent()
+			decodedRow = dec.NextDMLMessage().ToDMLEvent()
 			require.Equal(t, insertEvent2.GetCommitTs(), decodedRow.GetCommitTs())
 			require.Equal(t, insertEvent2.TableInfo.GetSchemaName(), decodedRow.TableInfo.GetSchemaName())
 			require.Equal(t, insertEvent2.TableInfo.GetTableName(), decodedRow.TableInfo.GetTableName())
@@ -957,7 +1013,7 @@ func TestColumnFlags(t *testing.T) {
 		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(createTableDDLEvent)
@@ -1038,7 +1094,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		minValues.Rewind()
 		maxValues.Rewind()
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1080,7 +1136,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedRow := dec.NextDMLEvent()
+			decodedRow := dec.NextDMLMessage().ToDMLEvent()
 			require.Equal(t, decodedRow.CommitTs, event.GetCommitTs())
 
 			decoded, ok := decodedRow.GetNextRow()
@@ -1117,7 +1173,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 	} {
 		event.Rewind()
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1155,7 +1211,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decodedRow := dec.NextDMLEvent()
+		decodedRow := dec.NextDMLMessage().ToDMLEvent()
 		decoded, ok := decodedRow.GetNextRow()
 		require.True(t, ok)
 
@@ -1194,7 +1250,7 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(ctx, codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		dec, err := NewDecoder(ctx, codecConfig, nil)
@@ -1223,8 +1279,8 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, tp)
 
-			decodedEvent := dec.NextDMLEvent()
-			require.Nil(t, decodedEvent)
+			decodedMessage := dec.NextDMLMessage()
+			require.Nil(t, decodedMessage)
 
 			e.Rewind()
 		}
@@ -1240,8 +1296,9 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		decodedDDL := dec.NextDDLEvent()
 		require.NotNil(t, decodedDDL)
 
-		cachedEvents := dec.(*Decoder).GetCachedEvents()
-		for idx, decodedRow := range cachedEvents {
+		cachedMessages := dec.(*Decoder).GetCachedMessages()
+		for idx, message := range cachedMessages {
+			decodedRow := message.ToDMLEvent()
 			require.NotNil(t, decodedRow)
 			require.NotNil(t, decodedRow.TableInfo)
 			require.Equal(t, decodedRow.GetTableID(), events[idx].GetTableID())
@@ -1262,7 +1319,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	row, ok := event.GetNextRow()
@@ -1289,8 +1346,8 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedRow := dec.NextDMLEvent()
-	require.Nil(t, decodedRow)
+	decodedMessage := dec.NextDMLMessage()
+	require.Nil(t, decodedMessage)
 
 	m, err := enc.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
@@ -1304,8 +1361,9 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	ddlEvent = dec.NextDDLEvent()
 	require.NotNil(t, ddlEvent)
 
-	cachedEvents := dec.GetCachedEvents()
-	for _, decodedRow = range cachedEvents {
+	cachedMessages := dec.GetCachedMessages()
+	for _, message := range cachedMessages {
+		decodedRow := message.ToDMLEvent()
 		require.NotNil(t, decodedRow)
 		require.NotNil(t, decodedRow.TableInfo)
 		require.Equal(t, decodedRow.TableInfo.TableName.TableID, ddlEvent.TableInfo.TableName.TableID)
@@ -1345,7 +1403,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 		} {
 			dmlEvent.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1394,7 +1452,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow := dec.NextDMLEvent()
+			decodedRow := dec.NextDMLMessage().ToDMLEvent()
 			decode, ok := decodedRow.GetNextRow()
 			require.True(t, ok)
 			require.Equal(t, decodedRow.CommitTs, dmlEvent.CommitTs)
@@ -1422,7 +1480,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 		} {
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
@@ -1478,7 +1536,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 					require.Equal(t, dec.msg.Type, DMLTypeInsert)
 				}
 
-				decodedRow := dec.NextDMLEvent()
+				decodedRow := dec.NextDMLMessage().ToDMLEvent()
 
 				require.Equal(t, decodedRow.CommitTs, event.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
@@ -1504,7 +1562,7 @@ func TestDDLMessageTooLarge(t *testing.T) {
 		common.EncodingFormatJSON,
 	} {
 		codecConfig.EncodingFormat = format
-		enc, err := NewEncoder(context.Background(), codecConfig)
+		enc, err := NewEncoder(codecConfig, nil)
 		require.NoError(t, err)
 
 		_, err = enc.EncodeDDLEvent(ddlEvent)
@@ -1514,6 +1572,9 @@ func TestDDLMessageTooLarge(t *testing.T) {
 
 func TestDMLMessageTooLarge(t *testing.T) {
 	_, insertEvent, _, _ := common.NewLargeEvent4Test(t)
+
+	ctx := context.Background()
+	changefeedID := commonType.NewChangeFeedIDWithName("test", "")
 
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	codecConfig.MaxMessageBytes = 50
@@ -1529,11 +1590,18 @@ func TestDMLMessageTooLarge(t *testing.T) {
 			config.LargeMessageHandleOptionHandleKeyOnly,
 			config.LargeMessageHandleOptionClaimCheck,
 		} {
+			var (
+				claimCheck *claimcheck.ClaimCheck
+				err        error
+			)
 			codecConfig.LargeMessageHandle.LargeMessageHandleOption = handle
 			if handle == config.LargeMessageHandleOptionClaimCheck {
 				codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
+				claimCheck, err = claimcheck.New(ctx, codecConfig.LargeMessageHandle, changefeedID)
+				require.NoError(t, err)
+				t.Cleanup(claimCheck.Close)
 			}
-			enc, err := NewEncoder(context.Background(), codecConfig)
+			enc, err := NewEncoder(codecConfig, claimCheck)
 			require.NoError(t, err)
 
 			err = enc.AppendRowChangedEvent(context.Background(), "", insertEvent)
@@ -1558,6 +1626,9 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
 	for _, rawValue := range []bool{false, true} {
 		codecConfig.LargeMessageHandle.ClaimCheckRawValue = rawValue
+		claimCheck, err := claimcheck.New(ctx, codecConfig.LargeMessageHandle, codecConfig.ChangefeedID)
+		require.NoError(t, err)
+		t.Cleanup(claimCheck.Close)
 		for _, format := range []common.EncodingFormatType{
 			common.EncodingFormatAvro,
 			common.EncodingFormatJSON,
@@ -1571,7 +1642,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
 				codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-				enc, err := NewEncoder(ctx, codecConfig)
+				enc, err := NewEncoder(codecConfig, claimCheck)
 				require.NoError(t, err)
 
 				m, err := enc.EncodeDDLEvent(ddlEvent)
@@ -1603,7 +1674,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				require.Equal(t, common.MessageTypeRow, messageType)
 				require.NotEqual(t, "", dec.msg.ClaimCheckLocation)
 
-				decodedRow := dec.NextDMLEvent()
+				decodedRow := dec.NextDMLMessage().ToDMLEvent()
 
 				require.Equal(t, decodedRow.CommitTs, updateEvent.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), updateEvent.TableInfo.GetSchemaName())
@@ -1615,6 +1686,161 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, decoded, decodedRow.TableInfo)
 			}
 		}
+	}
+}
+
+func TestClaimCheckChecksumWithTimeZone(t *testing.T) {
+	for _, zones := range [][2]string{
+		{"UTC", "UTC"},
+		{"Asia/Shanghai", "Asia/Shanghai"},
+		{"Asia/Shanghai", "UTC"},
+		{"UTC", "Asia/Shanghai"},
+	} {
+		t.Run(zones[0]+"/to/"+zones[1], func(t *testing.T) {
+			location, err := time.LoadLocation(zones[0])
+			require.NoError(t, err)
+			consumerLocation, err := time.LoadLocation(zones[1])
+			require.NoError(t, err)
+			helper := commonEvent.NewEventTestHelperWithTimeZone(t, location)
+			defer helper.Close()
+			ddl := helper.DDL2Event(`create table test.checksum_t (
+				id int primary key, ts timestamp(6), dt datetime, payload text)`)
+			dml, _ := helper.DML2UpdateEvent("test", "checksum_t",
+				`insert into test.checksum_t values (1, '2020-02-20 02:20:20.123456', '2020-02-20 02:20:20', repeat('a', 2048))`,
+				`update test.checksum_t set ts = '2020-02-21 03:21:21.654321', dt = '2020-02-21 03:21:21' where id = 1`)
+			row, ok := dml.GetNextRow()
+			require.True(t, ok)
+			checksum := func(row chunk.Row) uint32 {
+				data := rowcodec.RowData{}
+				for i, column := range dml.TableInfo.GetColumns() {
+					datum := row.GetDatum(i, &column.FieldType)
+					data.Cols = append(data.Cols, rowcodec.ColData{ColumnInfo: column, Datum: &datum})
+				}
+				value, err := data.Checksum(location)
+				require.NoError(t, err)
+				return value
+			}
+			event := &commonEvent.RowEvent{
+				PhysicalTableID: dml.PhysicalTableID,
+				StartTs:         dml.StartTs,
+				CommitTs:        dml.CommitTs,
+				TableInfo:       dml.TableInfo,
+				Event:           row,
+				ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+				Checksum:        &integrity.Checksum{Current: checksum(row.Row), Previous: checksum(row.PreRow)},
+			}
+			for _, format := range []common.EncodingFormatType{common.EncodingFormatJSON, common.EncodingFormatAvro} {
+				t.Run(string(format), func(t *testing.T) {
+					ctx := context.Background()
+					cfg := common.NewConfig(config.ProtocolSimple)
+					cfg.TimeZone = location
+					cfg.EncodingFormat = format
+					cfg.EnableRowChecksum = true
+					cfg.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
+					cfg.LargeMessageHandle.ClaimCheckStorageURI = "file://" + t.TempDir()
+					claimCheck, err := claimcheck.New(ctx, cfg.LargeMessageHandle, cfg.ChangefeedID)
+					require.NoError(t, err)
+					t.Cleanup(claimCheck.Close)
+					enc, err := NewEncoder(cfg, claimCheck)
+					require.NoError(t, err)
+					decoderCfg := *cfg
+					decoderCfg.TimeZone = consumerLocation
+					decoder, err := NewDecoder(ctx, &decoderCfg, nil)
+					require.NoError(t, err)
+					dec := decoder.(*Decoder)
+					message, err := enc.EncodeDDLEvent(ddl)
+					require.NoError(t, err)
+					dec.AddKeyValue(message.Key, message.Value)
+					messageType, hasNext := dec.HasNext()
+					require.True(t, hasNext)
+					require.Equal(t, common.MessageTypeDDL, messageType)
+					dec.NextDDLEvent()
+					cfg.MaxMessageBytes = 1024
+					require.NoError(t, enc.AppendRowChangedEvent(ctx, "", event))
+					messages := enc.Build()
+					require.Len(t, messages, 1)
+					dec.AddKeyValue(messages[0].Key, messages[0].Value)
+					messageType, hasNext = dec.HasNext()
+					require.True(t, hasNext)
+					require.Equal(t, common.MessageTypeRow, messageType)
+					require.NotEmpty(t, dec.msg.ClaimCheckLocation)
+					decoded := dec.NextDMLMessage().ToDMLEvent()
+					require.NotNil(t, decoded)
+					decodedRow, ok := decoded.GetNextRow()
+					require.True(t, ok)
+					require.Equal(t, event.Checksum, decodedRow.Checksum)
+					common.CompareRow(t, row, dml.TableInfo, decodedRow, decoded.TableInfo)
+				})
+			}
+		})
+	}
+}
+
+func TestChecksumAfterColumnTypeChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelperWithTimeZone(t, time.UTC)
+	defer helper.Close()
+	helper.DDL2Event(`create table test.checksum_order (
+		id int primary key, c1 smallint, c2 int, unique index idx(c1, c2))`)
+	ddl := helper.DDL2Event("alter table test.checksum_order modify column c1 smallint unsigned default 2345")
+	dml, _ := helper.DML2UpdateEvent("test", "checksum_order",
+		"insert into test.checksum_order values (1, 23, 59)",
+		"update test.checksum_order set c1 = 2345 where id = 1")
+	columns := dml.TableInfo.GetColumns()
+	require.Greater(t, columns[1].ID, columns[2].ID)
+	row, ok := dml.GetNextRow()
+	require.True(t, ok)
+	checksum := func(row chunk.Row) uint32 {
+		data := rowcodec.RowData{}
+		for _, i := range []int{0, 2, 1} {
+			column := columns[i]
+			datum := row.GetDatum(i, &column.FieldType)
+			data.Cols = append(data.Cols, rowcodec.ColData{ColumnInfo: column, Datum: &datum})
+		}
+		value, err := data.Checksum(time.UTC)
+		require.NoError(t, err)
+		return value
+	}
+	event := &commonEvent.RowEvent{
+		PhysicalTableID: dml.PhysicalTableID, StartTs: dml.StartTs, CommitTs: dml.CommitTs,
+		TableInfo: dml.TableInfo, Event: row, ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Checksum: &integrity.Checksum{Current: checksum(row.Row), Previous: checksum(row.PreRow)},
+	}
+	for _, format := range []common.EncodingFormatType{common.EncodingFormatJSON, common.EncodingFormatAvro} {
+		t.Run(string(format), func(t *testing.T) {
+			cfg := common.NewConfig(config.ProtocolSimple)
+			cfg.EncodingFormat = format
+			cfg.EnableRowChecksum = true
+			ctx := context.Background()
+			enc, err := NewEncoder(cfg, nil)
+			require.NoError(t, err)
+			dec, err := NewDecoder(ctx, cfg, nil)
+			require.NoError(t, err)
+			message, err := enc.EncodeDDLEvent(ddl)
+			require.NoError(t, err)
+			dec.AddKeyValue(message.Key, message.Value)
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
+			decodedDDL := dec.NextDDLEvent()
+			decodedColumns := decodedDDL.TableInfo.GetColumns()
+			require.Equal(t, []string{"id", "c2", "c1"}, []string{
+				decodedColumns[0].Name.O, decodedColumns[1].Name.O, decodedColumns[2].Name.O,
+			})
+			require.Equal(t, []string{"id", "c1", "c2"}, []string{columns[0].Name.O, columns[1].Name.O, columns[2].Name.O})
+			require.NoError(t, enc.AppendRowChangedEvent(ctx, "", event))
+			messages := enc.Build()
+			require.Len(t, messages, 1)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
+			messageType, hasNext = dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+			decoded := dec.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(decoded.PostFlush)
+			decodedRow, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, event.Checksum, decodedRow.Checksum)
+			common.CompareRow(t, row, dml.TableInfo, decodedRow, decoded.TableInfo)
+		})
 	}
 }
 
@@ -1651,7 +1877,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			codecConfig.MaxMessageBytes = config.DefaultMaxMessageBytes
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 
-			enc, err := NewEncoder(ctx, codecConfig)
+			enc, err := NewEncoder(codecConfig, nil)
 			require.NoError(t, err)
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, db)
@@ -1675,8 +1901,8 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				require.Equal(t, common.MessageTypeRow, messageType)
 				require.True(t, dec.msg.HandleKeyOnly)
 
-				decodedRow := dec.NextDMLEvent()
-				require.Nil(t, decodedRow)
+				decodedMessage := dec.NextDMLMessage()
+				require.Nil(t, decodedMessage)
 			}
 
 			enc.(*Encoder).config.MaxMessageBytes = config.DefaultMaxMessageBytes
@@ -1710,8 +1936,9 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			}
 			_ = dec.NextDDLEvent()
 
-			decodedRows := dec.GetCachedEvents()
-			for idx, decodedRow := range decodedRows {
+			decodedMessages := dec.GetCachedMessages()
+			for idx, message := range decodedMessages {
+				decodedRow := message.ToDMLEvent()
 				event := events[idx]
 
 				require.Equal(t, decodedRow.CommitTs, event.CommitTs)
@@ -1731,7 +1958,7 @@ func TestMarshallerError(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 
-	enc, err := NewEncoder(ctx, codecConfig)
+	enc, err := NewEncoder(codecConfig, nil)
 	require.NoError(t, err)
 
 	mockMarshaller := mock_simple.NewMockmarshaller(gomock.NewController(t))

@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,16 +28,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -85,7 +81,7 @@ type reader struct {
 
 func newReaders(ctx context.Context, cfg *readerConfig) ([]fileReader, error) {
 	if cfg == nil {
-		return nil, cerror.WrapError(cerror.ErrRedoConfigInvalid, errors.New("readerConfig can not be nil"))
+		return nil, errors.ErrRedoConfigInvalid.GenWithStack("reader Config can not be nil")
 	}
 	if !cfg.useExternalStorage {
 		log.Panic("external storage is not enabled, please check your configuration")
@@ -122,7 +118,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 	// create temp dir in local storage
 	err := os.MkdirAll(dir, redo.DefaultDirMode)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	// get all files
@@ -169,7 +165,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+			return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 		}
 		ret = append(ret, f)
 	}
@@ -181,12 +177,12 @@ func getSortedFileName(name string) string {
 }
 
 func selectDownLoadFile(
-	ctx context.Context, extStorage storage.ExternalStorage,
+	ctx context.Context, extStorage storeapi.Storage,
 	fixedType string, startTs uint64,
 ) ([]string, error) {
 	files := []string{}
 	// add changefeed filter and endTs filter
-	err := extStorage.WalkDir(ctx, &storage.WalkOption{},
+	err := extStorage.WalkDir(ctx, &storeapi.WalkOption{},
 		func(path string, size int64) error {
 			fileName := filepath.Base(path)
 			ret, err := shouldOpen(startTs, fileName, fixedType)
@@ -202,7 +198,7 @@ func selectDownLoadFile(
 			return nil
 		})
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrExternalStorageAPI, err)
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
 	return files, nil
@@ -215,17 +211,20 @@ func isLZ4Compressed(data []byte) bool {
 	return bytes.Equal(data[:4], lz4MagicNumber)
 }
 
-func readAllFromBuffer(buf []byte) (logHeap, error) {
+func readAllFromBuffer(buf []byte, fileName string) (logHeap, error) {
 	r := &reader{
-		br: bytes.NewReader(buf),
+		br:       bytes.NewReader(buf),
+		fileName: fileName,
 	}
-	defer r.Close()
+	defer func() {
+		_ = r.Close()
+	}()
 
 	h := logHeap{}
 	for {
 		rl, err := r.Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return nil, err
 			}
 			break
@@ -240,24 +239,19 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 // to local storage.
 func sortAndWriteFile(
 	egCtx context.Context,
-	extStorage storage.ExternalStorage,
+	extStorage storeapi.Storage,
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	w, err := file.NewLocalFileWriter(cfg.dir, math.MaxInt32, cfg.fileType, writer.WithLogFileName(func() string {
-		return sortedName
-	}))
+	w, err := newFramedFileWriter(filepath.Join(cfg.dir, sortedName))
 	if err != nil {
 		return err
 	}
+	defer w.Abort()
 
 	fileContent, err := extStorage.ReadFile(egCtx, fileName)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrExternalStorageAPI, err)
-	}
-	if len(fileContent) == 0 {
-		log.Warn("download file is empty", zap.String("file", fileName))
-		return nil
+		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	// it's lz4 compressed, decompress it
 	if isLZ4Compressed(fileContent) {
@@ -265,9 +259,16 @@ func sortAndWriteFile(
 			return err
 		}
 	}
+	if len(fileContent) == 0 {
+		if filepath.Ext(fileName) != redo.TmpEXT {
+			return errors.WrapError(errors.ErrRedoFileOp, io.ErrUnexpectedEOF)
+		}
+		log.Warn("download file is empty", zap.String("file", fileName))
+		return nil
+	}
 
 	// sort data
-	h, err := readAllFromBuffer(fileContent)
+	h, err := readAllFromBuffer(fileContent, fileName)
 	if err != nil {
 		return err
 	}
@@ -290,10 +291,9 @@ func sortAndWriteFile(
 		}
 		data, err := codec.MarshalRedoLog(item, nil)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrMarshalFailed, err)
+			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
-		_, err = w.Write(data)
-		if err != nil {
+		if err = w.Write(data); err != nil {
 			return err
 		}
 	}
@@ -319,40 +319,48 @@ func shouldOpen(startTs uint64, name, fixedType string) (bool, error) {
 	return commitTs > startTs, nil
 }
 
-// Read implement Read interface.
-// TODO: more general reader pair with writer in writer pkg
+// Read implements the fileReader interface.
 func (r *reader) Read() (*pevent.RedoLog, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	temporary := filepath.Ext(r.fileName) == redo.TmpEXT
 
 	lenField, err := readInt64(r.br)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, err
 		}
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		if temporary && errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, io.EOF
+		}
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	recBytes, padBytes := decodeFrameSize(lenField)
 	data := make([]byte, recBytes+padBytes)
 	_, err = io.ReadFull(r.br, data)
 	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if temporary && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
 			log.Warn("read redo log have unexpected io error",
 				zap.String("fileName", r.fileName),
 				zap.Error(err))
 			return nil, io.EOF
 		}
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		// A complete frame header promises a body. Even zero bytes of body
+		// in a sealed file is truncation, not the normal end of the file.
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	redoLog, _, err := codec.UnmarshalRedoLog(data[:recBytes])
 	if err != nil {
-		if r.isTornEntry(data) {
+		if temporary && r.isTornEntry(data) {
 			// just return io.EOF, since if torn write it is the last redoLog entry
 			return nil, io.EOF
 		}
-		return nil, cerror.WrapError(cerror.ErrUnmarshalFailed, err)
+		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
 
 	// point last valid offset to the end of redoLog
@@ -366,7 +374,7 @@ func readInt64(r io.Reader) (int64, error) {
 	return n, err
 }
 
-// decodeFrameSize pair with encodeFrameSize in writer.file
+// decodeFrameSize pairs with writer.EncodeFrameSize.
 // the func use code from etcd wal/decoder.go
 func decodeFrameSize(lenField int64) (recBytes int64, padBytes int64) {
 	// the record size is stored in the lower 56 bits of the 64-bit length
@@ -420,5 +428,5 @@ func (r *reader) Close() error {
 		return nil
 	}
 
-	return cerror.WrapError(cerror.ErrRedoFileOp, r.closer.Close())
+	return errors.WrapError(errors.ErrRedoFileOp, r.closer.Close())
 }

@@ -52,10 +52,11 @@ const (
 
 // MoveDispatcherOperator is an operator to move a table span to the destination dispatcher
 type MoveDispatcherOperator struct {
-	replicaSet     *replica.SpanReplication
-	spanController *span.Controller
-	origin         node.ID
-	dest           node.ID
+	replicaSet      *replica.SpanReplication
+	spanController  *span.Controller
+	origin          node.ID
+	dest            node.ID
+	maintainerEpoch uint64
 
 	// State transitions:
 	//   removeOrigin --(origin stopped)-> addDest --(dest working)-> doneSuccess
@@ -97,13 +98,20 @@ func (m *MoveDispatcherOperator) finishAsAbsent() {
 	m.state = moveStateDoneNoPostFinish
 }
 
-func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	origin node.ID,
+	dest node.ID,
+	maintainerEpoch uint64,
+) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: spanController,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		origin:          origin,
+		dest:            dest,
+		spanController:  spanController,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
@@ -118,6 +126,14 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 	if from == m.origin && status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		log.Info("replica set removed from origin node",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
+
+		// Preserve the origin dispatcher's final checkpoint before rebinding the span
+		// to the destination node. The maintainer handles operator status before it
+		// updates the span status. Once enterAddDest changes the binding, the generic
+		// status handler rejects this origin status because its node no longer matches,
+		// causing the destination dispatcher to start from the previous (potentially
+		// stale) complete-status checkpoint.
+		m.replicaSet.UpdateStatus(status)
 
 		// reset last send message time
 		m.sendThrottler.reset()
@@ -152,9 +168,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 	switch m.state {
 	case moveStateAddDest:
-		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move)
+		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
 	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
-		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move)
+		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move, m.maintainerEpoch)
 	default:
 		return nil
 	}

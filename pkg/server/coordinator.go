@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 )
 
 // Coordinator is the master of the ticdc cluster,
@@ -34,6 +35,8 @@ type Coordinator interface {
 	ListChangefeeds(ctx context.Context, keyspace string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error)
 	// GetChangefeed returns a changefeed
 	GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error)
+	// GetPersistedChangefeedInfo returns the latest backend-persisted changefeed info.
+	GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error)
 	// CreateChangefeed creates a new changefeed
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// RemoveChangefeed gets a changefeed
@@ -47,6 +50,9 @@ type Coordinator interface {
 	// RequestResolvedTsFromLogCoordinator requests the log coordinator to report the resolved ts of the changefeed,
 	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
 	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
+
+	// DrainNode requests best-effort draining on the target node and returns a remaining-work estimate.
+	DrainNode(ctx context.Context, target node.ID) (int, error)
 
 	Initialized() bool
 }

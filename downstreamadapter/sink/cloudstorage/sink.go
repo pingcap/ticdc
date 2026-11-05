@@ -21,16 +21,19 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/robfig/cron"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -53,7 +56,7 @@ type sink struct {
 	sinkURI      *url.URL
 	// todo: this field is not take effects yet, should be fixed.
 	outputRawChangeEvent bool
-	storage              storage.ExternalStorage
+	storage              storeapi.Storage
 
 	dmlWriters *dmlWriters
 
@@ -63,9 +66,8 @@ type sink struct {
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
 
-	tableSchemaStore *commonEvent.TableSchemaStore
-	cron             *cron.Cron
-	statistics       *metrics.Statistics
+	cron       *cron.Cron
+	statistics *statistics.Statistics
 
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
@@ -74,10 +76,11 @@ type sink struct {
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	// it's the same as the context passed into the Run method.
-	ctx context.Context
+	ctx       context.Context
+	writeGate *writelease.Gate
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
@@ -87,7 +90,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	if _, err = columnselector.New(sinkConfig, caseSensitive); err != nil {
+		return err
+	}
+	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
 	if err != nil {
 		return err
 	}
@@ -99,9 +105,13 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+// New creates a cloud storage sink using the supplied changefeed configuration.
+//
+//nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, caseSensitive bool, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
+	keyspaceID uint32,
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
@@ -116,9 +126,13 @@ func New(
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
-	// the last param maxMsgBytes is mainly to limit the size of a single message for
-	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
-	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	// Message size limits are mainly for MQ batch protocols. Cloud storage uses
+	// max int for both the final message limit and the batch threshold.
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt, math.MaxInt)
+	if err != nil {
+		return nil, err
+	}
+	columnSelectors, err := columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return nil, err
 	}
@@ -126,14 +140,17 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
-			statistics.Close()
+			stats.Close()
 			storage.Close()
 		}
 	}()
-	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters, err := newDMLWriters(
+		changefeedID, storage, cfg, encoderConfig,
+		util.GetOrZero(sinkConfig.EncoderConcurrency), ext, stats, columnSelectors,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +164,7 @@ func New(
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
+		statistics:               stats,
 		isNormal:                 atomic.NewBool(true),
 
 		ctx: ctx,
@@ -243,25 +260,36 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		sourceTableInfo := event.MultipleTableInfos[1]
 
-		var def cloudstorage.TableDefinition
-		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
-		def.Query = event.Query
-		def.Type = event.Type
-		if err := s.writeFile(event, def); err != nil {
+		schemaEvent := *event
+		schemaEvent.TableInfo = event.TableInfo.CloneWithRouting(
+			event.GetTargetExtraSchemaName(),
+			event.GetTargetExtraTableName(),
+		)
+		var schemaFile cloudstorage.SchemaFile
+		schemaFile.Build(&schemaEvent, s.cfg.OutputColumnID)
+		if err := s.writeFile(event, schemaFile); err != nil {
 			return err
 		}
-		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, sourceTableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		sourceEvent := *event
-		sourceEvent.TableInfo = sourceTableInfo
-		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
+		sourceEvent.TableInfo = sourceTableInfo.CloneWithRouting(
+			event.GetTargetSchemaName(),
+			event.GetTargetTableName(),
+		)
+		var sourceSchemaFile cloudstorage.SchemaFile
+		sourceSchemaFile.Build(&sourceEvent, s.cfg.OutputColumnID)
+		// Source schema file carries table structure only. The DDL is replayed
+		// from the exchanged table schema file.
+		sourceSchemaFile.Query = ""
+		sourceSchemaFile.Type = 0
+		if err := s.writeFile(&sourceEvent, sourceSchemaFile); err != nil {
 			return err
 		}
-	} else {
+	}
+	if event.GetDDLType() != model.ActionExchangeTablePartition {
 		for _, e := range event.GetEvents() {
-			var def cloudstorage.TableDefinition
-			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def); err != nil {
+			var schemaFile cloudstorage.SchemaFile
+			schemaFile.Build(e, s.cfg.OutputColumnID)
+			if err := s.writeFile(e, schemaFile); err != nil {
 				return err
 			}
 		}
@@ -269,8 +297,8 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	log.Info("storage sink executed ddl event",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("schema", event.GetSchemaName()),
-		zap.String("table", event.GetTableName()),
+		zap.String("schema", event.GetTargetSchemaName()),
+		zap.String("table", event.GetTargetTableName()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
@@ -278,32 +306,26 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+func (s *sink) writeFile(v *commonEvent.DDLEvent, schemaFile cloudstorage.SchemaFile) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
-	if s.cfg.UseTableIDAsPath && def.Table == "" {
-		log.Debug("skip database schema for table id path",
-			zap.String("schema", def.Schema),
-			zap.String("query", def.Query))
+	if s.cfg.UseTableIDAsPath && schemaFile.Table == "" {
 		return nil
 	}
-	encodedDef, err := def.MarshalWithQuery()
-	if err != nil {
+	encodedSchemaFile := schemaFile.Marshal()
+	path := schemaFile.Path(s.cfg.UseTableIDAsPath, v.GetTableID())
+	if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 		return err
 	}
-
-	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
-	if err != nil {
-		return err
-	}
-	log.Debug("write ddl event to external storage",
-		zap.String("path", path), zap.Any("ddl", v))
-	return s.statistics.RecordDDLExecution(func() (string, error) {
-		err = s.storage.WriteFile(s.ctx, path, encodedDef)
-		if err != nil {
-			return "", err
-		}
-		return v.GetDDLType().String(), nil
+	return s.statistics.RecordDDLExecution(v.GetDDLType().String(), func() error {
+		return s.storage.WriteFile(s.ctx, path, encodedSchemaFile)
 	})
+}
+
+func (s *sink) SetWriteGate(gate *writelease.Gate) {
+	s.writeGate = gate
+	if s.dmlWriters != nil {
+		s.dmlWriters.setWriteGate(gate)
+	}
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
@@ -335,7 +357,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
+			return context.Cause(ctx)
 		case checkpoint = <-s.checkpointChan:
 		}
 
@@ -357,6 +379,9 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		}
+		if !writelease.CanWrite(s.writeGate) {
+			continue
+		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
 			log.Error("cloud storage sink write file failed",
@@ -374,8 +399,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
-	s.tableSchemaStore = tableSchemaStore
+func (s *sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
 func (s *sink) initCron(
@@ -389,18 +413,18 @@ func (s *sink) initCron(
 	for _, job := range cleanupJobs {
 		err = s.cron.AddFunc(s.cfg.FileCleanupCronSpec, job)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err, "add cloud storage cleanup job")
 		}
 	}
 	return nil
 }
 
 func (s *sink) bgCleanup(ctx context.Context) {
-	if s.cfg.DateSeparator != config.DateSeparatorDay.String() || s.cfg.FileExpirationDays <= 0 {
+	if s.cfg.DateSeparator != config.DateSeparatorDay || s.cfg.FileExpirationDays <= 0 {
 		log.Info("skip cleanup expired files for storage sink",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
-			zap.String("dateSeparator", s.cfg.DateSeparator),
+			zap.Stringer("dateSeparator", s.cfg.DateSeparator),
 			zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 		return
 	}
@@ -410,7 +434,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	log.Info("start schedule cleanup expired files for storage sink",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.String("dateSeparator", s.cfg.DateSeparator),
+		zap.Stringer("dateSeparator", s.cfg.DateSeparator),
 		zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 
 	// wait for the context done
@@ -428,6 +452,9 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	var isRemoveEmptyDirsRunning atomic.Bool
 	if isLocal {
 		ret = append(ret, func() {
+			if !writelease.CanWrite(s.writeGate) {
+				return
+			}
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -438,7 +465,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 
 			checkpointTs := s.lastCheckpointTs.Load()
 			start := time.Now()
-			cnt, err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
+			err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
 			if err != nil {
 				log.Error("failed to remove empty dirs",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -453,13 +480,15 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Uint64("checkpointTs", checkpointTs),
-				zap.Uint64("count", cnt),
 				zap.Duration("cost", time.Since(start)))
 		})
 	}
 
 	var isCleanupRunning atomic.Bool
 	ret = append(ret, func() {
+		if !writelease.CanWrite(s.writeGate) {
+			return
+		}
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -470,7 +499,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		defer isCleanupRunning.Store(false)
 		start := time.Now()
 		checkpointTs := s.lastCheckpointTs.Load()
-		cnt, err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
+		err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
 		if err != nil {
 			log.Error("failed to remove expired files",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -485,7 +514,6 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Uint64("checkpointTs", checkpointTs),
-			zap.Uint64("count", cnt),
 			zap.Duration("cost", time.Since(start)))
 	})
 	return ret

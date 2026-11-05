@@ -28,7 +28,7 @@ import (
 func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -39,6 +39,8 @@ func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	require.NotNil(t, msg)
 	require.Equal(t, messaging.TypeScheduleDispatcherRequest, msg.Type)
 	require.Equal(t, nodeA.String(), msg.To.String())
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
 
 	// Node A is removed before it reports stopped status
 	op.OnNodeRemove(nodeA)
@@ -53,7 +55,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
 	require.NotNil(t, op)
 
 	spanController.MarkSpanAbsent(replicaSet)
@@ -75,7 +77,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
 	require.NotNil(t, op)
 
 	waitingMergeStatus := &heartbeatpb.TableSpanStatus{
@@ -98,7 +100,7 @@ func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
 	require.NotNil(t, op)
 
 	removedStatus := &heartbeatpb.TableSpanStatus{
@@ -109,4 +111,31 @@ func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
 	op.Check(nodeA, removedStatus)
 	require.True(t, op.IsFinished())
 	require.Equal(t, heartbeatpb.ComponentState_Removed, replicaSet.GetStatus().ComponentStatus)
+}
+
+// TestRemoveOperatorStoppedStatusBehindBlockTs covers a dispatcher removed while
+// it waits on a block event. The barrier has forwarded the stored checkpointTs to
+// blockTs-1, so the dispatcher's final Stopped status carries a lower checkpointTs.
+// The span must still become non-working, otherwise a non-cascade maintainer
+// remove never sees the DDL span stop and the maintainer handoff never finishes.
+func TestRemoveOperatorStoppedStatusBehindBlockTs(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+
+	blockTs := uint64(2000)
+	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    blockTs - 1,
+	})
+
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7)
+	op.Check(nodeA, &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	})
+	require.True(t, op.IsFinished())
+	require.False(t, replicaSet.IsWorking())
+	require.Equal(t, heartbeatpb.ComponentState_Stopped, replicaSet.GetStatus().ComponentStatus)
+	require.Equal(t, blockTs-1, replicaSet.GetStatus().CheckpointTs)
 }

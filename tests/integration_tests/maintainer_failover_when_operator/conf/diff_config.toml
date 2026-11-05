@@ -13,7 +13,7 @@ check-struct-only = false
 
     target-instance = "tidb0"
 
-    target-check-tables = ["maintainer_failover_when_operator.t1", "maintainer_failover_when_operator.t2", "maintainer_failover_when_operator.t4", "maintainer_failover_when_operator.t5"]
+    target-check-tables = ["maintainer_failover_when_operator.t1", "maintainer_failover_when_operator.t2", "maintainer_failover_when_operator.t4", "maintainer_failover_when_operator.t5", "maintainer_failover_when_operator.t6"]
 
 [data-sources]
 [data-sources.mysql1]

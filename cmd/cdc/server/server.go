@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -104,15 +103,11 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
 
 	// Initialize log redaction mode from config
-	// Empty string defaults to OFF (no redaction)
 	redactConfigValue := o.serverConfig.Security.RedactInfoLog.String()
-	redactMode, err := pkgutil.ParseRedactMode(redactConfigValue)
+	redactMode, err := o.resolveRedactMode()
 	if err != nil {
 		cmd.Printf("invalid redact-info-log configuration: %v\n", err)
 		os.Exit(1)
-	}
-	if redactMode == "" {
-		redactMode = perrors.RedactLogDisable // Default to OFF when not set
 	}
 	perrors.RedactLogEnabled.Store(redactMode)
 	log.Info("log redaction initialized", zap.String("config", redactConfigValue), zap.String("mode", redactMode))
@@ -123,7 +118,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
+	server.RecordBuildInfo()
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
@@ -173,6 +168,17 @@ func (o *options) run(cmd *cobra.Command) error {
 		return nil
 	}
 	return err
+}
+
+func (o *options) resolveRedactMode() (string, error) {
+	mode, err := pkgutil.ParseRedactMode(o.serverConfig.Security.RedactInfoLog.String())
+	if err != nil {
+		return "", err
+	}
+	if mode == "" {
+		return perrors.RedactLogEnable, nil
+	}
+	return mode, nil
 }
 
 func isNormalServerShutdown(err error, ctx context.Context) bool {

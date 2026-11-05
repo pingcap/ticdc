@@ -22,10 +22,9 @@ import (
 	"time"
 
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -35,7 +34,10 @@ import (
 // execDMLWithMaxRetries executes prepared DMLs with retry/backoff handling.
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) || len(dmls.sqls) != len(dmls.rowTypes) {
-		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s", dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes))
+		return errors.ErrUnexpected.FastGen(
+			"unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s",
+			dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes,
+		)
 	}
 
 	// approximateSize is multiplied by 2 because in extreme circustumas, every
@@ -45,80 +47,96 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
-	tryExec := func() (int, int64, error) {
+	tryExec := func() error {
 		start := time.Now()
 		defer func() {
 			if time.Since(start) > w.cfg.SlowQuery {
 				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
 			}
 		}()
-		err := w.dmlSession.withConn(w, writeTimeout, func(conn *sql.Conn) error {
-			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
-				// use sequence way to execute the dmls
-				tx, err := conn.BeginTx(w.ctx, nil)
-				if err != nil {
-					return errors.Trace(err)
-				}
-
-				err = w.sequenceExecute(dmls, tx, writeTimeout)
-				if err != nil {
-					return err
-				}
-
-				if err = tx.Commit(); err != nil {
-					return err
-				}
-
-				log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
-				return nil
+		for {
+			if !w.grantWrite() {
+				return errors.Trace(w.ctx.Err())
 			}
+			admitted, err := w.dmlSession.withConn(w, writeTimeout, func() bool {
+				return w.writeGate == nil || w.writeGate.IsWritable()
+			}, func(conn *sql.Conn) error {
+				if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
+					// use sequence way to execute the dmls
+					tx, err := conn.BeginTx(w.ctx, nil)
+					if err != nil {
+						return errors.Trace(err)
+					}
 
-			// use multi stmt way to execute the dmls
-			if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
-				log.Warn("multiStmtExecute failed, fallback to sequence way",
-					zap.Error(err),
-					zap.Any("sql", dmls.LogWithoutValues()),
-					zap.Int("writerID", w.id))
-				fallbackToSeqWay = true
+					err = w.sequenceExecute(dmls, tx, writeTimeout)
+					if err != nil {
+						return err
+					}
+
+					if err = tx.Commit(); err != nil {
+						return err
+					}
+
+					log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
+					return nil
+				}
+
+				// use multi stmt way to execute the dmls
+				if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
+					log.Warn("multiStmtExecute failed, fallback to sequence way",
+						zap.Error(err),
+						zap.Any("sql", dmls.LogWithoutValues()),
+						zap.Int("writerID", w.id))
+					fallbackToSeqWay = true
+					return err
+				}
+				return nil
+			})
+			if err != nil {
 				return err
 			}
-			return nil
-		})
-		if err != nil {
-			return 0, 0, err
+			if admitted {
+				w.statistics.RecordDMLBatch(dmls.rowCount, dmls.approximateSize)
+				return nil
+			}
 		}
-		return dmls.rowCount, dmls.approximateSize, nil
 	}
-	return retry.Do(w.ctx, func() error {
+	err := retry.Do(w.ctx, func() error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
-		failpoint.Inject("MySQLSinkHangLongTime", func() { _ = util.Hang(w.ctx, time.Hour) })
+		failpoint.Inject("MySQLSinkHangLongTime", func() {
+			log.Warn("inject MySQLSinkHangLongTime")
+			_ = util.Hang(w.ctx, time.Hour)
+		})
 
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
-			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
+			err := errors.WrapError(errors.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number:  uint16(mysql.ErrDupEntry),
 				Message: "Duplicate entry",
 			})
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
-		err := w.statistics.RecordBatchExecution(tryExec)
+		err := tryExec()
 		if err != nil {
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
-			return errors.Trace(err)
+			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
+	if err != nil {
+		w.statistics.RecordDMLError()
+	}
+	return err
 }
 
 // sequenceExecute runs each SQL sequentially inside a transaction.
@@ -158,17 +176,17 @@ func (w *Writer) sequenceExecute(
 		if execError != nil {
 			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
+				if !errors.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}
 			cancelFunc()
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
 		if rowsAffected, err := res.RowsAffected(); err != nil {
 			log.Warn("get rows affected rows failed", zap.Error(err))
 		} else {
-			w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
+			w.recordRowsAffected(rowsAffected, dmls.rowTypes[i])
 		}
 		cancelFunc()
 	}
@@ -180,9 +198,11 @@ func (w *Writer) multiStmtExecute(
 	conn *sql.Conn,
 	dmls *preparedDMLs, writeTimeout time.Duration,
 ) error {
-	var multiStmtArgs []any
-	for _, value := range dmls.values {
-		multiStmtArgs = append(multiStmtArgs, value...)
+	var multiStmtArgs []driver.NamedValue
+	for _, values := range dmls.values {
+		for _, value := range values {
+			multiStmtArgs = append(multiStmtArgs, driver.NamedValue{Ordinal: len(multiStmtArgs) + 1, Value: value})
+		}
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
@@ -191,28 +211,46 @@ func (w *Writer) multiStmtExecute(
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	// we use conn.ExecContext to reduce the overhead of network latency.
-	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
-	// When an error happens before COMMIT, the server session can be left with an open transaction.
-	// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
-	res, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
-	if err != nil {
-		rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
-		_, rbErr := conn.ExecContext(rbCtx, "ROLLBACK")
-		rbCancel()
-		if rbErr != nil {
-			log.Info("failed to rollback after multi statement exec error",
-				zap.Int("writerID", w.id),
-				zap.Error(rbErr))
+	// We use conn.Raw to record the all affected rows.
+	// See https://github.com/go-sql-driver/mysql/pull/1309
+	return conn.Raw(func(raw any) error {
+		// Raw bypasses database/sql's argument conversion, so use the driver's checker.
+		checker := raw.(driver.NamedValueChecker)
+		for i := range multiStmtArgs {
+			if err := checker.CheckNamedValue(&multiStmtArgs[i]); err != nil {
+				return err
+			}
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
-	}
-	if rowsAffected, err := res.RowsAffected(); err != nil {
-		log.Warn("get rows affected rows failed", zap.Error(err))
-	} else {
-		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
-	}
-	return nil
+		execer := raw.(driver.ExecerContext)
+		// we use ExecContext to reduce the overhead of network latency.
+		// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+		// When an error happens before COMMIT, the server session can be left with an open transaction.
+		// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
+		res, err := execer.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs)
+		if err != nil {
+			// An error before COMMIT can leave an open transaction. Use the driver
+			// directly because Raw already holds the underlying connection's lock.
+			rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
+			_, rbErr := execer.ExecContext(rbCtx, "ROLLBACK", nil)
+			rbCancel()
+			if rbErr != nil {
+				log.Info("failed to rollback after multi statement exec error",
+					zap.Int("writerID", w.id),
+					zap.Error(rbErr))
+			}
+			args := make([]any, len(multiStmtArgs))
+			for i, arg := range multiStmtArgs {
+				args[i] = arg.Value
+			}
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(args))))
+		}
+		var rowsAffected int64
+		for _, affected := range res.(dmysql.Result).AllRowsAffected() {
+			rowsAffected += affected
+		}
+		w.recordTotalRowsAffected(rowsAffected, int64(len(dmls.sqls)))
+		return nil
+	})
 }
 
 // logDMLTxnErr prints retryable/irretryable errors with contextual information.

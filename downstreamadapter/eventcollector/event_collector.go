@@ -21,13 +21,13 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
@@ -90,18 +90,18 @@ type changefeedStat struct {
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 	return &changefeedStat{
 		changefeedID:              changefeedID,
-		metricMemoryUsageMax:      metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
-		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageMax:      dynamicStreamMemoryUsage.WithLabelValues("event-collector", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsed:     dynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageMaxRedo:  dynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
+		metricMemoryUsageUsedRedo: dynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
 	}
 }
 
 func (c *changefeedStat) removeMetrics() {
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
-	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	dynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 /*
@@ -162,17 +162,17 @@ func New(serverId node.ID) *EventCollector {
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		receiveChannels:                      receiveChannels,
 		redoReceiveChannels:                  redoReceiveChannels,
-		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "eventDispatcher"),
-		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "eventDispatcher"),
-		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
+		metricDispatcherReceivedKVEventCount: dispatcherReceivedEventCount.WithLabelValues("KVEvent", "eventDispatcher"),
+		metricDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "eventDispatcher"),
+		metricReceiveEventLagDuration:                eventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 
-		metricRedoDispatcherReceivedKVEventCount:         metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
-		metricRedoDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
+		metricRedoDispatcherReceivedKVEventCount:         dispatcherReceivedEventCount.WithLabelValues("KVEvent", "redoDispatcher"),
+		metricRedoDispatcherReceivedResolvedTsEventCount: dispatcherReceivedEventCount.WithLabelValues("ResolvedTs", "redoDispatcher"),
 
-		metricDSEventChanSize:     metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
-		metricDSPendingQueue:      metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
-		metricDSEventChanSizeRedo: metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
-		metricDSPendingQueueRedo:  metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
+		metricDSEventChanSize:     dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector"),
+		metricDSPendingQueue:      dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector"),
+		metricDSEventChanSizeRedo: dynstream.DynamicStreamEventChanSize.WithLabelValues("event-collector-redo"),
+		metricDSPendingQueueRedo:  dynstream.DynamicStreamPendingQueueLen.WithLabelValues("event-collector-redo"),
 	}
 
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
@@ -263,7 +263,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
 			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("mode", target.GetMode()))
 	}()
-	metrics.EventCollectorRegisteredDispatcherCount.Inc()
+	eventCollectorRegisteredDispatcherCount.Inc()
 
 	stat := newDispatcherStat(target, c, readyCallback)
 	c.dispatcherMap.Store(target.GetId(), stat)
@@ -301,7 +301,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.commitReady(c.getLocalServerID())
+	stat.session.commitLocalRegistration()
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
@@ -423,16 +423,15 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
 		stat := value.(*dispatcherStat)
-		if !stat.isReceivingDataEvent() {
-			return true
+		eventServiceID, checkpointTs, epoch, ok := stat.getHeartbeatReport()
+		if ok {
+			group(eventServiceID, stat.getDispatcherID(), checkpointTs, epoch)
 		}
-		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
-		group(
-			stat.getEventServiceID(),
-			stat.getDispatcherID(),
-			checkpointTs,
-			epoch,
-		)
+		// Keep registrations alive while waiting for ready. Epoch zero renews
+		// the registration without reporting progress from another stream.
+		for _, target := range stat.session.connState.pendingRegistrations(c.serverId) {
+			group(target, stat.getDispatcherID(), 0, 0)
+		}
 		return true
 	})
 
@@ -472,6 +471,29 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case req := <-c.dispatcherMessageChan.Out():
+			if req.Message.Type == messaging.TypeDispatcherRequest {
+				// Failed sends go back to the queue tail, so a REGISTER retry can
+				// arrive after REMOVE and recreate an abandoned broker registration.
+				// Recheck the session before every send: the dispatcher may have been
+				// removed or stopped using this broker while the request was queued.
+				// Keep REMOVE requests even after local state disappears so remote
+				// cleanup can finish. Compact the batch in place, filtering only REGISTER.
+				requests := req.Message.Message[:0]
+				for _, payload := range req.Message.Message {
+					request := payload.(*messaging.DispatcherRequest)
+					if request.GetActionType() == eventpb.ActionType_ACTION_TYPE_REGISTER {
+						stat := c.getDispatcherStatByID(request.GetID())
+						if stat == nil || !stat.session.connState.hasRegistration(req.Message.To, c.serverId) {
+							continue
+						}
+					}
+					requests = append(requests, payload)
+				}
+				req.Message.Message = requests
+				if len(requests) == 0 {
+					continue
+				}
+			}
 			err := c.mc.SendCommand(req.Message)
 			if err != nil {
 				sleepInterval := 10 * time.Millisecond
@@ -512,14 +534,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
-			if stat.isCurrentEventService(targetMessage.From) {
-				log.Info("dispatcher removed in event service",
-					zap.Stringer("dispatcherID", ds.DispatcherID),
-					zap.Stringer("eventServiceID", targetMessage.From))
-				// register the dispatcher again
-				stat.registerTo(targetMessage.From)
-			}
+			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
 		}
 	}
 }
@@ -531,7 +546,7 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 
 	start := time.Now()
 	defer func() {
-		metrics.EventCollectorHandleEventDuration.Observe(time.Since(start).Seconds())
+		eventCollectorHandleEventDuration.Observe(time.Since(start).Seconds())
 	}()
 
 	// If the message is a log service event, we need to forward it to the
@@ -709,8 +724,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID := stat.getEventServiceID()
-		if eventServiceID == "" {
+		eventServiceID := stat.session.getEventServiceID()
+		if eventServiceID.IsEmpty() {
 			return true
 		}
 
@@ -765,14 +780,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 func updateMinUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
 	if existing, exists := m[key]; exists {
 		m[key] = min(existing, value)
-	} else {
-		m[key] = value
-	}
-}
-
-func updateMaxUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
-	if existing, exists := m[key]; exists {
-		m[key] = max(existing, value)
 	} else {
 		m[key] = value
 	}

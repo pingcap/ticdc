@@ -17,7 +17,6 @@ import (
 	"strconv"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -95,10 +94,10 @@ func (c *eventStoreTxnCommitTsCollector) recordEncodedKey(key []byte) {
 }
 
 func newEventStoreSSTFileFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {
-	scannedCount := metrics.EventStoreSSTFileFilterCount.WithLabelValues("scanned")
-	skippedCount := metrics.EventStoreSSTFileFilterCount.WithLabelValues("skipped")
-	scannedLogicalBytes := metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues("scanned")
-	skippedLogicalBytes := metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues("skipped")
+	scannedCount := eventStoreSSTFileFilterCount.WithLabelValues("scanned")
+	skippedCount := eventStoreSSTFileFilterCount.WithLabelValues("skipped")
+	scannedLogicalBytes := eventStoreSSTFileFilterLogicalBytes.WithLabelValues("scanned")
+	skippedLogicalBytes := eventStoreSSTFileFilterLogicalBytes.WithLabelValues("skipped")
 	return func(userProps map[string]string) bool {
 		shouldScan := eventStoreSSTFileMayContainTxnCommitTs(userProps, lowerTs, upperTs)
 		recordEventStoreSSTFileFilterMetrics(

@@ -30,9 +30,8 @@ type pulsarTopicManager struct {
 
 // GetPulsarTopicManagerAndTryCreateTopic returns the topic manager and try to create the topic.
 func GetPulsarTopicManagerAndTryCreateTopic(
-	ctx context.Context,
+	_ context.Context,
 	cfg *config.PulsarConfig,
-	topic string,
 	client pulsar.Client,
 ) (TopicManager, error) {
 	topicManager := newPulsarTopicManager(cfg, client)
@@ -53,7 +52,7 @@ func newPulsarTopicManager(
 // GetPartitionNum  always return 1 because we pass a message key to pulsar producer,
 // and pulsar producer will hash the key to a partition.
 // This method is only used to meet the requirement of mq sink's interface.
-func (m *pulsarTopicManager) GetPartitionNum(ctx context.Context, topic string) (int32, error) {
+func (m *pulsarTopicManager) GetPartitionNum(_ context.Context, _ string) (int32, error) {
 	return 1, nil
 }
 

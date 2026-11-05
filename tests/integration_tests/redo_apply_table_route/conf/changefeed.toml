@@ -1,0 +1,21 @@
+# Changefeed config with redo log enabled for table route test.
+
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/redo_apply_table_route/redo"
+flush-interval = 2000
+meta-flush-interval = 200
+
+[filter]
+rules = ['source_db.*', 'source_extra_db.*']
+
+[sink]
+[[sink.dispatchers]]
+matcher = ['source_db.*']
+target-schema = 'target_db'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['source_extra_db.*']
+target-schema = 'target_extra_db'
+target-table = '{table}_routed'

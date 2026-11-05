@@ -32,4 +32,8 @@ type Event struct {
 	changefeedID common.ChangeFeedID
 	eventType    int
 	message      *messaging.TargetMessage
+	// blockStatusReleaseKeys tracks the block-status keys reserved when the
+	// event entered the maintainer queue. They are released after HandleEvent
+	// returns so duplicate resends stay suppressed while the event is pending.
+	blockStatusReleaseKeys []blockStatusDedupeKey
 }

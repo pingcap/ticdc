@@ -16,19 +16,22 @@ package logpuller
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -37,9 +40,25 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+type mockLockResolver struct {
+	calls atomic.Int32
+}
+
+func (r *mockLockResolver) Resolve(
+	_ context.Context,
+	_ uint32,
+	_ uint64,
+	_ uint64,
+) error {
+	r.calls.Add(1)
+	return nil
+}
+
 func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 10),
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -49,10 +68,23 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
-	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
-	client.totalSpans.spanMap[SubscriptionID(1)] = span
-	client.pdClock = pdutil.NewClock4Test()
+	client.upstream = &upstreamHandle{pdClock: pdutil.NewClock4Test()}
+	client.spanRegistry = newSpanRegistry(nil, client.upstream.pdClock)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+		client.upstream.pdClock,
+		30*time.Minute,
+	)
+	client.spanRegistry.Add(span)
 
 	// Lock a range, and then ResolveLock will trigger a task for it.
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
@@ -67,19 +99,22 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		require.True(t, false, "must get a resolve lock task")
 	}
 
+	// The same region should not be enqueued repeatedly within resolveLockMinInterval.
+	span.resolveStaleLocks(200)
+	select {
+	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
+		tracker: newRegionTracker(),
 	}
 	// Lock another range, no task will be triggered before initialized.
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
-	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker)
+	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker, nil, nil)
 	span.resolveStaleLocks(200)
-	select {
-	case task := <-client.resolveLockTaskCh:
-		require.Equal(t, uint64(1), task.regionID)
-	case <-time.After(100 * time.Millisecond):
-	}
 	select {
 	case <-client.resolveLockTaskCh:
 		require.True(t, false, "shouldn't get a resolve lock task")
@@ -90,23 +125,130 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	state.setInitialized()
 	span.resolveStaleLocks(200)
 	select {
-	case <-client.resolveLockTaskCh:
+	case task := <-client.resolveLockTaskCh:
+		require.Equal(t, uint64(2), task.regionID)
 	case <-time.After(100 * time.Millisecond):
 		require.True(t, false, "must get a resolve lock task")
 	}
+	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
 	case <-time.After(100 * time.Millisecond):
-		require.True(t, false, "must get a resolve lock task")
 	}
 	require.Equal(t, 0, len(client.resolveLockTaskCh))
 
 	close(client.resolveLockTaskCh)
 }
 
+func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.cancel()
+
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+	pdClock := pdutil.NewClock4Test()
+	span1 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
+	span2 := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(2), heartbeatpb.TableSpan{
+		TableID:  2,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdClock, 30*time.Minute)
+
+	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	res.LockedRangeState.Initialized.Store(true)
+	res = span2.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	res.LockedRangeState.Initialized.Store(true)
+
+	span1.resolveStaleLocks(200)
+	select {
+	case task := <-client.resolveLockTaskCh:
+		require.Equal(t, uint64(1), task.regionID)
+	case <-time.After(100 * time.Millisecond):
+		require.True(t, false, "must get a resolve lock task")
+	}
+
+	span2.resolveStaleLocks(200)
+	select {
+	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestHandleResolveLockTasksMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resolver := &mockLockResolver{}
+	client := &subscriptionClient{
+		lockResolver:           resolver,
+		resolveLockTaskCh:      make(chan resolveLockTask, 4),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.handleResolveLockTasks(ctx)
+	}()
+
+	state := &regionlock.LockedRangeState{}
+	state.Initialized.Store(true)
+	state.ResolvedTs.Store(100)
+
+	successBefore := testutil.ToFloat64(
+		metricResolveLockSuccessCounter)
+
+	key := resolveLockKey{keyspaceID: 1, regionID: 1}
+	require.True(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   1,
+		targetTs:   200,
+		state:      state,
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 1 &&
+			testutil.ToFloat64(metricResolveLockSuccessCounter) >= successBefore+1
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
+
+	state.ResolvedTs.Store(300)
+	key = resolveLockKey{keyspaceID: 1, regionID: 2}
+	require.True(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   2,
+		targetTs:   400,
+		state:      state,
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 2
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.Equal(t, context.Canceled, errors.Cause(err))
+	case <-time.After(time.Second):
+		t.Fatal("resolve lock task handler did not exit")
+	}
+}
+
 func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
@@ -118,7 +260,20 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
+	)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -127,7 +282,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// Fill the channel to simulate the resolver goroutine being blocked.
 	client.resolveLockTaskCh <- resolveLockTask{}
 
-	before := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	before := testutil.ToFloat64(subscriptionClientResolveLockTaskDropCounter)
 	done := make(chan struct{})
 	go func() {
 		span.resolveStaleLocks(200)
@@ -143,7 +298,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	// No new task is added because the channel is still full.
 	require.Equal(t, 1, len(client.resolveLockTaskCh))
 
-	after := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	after := testutil.ToFloat64(subscriptionClientResolveLockTaskDropCounter)
 	require.Equal(t, before+1, after)
 
 	<-client.resolveLockTaskCh
@@ -152,12 +307,12 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
-		regionTaskQueue:   NewPriorityQueue(),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		memoryQuota:            newMemoryQuotaController(0, 0),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
-	client.pdClock = pdutil.NewClock4Test()
 
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
@@ -166,27 +321,43 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, true)
+	span := newSubscribedSpan(
+		client.ctx,
+		client.resolveLockRateLimiter,
+		client.resolveLockTaskCh,
+		SubscriptionID(1),
+		rawSpan,
+		100,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		true,
+		pdutil.NewClock4Test(),
+		30*time.Minute,
+	)
 
 	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	const storeAddr = "store-1"
+	worker := &regionRequestWorker{storeAddr: storeAddr, controlQueue: newControlQueue()}
+	store := &regionRequestStore{workers: []*regionRequestWorker{worker}}
+	client.regionScheduler = &regionRequestScheduler{}
+	client.regionScheduler.stores.Store(storeAddr, store)
 
 	client.setTableStopped(span)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	task, err := client.regionTaskQueue.Pop(ctx)
-	require.NoError(t, err)
-	region := task.GetRegionInfo()
-	require.True(t, region.isStopped())
-	require.True(t, region.filterLoop)
+	req, ok := worker.controlQueue.tryPop()
+	require.True(t, ok)
+	require.Equal(t, SubscriptionID(1), req.subID)
+	require.True(t, req.filterLoop)
 }
 
-func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
+func TestRegionFailureHandlerQueuesCanceledError(t *testing.T) {
 	client := &subscriptionClient{
-		errCache: newErrCache(),
-		ds:       &mockDynamicStream{},
+		eventSink: &regionEventSink{ds: &mockDynamicStream{}},
 	}
+	client.spanRegistry = newSpanRegistry(nil, nil)
+	client.failureHandler = newRegionFailureHandler(nil, client.onTableDrained, nil, nil)
 	rawSpan := heartbeatpb.TableSpan{
 		TableID:  1,
 		StartKey: []byte("a"),
@@ -197,7 +368,7 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 		span:      rawSpan,
 		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
 	}
-	client.totalSpans.spanMap = map[SubscriptionID]*subscribedSpan{span.subID: span}
+	client.spanRegistry.Add(span)
 
 	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
@@ -205,25 +376,43 @@ func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
 	require.False(t, span.rangeLock.Stop())
 
-	client.onRegionFail(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(1, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
 		subscribedSpan:   span,
 		lockedRangeState: res1.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.errCache.cache, 1)
+	require.Len(t, client.failureHandler.cache.cache, 1)
 	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
 
-	client.onRegionFail(newRegionErrorInfo(regionInfo{
+	client.failureHandler.Report(newRegionErrorInfo(regionInfo{
 		verID:            tikv.NewRegionVerID(2, 1, 1),
 		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
 		subscribedSpan:   span,
 		lockedRangeState: res2.LockedRangeState,
 	}, &requestCancelledErr{}))
 
-	require.Len(t, client.errCache.cache, 1)
-	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+	require.Len(t, client.failureHandler.cache.cache, 1)
+	require.Same(t, span, client.spanRegistry.Get(span.subID))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.failureHandler.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return client.spanRegistry.Get(span.subID) == nil
+	}, time.Second, 10*time.Millisecond)
+	cancel()
+	select {
+	case err := <-runDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("failure handler did not exit after context cancellation")
+	}
 }
 
 type mockDynamicStream struct{}
@@ -256,25 +445,49 @@ func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] 
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
 
-func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
-	client := &subscriptionClient{
-		ds:              &mockDynamicStream{},
-		regionTaskQueue: NewPriorityQueue(),
+func TestRegionEventSinkPushUnblocksOnClientClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	quota := newMemoryQuotaController(10, 8)
+	span := &subscribedSpan{subID: 1}
+	require.True(t, quota.AcquireEvent(ctx, span, 20))
+	t.Cleanup(func() { quota.ReleaseEvent(20) })
+
+	sink := &regionEventSink{
+		ctx:         ctx,
+		ds:          &mockDynamicStream{},
+		memoryQuota: quota,
 	}
-	client.ctx, client.cancel = context.WithCancel(context.Background())
-	client.cond = sync.NewCond(&client.mu)
+	client := &subscriptionClient{eventSink: sink}
+	client.regionScheduler = &regionRequestScheduler{
+		taskQueue: priorityqueue.New[*regionPriorityTask](),
+	}
+	client.ctx = ctx
+	client.cancel = cancel
 
-	client.paused.Store(true)
-
+	event := regionEvent{
+		states: []*regionFeedState{{
+			region: regionInfo{subscribedSpan: span},
+		}},
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{
+				Entries: []*cdcpb.Event_Row{{
+					Key:   []byte("key"),
+					Value: []byte("value"),
+				}},
+			},
+		},
+	}
 	done := make(chan struct{})
 	go func() {
-		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+		sink.Push(SubscriptionID(1), event)
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		t.Fatal("pushRegionEventToDS should block when paused")
+		t.Fatal("pushRegionEventToDS should block when event memory is exhausted")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -285,41 +498,6 @@ func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("pushRegionEventToDS should be unblocked by Close")
 	}
-}
-
-func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
-	ctx := context.Background()
-	client := &subscriptionClient{}
-
-	worker := &regionRequestWorker{
-		requestCache: newRequestCache(1),
-	}
-	store := &requestedStore{storeAddr: "store-1"}
-	store.requestWorkers.s = []*regionRequestWorker{worker}
-	client.stores.Store(store.storeAddr, store)
-
-	dummyRegion := regionInfo{
-		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
-		lockedRangeState: &regionlock.LockedRangeState{},
-	}
-	ok, err := worker.add(ctx, dummyRegion, true)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	stopRegion := regionInfo{
-		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
-	}
-	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
-	require.False(t, enqueued)
-
-	<-worker.requestCache.pendingQueue
-	worker.requestCache.markDone()
-
-	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
-	require.NoError(t, err)
-	require.True(t, enqueued)
-	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
@@ -351,11 +529,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	// bootstrap cluster with a region which leader is in invalid store.
 	cluster.Bootstrap(11, []uint64{1, 2, 3}, []uint64{4, 5, 6}, 6)
 
-	clientConfig := &SubscriptionClientConfig{
-		RegionRequestWorkerPerStore: 2,
-	}
 	client := NewSubscriptionClient(
-		clientConfig,
 		pdClient,
 		nil, // we don't need it in this unittest, so we can pass nil
 		&security.Credential{},
@@ -395,7 +569,16 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
+	client.Subscribe(
+		subID,
+		span,
+		1,
+		consumeKVEvents,
+		advanceResolvedTs,
+		0,
+		false,
+		ScanPriorityLow,
+	)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())
@@ -425,166 +608,232 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	}
 }
 
-// TestErrCacheDispatchWithFullChannelAndCanceledContext tests that when errCh is full
-// and context is canceled, the dispatch method doesn't get stuck.
-func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
-	// Create errCache with a small errCh to easily fill it up
-	errCache := &errCache{
-		cache:  make([]regionErrorInfo, 0, 10),
-		errCh:  make(chan regionErrorInfo, 2), // Small buffer to easily fill
-		notify: make(chan struct{}, 10),
-	}
-
-	// Create a mock regionErrorInfo
-	mockErrInfo := regionErrorInfo{
-		regionInfo: regionInfo{
-			verID: tikv.NewRegionVerID(1, 1, 1),
-			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
-		},
-		err: errors.New("test error"),
-	}
-
-	// Fill up the errCh channel to make it full
-	errCache.errCh <- mockErrInfo
-	errCache.errCh <- mockErrInfo
-
-	// Add some errors to the cache
-	for i := 0; i < 5; i++ {
-		errCache.add(mockErrInfo)
-	}
-
-	// Create a context that will be canceled
+func TestSubscriptionRequestEventAndUnsubscribeFlow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
-	// Channel to signal when dispatch returns
-	dispatchDone := make(chan error, 1)
+	eventsCh := make(chan *cdcpb.ChangeDataEvent, 10)
+	serverImpl := newMockChangeDataServer(eventsCh)
+	serverWG := &sync.WaitGroup{}
+	server, storeAddr := newMockService(ctx, t, serverImpl, serverWG)
 
-	// Start dispatch in a goroutine
+	_, cluster, pdClient, _ := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	pdClient = &mockPDClient{Client: pdClient, versionGen: defaultVersionGen}
+	regionCache := tikv.NewRegionCache(pdClient)
+	appcontext.SetService(appcontext.RegionCache, regionCache)
+
+	cluster.AddStore(1, storeAddr)
+	cluster.Bootstrap(11, []uint64{1}, []uint64{2}, 2)
+
+	client := NewSubscriptionClient(pdClient, nil, &security.Credential{})
+	concreteClient := client.(*subscriptionClient)
+	runDone := make(chan error, 1)
 	go func() {
-		err := errCache.dispatch(ctx)
-		dispatchDone <- err
+		runDone <- client.Run(ctx)
 	}()
 
-	// Give dispatch some time to start and potentially get stuck
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel the context
-	cancel()
-
-	// Wait for dispatch to return with a timeout
-	select {
-	case err := <-dispatchDone:
-		// Verify that dispatch returned with context.Canceled error
-		require.Equal(t, context.Canceled, err)
-	case <-time.After(5 * time.Second):
-		// If we timeout here, it means dispatch is stuck
-		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
-	}
-}
-
-func TestErrCacheDispatchBatch(t *testing.T) {
-	mockErrInfo := regionErrorInfo{
-		regionInfo: regionInfo{
-			verID: tikv.NewRegionVerID(1, 1, 1),
-			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
-		},
-		err: errors.New("test error"),
-	}
-
-	tests := []struct {
-		name          string
-		cacheLen      int
-		limit         int
-		expectedN     int
-		expectedCache int
-		expectedErrCh int
-	}{
-		{
-			name:          "dispatch all when limit equals cache length",
-			cacheLen:      5,
-			limit:         5,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "keep remaining cache when limit is smaller",
-			cacheLen:      5,
-			limit:         2,
-			expectedN:     2,
-			expectedCache: 3,
-			expectedErrCh: 2,
-		},
-		{
-			name:          "dispatch all when limit is larger",
-			cacheLen:      5,
-			limit:         10,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "dispatch all when limit is zero",
-			cacheLen:      5,
-			limit:         0,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "dispatch all when limit is negative",
-			cacheLen:      5,
-			limit:         -1,
-			expectedN:     5,
-			expectedCache: 0,
-			expectedErrCh: 5,
-		},
-		{
-			name:          "empty cache",
-			cacheLen:      0,
-			limit:         5,
-			expectedN:     0,
-			expectedCache: 0,
-			expectedErrCh: 0,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			errCache := &errCache{
-				cache:  make([]regionErrorInfo, 0, 10),
-				errCh:  make(chan regionErrorInfo, 10),
-				notify: make(chan struct{}, 1),
-			}
-			for i := 0; i < tc.cacheLen; i++ {
-				errCache.add(mockErrInfo)
-			}
-
-			n, err := errCache.dispatchBatch(context.Background(), tc.limit)
-			require.NoError(t, err)
-			require.Equal(t, tc.expectedN, n)
-			require.Len(t, errCache.cache, tc.expectedCache)
-			require.Len(t, errCache.errCh, tc.expectedErrCh)
-		})
-	}
-}
-
-func TestGCResolveLastRunMap(t *testing.T) {
-	now := time.Now()
-	resolveLastRun := make(map[uint64]time.Time, resolveLastRunGCThreshold+1)
-	const keep = 10
-	for i := 0; i < resolveLastRunGCThreshold+1; i++ {
-		lastRunTime := now.Add(-2 * resolveLockMinInterval)
-		if i < keep {
-			lastRunTime = now.Add(-resolveLockMinInterval / 2)
+	defer func() {
+		cancel()
+		select {
+		case err := <-runDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("subscription client did not stop")
 		}
-		resolveLastRun[uint64(i)] = lastRunTime
+		require.NoError(t, concreteClient.Close(context.Background()))
+		server.Stop()
+		serverImpl.wg.Wait()
+		serverWG.Wait()
+		regionCache.Close()
+		pdClient.Close()
+	}()
+
+	subID := client.AllocSubscriptionID()
+	span := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+	}
+	kvCh := make(chan []common.RawKVEntry, 1)
+	resolvedTsCh := make(chan uint64, 1)
+	client.Subscribe(
+		subID,
+		span,
+		1,
+		func(events []common.RawKVEntry, _ func()) bool {
+			kvCh <- append([]common.RawKVEntry(nil), events...)
+			return false
+		},
+		func(ts uint64) { resolvedTsCh <- ts },
+		0,
+		true,
+		ScanPriorityHigh,
+	)
+
+	var subscribeRequest *cdcpb.ChangeDataRequest
+	select {
+	case subscribeRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for change data request")
+	}
+	require.Equal(t, uint64(subID), subscribeRequest.RequestId)
+	require.Equal(t, uint64(11), subscribeRequest.RegionId)
+	require.Equal(t, uint64(1), subscribeRequest.CheckpointTs)
+	require.Equal(t, span.StartKey, subscribeRequest.StartKey)
+	require.Equal(t, span.EndKey, subscribeRequest.EndKey)
+	require.Equal(t, kvrpcpb.ExtraOp_ReadOldValue, subscribeRequest.ExtraOp)
+	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, subscribeRequest.ScanPriority)
+	require.True(t, subscribeRequest.FilterLoop)
+	require.NotNil(t, subscribeRequest.Header)
+	require.Equal(t, pdClient.GetClusterID(ctx), subscribeRequest.Header.ClusterId)
+	require.NotNil(t, subscribeRequest.RegionEpoch)
+
+	eventsCh <- mockInitializedEvent(11, uint64(subID))
+	eventsCh <- &cdcpb.ChangeDataEvent{Events: []*cdcpb.Event{{
+		RegionId:  11,
+		RequestId: uint64(subID),
+		Event: &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{Entries: []*cdcpb.Event_Row{{
+			StartTs:  1,
+			CommitTs: 2,
+			Type:     cdcpb.Event_COMMITTED,
+			OpType:   cdcpb.Event_Row_PUT,
+			Key:      []byte("key"),
+			Value:    []byte("value"),
+			OldValue: []byte("old-value"),
+		}}}},
+	}}}
+
+	select {
+	case entries := <-kvCh:
+		require.Len(t, entries, 1)
+		require.Equal(t, common.OpTypePut, entries[0].OpType)
+		require.Equal(t, uint64(1), entries[0].StartTs)
+		require.Equal(t, uint64(2), entries[0].CRTs)
+		require.Equal(t, uint64(11), entries[0].RegionID)
+		require.Equal(t, []byte("key"), entries[0].Key)
+		require.Equal(t, []byte("value"), entries[0].Value)
+		require.Equal(t, []byte("old-value"), entries[0].OldValue)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a KV event")
 	}
 
-	resolveLastRun = gcResolveLastRunMap(resolveLastRun, now)
-	require.Len(t, resolveLastRun, keep)
-	for i := 0; i < keep; i++ {
-		_, ok := resolveLastRun[uint64(i)]
-		require.True(t, ok)
+	const targetTs = uint64(3)
+	eventsCh <- mockTsEventBatch(11, targetTs, uint64(subID))
+	select {
+	case resolvedTs := <-resolvedTsCh:
+		require.Equal(t, targetTs, resolvedTs)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for resolved ts")
 	}
+
+	eventsCh <- &cdcpb.ChangeDataEvent{Events: []*cdcpb.Event{{
+		RegionId:  11,
+		RequestId: uint64(subID),
+		Event: &cdcpb.Event_Error{Error: &cdcpb.Error{
+			EpochNotMatch: &errorpb.EpochNotMatch{},
+		}},
+	}}}
+
+	var retryRequest *cdcpb.ChangeDataRequest
+	select {
+	case retryRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retry request after region error")
+	}
+	require.Equal(t, uint64(subID), retryRequest.RequestId)
+	require.Equal(t, uint64(11), retryRequest.RegionId)
+	require.Equal(t, targetTs, retryRequest.CheckpointTs)
+	require.Nil(t, retryRequest.GetDeregister())
+
+	client.Unsubscribe(subID)
+	var deregisterRequest *cdcpb.ChangeDataRequest
+	select {
+	case deregisterRequest = <-serverImpl.requestCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for deregister request")
+	}
+	require.Equal(t, uint64(subID), deregisterRequest.RequestId)
+	require.True(t, deregisterRequest.FilterLoop)
+	require.NotNil(t, deregisterRequest.GetDeregister())
+
+	require.Eventually(t, func() bool {
+		return concreteClient.spanRegistry.Get(subID) == nil
+	}, 5*time.Second, 10*time.Millisecond, "subscription path was not removed")
+}
+
+func TestGetResolvedTargetTs(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+
+	span := newSubscribedSpan(client.ctx, client.resolveLockRateLimiter, client.resolveLockTaskCh, SubscriptionID(1), heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false, pdutil.NewClock4Test(), 30*time.Minute)
+	span.initialized.Store(true)
+
+	// Simulate clock skew: local pdClock is 30s ahead of PD.
+	// In the real scenario:
+	//   - currentTs comes from pd.GetTS (PD time)
+	//   - currentTime comes from pdClock.CurrentTime() (local clock, could be ahead)
+	//   - resolvedTs is a TiKV/PD timestamp
+	pdNow := time.Now()
+	localClockNow := pdNow.Add(30 * time.Second) // local clock 30s ahead
+	currentTs := oracle.GoTimeToTS(pdNow)
+
+	// resolvedTime is 2 seconds ago in PD time, so:
+	//   resolvedTime + resolveLockFence = pdNow - 2s + 4s = pdNow + 2s > pdNow
+	//   => oracle.GoTimeToTS(resolvedTime + resolveLockFence) > currentTs
+	// But currentTime (local) - resolvedTime = 32s > 4s (resolveLockFence), so the check passes
+	resolvedTime := pdNow.Add(-2 * time.Second)
+	resolvedTs := oracle.GoTimeToTS(resolvedTime)
+	span.resolvedTs.Store(resolvedTs)
+	span.resolvedTsUpdated.Store(pdNow.Add(-10 * time.Second).Unix())
+
+	// Verify the setup: resolvedTime + resolveLockFence should exceed currentTs
+	tsIfUncapped := oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+	require.True(t, tsIfUncapped > currentTs,
+		"setup: resolvedTime+resolveLockFence TS (%d) should exceed currentTs (%d)", tsIfUncapped, currentTs)
+
+	// With the fix (min), targetTs should be capped at currentTs
+	targetTs := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, currentTs, targetTs,
+		"targetTs should be capped at currentTs when resolvedTime+resolveLockFence exceeds it")
+
+	// Test case 2: resolvedTime + resolveLockFence is in the past (< currentTs)
+	// resolvedTime = 20s ago, +4s = 16s ago < pdNow, so tsIfUncapped < currentTs
+	resolvedTime2 := pdNow.Add(-20 * time.Second)
+	span.resolvedTs.Store(oracle.GoTimeToTS(resolvedTime2))
+	tsIfUncapped2 := oracle.GoTimeToTS(resolvedTime2.Add(resolveLockFence))
+	require.True(t, tsIfUncapped2 < currentTs,
+		"setup: resolvedTime+resolveLockFence TS (%d) should be less than currentTs (%d)", tsIfUncapped2, currentTs)
+
+	targetTs2 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, tsIfUncapped2, targetTs2,
+		"targetTs should be resolvedTime+resolveLockFence when it's less than currentTs")
+
+	// Test case 3: span not initialized
+	span.initialized.Store(false)
+	targetTs3 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs3, "targetTs should be 0 when span is not initialized")
+
+	// Test case 4: resolvedTsUpdated is recent (within resolveLockFence)
+	span.initialized.Store(true)
+	span.resolvedTsUpdated.Store(time.Now().Unix())
+	targetTs4 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs4, "targetTs should be 0 when resolvedTsUpdated is recent")
+
+	// Test case 5: currentTime - resolvedTime < resolveLockFence (should return 0)
+	span.resolvedTsUpdated.Store(pdNow.Add(-10 * time.Second).Unix())
+	recentResolvedTime := localClockNow.Add(-2 * time.Second) // 2s ago in local time
+	span.resolvedTs.Store(oracle.GoTimeToTS(recentResolvedTime))
+	targetTs5 := getResolvedTargetTs(span, localClockNow, currentTs)
+	require.Equal(t, uint64(0), targetTs5,
+		"targetTs should be 0 when currentTime - resolvedTime < resolveLockFence")
 }

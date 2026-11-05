@@ -15,7 +15,7 @@ package config
 
 import (
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -55,34 +55,39 @@ func (c *LargeMessageHandleConfig) AdjustAndValidate(protocol Protocol, enableTi
 
 	// compression can be enabled independently
 	if !compression.Supported(c.LargeMessageHandleCompression) {
-		return cerror.ErrInvalidReplicaConfig.GenWithStack(
+		return errors.ErrInvalidReplicaConfig.GenWithStack(
 			"large message handle compression is not supported, got %s", c.LargeMessageHandleCompression)
 	}
 	if c.LargeMessageHandleOption == LargeMessageHandleOptionNone {
 		return nil
+	}
+	if c.LargeMessageHandleOption != LargeMessageHandleOptionClaimCheck &&
+		c.LargeMessageHandleOption != LargeMessageHandleOptionHandleKeyOnly {
+		return errors.ErrInvalidReplicaConfig.GenWithStack(
+			"unknown large-message-handle-option %s", c.LargeMessageHandleOption)
 	}
 
 	switch protocol {
 	case ProtocolOpen, ProtocolSimple:
 	case ProtocolCanalJSON:
 		if !enableTiDBExtension {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to %s, protocol is %s, but enable-tidb-extension is false",
 				c.LargeMessageHandleOption, protocol.String())
 		}
 	default:
-		return cerror.ErrInvalidReplicaConfig.GenWithStack(
+		return errors.ErrInvalidReplicaConfig.GenWithStack(
 			"large message handle is set to %s, protocol is %s, it's not supported",
 			c.LargeMessageHandleOption, protocol.String())
 	}
 
 	if c.LargeMessageHandleOption == LargeMessageHandleOptionClaimCheck {
 		if c.ClaimCheckStorageURI == "" {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to claim-check, but the claim-check-storage-uri is empty")
 		}
 		if c.ClaimCheckRawValue && protocol == ProtocolOpen {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to claim-check, raw value is not supported for the open protocol")
 		}
 	}
@@ -106,7 +111,8 @@ func (c *LargeMessageHandleConfig) EnableClaimCheck() bool {
 	return c.LargeMessageHandleOption == LargeMessageHandleOptionClaimCheck
 }
 
-// Disabled returns true if disable large message handle.
+// Disabled returns true only when large message handling is explicitly disabled.
+// It returns false for nil and unknown configurations.
 func (c *LargeMessageHandleConfig) Disabled() bool {
 	if c == nil {
 		return false

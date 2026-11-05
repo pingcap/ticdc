@@ -52,8 +52,8 @@ func (p *mockProducer) syncBroadcastMessage(ctx context.Context, topic string, m
 
 // SyncSendMessage sends a message
 // partitionNum is not used,pulsar consume all partitions
-func (p *mockProducer) syncSendMessage(ctx context.Context, topic string,
-	message *common.Message, messageType common.MessageType,
+func (p *mockProducer) syncSendMessage(_ context.Context, topic string,
+	message *common.Message, _ common.MessageType,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -66,7 +66,7 @@ func (p *mockProducer) syncSendMessage(ctx context.Context, topic string,
 }
 
 // GetProducerByTopic returns a producer by topic name
-func (p *mockProducer) GetProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *mockProducer) GetProducerByTopic(_ string) (producer pulsar.Producer, err error) {
 	return producer, nil
 }
 

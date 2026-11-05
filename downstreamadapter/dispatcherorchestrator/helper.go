@@ -34,9 +34,8 @@ type pendingMessageKey struct {
 // Once Pop returns a message, the key leaves the pending set immediately, so the next
 // retry can queue one more request for the next processing round.
 //
-// For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// While a request is still queued, a later removed=true request replaces removed=false in
-// that queued slot so the next execution still observes the stronger semantics.
+// For MaintainerCloseRequest, removed=true has stronger semantics than removed=false.
+// It can upgrade a queued request only when it does not move the maintainer epoch backward.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -72,6 +71,9 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
+	if shouldReplaceByMaintainerEpoch(oldMsg, newMsg) {
+		return true
+	}
 	if key.msgType != messaging.TypeMaintainerCloseRequest {
 		return false
 	}
@@ -86,8 +88,35 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	if !ok1 || !ok2 {
 		return false
 	}
-	// Only upgrade semantics: allow removed=true to override removed=false.
-	return !oldReq.Removed && newReq.Removed
+	// Only upgrade semantics: allow removed=true to override removed=false without
+	// letting a stale removed request overwrite a newer epoch close.
+	return !oldReq.Removed && newReq.Removed && newReq.MaintainerEpoch >= oldReq.MaintainerEpoch
+}
+
+// shouldReplaceByMaintainerEpoch lets a newer maintainer generation replace an
+// older queued control message for the same changefeed and message type.
+func shouldReplaceByMaintainerEpoch(oldMsg, newMsg *messaging.TargetMessage) bool {
+	oldMaintainerEpoch, oldOK := pendingMessageMaintainerEpoch(oldMsg)
+	newMaintainerEpoch, newOK := pendingMessageMaintainerEpoch(newMsg)
+	return oldOK && newOK && newMaintainerEpoch > oldMaintainerEpoch
+}
+
+// pendingMessageMaintainerEpoch extracts the maintainer epoch from messages
+// whose ordering must be fenced by maintainer generation.
+func pendingMessageMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return 0, false
+	}
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerCloseRequest:
+		return req.MaintainerEpoch, true
+	default:
+		return 0, false
+	}
 }
 
 // Pop blocks until a message is available or the queue is closed.

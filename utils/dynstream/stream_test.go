@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,7 @@ func newMockEvent(id int, path string, sleep time.Duration, work mockWork, start
 type mockHandler struct {
 	mu            sync.Mutex
 	droppedEvents []*mockEvent
+	dropEvent     *mockEvent
 }
 
 func (h *mockHandler) Path(event *mockEvent) string {
@@ -88,7 +90,7 @@ func (h *mockHandler) OnDrop(event *mockEvent) interface{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.droppedEvents = append(h.droppedEvents, event)
-	return nil
+	return h.dropEvent
 }
 
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {
@@ -205,6 +207,36 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
+}
+
+func TestDropPoppedBatchAfterRemovePath(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{}, newTestBatchConfigRegistry())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
+	events := []*mockEvent{{id: 1}, {id: 2}}
+
+	require.False(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Empty(t, handler.drainDroppedEvents())
+
+	path.removed.Store(true)
+	require.True(t, stream.dropBatchIfPathRemoved(path, events))
+	require.Equal(t, events, handler.drainDroppedEvents())
+}
+
+func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test-batch-metric-cache-limit", &handler, Option{}, newTestBatchConfigRegistry())
+
+	for i := range maxBatchMetricCacheEntries {
+		stream.getBatchMetricObservers(fmt.Sprintf("label-%d", i))
+	}
+	require.Len(t, stream.batchMetricCache, maxBatchMetricCacheEntries)
+	require.Contains(t, stream.batchMetricCache, "label-0")
+
+	stream.getBatchMetricObservers("new-label")
+	require.Len(t, stream.batchMetricCache, maxBatchMetricCacheEntries)
+	require.NotContains(t, stream.batchMetricCache, "label-0")
+	require.Contains(t, stream.batchMetricCache, "new-label")
 }
 
 func TestStreamCleansBatcherBufferAfterHandle(t *testing.T) {

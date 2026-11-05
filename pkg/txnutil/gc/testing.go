@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
@@ -32,6 +33,9 @@ type MockPDClient struct {
 
 	UpdateServiceGCSafePointFunc func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error)
 	GetGCStatesClientFunc        func(keyspaceID uint32) pdgc.GCStatesClient
+	GetMinServiceSafePointV2Func func(ctx context.Context, keyspaceID uint32) (uint64, error)
+	SetServiceSafePointV2Func    func(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error)
+	DeleteServiceSafePointV2Func func(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error)
 }
 
 // UpdateServiceGCSafePoint implements pd.Client.UpdateServiceGCSafePoint.
@@ -40,7 +44,7 @@ func (m *MockPDClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID s
 }
 
 // GetTS implements pd.Client.GetTS.
-func (m *MockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+func (m *MockPDClient) GetTS(_ context.Context) (int64, int64, error) {
 	return oracle.GetPhysical(time.Now()), 0, nil
 }
 
@@ -49,7 +53,7 @@ func (m *MockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 func (m *MockPDClient) Close() {}
 
 // GetClusterID gets the cluster ID from PD.
-func (m *MockPDClient) GetClusterID(ctx context.Context) uint64 {
+func (m *MockPDClient) GetClusterID(_ context.Context) uint64 {
 	return m.ClusterID
 }
 
@@ -62,8 +66,8 @@ func (m *MockPDClient) GetAllStores(
 
 // LoadGlobalConfig loads global config from PD.
 func (m *MockPDClient) LoadGlobalConfig(
-	ctx context.Context,
-	names []string, configPath string,
+	_ context.Context,
+	_ []string, _ string,
 ) ([]pd.GlobalConfigItem, int64, error) {
 	return []pd.GlobalConfigItem{
 		{
@@ -82,4 +86,39 @@ func (m *MockPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient 
 		return m.Client.GetGCStatesClient(keyspaceID)
 	}
 	return nil
+}
+
+// GetMinServiceSafePointV2 implements pdgc.LegacyClientV2.GetMinServiceSafePointV2.
+func (m *MockPDClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	if m.GetMinServiceSafePointV2Func != nil {
+		return m.GetMinServiceSafePointV2Func(ctx, keyspaceID)
+	}
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
+		return legacyCli.GetMinServiceSafePointV2(ctx, keyspaceID)
+	}
+	return 0, errors.New("GetMinServiceSafePointV2Func is not set")
+}
+
+// SetServiceSafePointV2 implements pdgc.LegacyClientV2.SetServiceSafePointV2.
+func (m *MockPDClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	if m.SetServiceSafePointV2Func != nil {
+		return m.SetServiceSafePointV2Func(ctx, keyspaceID, serviceID, ttl, safePoint)
+	}
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
+		return legacyCli.SetServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint)
+	}
+	return 0, errors.New("SetServiceSafePointV2Func is not set")
+}
+
+// DeleteServiceSafePointV2 implements pdgc.LegacyClientV2.DeleteServiceSafePointV2.
+func (m *MockPDClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+	if m.DeleteServiceSafePointV2Func != nil {
+		return m.DeleteServiceSafePointV2Func(ctx, keyspaceID, serviceID)
+	}
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
+		return legacyCli.DeleteServiceSafePointV2(ctx, keyspaceID, serviceID)
+	}
+	return 0, errors.New("DeleteServiceSafePointV2Func is not set")
 }

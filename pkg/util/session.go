@@ -78,7 +78,7 @@ func (se *session) GetBuiltinFunctionUsage() map[string]uint32 {
 	return se.builtinFunctionUsage
 }
 
-func (se *session) BuiltinFunctionUsageInc(scalarFuncSigName string) {}
+func (se *session) BuiltinFunctionUsageInc(_ string) {}
 
 // ZeroSessionCtx is used when the session variables is not important.
 var ZeroSessionCtx sessionctx.Context

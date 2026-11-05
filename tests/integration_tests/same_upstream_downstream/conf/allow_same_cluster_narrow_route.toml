@@ -1,0 +1,11 @@
+# The matcher is narrower than the filter rule, so tables of `allow_same_cluster_src` other than
+# `t1` would keep their own name. This changefeed must be rejected.
+allow-same-cluster = true
+
+[filter]
+rules = ['allow_same_cluster_src.*']
+
+[sink]
+[[sink.dispatchers]]
+matcher = ['allow_same_cluster_src.t1']
+target-schema = 'allow_same_cluster_dst'

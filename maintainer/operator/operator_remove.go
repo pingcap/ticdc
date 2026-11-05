@@ -59,33 +59,35 @@ type removeDispatcherOperator struct {
 	// ScheduleDispatcherRequest (for example merge-related messages).
 	operatorType heartbeatpb.OperatorType
 
-	sendThrottler sendThrottler
+	maintainerEpoch uint64
+	sendThrottler   sendThrottler
 }
 
 func NewRemoveDispatcherOperator(
 	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
 	postFinish func(),
 ) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		postFinish:     postFinish,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		nodeID:          replicaSet.GetNodeID(),
+		spanController:  spanController,
+		postFinish:      postFinish,
+		operatorType:    operatorType,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, operatorType heartbeatpb.OperatorType) *removeDispatcherOperator {
-	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
-	}
+func newRemoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
+) *removeDispatcherOperator {
+	return NewRemoveDispatcherOperator(spanController, replicaSet, operatorType, maintainerEpoch, nil)
 }
 
 func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -96,7 +98,7 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 		from == m.nodeID &&
 		(status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed) {
-		m.replicaSet.UpdateStatus(status)
+		m.replicaSet.UpdateRemovedStatus(status)
 		log.Info("dispatcher report non-working status",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 		m.finished.Store(true)
@@ -110,7 +112,7 @@ func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 
-	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType, m.maintainerEpoch)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.

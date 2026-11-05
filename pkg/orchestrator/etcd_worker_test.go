@@ -23,14 +23,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -41,7 +41,10 @@ const (
 	testEtcdKeyPrefix    = "/cdc_etcd_worker_test"
 	numGroups            = 10
 	numValuesPerGroup    = 5
-	totalTicksPerReactor = 1000
+	totalTicksPerReactor = 30
+	// linearizabilityValues is how many values TestLinearizability writes before the
+	// worker starts, and how many more it writes while the worker runs.
+	linearizabilityValues = 50
 )
 
 type simpleReactor struct {
@@ -52,7 +55,7 @@ type simpleReactor struct {
 
 func (s *simpleReactor) Tick(_ context.Context, state ReactorState) (nextState ReactorState, err error) {
 	if s.tickCount >= totalTicksPerReactor {
-		return s.state, cerrors.ErrReactorFinished
+		return s.state, errors.ErrReactorFinished.FastGenByArgs()
 	}
 	s.tickCount++
 
@@ -211,6 +214,8 @@ func setUpTest(t *testing.T) (func() etcd.Client, func()) {
 }
 
 func TestEtcdSum(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -272,8 +277,8 @@ func TestEtcdSum(t *testing.T) {
 	}
 
 	err = errg.Wait()
-	if err != nil && (errors.Cause(err) == context.DeadlineExceeded ||
-		errors.Cause(err) == context.Canceled ||
+	if err != nil && (errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
 		strings.Contains(err.Error(), "etcdserver: request timeout")) {
 		return
 	}
@@ -312,6 +317,8 @@ func (s *intReactorState) GetPatches() [][]DataPatch {
 type linearizabilityReactor struct {
 	state     *intReactorState
 	tickCount int
+	// finalValue is the last value the test writes; the reactor stops once it is observed.
+	finalValue int
 }
 
 func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (nextState ReactorState, err error) {
@@ -322,14 +329,16 @@ func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (
 		}
 		r.tickCount++
 	}
-	if r.state.val == 1999 {
-		return r.state, cerrors.ErrReactorFinished
+	if r.state.val == r.finalValue {
+		return r.state, errors.ErrReactorFinished.FastGenByArgs()
 	}
 	r.state.isUpdated = false
 	return r.state, nil
 }
 
 func TestLinearizability(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -340,14 +349,15 @@ func TestLinearizability(t *testing.T) {
 	cdcCli, err := etcd.NewCDCEtcdClient(ctx, cli0.Unwrap(), "default")
 	require.Nil(t, err)
 	cli := newClient()
-	for i := 0; i < 1000; i++ {
+	for i := range linearizabilityValues {
 		_, err := cli.Put(ctx, testEtcdKeyPrefix+"/lin", strconv.Itoa(i))
 		require.Nil(t, err)
 	}
 
 	reactor, err := NewEtcdWorker(cdcCli, testEtcdKeyPrefix+"/lin", &linearizabilityReactor{
-		state:     nil,
-		tickCount: 999,
+		state:      nil,
+		tickCount:  linearizabilityValues - 1,
+		finalValue: 2*linearizabilityValues - 2,
 	}, &intReactorState{
 		val:       0,
 		isUpdated: false,
@@ -359,7 +369,7 @@ func TestLinearizability(t *testing.T) {
 	})
 
 	time.Sleep(500 * time.Millisecond)
-	for i := 999; i < 2000; i++ {
+	for i := linearizabilityValues - 1; i < 2*linearizabilityValues-1; i++ {
 		_, err := cli.Put(ctx, testEtcdKeyPrefix+"/lin", strconv.Itoa(i))
 		require.Nil(t, err)
 	}
@@ -423,10 +433,12 @@ func (r *finishedReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return nil, true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestFinished(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -493,10 +505,12 @@ func (r *coverReactor) Tick(ctx context.Context, state ReactorState) (nextState 
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return append(old, []byte("fin")...), true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestCover(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -572,10 +586,12 @@ func (r *emptyTxnReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return []byte("123"), true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestEmptyTxn(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -641,10 +657,12 @@ func (r *emptyOrNilReactor) Tick(ctx context.Context, state ReactorState) (nextS
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return nil, true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestEmptyOrNil(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -689,7 +707,7 @@ func (r *modifyOneReactor) Tick(ctx context.Context, state ReactorState) (nextSt
 	if !r.finished {
 		r.finished = true
 	} else {
-		return r.state, cerrors.ErrReactorFinished.GenWithStackByArgs()
+		return r.state, errors.ErrReactorFinished.GenWithStackByArgs()
 	}
 	if r.waitOnCh != nil {
 		select {
@@ -715,6 +733,8 @@ func (r *modifyOneReactor) Tick(ctx context.Context, state ReactorState) (nextSt
 // TestModifyAfterDelete tests snapshot isolation when there is one modifying transaction delayed in the middle while a deleting transaction
 // commits. The first transaction should be aborted and retried, and isolation should not be violated.
 func TestModifyAfterDelete(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -777,8 +797,19 @@ func TestModifyAfterDelete(t *testing.T) {
 }
 
 func TestRetryableError(t *testing.T) {
-	require.True(t, isRetryableError(cerrors.ErrEtcdTryAgain))
-	require.True(t, isRetryableError(cerrors.ErrReachMaxTry.Wrap(rpctypes.ErrTimeoutDueToLeaderFail)))
+	require.True(t, isRetryableError(errors.ErrEtcdTryAgain))
+	require.True(t, isRetryableError(errors.ErrReachMaxTry.Wrap(rpctypes.ErrTimeoutDueToLeaderFail)))
 	require.True(t, isRetryableError(errors.Trace(context.DeadlineExceeded)))
 	require.False(t, isRetryableError(context.Canceled))
+}
+
+func TestEtcdEventKeysOmitValues(t *testing.T) {
+	events := []*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Key: []byte("/key1"), Value: []byte("secret-value")}},
+		{Type: mvccpb.DELETE, Kv: &mvccpb.KeyValue{Key: []byte("/key2")}},
+	}
+	keys := etcdEventKeys(events)
+	require.Equal(t, []string{"PUT /key1", "DELETE /key2"}, keys)
+	require.NotContains(t, strings.Join(keys, ","), "secret-value")
+	require.Empty(t, etcdEventKeys(nil))
 }

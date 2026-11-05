@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
@@ -65,15 +67,79 @@ type EventTestHelper struct {
 
 	originalEnableDistTask bool
 
+	// privateStore reports that the helper owns its store instead of using the
+	// store shared by the helpers of this test binary.
+	privateStore bool
+
 	tableInfos map[string]*common.TableInfo
 	// each partition table's partition ID, Name -> ID.
 	partitionIDs map[string]map[string]int64
 }
 
+// Bootstrapping a mockstore (session.BootstrapSession) is what makes this helper
+// expensive: it creates and populates the TiDB system tables, which takes
+// seconds. A test binary creates hundreds of helpers, so they share one
+// bootstrapped store. That domain has to stay alive while the helpers are: it
+// owns the DDL worker, and closing it while later helpers still run DDL ends up
+// waiting for a DDL owner that never comes back. Helpers that are alive at the
+// same time (a test that keeps a helper while a subtest creates another one, or
+// parallel tests) get a store of their own instead, because sharing the store
+// means sharing the schemas.
+var (
+	sharedStoreMu sync.Mutex
+	sharedStore   kv.Storage
+	sharedDomain  *domain.Domain
+	// liveHelpers counts the helpers that are not closed yet.
+	liveHelpers int
+)
+
+// takeHelperStore bootstraps the store for a new helper and counts the helper as
+// live. private reports that the store and the domain belong to this helper
+// alone and have to be closed by it.
+func takeHelperStore(t testing.TB, forcePrivate bool) (store kv.Storage, dom *domain.Domain, private bool) {
+	sharedStoreMu.Lock()
+	liveHelpers++
+	first := liveHelpers == 1 && !forcePrivate
+	sharedStoreMu.Unlock()
+
+	if !first {
+		privateStore, err := mockstore.NewMockStore()
+		require.NoError(t, err)
+		privateDomain, err := session.BootstrapSession(privateStore)
+		require.NoError(t, err)
+		return privateStore, privateDomain, true
+	}
+
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedStore == nil {
+		store, err := mockstore.NewMockStore()
+		require.NoError(t, err)
+		sharedStore = store
+	}
+	if sharedDomain == nil {
+		dom, err := session.BootstrapSession(sharedStore)
+		require.NoError(t, err)
+		sharedDomain = dom
+	}
+	return sharedStore, sharedDomain, false
+}
+
 // NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
 func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestHelper {
-	store, err := mockstore.NewMockStore()
-	require.NoError(t, err)
+	return newEventTestHelper(t, tz, false)
+}
+
+// NewEventTestHelperWithPrivateStore creates a SchemaTestHelper with a store of
+// its own. Use it for a test that writes to the system tables or that breaks the
+// store in a way the next helper would notice, because the helpers of a test
+// binary otherwise share one store.
+func NewEventTestHelperWithPrivateStore(t testing.TB) *EventTestHelper {
+	return newEventTestHelper(t, time.Local, true)
+}
+
+func newEventTestHelper(t testing.TB, tz *time.Location, privateStore bool) *EventTestHelper {
+	store, dom, private := takeHelperStore(t, privateStore)
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
 		conf.AlterPrimaryKey = true
 	})
@@ -90,19 +156,42 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 		require.NoError(t, failpoint.Disable(disableTiDBDistTaskFailpoint))
 	}()
 
-	domain, err := session.BootstrapSession(store)
-	require.NoError(t, err)
-	domain.SetStatsUpdating(true)
+	dom.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
-	return &EventTestHelper{
+
+	helper := &EventTestHelper{
 		t:                      t,
 		tk:                     tk,
 		storage:                store,
-		domain:                 domain,
+		privateStore:           private,
+		domain:                 dom,
 		mounter:                NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
 		originalEnableDistTask: originalEnableDistTask,
 		tableInfos:             make(map[string]*common.TableInfo),
 		partitionIDs:           make(map[string]map[string]int64),
+	}
+	if !private {
+		// A previous helper may have left schemas behind in the shared store,
+		// so start from the schemas a freshly bootstrapped store has.
+		helper.dropUserSchemas()
+	}
+	return helper
+}
+
+// CloseSharedEventTestStore closes the domain and the mock store that the
+// helpers of a test binary share. Both are kept for the whole test binary, so a
+// test binary that checks for leaked goroutines has to close them after all
+// tests finished.
+func CloseSharedEventTestStore() {
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedDomain != nil {
+		sharedDomain.Close()
+		sharedDomain = nil
+	}
+	if sharedStore != nil {
+		sharedStore.Close() //nolint:errcheck
+		sharedStore = nil
 	}
 }
 
@@ -141,7 +230,6 @@ func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.T
 	if info == nil {
 		return
 	}
-	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
@@ -330,7 +418,7 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
 		}
-		s.fillCreateTableLikeBlockedTableNames(ddlEvent)
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent, job)
 	case timodel.ActionRecoverTable:
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
@@ -346,8 +434,10 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		s.fillRenameTableEventMetadata(ddlEvent)
 	case timodel.ActionRenameTables:
 		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateView:
+		s.normalizeCreateViewQueryWithStoredSelect(ddlEvent)
 	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
-		timodel.ActionCreateView, timodel.ActionDropView:
+		timodel.ActionDropView:
 	default:
 		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
 			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
@@ -355,7 +445,13 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 	}
 }
 
-func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent) {
+// fillCreateTableLikeBlockedTableNames populates BlockedTableNames for a
+// CREATE TABLE ... LIKE event. It first checks the query for an explicit
+// refer schema, then falls back to job.InvolvingSchemaInfo, and finally to
+// the event SchemaName. When the refer schema differs from the event schema,
+// it rewrites the query to include the qualified schema name so that
+// downstream routing can correctly resolve the cross-schema reference.
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent, job *timodel.Job) {
 	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
 	require.NoError(s.t, err)
 
@@ -366,12 +462,71 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+	}
+	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = ddlEvent.SchemaName
+	}
+	if refSchema == "" {
+		return
+	}
+	if createStmt.ReferTable.Schema.O == "" && !strings.EqualFold(refSchema, ddlEvent.SchemaName) {
+		createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+		query, err := Restore(createStmt)
+		require.NoError(s.t, err)
+		ddlEvent.Query = query
 	}
 	ddlEvent.BlockedTableNames = []SchemaTableName{{
 		SchemaName: refSchema,
 		TableName:  createStmt.ReferTable.Name.O,
 	}}
+}
+
+func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDLEvent) {
+	if ddlEvent.TableInfo == nil || ddlEvent.TableInfo.View == nil {
+		return
+	}
+
+	query, err := NormalizeCreateViewQueryWithStoredSelect(
+		ddlEvent.Query,
+		ddlEvent.TableInfo.View.SelectStmt,
+		ddlEvent.SchemaName,
+		nil,
+	)
+	require.NoError(s.t, err)
+	ddlEvent.Query = query
+}
+
+// findCreateTableLikeReferSchema resolves the source schema for CREATE TABLE
+// ... LIKE by inspecting job.InvolvingSchemaInfo.
+//
+// Example — "CREATE TABLE extra.t2 LIKE t1" with session in db1:
+//
+//	InvolvingSchemaInfo = [
+//	    {Database: "extra", Table: "t2"},               // target (exclusive)
+//	    {Database: "db1",   Table: "t1", SharedInvolving}, // refer source
+//	]
+//	→ returns "db1" (SharedInvolving match on table "t1")
+//
+// SharedInvolving entries are preferred because TiDB marks the LIKE source
+// table with this mode. Without the mode check, the DDL target table may be
+// mistaken for the refer table when both happen to share the same name.
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+	for _, info := range job.InvolvingSchemaInfo {
+		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
+			return info.Database
+		}
+	}
+	for _, info := range job.InvolvingSchemaInfo {
+		if !strings.EqualFold(info.Table, referTable) {
+			continue
+		}
+		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
+			continue
+		}
+		return info.Database
+	}
+	return ""
 }
 
 func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
@@ -515,7 +670,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 		_ = batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
-			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 			require.NoError(s.t, err)
 		}
 	}
@@ -534,7 +689,7 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -548,7 +703,6 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
 func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
-	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
@@ -559,7 +713,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
-		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil)
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 		require.NoError(s.t, err)
 	}
 	return dmlEvent
@@ -600,7 +754,8 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 		CRTs:        rawKvs[1].CRTs,
 	}
 
-	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+	require.NoError(s.t, err)
 
 	return dmlEvent, raw
 }
@@ -635,7 +790,7 @@ func (s *EventTestHelper) DML2DeleteEvent(schema, table string, dml string, dele
 		StartTs:  rawKv[0].StartTs,
 		CRTs:     rawKv[0].CRTs,
 	}
-	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil)
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
 	require.NoError(s.t, err)
 
 	_ = s.DML2RawKv(physicalTableID, ts, deleteDml)
@@ -713,9 +868,43 @@ func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 
 // Close closes the helper
 func (s *EventTestHelper) Close() {
-	s.domain.Close()
-	s.storage.Close() //nolint:errcheck
+	sharedStoreMu.Lock()
+	liveHelpers--
+	sharedStoreMu.Unlock()
+	if s.privateStore {
+		s.domain.Close()
+		s.storage.Close() //nolint:errcheck
+	}
+	// The domain of the shared store outlives the helpers, see takeHelperStore.
 	vardef.EnableDistTask.Store(s.originalEnableDistTask)
+}
+
+// dropUserSchemas removes every schema that a test may have created, so that a
+// helper taking over the shared store sees the schemas of a freshly
+// bootstrapped store.
+func (s *EventTestHelper) dropUserSchemas() {
+	// The session of a fresh helper does not see the schemas yet (its schema
+	// version is not loaded), so enumerate them through the domain infoschema.
+	// A table in one schema may be referenced by a foreign key in another.
+	// All user schemas are discarded here, so allow dropping either one first.
+	s.tk.MustExec("set @@session.foreign_key_checks = 0")
+	defer s.tk.MustExec("set @@session.foreign_key_checks = 1")
+	for _, dbInfo := range s.domain.InfoSchema().AllSchemas() {
+		name := dbInfo.Name.L
+		if isSystemSchema(name) {
+			continue
+		}
+		s.tk.MustExec("drop database if exists " + common.QuoteName(name))
+	}
+	s.tk.MustExec("create database if not exists test")
+}
+
+func isSystemSchema(name string) bool {
+	switch strings.ToLower(name) {
+	case "information_schema", "performance_schema", "metrics_schema", "mysql", "sys":
+		return true
+	}
+	return false
 }
 
 func toTableInfosKey(schema, table string) string {
@@ -782,26 +971,12 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 }
 
 // IsSplitable returns whether the table is eligible for split in all sinks
-// Only the table with pk and no uk can always be splitted in all sinks.
-// Notice: please ensure the logic of IsSplitable is totally the same with isSplitable in utils
+// Only tables with a clustered primary key and no other unique key can be split in all sinks.
 func IsSplitable(tableInfo *common.TableInfo) bool {
 	// some ddl jobs do not have table info, such as drop database, we just ignore checking these jobs
 	if tableInfo == nil {
 		return true
 	}
 
-	if tableInfo.GetPkColInfo() == nil {
-		return false
-	}
-
-	indices := tableInfo.GetIndices()
-	for _, index := range indices {
-		if index.Primary {
-			continue
-		}
-		if index.Unique {
-			return false
-		}
-	}
-	return true
+	return common.IsSplitable(tableInfo.HasClusteredPrimaryKey(), tableInfo.GetIndices())
 }

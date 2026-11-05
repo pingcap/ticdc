@@ -83,7 +83,12 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
-				"Revision", "DBID", "Mode",
+				"Revision", "DBID",
+				// Materialized-view metadata is table-level and does not affect the shared column schema.
+				"MaterializedViewBase", "MaterializedView", "MaterializedViewShadow", "MaterializedViewLog",
+				// These table-level storage settings do not affect the shared column schema.
+				"EngineAttribute", "StorageClassTier", "StorageClassTransitions", "Mode",
+				"MaterializedView", "MaterializedViewBase", "MaterializedViewLog",
 			},
 		},
 		{
@@ -128,7 +133,6 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	moduleCache := make(map[string]*moduleInfo)
 	packageCache := make(map[packageKey]map[string][]string)
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			mod, ok := moduleCache[tc.modulePath]
 			if !ok {

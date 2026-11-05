@@ -16,10 +16,11 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
@@ -37,8 +38,10 @@ type task struct {
 	dispatcherID commonType.DispatcherID
 
 	// DML-only fields.
-	event          *commonEvent.DMLEvent           // Original DML event to encode and flush.
+	postEnqueue    func()                          // Transaction enqueue callback.
+	tableInfo      *commonType.TableInfo           // Table info used after event is released.
 	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
+	rowEvents      []*commonEvent.RowEvent         // Row events to encode and flush.
 	encodedMsgs    []*common.Message               // Encoded result built from event.
 
 	// Flush-only field.
@@ -48,12 +51,20 @@ type task struct {
 func newDMLTask(
 	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
+	selector commonEvent.Selector,
 ) *task {
+	postEnqueue, postFlush := event.DetachPostCallbacks()
 	return &task{
 		kind:           taskKindDML,
-		event:          event,
+		postEnqueue:    postEnqueue,
+		tableInfo:      event.TableInfo,
 		versionedTable: version,
-		dispatcherID:   event.GetDispatcherID(),
+		// Storage txn encoders attach only the last row callback to the built
+		// batch message, so the callback is triggered once per encoded txn
+		// message. Kafka uses row-level callbacks and counts all rows before
+		// PostFlush, which cannot be reused here for multi-row txns.
+		rowEvents:    helper.NewRowEvents(event, selector, postFlush),
+		dispatcherID: event.GetDispatcherID(),
 	}
 }
 

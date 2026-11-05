@@ -20,10 +20,10 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/api/v2/mock"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,7 +71,13 @@ func TestChangefeedQueryCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 
 	// query success
-	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(&v2.ChangeFeedInfo{}, nil)
+	info := &v2.ChangeFeedInfo{
+		SinkURI: "kafka://user:uri-secret-sentinel@host/topic",
+		Config: &v2.ReplicaConfig{Sink: &v2.SinkConfig{KafkaConfig: &v2.KafkaConfig{
+			SASLPassword: new("password-sentinel"),
+		}}},
+	}
+	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(info, nil)
 
 	o.simplified = false
 	o.changefeedID = "bcd"
@@ -82,6 +88,9 @@ func TestChangefeedQueryCli(t *testing.T) {
 	require.Nil(t, err)
 	// make sure config is printed
 	require.Contains(t, string(out), "config")
+	require.NotContains(t, string(out), "sentinel")
+	require.Contains(t, string(out), "******")
+	require.Equal(t, "password-sentinel", *info.Config.Sink.KafkaConfig.SASLPassword)
 
 	// query failed
 	cfV2.EXPECT().Get(gomock.Any(), gomock.Any(), "bcd").Return(nil, errors.New("test"))

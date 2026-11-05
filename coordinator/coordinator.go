@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -218,7 +217,7 @@ func (c *coordinator) run(ctx context.Context) error {
 				c.gcCleaner.OnUpdateGCSafepointSucceeded()
 			}
 			now := time.Now()
-			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
+			coordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
 			c.lastTickTime = now
 		case changes := <-c.changefeedChangeCh:
 			if err := c.saveCheckpointTs(ctx, changes); err != nil {
@@ -251,6 +250,9 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
+	// Serialize info writes with API operations and the bootstrap acknowledgement.
+	c.controller.apiLock.Lock()
+	defer c.controller.apiLock.Unlock()
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
@@ -267,6 +269,21 @@ func (c *coordinator) handleStateChange(
 		log.Debug("skip persisting unchanged changefeed runtime state",
 			zap.String("changefeed", event.changefeedID.String()),
 			zap.String("state", string(event.state)))
+		return nil
+	}
+
+	if event.state == config.StateWarning {
+		warningState := config.StateWarning
+		currentMaintainerEpoch := currentInfo.Epoch
+		if err := c.controller.updateChangefeedEpoch(ctx, event.changefeedID, changefeed.EpochBumpOptions{
+			State:       &warningState,
+			Error:       event.err,
+			UpdateError: true,
+		}); err != nil {
+			return errors.Trace(err)
+		}
+		c.controller.operatorController.StopChangefeedWithMaintainerEpoch(ctx, event.changefeedID, false, currentMaintainerEpoch)
+		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 		return nil
 	}
 
@@ -287,23 +304,17 @@ func (c *coordinator) handleStateChange(
 	}
 	cf.SetInfo(cfInfo)
 
-	switch event.state {
-	case config.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
-	case config.StateFailed, config.StateFinished:
+	if event.state == config.StateFailed || event.state == config.StateFinished {
 		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-	default:
 	}
 	return nil
 }
 
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
-func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
+func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, checkpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, checkpointTs)
 	if err == nil {
 		return
 	}
@@ -332,6 +343,18 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 	}
 }
 
+// checkStaleCheckpoints also checks non-running changefeeds because their
+// checkpoints no longer advance and cannot trigger the heartbeat-driven check.
+func (c *coordinator) checkStaleCheckpoints(ctx context.Context) {
+	for _, cf := range c.controller.changefeedDB.GetAllChangefeeds() {
+		info := cf.GetInfo()
+		if info == nil || !info.NeedBlockGC() {
+			continue
+		}
+		c.checkStaleCheckpointTs(ctx, cf, cf.GetLastSavedCheckPointTs())
+	}
+}
+
 func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefeedChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
@@ -350,7 +373,7 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefee
 	if len(statusMap) == 0 {
 		return nil
 	}
-	err := c.controller.backend.UpdateChangefeedCheckpointTs(ctx, statusMap)
+	err := c.controller.updateChangefeedCheckpointTs(ctx, statusMap)
 	if err != nil {
 		log.Error("failed to update checkpointTs", zap.Error(err))
 		return errors.Trace(err)
@@ -423,6 +446,14 @@ func (c *coordinator) ListChangefeeds(ctx context.Context, keyspace string) ([]*
 
 func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
+}
+
+func (c *coordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	return c.controller.GetPersistedChangefeedInfo(ctx, id)
+}
+
+func (c *coordinator) DrainNode(ctx context.Context, target node.ID) (int, error) {
+	return c.controller.DrainNode(ctx, target)
 }
 
 func (c *coordinator) Initialized() bool {
@@ -504,8 +535,15 @@ func (c *coordinator) updateKeyspaceGcBarrier(
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
 func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
+	var err error
 	if kerneltype.IsNextGen() {
-		return c.updateAllKeyspaceGcBarriers(ctx)
+		err = c.updateAllKeyspaceGcBarriers(ctx)
+	} else {
+		err = c.updateGlobalGcSafepoint(ctx)
 	}
-	return c.updateGlobalGcSafepoint(ctx)
+	if err != nil {
+		return err
+	}
+	c.checkStaleCheckpoints(ctx)
+	return nil
 }

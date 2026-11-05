@@ -14,8 +14,6 @@
 package messaging
 
 import (
-	"sync/atomic"
-
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 )
 
@@ -25,42 +23,4 @@ import (
 type grpcStream interface {
 	Send(*proto.Message) error
 	Recv() (*proto.Message, error)
-}
-
-var streamGenerator atomic.Uint64
-
-type streamWrapper struct {
-	grpcStream
-	id         uint64
-	streamType string
-}
-
-// newStreamWrapper creates a new stream wrapper.
-func newStreamWrapper(stream grpcStream, streamType string) *streamWrapper {
-	return &streamWrapper{
-		grpcStream: stream,
-		id:         streamGenerator.Add(1),
-		streamType: streamType,
-	}
-}
-
-func (s *streamWrapper) Send(msg *proto.Message) error {
-	return s.grpcStream.Send(msg)
-}
-
-func (s *streamWrapper) Recv() (*proto.Message, error) {
-	return s.grpcStream.Recv()
-}
-
-func (s *streamWrapper) ID() uint64 {
-	return s.id
-}
-
-func (s *streamWrapper) StreamType() string {
-	return s.streamType
-}
-
-// Equals returns true if the two streams are the same.
-func (s *streamWrapper) Equals(other *streamWrapper) bool {
-	return s.id == other.id
 }

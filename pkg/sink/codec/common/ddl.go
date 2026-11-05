@@ -133,6 +133,8 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionDropIndex
 	case *ast.DropDatabaseStmt:
 		return timodel.ActionDropSchema
+	case *ast.FlashBackDatabaseStmt:
+		return timodel.ActionRecoverSchema
 	case *ast.FlashBackTableStmt, *ast.RecoverTableStmt:
 		return timodel.ActionRecoverTable
 	case *ast.RenameTableStmt:
@@ -163,7 +165,7 @@ func GetBlockedTables(
 	if action == timodel.ActionRenameTable {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
+			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
 		}
 		// The query in job maybe "RENAME TABLE table1 to table2"
 		oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
@@ -180,7 +182,7 @@ func GetBlockedTables(
 	if action == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
-			log.Panic("parse statement failed", zap.Any("DDL", ddl), zap.Error(err))
+			log.Panic("parse statement failed", zap.String("DDL", ddl.GetDDLQuery()), zap.Error(err))
 		}
 		sourceSchemaName := stmt.(*ast.AlterTableStmt).Table.Schema.O
 		if sourceSchemaName == "" {
@@ -199,8 +201,8 @@ func GetBlockedTables(
 	}
 
 	switch action {
-	// create schema means the database not exist yet, so should not block tables.
-	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
+	// These DDLs only add schemas or tables, so they do not block existing tables.
+	case timodel.ActionCreateSchema, timodel.ActionRecoverSchema, timodel.ActionCreateTable:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 		}
@@ -219,7 +221,7 @@ func GetBlockedTables(
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
-		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionAlterIndexVisibility,
+		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionModifyTableComment, timodel.ActionAlterIndexVisibility,
 		timodel.ActionRebaseAutoID, timodel.ActionMultiSchemaChange, timodel.ActionDropView:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,

@@ -29,10 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	trafficScoreThreshold = 3
-	regionScoreThreshold  = 3
-)
+var trafficScoreThreshold = 3
 
 // defaultSpanSplitChecker is used to check whether spans in the default group need to be split
 // based on multiple thresholds including write traffic and region count.

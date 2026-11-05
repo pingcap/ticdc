@@ -105,7 +105,7 @@ func getColumnsFromIndex(index *model.IndexInfo, tableInfo *model.TableInfo) []*
 }
 
 func needQuotes(ft types.FieldType) bool {
-	return !(dbutil.IsNumberType(ft.GetType()) || dbutil.IsFloatType(ft.GetType()))
+	return !dbutil.IsNumberType(ft.GetType()) && !dbutil.IsFloatType(ft.GetType())
 }
 
 func rowContainsCols(row map[string]*dbutil.ColumnData, cols []*model.ColumnInfo) bool {
@@ -128,9 +128,9 @@ func redactRowToString(row map[string]*dbutil.ColumnData) string {
 	s.WriteString("{ ")
 	for key, val := range row {
 		if val.IsNull {
-			s.WriteString(fmt.Sprintf("%s: IsNull, ", key))
+			fmt.Fprintf(&s, "%s: IsNull, ", key)
 		} else {
-			s.WriteString(fmt.Sprintf("%s: %s, ", key, util.RedactValue(string(val.Data))))
+			fmt.Fprintf(&s, "%s: %s, ", key, util.RedactValue(string(val.Data)))
 		}
 	}
 	s.WriteString(" }")

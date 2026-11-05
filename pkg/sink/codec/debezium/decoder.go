@@ -18,14 +18,17 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -47,10 +50,10 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
-	keyPayload   map[string]interface{}
-	keySchema    map[string]interface{}
-	valuePayload map[string]interface{}
-	valueSchema  map[string]interface{}
+	keyPayload   map[string]any
+	keySchema    map[string]any
+	valuePayload map[string]any
+	valueSchema  map[string]any
 }
 
 // NewDecoder return an debezium decoder
@@ -149,23 +152,68 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return event
 }
 
-// NextDMLEvent returns the next dml event if exists
-func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLMessage returns the next dml message if exists
+func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	if len(d.valuePayload) == 0 {
-		log.Panic("next DML event failed, since value payload is empty")
+		log.Panic("next DML message failed, since value payload is empty")
 	}
 	if d.config.DebeziumDisableSchema {
-		log.Panic("next DML event failed, since DebeziumDisableSchema is true")
+		log.Panic("next DML message failed, since DebeziumDisableSchema is true")
 	}
 	if !d.config.EnableTiDBExtension {
-		log.Panic("next DML event failed, since EnableTiDBExtension is false")
+		log.Panic("next DML message failed, since EnableTiDBExtension is false")
 	}
-	defer d.clear()
-	tableInfo := d.queryTableInfo()
-	commitTs := d.getCommitTs()
+
+	keyPayload := d.keyPayload
+	valuePayload := d.valuePayload
+	valueSchema := d.valueSchema
+	commitTs := getCommitTsFromPayload(valuePayload)
+	schemaName := getSchemaNameFromPayload(valuePayload)
+	tableName := getTableNameFromPayload(valuePayload)
+	rowType := rowTypeFromPayload(valuePayload)
+	tableID := tableIDAllocator.Allocate(schemaName, tableName)
+	d.clear()
+
+	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
+	})
+}
+
+func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {
+	op, ok := valuePayload["op"]
+	if !ok {
+		log.Panic("DML message op not found")
+	}
+	switch op {
+	case "c":
+		return commonType.RowTypeInsert
+	case "u":
+		return commonType.RowTypeUpdate
+	case "d":
+		return commonType.RowTypeDelete
+	default:
+		log.Panic("unknown op for the DML message", zap.Any("op", op))
+	}
+	return commonType.RowTypeInsert
+}
+
+func (d *decoder) assembleDMLEventFromPayload(
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
+) *commonEvent.DMLEvent {
+	tableInfo := queryTableInfoFromPayload(keyPayload, valuePayload, valueSchema)
+	commitTs := getCommitTsFromPayload(valuePayload)
+	startTs, hasStartTs := getStartTsFromPayload(valuePayload)
+	if !hasStartTs {
+		// Keep old messages consumable when start_ts is absent. Invalid values
+		// are logged by getStartTsFromPayload and also fall back so a malformed
+		// message does not stop production consumption.
+		startTs = commitTs
+	}
 	event := &commonEvent.DMLEvent{
 		Rows:            chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity),
-		StartTs:         commitTs,
+		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
 		PhysicalTableID: tableInfo.TableName.TableID,
@@ -175,14 +223,18 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		event.Rows.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
 	columns := tableInfo.GetColumns()
-	before, ok1 := d.valuePayload["before"].(map[string]interface{})
+	binaryHandlingMode := d.config.DebeziumBinaryHandlingMode
+	if d.config.Protocol == config.ProtocolDebeziumAvro {
+		binaryHandlingMode = common.BinaryHandlingModeBase64
+	}
+	before, ok1 := valuePayload["before"].(map[string]any)
 	if ok1 {
-		data := assembleColumnData(before, columns, d.config.TimeZone)
+		data := assembleColumnData(before, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
-	after, ok2 := d.valuePayload["after"].(map[string]interface{})
+	after, ok2 := valuePayload["after"].(map[string]any)
 	if ok2 {
-		data := assembleColumnData(after, columns, d.config.TimeZone)
+		data := assembleColumnData(after, columns, d.config.TimeZone, binaryHandlingMode)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
@@ -199,7 +251,11 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 }
 
 func (d *decoder) getCommitTs() uint64 {
-	source := d.valuePayload["source"].(map[string]interface{})
+	return getCommitTsFromPayload(d.valuePayload)
+}
+
+func getCommitTsFromPayload(valuePayload map[string]any) uint64 {
+	source := valuePayload["source"].(map[string]any)
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
 	if err != nil {
 		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
@@ -207,16 +263,49 @@ func (d *decoder) getCommitTs() uint64 {
 	return uint64(commitTs)
 }
 
+// getStartTsFromPayload returns the start_ts carried in the source block.
+// It returns false when the field is absent or invalid. Invalid values are
+// logged before returning so callers can fall back without stopping consumption.
+func getStartTsFromPayload(valuePayload map[string]any) (uint64, bool) {
+	source := valuePayload["source"].(map[string]any)
+	rawStartTs, exists := source["start_ts"]
+	if !exists {
+		return 0, false
+	}
+	startTs, ok := rawStartTs.(json.Number)
+	if !ok {
+		log.Error("decode value failed",
+			zap.String("reason", "start_ts is not an integer"),
+			zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	ts, err := startTs.Int64()
+	if err == nil && ts <= 0 {
+		err = errors.Errorf("start_ts must be positive: %d", ts)
+	}
+	if err != nil {
+		log.Error("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(source)))
+		return 0, false
+	}
+	return uint64(ts), true
+}
+
 func (d *decoder) getSchemaName() string {
-	source := d.valuePayload["source"].(map[string]interface{})
-	schemaName := source["db"].(string)
-	return schemaName
+	return getSchemaNameFromPayload(d.valuePayload)
+}
+
+func getSchemaNameFromPayload(valuePayload map[string]any) string {
+	source := valuePayload["source"].(map[string]any)
+	return source["db"].(string)
 }
 
 func (d *decoder) getTableName() string {
-	source := d.valuePayload["source"].(map[string]interface{})
-	tableName := source["table"].(string)
-	return tableName
+	return getTableNameFromPayload(d.valuePayload)
+}
+
+func getTableNameFromPayload(valuePayload map[string]any) string {
+	source := valuePayload["source"].(map[string]any)
+	return source["table"].(string)
 }
 
 func (d *decoder) clear() {
@@ -226,28 +315,31 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func (d *decoder) queryTableInfo() *commonType.TableInfo {
-	schemaName := d.getSchemaName()
-	tableName := d.getTableName()
-
+func queryTableInfoFromPayload(
+	keyPayload map[string]any,
+	valuePayload map[string]any,
+	valueSchema map[string]any,
+) *commonType.TableInfo {
+	schemaName := getSchemaNameFromPayload(valuePayload)
+	tableName := getTableNameFromPayload(valuePayload)
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 	tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
 	tidbTableInfo.Name = ast.NewCIStr(tableName)
 
-	fields := d.valueSchema["fields"].([]interface{})
-	after := fields[1].(map[string]interface{})
-	columnsField := after["fields"].([]interface{})
-	indexColumns := make([]*timodel.IndexColumn, 0, len(d.keyPayload))
+	fields := valueSchema["fields"].([]any)
+	after := fields[1].(map[string]any)
+	columnsField := after["fields"].([]any)
+	indexColumns := make([]*timodel.IndexColumn, 0, len(keyPayload))
 	for idx, column := range columnsField {
-		col := column.(map[string]interface{})
+		col := column.(map[string]any)
 		colName := col["field"].(string)
 		tidbType := col["tidb_type"].(string)
 		optional := col["optional"].(bool)
 		fieldType := parseTiDBType(tidbType, optional)
 		switch fieldType.GetType() {
 		case mysql.TypeEnum, mysql.TypeSet:
-			parameters := col["parameters"].(map[string]interface{})
+			parameters := col["parameters"].(map[string]any)
 			allowed := parameters["allowed"].(string)
 			fieldType.SetElems(strings.Split(allowed, ","))
 		case mysql.TypeDatetime:
@@ -256,7 +348,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 				fieldType.SetDecimal(6)
 			}
 		}
-		if _, ok := d.keyPayload[colName]; ok {
+		if _, ok := keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   ast.NewCIStr(colName),
 				Offset: idx,
@@ -265,6 +357,7 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, &timodel.ColumnInfo{
 			ID:        int64(idx),
+			Offset:    idx,
 			State:     timodel.StatePublic,
 			Name:      ast.NewCIStr(colName),
 			FieldType: *fieldType,
@@ -276,24 +369,26 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		Columns: indexColumns,
 		Unique:  true,
 		Primary: true,
+		State:   timodel.StatePublic,
 	})
+	commonType.SetHandleKeyFlags(tidbTableInfo)
 	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 	return result
 }
 
-func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]interface{} {
-	result := make(map[string]interface{}, 0)
+func assembleColumnData(data map[string]any, columns []*timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) map[string]any {
+	result := make(map[string]any, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = decodeColumn(val, col, timeZone)
+		result[col.Name.O] = decodeColumn(val, col, timeZone, binaryHandlingMode)
 	}
 	return result
 }
 
-func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time.Location) interface{} {
+func decodeColumn(value any, colInfo *timodel.ColumnInfo, timeZone *time.Location, binaryHandlingMode string) any {
 	if value == nil {
 		return value
 	}
@@ -303,8 +398,16 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			value, err = base64.StdEncoding.DecodeString(value.(string))
+			switch binaryHandlingMode {
+			case common.BinaryHandlingModeBase64URLSafe:
+				value, err = base64.URLEncoding.DecodeString(value.(string))
+			case common.BinaryHandlingModeHex:
+				value, err = hex.DecodeString(value.(string))
+			default:
+				value, err = base64.StdEncoding.DecodeString(value.(string))
+			}
 			if err != nil {
+				err = errors.WrapError(errors.ErrDebeziumInvalidMessage, err)
 				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
 			}
 			return value
@@ -346,6 +449,13 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time
 		}
 		value = types.NewDuration(0, 0, 0, int(val), types.MaxFsp)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
+		if strVal, ok := value.(string); ok && mysql.HasUnsignedFlag(colInfo.GetFlag()) {
+			uintVal, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return uintVal
+		}
 		var intVal int64
 		intVal, err = value.(json.Number).Int64()
 		if err != nil {
@@ -371,6 +481,14 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time
 			return types.NewBinaryLiteralFromUint(uint64(0), -1)
 		}
 	case mysql.TypeNewDecimal:
+		if strVal, ok := value.(string); ok {
+			dec := new(types.MyDecimal)
+			err = dec.FromString([]byte(strVal))
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.String("value", util.RedactAny(value)))
+			}
+			return dec
+		}
 		var f64 float64
 		f64, err = value.(json.Number).Float64()
 		if err != nil {
@@ -446,18 +564,18 @@ func parseTiDBType(tidbType string, optional bool) *ptypes.FieldType {
 	return ft
 }
 
-func decodeRawBytes(data []byte) (map[string]interface{}, map[string]interface{}, error) {
-	var v map[string]interface{}
+func decodeRawBytes(data []byte) (map[string]any, map[string]any, error) {
+	var v map[string]any
 	d := json.NewDecoder(bytes.NewBuffer(data))
 	d.UseNumber()
 	if err := d.Decode(&v); err != nil {
 		return nil, nil, errors.Trace(err)
 	}
-	payload, ok := v["payload"].(map[string]interface{})
+	payload, ok := v["payload"].(map[string]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("decode payload failed, data: %+v", v)
 	}
-	schema, ok := v["schema"].(map[string]interface{})
+	schema, ok := v["schema"].(map[string]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("decode payload failed, data: %+v", v)
 	}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/go-sql-driver/mysql"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -231,6 +232,69 @@ func TestGenerateDSNByConfig(t *testing.T) {
 	testIsolationConfig()
 }
 
+func TestSetDSNReadTimeout(t *testing.T) {
+	t.Parallel()
+
+	dsnStr, err := setDSNReadTimeout(
+		"root:123456@tcp(127.0.0.1:4000)/?readTimeout=2m&writeTimeout=5m&timeout=3m",
+		"10m",
+	)
+	require.NoError(t, err)
+
+	dsn, err := dmysql.ParseDSN(dsnStr)
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Minute, dsn.ReadTimeout)
+	require.Equal(t, 5*time.Minute, dsn.WriteTimeout)
+	require.Equal(t, 3*time.Minute, dsn.Timeout)
+}
+
+func TestConfigureControlDBConn(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	configureControlDBConn(db)
+
+	require.Equal(t, defaultControlDBConns, db.Stats().MaxOpenConnections)
+
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection", "return(true)"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection"))
+	})
+
+	db, _, err = sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	configureControlDBConn(db)
+
+	if db.Stats().MaxOpenConnections != 1 {
+		t.Skip("failpoint rewriting is disabled")
+	}
+	require.Equal(t, 1, db.Stats().MaxOpenConnections)
+}
+
+func TestConfigureDMLDBConn(t *testing.T) {
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection", "return(true)"))
+	t.Cleanup(func() {
+		require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection"))
+	})
+
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	cfg := New()
+	cfg.WorkerCount = 3
+	configureDMLDBConn(db, cfg)
+
+	// The DDL timestamp failpoint is scoped to the control pool. DML writers must
+	// keep their worker-based pool size so table-level DDLs are not blocked by
+	// unflushed DML events.
+	require.Equal(t, cfg.WorkerCount+dmlDBPrepareExtraConns, db.Stats().MaxOpenConnections)
+	require.Equal(t, 4, db.Stats().MaxOpenConnections)
+}
+
 func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 
@@ -265,6 +329,83 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 
 	expected.sinkURI = uri
 	require.Equal(t, expected, cfg)
+}
+
+func TestApplyAsyncDDLTimeout(t *testing.T) {
+	t.Parallel()
+
+	newChangefeedConfig := func(mysqlConfig *config.MySQLConfig) *config.ChangefeedConfig {
+		return &config.ChangefeedConfig{
+			TimeZone: "UTC",
+			SinkConfig: &config.SinkConfig{
+				TiDBSourceID: 1,
+				MySQLConfig:  mysqlConfig,
+			},
+		}
+	}
+
+	cases := []struct {
+		name                    string
+		uri                     string
+		mysqlConfig             *config.MySQLConfig
+		expectedReadTimeout     string
+		expectedAsyncDDLTimeout string
+	}{
+		{
+			name:                    "default async ddl timeout",
+			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m",
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: defaultAsyncDDLTimeout,
+		},
+		{
+			name:                    "sink uri async ddl timeout",
+			uri:                     "mysql://127.0.0.1:3306/?read-timeout=4m&async-ddl-timeout=30m",
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "30m",
+		},
+		{
+			name: "config async ddl timeout",
+			uri:  "mysql://127.0.0.1:3306/?read-timeout=4m",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("20m"),
+			},
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "20m",
+		},
+		{
+			name: "sink uri async ddl timeout overrides config",
+			uri:  "mysql://127.0.0.1:3306/?read-timeout=4m&async-ddl-timeout=30m",
+			mysqlConfig: &config.MySQLConfig{
+				AsyncDDLTimeout: util.AddressOf("20m"),
+			},
+			expectedReadTimeout:     "4m",
+			expectedAsyncDDLTimeout: "30m",
+		},
+		{
+			name: "config read timeout does not change async ddl timeout",
+			uri:  "mysql://127.0.0.1:3306/",
+			mysqlConfig: &config.MySQLConfig{
+				ReadTimeout: util.AddressOf("6m"),
+			},
+			expectedReadTimeout:     "6m",
+			expectedAsyncDDLTimeout: defaultAsyncDDLTimeout,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			uri, err := url.Parse(tc.uri)
+			require.NoError(t, err)
+			cfg := New()
+			err = cfg.Apply(uri, common.NewChangefeedID4Test("default", "changefeed-01"), newChangefeedConfig(tc.mysqlConfig))
+			require.NoError(t, err)
+
+			require.Equal(t, tc.expectedReadTimeout, cfg.ReadTimeout)
+			require.Equal(t, tc.expectedAsyncDDLTimeout, cfg.AsyncDDLTimeout)
+		})
+	}
 }
 
 func TestDefaultWorkerCountByDownstream(t *testing.T) {
@@ -396,6 +537,7 @@ func TestParseSinkURIBadQueryString(t *testing.T) {
 		"mysql://127.0.0.1:3306/?write-timeout=badduration",
 		"mysql://127.0.0.1:3306/?read-timeout=badduration",
 		"mysql://127.0.0.1:3306/?timeout=badduration",
+		"mysql://127.0.0.1:3306/?async-ddl-timeout=badduration",
 	}
 	var uri *url.URL
 	var err error

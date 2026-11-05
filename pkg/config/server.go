@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -104,6 +105,9 @@ var defaultServerConfig = &ServerConfig{
 	DataDir: "",
 	GcTTL:   24 * 60 * 60, // 24H
 	TZ:      "System",
+	// Disabled by default. When enabled in next-gen mode, TiCDC uses
+	// service safepoint v2 instead of GC barriers.
+	EnableLegacySafePoint: false,
 	// The default election-timeout in PD is 3s and minimum session TTL is 5s,
 	// which is calculated by `math.Ceil(3 * election-timeout / 2)`, we choose
 	// default capture session ttl to 10s to increase robust to PD jitter,
@@ -148,6 +152,8 @@ type ServerConfig struct {
 	GcTTL int64  `toml:"gc-ttl" json:"gc-ttl"`
 	TZ    string `toml:"tz" json:"tz"`
 
+	EnableLegacySafePoint bool `toml:"enable-legacy-safepoint" json:"enable-legacy-safepoint"`
+
 	CaptureSessionTTL int `toml:"capture-session-ttl" json:"capture-session-ttl"`
 
 	OwnerFlushInterval     TomlDuration `toml:"owner-flush-interval" json:"owner-flush-interval"`
@@ -189,8 +195,47 @@ func (c *ServerConfig) Unmarshal(data []byte) error {
 
 // String implements the Stringer interface
 func (c *ServerConfig) String() string {
-	s, _ := c.Marshal()
+	s, _ := c.MaskedForDisplay().Marshal()
 	return s
+}
+
+// MaskedForDisplay returns a copy suitable for logs and API responses.
+// It does not modify the active server configuration.
+func (c *ServerConfig) MaskedForDisplay() *ServerConfig {
+	if c == nil {
+		return nil
+	}
+	masked := *c
+	if c.Encryption != nil {
+		encryption := *c.Encryption
+		masked.Encryption = &encryption
+		if c.Encryption.KMS != nil {
+			kms := *c.Encryption.KMS
+			encryption.KMS = &kms
+			if kms.AWS != nil {
+				aws := *kms.AWS
+				aws.Endpoint = util.MaskSensitiveDataInURIForError(aws.Endpoint)
+				aws.AccessKey = maskConfiguredSecret(aws.AccessKey)
+				aws.SecretAccessKey = maskConfiguredSecret(aws.SecretAccessKey)
+				aws.SessionToken = maskConfiguredSecret(aws.SessionToken)
+				kms.AWS = &aws
+			}
+			if kms.GCP != nil {
+				gcp := *kms.GCP
+				gcp.Endpoint = util.MaskSensitiveDataInURIForError(gcp.Endpoint)
+				gcp.CredentialsJSON = maskConfiguredSecret(gcp.CredentialsJSON)
+				kms.GCP = &gcp
+			}
+		}
+	}
+	return &masked
+}
+
+func maskConfiguredSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "xxxxx"
 }
 
 // Clone clones a replication

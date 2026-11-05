@@ -57,7 +57,8 @@ type Controller struct {
 	// so no need to schedule it
 	ddlSpan *replica.SpanReplication
 
-	// mu protects concurrent access to [pkgreplica.ReplicationDB, ddlSpan, allTasks, schemaTasks, tableTasks]
+	// mu protects concurrent access to [pkgreplica.ReplicationDB, ddlSpan, allTasks, schemaTasks, tableTasks,
+	// nonReplicatingCheckpointTs]
 	mu sync.RWMutex
 	// ReplicationDB tracks the scheduling status of spans
 	pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication]
@@ -67,6 +68,8 @@ type Controller struct {
 	schemaTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
 	// tableTasks provides quick access to spans by table ID
 	tableTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
+	// nonReplicatingCheckpointTs tracks absent and scheduling spans so checkpoint calculation does not scan all spans.
+	nonReplicatingCheckpointTs *checkpointTsTracker
 
 	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID pkgreplica.GroupID) pkgreplica.GroupChecker[common.DispatcherID, *replica.SpanReplication]
@@ -108,9 +111,10 @@ func NewController(
 		keyspaceID:                      keyspaceID,
 		maintainerCommittedCheckpointTs: atomic.NewUint64(ddlSpan.GetStatus().CheckpointTs),
 
-		schemaTasks: make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
-		tableTasks:  make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
-		allTasks:    make(map[common.DispatcherID]*replica.SpanReplication),
+		schemaTasks:                make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		tableTasks:                 make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		allTasks:                   make(map[common.DispatcherID]*replica.SpanReplication),
+		nonReplicatingCheckpointTs: newCheckpointTsTracker(),
 	}
 	c.ReplicationDB = pkgreplica.NewReplicationDB(changefeedID.String(), c.doWithRLock, c.newGroupChecker)
 	c.initializeDDLSpan(ddlSpan)
@@ -229,15 +233,12 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 }
 
 func (c *Controller) GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs uint64) uint64 {
-	for _, span := range c.GetAbsent() {
-		if span.GetStatus().CheckpointTs < minCheckpointTs {
-			minCheckpointTs = span.GetStatus().CheckpointTs
-		}
-	}
-	for _, span := range c.GetScheduling() {
-		if span.GetStatus().CheckpointTs < minCheckpointTs {
-			minCheckpointTs = span.GetStatus().CheckpointTs
-		}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	checkpointTs, ok := c.nonReplicatingCheckpointTs.min()
+	if ok && checkpointTs < minCheckpointTs {
+		return checkpointTs
 	}
 	return minCheckpointTs
 }
@@ -352,10 +353,9 @@ func (c *Controller) UpdateSchemaID(tableID, newSchemaID int64) {
 
 // UpdateStatus updates the status of a span
 func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbeatpb.TableSpanStatus) {
-	span.UpdateStatus(status)
-
 	if span == c.ddlSpan {
 		// ddl span don't need check by checker
+		span.UpdateStatus(status)
 		return
 	}
 	// Note: a read lock is required inside the `GetGroupChecker` method.
@@ -363,6 +363,9 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if span.UpdateStatus(status) {
+		c.nonReplicatingCheckpointTs.updateTrackedSpan(span.ID, span.GetStatus().CheckpointTs)
+	}
 	checker.UpdateStatus(span)
 }
 
@@ -388,13 +391,34 @@ func (c *Controller) AddReplicatingSpan(span *replica.SpanReplication) {
 	c.allTasks[span.ID] = span
 	c.addToSchemaAndTableMap(span)
 	c.AddReplicatingWithoutLock(span)
+	c.untrackNonReplicatingSpan(span)
 }
 
-// MarkSpanAbsent marks span as absent
-func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) {
+// MarkSpanAbsent marks span as absent if it is still the current task for its dispatcher ID.
+func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) bool {
+	if span == nil {
+		return false
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.MarkAbsentWithoutLock(span)
+	return c.markSpanAbsentIfCurrentWithoutLock(span)
+}
+
+// MarkSpanAbsentIfCurrent marks span as absent if it is still the current task
+// and is still bound to expectedNode.
+func (c *Controller) MarkSpanAbsentIfCurrent(span *replica.SpanReplication, expectedNode node.ID) bool {
+	if span == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current, ok := c.allTasks[span.ID]
+	if !ok || current != span || current.GetNodeID() != expectedNode {
+		return false
+	}
+	return c.markSpanAbsentIfCurrentWithoutLock(span)
 }
 
 // MarkSpanScheduling marks span as scheduling
@@ -402,6 +426,7 @@ func (c *Controller) MarkSpanScheduling(span *replica.SpanReplication) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.MarkSchedulingWithoutLock(span)
+	c.trackNonReplicatingSpan(span)
 }
 
 // MarkSpanReplicating marks span as replicating
@@ -409,6 +434,7 @@ func (c *Controller) MarkSpanReplicating(span *replica.SpanReplication) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.MarkReplicatingWithoutLock(span)
+	c.untrackNonReplicatingSpan(span)
 }
 
 // BindSpanToNode binds span to node
@@ -416,6 +442,7 @@ func (c *Controller) BindSpanToNode(old, new node.ID, span *replica.SpanReplicat
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.BindReplicaToNodeWithoutLock(old, new, span)
+	c.trackNonReplicatingSpan(span)
 }
 
 // RemoveReplicatingSpan removes replicating span
@@ -432,6 +459,7 @@ func (c *Controller) addAbsentReplicaSetWithoutLock(spans ...*replica.SpanReplic
 		c.allTasks[span.ID] = span
 		c.AddAbsentWithoutLock(span)
 		c.addToSchemaAndTableMap(span)
+		c.trackNonReplicatingSpan(span)
 	}
 }
 
@@ -441,6 +469,7 @@ func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplic
 	c.allTasks[span.ID] = span
 	c.AddSchedulingReplicaWithoutLock(span, targetNodeID)
 	c.addToSchemaAndTableMap(span)
+	c.trackNonReplicatingSpan(span)
 }
 
 // ReplaceReplicaSet replaces old replica sets with new spans and returns the newly created replicas.
@@ -581,6 +610,7 @@ func (c *Controller) RemoveBySchemaID(schemaID int64) {
 func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
 	for _, span := range spans {
 		c.RemoveReplicaWithoutLock(span)
+		c.untrackNonReplicatingSpan(span)
 
 		tableID := span.Span.TableID
 		schemaID := span.GetSchemaID()
@@ -594,6 +624,27 @@ func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
 		}
 		delete(c.allTasks, span.ID)
 	}
+}
+
+func (c *Controller) markSpanAbsentIfCurrentWithoutLock(span *replica.SpanReplication) bool {
+	current, ok := c.allTasks[span.ID]
+	if !ok || current != span {
+		return false
+	}
+	c.MarkAbsentWithoutLock(current)
+	c.trackNonReplicatingSpan(current)
+	return true
+}
+
+func (c *Controller) trackNonReplicatingSpan(span *replica.SpanReplication) {
+	if span == c.ddlSpan {
+		return
+	}
+	c.nonReplicatingCheckpointTs.trackSpan(span.ID, span.GetStatus().CheckpointTs)
+}
+
+func (c *Controller) untrackNonReplicatingSpan(span *replica.SpanReplication) {
+	c.nonReplicatingCheckpointTs.untrackSpan(span.ID)
 }
 
 // addToSchemaAndTableMap adds the span to the schema and table map

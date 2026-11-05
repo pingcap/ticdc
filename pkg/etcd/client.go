@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/errs"
-	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	v3rpc "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientV3 "go.etcd.io/etcd/client/v3"
@@ -456,7 +455,7 @@ func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.
 			select {
 			case <-client.Ctx().Done():
 				log.Info("etcd client is closed, exit health check goroutine")
-				checker.Range(func(key, value interface{}) bool {
+				checker.Range(func(_, value any) bool {
 					client := value.(*healthyClient)
 					client.Close()
 					return true
@@ -524,19 +523,19 @@ func (checker *healthyChecker) patrol(ctx context.Context) []string {
 	// See https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L105-L145
 	var wg sync.WaitGroup
 	count := 0
-	checker.Range(func(key, value interface{}) bool {
+	checker.Range(func(_, _ any) bool {
 		count++
 		return true
 	})
 	hch := make(chan string, count)
 	healthyList := make([]string, 0, count)
-	checker.Range(func(key, value interface{}) bool {
+	checker.Range(func(key, value any) bool {
 		wg.Add(1)
-		go func(key, value interface{}) {
+		go func(key, value any) {
 			defer wg.Done()
 			ep := key.(string)
 			client := value.(*healthyClient)
-			if IsHealthy(ctx, client.Client) {
+			if isHealthy(ctx, client.Client) {
 				hch <- ep
 				checker.Store(ep, &healthyClient{
 					Client:     client.Client,
@@ -556,23 +555,37 @@ func (checker *healthyChecker) patrol(ctx context.Context) []string {
 }
 
 func (checker *healthyChecker) update(eps []string) {
+	updateEps := make(map[string]struct{}, len(eps))
 	for _, ep := range eps {
+		updateEps[ep] = struct{}{}
 		// check if client exists, if not, create one, if exists, check if it's offline or disconnected.
-		if client, ok := checker.Load(ep); ok {
-			lastHealthy := client.(*healthyClient).lastHealth
+		if value, ok := checker.Load(ep); ok {
+			client := value.(*healthyClient)
+			lastHealthy := client.lastHealth
 			if time.Since(lastHealthy) > etcdServerOfflineTimeout {
 				log.Info("some etcd server maybe offline", zap.String("endpoint", ep))
+				_ = client.Close()
 				checker.Delete(ep)
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
 				// try to reset client endpoint to trigger reconnect
-				client.(*healthyClient).Client.SetEndpoints([]string{}...)
-				client.(*healthyClient).Client.SetEndpoints(ep)
+				client.SetEndpoints([]string{}...)
+				client.SetEndpoints(ep)
 			}
 			continue
 		}
 		checker.addClient(ep, time.Now())
 	}
+	checker.Range(func(key, value any) bool {
+		ep := key.(string)
+		if _, exist := updateEps[ep]; !exist {
+			if client, ok := value.(*healthyClient); ok {
+				_ = client.Close()
+			}
+			checker.Delete(key)
+		}
+		return true
+	})
 }
 
 func (checker *healthyChecker) addClient(ep string, lastHealth time.Time) {
@@ -606,13 +619,13 @@ func syncUrls(client *clientv3.Client) []string {
 	return eps
 }
 
-// IsHealthy checks if the etcd is healthy.
-func IsHealthy(ctx context.Context, client *clientv3.Client) bool {
+// isHealthy checks if the etcd is healthy.
+func isHealthy(ctx context.Context, client *clientv3.Client) bool {
 	timeout := etcdClientTimeoutDuration
 	ctx, cancel := context.WithTimeout(clientv3.WithRequireLeader(ctx), timeout)
 	defer cancel()
 	_, err := client.Get(ctx, healthyPath)
 	// permission denied is OK since proposal goes through consensus to get it
 	// See: https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L124
-	return err == nil || err == rpctypes.ErrPermissionDenied
+	return err == nil || cerror.Is(err, v3rpc.ErrPermissionDenied)
 }

@@ -17,12 +17,25 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 )
+
+// TrackDMLMessage records a DML batch when the message is successfully delivered.
+func TrackDMLMessage(message *common.Message, stats *statistics.Statistics) {
+	rows, writeBytes := message.GetRowsCount(), int64(message.Length())
+	callback := message.Callback
+	message.Callback = func() {
+		stats.RecordDMLBatch(rows, writeBytes)
+		if callback != nil {
+			callback()
+		}
+	}
+}
 
 // DDLDispatchRule is the dispatch rule for DDL event.
 type DDLDispatchRule int
@@ -50,17 +63,16 @@ func GetEncoderConfig(
 	sinkURI *url.URL,
 	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
-	maxMsgBytes int,
+	maxMessageBytes int,
+	maxBatchedBytes int,
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
 		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
-	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
-	// to prevent that the encoder generate batched message too large
-	// then cause producer meet `message too large`.
 	encoderConfig = encoderConfig.
-		WithMaxMessageBytes(maxMsgBytes).
+		WithMaxMessageBytes(maxMessageBytes).
+		WithMaxBatchedBytes(maxBatchedBytes).
 		WithChangefeedID(changefeedID)
 
 	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
@@ -100,7 +112,7 @@ func GetProtocol(protocolStr string) (config.Protocol, error) {
 // GetFileExtension returns the extension for specific protocol
 func GetFileExtension(protocol config.Protocol) string {
 	switch protocol {
-	case config.ProtocolAvro, config.ProtocolCanalJSON, config.ProtocolMaxwell,
+	case config.ProtocolAvro, config.ProtocolDebeziumAvro, config.ProtocolCanalJSON, config.ProtocolMaxwell,
 		config.ProtocolOpen, config.ProtocolSimple:
 		return ".json"
 	case config.ProtocolCraft:

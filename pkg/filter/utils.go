@@ -14,12 +14,11 @@
 package filter
 
 import (
-	"fmt"
 	"strings"
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	tifilter "github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -57,19 +56,22 @@ func VerifyTableRules(cfg *config.FilterConfig) (tfilter.Filter, error) {
 	}
 	f, err := tfilter.Parse(rules)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg)
+		return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, cfg)
 	}
 
 	return f, nil
 }
 
-// ddlToEventType get event type from ddl query.
+// ddlToEventType returns the event type of the ddl. It returns NullEvent when
+// the event filter does not handle the ddl type, which includes a whitelisted
+// ddl type whose event type is unknown to the event filter, so that
+// shouldSkipDDL leaves such a ddl to replicate.
 func ddlToEventType(jobType timodel.ActionType) bf.EventType {
-	evenType, ok := ddlWhiteListMap[jobType]
-	if ok {
-		return evenType
+	eventType, ok := ddlWhiteListMap[jobType]
+	if !ok || bf.ClassifyEvent(eventType) == bf.NullEvent {
+		return bf.NullEvent
 	}
-	return bf.NullEvent
+	return eventType
 }
 
 var alterTableSubType = []timodel.ActionType{
@@ -148,11 +150,4 @@ func SupportedEventTypes() []bf.EventType {
 		supportedEventTypes = append(supportedEventTypes, ddlType)
 	}
 	return supportedEventTypes
-}
-
-func completeExpression(suffix string) string {
-	if suffix == "" {
-		return suffix
-	}
-	return fmt.Sprintf("select * from t where %s", suffix)
 }

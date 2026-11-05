@@ -14,17 +14,272 @@
 package schemastore
 
 import (
+	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type trackingSubscriptionClient struct {
+	nextID        atomic.Uint64
+	mu            sync.Mutex
+	subscriptions map[logpuller.SubscriptionID]struct{}
+	priorities    map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel
+}
+
+func newTrackingSubscriptionClient() *trackingSubscriptionClient {
+	return &trackingSubscriptionClient{
+		subscriptions: make(map[logpuller.SubscriptionID]struct{}),
+		priorities:    make(map[logpuller.SubscriptionID]logpuller.ScanPriorityLevel),
+	}
+}
+
+func (s *trackingSubscriptionClient) Name() string { return "trackingSubscriptionClient" }
+
+func (s *trackingSubscriptionClient) Run(context.Context) error { return nil }
+
+func (s *trackingSubscriptionClient) Close(context.Context) error { return nil }
+
+func (s *trackingSubscriptionClient) AllocSubscriptionID() logpuller.SubscriptionID {
+	return logpuller.SubscriptionID(s.nextID.Add(1))
+}
+
+func (s *trackingSubscriptionClient) Subscribe(
+	subID logpuller.SubscriptionID,
+	_ heartbeatpb.TableSpan,
+	_ uint64,
+	_ func([]common.RawKVEntry, func()) bool,
+	_ func(uint64),
+	_ int64,
+	_ bool,
+	priority logpuller.ScanPriorityLevel,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[subID] = struct{}{}
+	s.priorities[subID] = priority
+}
+
+func (s *trackingSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, subID)
+	delete(s.priorities, subID)
+}
+
+func (s *trackingSubscriptionClient) contains(subID logpuller.SubscriptionID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.subscriptions[subID]
+	return ok
+}
+
+func (s *trackingSubscriptionClient) subscriptionPriorities() []logpuller.ScanPriorityLevel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	priorities := make([]logpuller.ScanPriorityLevel, 0, len(s.priorities))
+	for _, priority := range s.priorities {
+		priorities = append(priorities, priority)
+	}
+	return priorities
+}
+
+func TestSchemaStoreCloseCancelsKeyspaceInitialization(t *testing.T) {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:                    lifecycleCtx,
+		cancel:                 lifecycleCancel,
+		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	initializationCtx, cancel := store.newInitializationContext(context.Background())
+	defer cancel()
+
+	// Registration holds this lock while loading the initial snapshot. Close
+	// must cancel that work before waiting for the lock.
+	store.keyspaceLocker.Lock()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close(context.Background())
+	}()
+	select {
+	case <-initializationCtx.Done():
+		require.ErrorIs(t, initializationCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		store.keyspaceLocker.Unlock()
+		require.FailNow(t, "keyspace initialization context was not canceled")
+	}
+	store.keyspaceLocker.Unlock()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "schema store did not close after registration finished")
+	}
+}
+
+func TestSchemaStoreRejectsRegistrationAfterClose(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "closed-keyspace"}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	keyspaceCtx, keyspaceCancel := context.WithCancel(context.Background())
+	store := &schemaStore{
+		ctx:    lifecycleCtx,
+		cancel: lifecycleCancel,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+			keyspaceID: {
+				ctx:    keyspaceCtx,
+				cancel: keyspaceCancel,
+			},
+		},
+		tombstoneKeyspaces: make(map[uint32]struct{}),
+	}
+
+	require.NoError(t, store.Close(context.Background()))
+	require.ErrorIs(t, store.RegisterKeyspace(context.Background(), keyspaceMeta), context.Canceled)
+}
+
+func TestRemoveTombstoneKeyspace(t *testing.T) {
+	const keyspaceID = uint32(42)
+	keyspaceMeta := common.KeyspaceMeta{ID: keyspaceID, Name: "tombstone-keyspace"}
+	schemaStoreCtx, cancelSchemaStore := context.WithCancel(context.Background())
+	defer cancelSchemaStore()
+	keyspaceCtx, cancelKeyspace := context.WithCancel(schemaStoreCtx)
+	storage := newPersistentStorageForTest(t.TempDir(), nil)
+	require.NoError(t, storage.run())
+
+	subClient := newTrackingSubscriptionClient()
+	fetcher := newDDLJobFetcher(keyspaceCtx, subClient, nil, keyspaceID, nil, nil)
+	subID := subClient.AllocSubscriptionID()
+	subClient.Subscribe(
+		subID,
+		heartbeatpb.TableSpan{},
+		0,
+		nil,
+		nil,
+		0,
+		false,
+		logpuller.ScanPriorityLow,
+	)
+	fetcher.resolvedTsTracker.resolvedTsItemMap[subID] = &resolvedTsItem{}
+
+	keyspaceStore := &keyspaceSchemaStore{
+		ctx:           keyspaceCtx,
+		cancel:        cancelKeyspace,
+		ddlJobFetcher: fetcher,
+		dataStorage:   storage,
+		unsortedCache: newDDLCache(),
+		notifyCh:      make(chan any, 1),
+	}
+	store := &schemaStore{
+		ctx:                    schemaStoreCtx,
+		cancel:                 cancelSchemaStore,
+		keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{keyspaceID: keyspaceStore},
+		tombstoneKeyspaces:     make(map[uint32]struct{}),
+	}
+	t.Cleanup(func() { require.NoError(t, keyspaceStore.close()) })
+
+	// Hold one active user to verify teardown waits before closing storage.
+	require.True(t, keyspaceStore.acquire())
+	cleanupDone := make(chan struct{})
+	go func() {
+		store.removeTombstoneKeyspace(keyspaceMeta, keyspaceStore)
+		close(cleanupDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		store.keyspaceLocker.RLock()
+		defer store.keyspaceLocker.RUnlock()
+		_, exists := store.keyspaceSchemaStoreMap[keyspaceID]
+		_, tombstone := store.tombstoneKeyspaces[keyspaceID]
+		return !exists && tombstone
+	}, time.Second, 10*time.Millisecond)
+	require.Error(t, store.RegisterKeyspace(context.Background(), keyspaceMeta))
+	require.False(t, keyspaceStore.acquire())
+	select {
+	case <-cleanupDone:
+		require.Fail(t, "teardown closed storage while a user was active")
+	default:
+	}
+
+	keyspaceStore.release()
+	require.Eventually(t, func() bool {
+		select {
+		case <-cleanupDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	require.ErrorIs(t, keyspaceCtx.Err(), context.Canceled)
+	require.False(t, subClient.contains(subID))
+	var panicValue any
+	func() {
+		defer func() { panicValue = recover() }()
+		_, _, _ = storage.db.Get([]byte("closed"))
+	}()
+	panicErr, ok := panicValue.(error)
+	require.True(t, ok)
+	require.ErrorIs(t, panicErr, pebble.ErrClosed)
+}
+
+type flakyEncryptionManagerForTest struct {
+	failTimes  int
+	failOnCall int
+	calls      int
+}
+
+func (m *flakyEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	m.calls++
+	if m.calls <= m.failTimes || m.calls == m.failOnCall {
+		return nil, cerror.New("inject encryption failure")
+	}
+	return data, nil
+}
+
+func (m *flakyEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	return encryptedData, nil
+}
+
+type prefixEncryptionManagerForTest struct{}
+
+var encryptedPrefixForTest = []byte("enc:")
+
+func (m *prefixEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	encrypted := make([]byte, 0, len(encryptedPrefixForTest)+len(data))
+	encrypted = append(encrypted, encryptedPrefixForTest...)
+	encrypted = append(encrypted, data...)
+	return encrypted, nil
+}
+
+func (m *prefixEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	if len(encryptedData) < len(encryptedPrefixForTest) {
+		return nil, cerror.New("encrypted data too short")
+	}
+	if string(encryptedData[:len(encryptedPrefixForTest)]) != string(encryptedPrefixForTest) {
+		return nil, cerror.New("invalid encrypted prefix")
+	}
+	plaintext := make([]byte, len(encryptedData)-len(encryptedPrefixForTest))
+	copy(plaintext, encryptedData[len(encryptedPrefixForTest):])
+	return plaintext, nil
+}
 
 func TestIgnoreDDLByCommitTs(t *testing.T) {
 	// 1. Setup a mock SchemaStore.
@@ -102,12 +357,287 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Len(t, tables, 2)
 	tableNames := make(map[string]struct{})
 	for _, tbl := range tables {
-		log.Info("found table", zap.String("name", tbl.SchemaTableName.TableName))
-		tableNames[tbl.SchemaTableName.TableName] = struct{}{}
+		log.Info("found table", zap.String("name", tbl.TableName))
+		tableNames[tbl.TableName] = struct{}{}
 	}
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
+}
+
+func TestRenameTableFromSystemSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		version     model.JobVersion
+		query       string
+		partitioned bool
+		multiple    bool
+	}{
+		{name: "single table v1", version: model.JobVersion1, query: "RENAME TABLE mysql.a TO test.a"},
+		{name: "single table v2", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a"},
+		{name: "unqualified source", version: model.JobVersion2, query: "RENAME TABLE a TO test.a"},
+		{name: "partitioned table", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a", partitioned: true},
+		{name: "multiple tables", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a, test.b TO test.c", multiple: true},
+		{name: "multiple partitioned tables", version: model.JobVersion2, query: "RENAME TABLE mysql.a TO test.a, test.b TO test.c", multiple: true, partitioned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pstorage := newPersistentStorageForTest(dir, []mockDBInfo{{
+				dbInfo: &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")},
+				tables: []*model.TableInfo{newEligibleTableInfoForTest(102, "b")},
+			}})
+			t.Cleanup(func() { require.NoError(t, pstorage.close()) })
+			store := &keyspaceSchemaStore{
+				pdClock:       pdutil.NewClock4Test(),
+				unsortedCache: newDDLCache(),
+				dataStorage:   pstorage,
+				notifyCh:      make(chan any, 1),
+			}
+
+			// System-table creation is filtered before it reaches persistent storage.
+			createJob := buildCreateTableJobForTest(1, 101, "a", 1000)
+			createJob.SchemaName = "mysql"
+			createJob.BinlogInfo.SchemaVersion = 1
+			store.writeDDLEvent(DDLJobWithCommitTs{Job: createJob, CommitTs: 1000})
+			store.advancePendingResolvedTs(1000)
+			store.tryUpdateResolvedTs()
+			require.NotContains(t, pstorage.databaseMap, int64(1))
+			require.NotContains(t, pstorage.tableMap, int64(101))
+
+			job := buildRenameTableJobForTest(100, 101, "a", 1010, &model.InvolvingSchemaInfo{
+				Database: "mysql",
+				Table:    "a",
+			})
+			job.Version = tc.version
+			job.FillArgs(&model.RenameTableArgs{
+				OldSchemaID:   1,
+				OldSchemaName: ast.NewCIStr("mysql"),
+				NewTableName:  ast.NewCIStr("a"),
+			})
+			if tc.multiple {
+				job = buildRenameTablesJobForTest(
+					[]int64{1, 100}, []int64{100, 100}, []int64{101, 102},
+					[]string{"mysql", "test"}, []string{"a", "b"}, []string{"a", "c"}, 1010)
+			}
+			physicalIDs := []int64{101}
+			if tc.partitioned {
+				physicalIDs = []int64{201, 202}
+				tableInfo := newEligiblePartitionTableInfoForTest(101, "a", []model.PartitionDefinition{
+					{ID: 201}, {ID: 202},
+				})
+				if tc.multiple {
+					job.BinlogInfo.MultipleTableInfos[0] = tableInfo
+				} else {
+					job.BinlogInfo.TableInfo = tableInfo
+				}
+			}
+			job.Query = tc.query
+			job.SchemaName = "test"
+			job.BinlogInfo.SchemaVersion = 2
+			// Exercise the persisted argument format used by the DDL puller.
+			encodedJob, err := job.Encode(true)
+			require.NoError(t, err)
+			job = &model.Job{}
+			require.NoError(t, job.Decode(encodedJob))
+			store.writeDDLEvent(DDLJobWithCommitTs{Job: job, CommitTs: 1010})
+			store.advancePendingResolvedTs(1010)
+			store.tryUpdateResolvedTs()
+			require.Equal(t, uint64(1010), store.resolvedTs.Load())
+			require.Equal(t, &BasicTableInfo{SchemaID: 100, Name: "a"}, pstorage.tableMap[101])
+			require.True(t, pstorage.databaseMap[100].Tables[101])
+			require.NotContains(t, pstorage.databaseMap, int64(1))
+			if tc.multiple {
+				require.Equal(t, "c", pstorage.tableMap[102].Name)
+			}
+			if tc.partitioned {
+				require.Len(t, pstorage.partitionMap[101], 2)
+			}
+
+			// Only feeds selecting the new table receive the existing rename error.
+			for _, tableFilter := range []filter.Filter{
+				buildTableFilterByNameForTest("test", "a"),
+				buildTableFilterByNameForTest("*", "*"),
+			} {
+				events, err := pstorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
+				require.NoError(t, err)
+				require.Len(t, events, 1)
+				require.Contains(t, events[0].Err, "ErrSyncRenameTableFailed")
+			}
+			events, err := pstorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest("other", "*"), 1000, 10)
+			require.NoError(t, err)
+			require.Empty(t, events)
+
+			// Snapshot reconstruction and restart must also handle the missing old table.
+			tables, err := pstorage.getAllPhysicalTables(1010, buildTableFilterByNameForTest("test", "a"))
+			require.NoError(t, err)
+			var actualIDs []int64
+			for _, table := range tables {
+				require.Equal(t, "test", table.SchemaName)
+				require.Equal(t, "a", table.TableName)
+				actualIDs = append(actualIDs, table.TableID)
+			}
+			require.ElementsMatch(t, physicalIDs, actualIDs)
+			expectedTables, expectedPartitions := pstorage.tableMap, pstorage.partitionMap
+			require.NoError(t, pstorage.close())
+			pstorage = loadPersistentStorageFromPathForTest(dir, 1011)
+			require.Equal(t, expectedTables, pstorage.tableMap)
+			require.Equal(t, expectedPartitions, pstorage.partitionMap)
+			dropJob := buildDropTableJobForTest(100, 101, 1020)
+			if tc.partitioned {
+				dropJob = buildDropPartitionTableJobForTest(100, 101, "a", physicalIDs, 1020)
+			}
+			require.NoError(t, pstorage.handleDDLJob(dropJob))
+			require.NotContains(t, pstorage.tableMap, int64(101))
+			require.NotContains(t, pstorage.partitionMap, int64(101))
+		})
+	}
+}
+
+func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failTimes: 1}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createSchema,
+		CommitTs: 1000,
+	})
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createTable,
+		CommitTs: 1010,
+	})
+	store.advancePendingResolvedTs(1010)
+
+	// First attempt fails when writing create schema; dedup watermarks should not advance.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(0), store.schemaVersion)
+	require.Equal(t, uint64(0), store.finishedDDLTs)
+	require.Equal(t, uint64(0), store.resolvedTs.Load())
+
+	// Second attempt retries failed DDLs and succeeds.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, uint64(1010), store.resolvedTs.Load())
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestTryUpdateResolvedTsDoesNotAdvancePastFailedDDLAtSameCommitTs(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	pstorage := newPersistentStorageForTest(t.TempDir(), nil)
+	defer func() {
+		require.NoError(t, pstorage.close())
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failOnCall: 2}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	const commitTs = uint64(1010)
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createSchema, CommitTs: commitTs})
+	store.writeDDLEvent(DDLJobWithCommitTs{Job: createTable, CommitTs: commitTs})
+	store.advancePendingResolvedTs(commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(1), store.schemaVersion)
+	require.Equal(t, uint64(1000), store.finishedDDLTs)
+	require.Less(t, store.resolvedTs.Load(), commitTs)
+
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, commitTs, store.resolvedTs.Load())
+}
+
+func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, int64(200), tables[0].TableID)
+	require.Equal(t, int64(100), tables[0].SchemaID)
+	require.Equal(t, "t1", tables[0].TableName)
+}
+
+func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	err = pstorage.registerTable(200, 1010)
+	require.NoError(t, err)
+
+	tableInfo, err := pstorage.getTableInfo(200, 1010)
+	require.NoError(t, err)
+	require.NotNil(t, tableInfo)
 }
 
 func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {

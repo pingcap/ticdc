@@ -36,6 +36,9 @@ type dispatcherTestSink struct {
 
 	flushMu              sync.Mutex
 	flushBeforeBlockHook func(commonEvent.BlockEvent) error
+
+	writeMu             sync.Mutex
+	writeBlockEventHook func(commonEvent.BlockEvent) error
 }
 
 func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTestSink {
@@ -58,6 +61,12 @@ func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTe
 		testSink.dmls = append(testSink.dmls, event)
 	}).AnyTimes()
 	testSink.sink.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		testSink.writeMu.Lock()
+		hook := testSink.writeBlockEventHook
+		testSink.writeMu.Unlock()
+		if hook != nil {
+			return hook(event)
+		}
 		event.PostFlush()
 		return nil
 	}).AnyTimes()
@@ -89,6 +98,12 @@ func (s *dispatcherTestSink) SetFlushBeforeBlockHook(hook func(commonEvent.Block
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 	s.flushBeforeBlockHook = hook
+}
+
+func (s *dispatcherTestSink) SetWriteBlockEventHook(hook func(commonEvent.BlockEvent) error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.writeBlockEventHook = hook
 }
 
 func (s *dispatcherTestSink) GetDMLs() []*commonEvent.DMLEvent {

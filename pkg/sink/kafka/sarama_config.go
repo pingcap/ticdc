@@ -23,7 +23,6 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
 
@@ -45,29 +44,24 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Metadata.Retry.Max = 10
 	config.Metadata.Retry.Backoff = 200 * time.Millisecond
 	config.Metadata.Timeout = 2 * time.Minute
-	// The kafka server side connections.max.idle.ms default value is 10 minutes.
-	// it will close the connection if idle for too long.
-	// so we need to refresh the metadata frequently to avoid the connection being closed by server,
-	// and then trigger the `fetching metadata: write broken pipe` error, it's annoying.
-	config.Metadata.RefreshFrequency = 9 * time.Minute
-
 	config.Admin.Retry.Max = 10
 	config.Admin.Retry.Backoff = 200 * time.Millisecond
 	// This timeout control the request timeout for each admin request.
 	// set it as the read timeout.
 	config.Admin.Timeout = 10 * time.Second
 
-	// According to the https://github.com/IBM/sarama/issues/2619,
-	// sarama may send message out of order even set the `config.Net.MaxOpenRequest` to 1,
-	// when the kafka cluster is unhealthy and trigger the internal retry mechanism.
-	config.Producer.Retry.Max = 0
+	// Keep a bounded producer retry budget to tolerate transient broker-side
+	// connection failures such as stale connections or broken pipe errors.
+	// The PingCAP Sarama fork includes the partition-muting ordering fix, while
+	// Net.MaxOpenRequests=1 below remains an extra ordering guard.
+	config.Producer.Retry.Max = o.MaxRetry
 	config.Producer.Retry.Backoff = 100 * time.Millisecond
 
 	// make sure sarama producer flush messages as soon as possible.
 	config.Producer.Flush.Bytes = 0
 	config.Producer.Flush.Messages = 0
 	config.Producer.Flush.Frequency = time.Duration(0)
-	config.Producer.Flush.MaxMessages = o.MaxMessages
+	config.Producer.Flush.MaxMessages = 0
 
 	config.Net.MaxOpenRequests = 1
 	config.Net.DialTimeout = o.DialTimeout
@@ -92,11 +86,8 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	case "zstd":
 		config.Producer.Compression = sarama.CompressionZSTD
 	default:
-		log.Warn("Unsupported compression algorithm", zap.String("compression", o.Compression))
+		log.Warn("unsupported kafka compression algorithm", zap.String("compression", o.Compression))
 		config.Producer.Compression = sarama.CompressionNone
-	}
-	if config.Producer.Compression != sarama.CompressionNone {
-		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
 
 	if o.EnableTLS {
@@ -113,7 +104,7 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 		if o.Credential != nil && o.Credential.IsTLSEnabled() {
 			config.Net.TLS.Config, err = o.Credential.ToTLSConfig()
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 			}
 		}
 
@@ -122,67 +113,67 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 
 	err = completeSaramaSASLConfig(ctx, config, o)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return nil, err
 	}
 
-	kafkaVersion, err := getKafkaVersion(config, o)
+	err = completeSaramaKafkaVersion(config, o)
 	if err != nil {
-		log.Warn("Can't get Kafka version by broker. ticdc will use default version",
-			zap.String("defaultVersion", kafkaVersion.String()))
-	}
-	config.Version = kafkaVersion
-
-	if o.IsAssignedVersion {
-		version, err := sarama.ParseKafkaVersion(o.Version)
-		if err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
-		}
-		config.Version = version
-		if !version.IsAtLeast(maxKafkaVersion) && version.String() != kafkaVersion.String() {
-			log.Warn("The Kafka version you assigned may not be correct. "+
-				"Please assign a version equal to or less than the specified version",
-				zap.String("assignedVersion", version.String()),
-				zap.String("desiredVersion", kafkaVersion.String()))
-		}
+		return nil, err
 	}
 	return config, nil
 }
 
+func completeSaramaKafkaVersion(config *sarama.Config, o *options) error {
+	detectedVersion, err := detectKafkaVersion(config, o)
+	if err != nil {
+		log.Warn("kafka version detection failed, using fallback version",
+			zap.Strings("brokers", o.BrokerEndpoints),
+			zap.String("fallbackVersion", detectedVersion.String()),
+			zap.Error(err))
+	}
+	kafkaVersion, err := selectKafkaVersion(detectedVersion, o)
+	if err != nil {
+		return err
+	}
+	config.Version = kafkaVersion
+	return nil
+}
+
 func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *options) error {
-	if o.SASL != nil && o.SASL.SASLMechanism != "" {
+	if o.sasl != nil && o.sasl.mechanism != "" {
 		config.Net.SASL.Enable = true
-		config.Net.SASL.Mechanism = sarama.SASLMechanism(o.SASL.SASLMechanism)
-		switch o.SASL.SASLMechanism {
-		case SASLTypeSCRAMSHA256, SASLTypeSCRAMSHA512, SASLTypePlaintext:
-			config.Net.SASL.User = o.SASL.SASLUser
-			config.Net.SASL.Password = o.SASL.SASLPassword
-			if strings.EqualFold(string(o.SASL.SASLMechanism), SASLTypeSCRAMSHA256) {
+		config.Net.SASL.Mechanism = sarama.SASLMechanism(o.sasl.mechanism)
+		switch o.sasl.mechanism {
+		case scram256Mechanism, scram512Mechanism, plainMechanism:
+			config.Net.SASL.User = o.sasl.user
+			config.Net.SASL.Password = o.sasl.password
+			if strings.EqualFold(string(o.sasl.mechanism), string(scram256Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
-					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA256}
+					return &xdgSCRAMClient{HashGeneratorFcn: sha256HashGenerator}
 				}
-			} else if strings.EqualFold(string(o.SASL.SASLMechanism), SASLTypeSCRAMSHA512) {
+			} else if strings.EqualFold(string(o.sasl.mechanism), string(scram512Mechanism)) {
 				config.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient {
-					return &security.XDGSCRAMClient{HashGeneratorFcn: security.SHA512}
+					return &xdgSCRAMClient{HashGeneratorFcn: sha512HashGenerator}
 				}
 			}
-		case SASLTypeGSSAPI:
-			config.Net.SASL.GSSAPI.AuthType = int(o.SASL.GSSAPI.AuthType)
-			config.Net.SASL.GSSAPI.Username = o.SASL.GSSAPI.Username
-			config.Net.SASL.GSSAPI.ServiceName = o.SASL.GSSAPI.ServiceName
-			config.Net.SASL.GSSAPI.KerberosConfigPath = o.SASL.GSSAPI.KerberosConfigPath
-			config.Net.SASL.GSSAPI.Realm = o.SASL.GSSAPI.Realm
-			config.Net.SASL.GSSAPI.DisablePAFXFAST = o.SASL.GSSAPI.DisablePAFXFAST
-			switch o.SASL.GSSAPI.AuthType {
-			case security.UserAuth:
-				config.Net.SASL.GSSAPI.Password = o.SASL.GSSAPI.Password
-			case security.KeyTabAuth:
-				config.Net.SASL.GSSAPI.KeyTabPath = o.SASL.GSSAPI.KeyTabPath
+		case gssapiMechanism:
+			config.Net.SASL.GSSAPI.AuthType = int(o.sasl.gssapi.authType)
+			config.Net.SASL.GSSAPI.Username = o.sasl.gssapi.username
+			config.Net.SASL.GSSAPI.ServiceName = o.sasl.gssapi.serviceName
+			config.Net.SASL.GSSAPI.KerberosConfigPath = o.sasl.gssapi.kerberosConfigPath
+			config.Net.SASL.GSSAPI.Realm = o.sasl.gssapi.realm
+			config.Net.SASL.GSSAPI.DisablePAFXFAST = o.sasl.gssapi.disablePAFXFAST
+			switch o.sasl.gssapi.authType {
+			case userAuth:
+				config.Net.SASL.GSSAPI.Password = o.sasl.gssapi.password
+			case keyTabAuth:
+				config.Net.SASL.GSSAPI.KeyTabPath = o.sasl.gssapi.keyTabPath
 			}
 
-		case SASLTypeOAuth:
+		case oauthMechanism:
 			p, err := newTokenProvider(ctx, o)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			config.Net.SASL.TokenProvider = p
 		}
@@ -191,7 +182,7 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 	return nil
 }
 
-func getKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, error) {
+func detectKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, error) {
 	addrs := o.BrokerEndpoints
 	if len(addrs) > 1 {
 		// Shuffle the list of addresses to randomize the order in which
@@ -213,25 +204,26 @@ func getKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, er
 		}
 	}
 	if err != nil {
-		log.Warn("kafka sink use the default kafka version since cannot find it from the brokers",
-			zap.String("defaultVersion", defaultKafkaVersion.String()))
 		targetVersion = defaultKafkaVersion
 	}
+	return targetVersion, err
+}
 
-	if o.IsAssignedVersion {
-		assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
-		if err != nil {
-			return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
-		}
-		if !assignedVersion.IsAtLeast(maxKafkaVersion) && assignedVersion.String() != targetVersion.String() {
-			log.Warn("The Kafka version you assigned may not be correct. "+
-				"Please assign a version equal to or less than the specified version",
-				zap.String("assignedVersion", assignedVersion.String()),
-				zap.String("desiredVersion", targetVersion.String()))
-		}
-		targetVersion = assignedVersion
+func selectKafkaVersion(detectedVersion sarama.KafkaVersion, o *options) (sarama.KafkaVersion, error) {
+	if !o.IsAssignedVersion {
+		return detectedVersion, nil
 	}
-	return targetVersion, nil
+	assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
+	if err != nil {
+		return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+	}
+	if !assignedVersion.IsAtLeast(maxKafkaVersion) &&
+		assignedVersion.String() != detectedVersion.String() {
+		log.Warn("configured kafka version differs from detected version",
+			zap.String("assignedVersion", assignedVersion.String()),
+			zap.String("desiredVersion", detectedVersion.String()))
+	}
+	return assignedVersion, nil
 }
 
 func getKafkaVersionFromBroker(config *sarama.Config, requestVersion int16, addr string) (sarama.KafkaVersion, error) {
@@ -242,12 +234,10 @@ func getKafkaVersionFromBroker(config *sarama.Config, requestVersion int16, addr
 		_ = broker.Close()
 	}()
 	if err != nil {
-		log.Warn("Kafka fail to open broker", zap.String("addr", addr), zap.Error(err))
 		return KafkaVersion, err
 	}
 	apiResponse, err := broker.ApiVersions(&sarama.ApiVersionsRequest{Version: requestVersion})
 	if err != nil {
-		log.Warn("Kafka fail to get ApiVersions", zap.String("addr", addr), zap.Error(err))
 		return KafkaVersion, err
 	}
 	// ApiKey method

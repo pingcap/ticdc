@@ -20,10 +20,9 @@ import (
 	"sync"
 
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/errors"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -41,8 +40,8 @@ func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool,
 	row := db.QueryRowContext(ctx, "SELECT @@tidb_cdc_active_active_sync_stats;")
 	var v sql.NullString
 	if err := row.Scan(&v); err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
-			mysqlErr.Number == tidbmysql.ErrUnknownSystemVariable {
+		var mysqlErr *dmysql.MySQLError
+		if errors.As(errors.Cause(err), &mysqlErr) && mysqlErr.Number == tidbmysql.ErrUnknownSystemVariable {
 			return false, nil
 		}
 		return false, errors.Trace(err)
@@ -74,7 +73,7 @@ func NewActiveActiveSyncStatsCollector(changefeedID common.ChangeFeedID) *Active
 	return &ActiveActiveSyncStatsCollector{
 		keyspace:                 keyspace,
 		changefeed:               changefeed,
-		conflictSkipRows:         metrics.ActiveActiveConflictSkipRowsCounter.WithLabelValues(keyspace, changefeed),
+		conflictSkipRows:         activeActiveConflictSkipRowsCounter.WithLabelValues(keyspace, changefeed),
 		lastConflictSkipRowsByID: make(map[uint64]uint64),
 	}
 }
@@ -120,7 +119,7 @@ func (c *ActiveActiveSyncStatsCollector) ForgetConn(connID uint64) {
 // Close releases metric series held by this collector.
 func (c *ActiveActiveSyncStatsCollector) Close() {
 	// Reset the series on sink rebuild.
-	metrics.ActiveActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
+	activeActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
 }
 
 // queryActiveActiveSyncStats queries CONNECTION_ID() and the session variable

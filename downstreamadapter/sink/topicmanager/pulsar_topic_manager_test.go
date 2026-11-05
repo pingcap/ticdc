@@ -42,8 +42,6 @@ func newPulsarConfig(t *testing.T) (*config.PulsarConfig, *url.URL) {
 func TestGetPartitionNumMock(t *testing.T) {
 	t.Parallel()
 
-	cfg, _ := newPulsarConfig(t)
-
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink = &config.SinkConfig{
 		Protocol: util.AddressOf("canal-json"),
@@ -52,7 +50,7 @@ func TestGetPartitionNumMock(t *testing.T) {
 	ctx := context.Background()
 
 	ctx = context.WithValue(ctx, "testing.T", t)
-	pm, err := NewMockPulsarTopicManager(cfg, nil)
+	pm, err := NewMockPulsarTopicManager()
 	require.NoError(t, err)
 	require.NotNil(t, pm)
 

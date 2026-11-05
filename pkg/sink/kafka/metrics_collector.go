@@ -50,6 +50,7 @@ const (
 	requestLatencyInMsMetricNamePrefix = "request-latency-in-ms-for-broker-"
 	requestsInFlightMetricNamePrefix   = "requests-in-flight-for-broker-"
 	responseRateMetricNamePrefix       = "response-rate-for-broker-"
+	throttleTimeMetricNamePrefix       = "throttle-time-in-ms-for-broker-"
 
 	p99 = "p99"
 	avg = "avg"
@@ -58,7 +59,7 @@ const (
 type saramaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
 	// adminClient is used to get broker infos from broker.
-	adminClient ClusterAdminClient
+	adminClient AdminClient
 	brokers     map[int32]struct{}
 	registry    metrics.Registry
 }
@@ -92,7 +93,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	brokers := m.adminClient.GetAllBrokers()
+	brokers := m.adminClient.GetAllBrokers(ctx)
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}
 	}
@@ -124,12 +125,13 @@ func (m *saramaMetricsCollector) collectProducerMetrics() {
 func (m *saramaMetricsCollector) collectBrokerMetrics() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeedID := m.changefeedID.Name()
+
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
 		outgoingByteRateMetric := m.registry.Get(
 			getBrokerMetricName(outgoingByteRateMetricNamePrefix, brokerID))
 		if meter, ok := outgoingByteRateMetric.(metrics.Meter); ok {
-			OutgoingByteRateGauge.
+			outgoingByteRateGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
@@ -137,7 +139,7 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 		requestRateMetric := m.registry.Get(
 			getBrokerMetricName(requestRateMetricNamePrefix, brokerID))
 		if meter, ok := requestRateMetric.(metrics.Meter); ok {
-			RequestRateGauge.
+			requestRateGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
 		}
@@ -145,10 +147,10 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 		requestLatencyMetric := m.registry.Get(
 			getBrokerMetricName(requestLatencyInMsMetricNamePrefix, brokerID))
 		if histogram, ok := requestLatencyMetric.(metrics.Histogram); ok {
-			RequestLatencyGauge.
+			requestLatencyGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, avg).
 				Set(histogram.Snapshot().Mean() / 1000)
-			RequestLatencyGauge.
+			requestLatencyGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID, p99).
 				Set(histogram.Snapshot().Percentile(0.99) / 1000)
 		}
@@ -167,6 +169,18 @@ func (m *saramaMetricsCollector) collectBrokerMetrics() {
 			responseRateGauge.
 				WithLabelValues(keyspace, changefeedID, brokerID).
 				Set(meter.Snapshot().Rate1())
+		}
+
+		throttleTimeMetric := m.registry.Get(getBrokerMetricName(
+			throttleTimeMetricNamePrefix, brokerID))
+		if histogram, ok := throttleTimeMetric.(metrics.Histogram); ok {
+			snapshot := histogram.Snapshot()
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, avg).
+				Set(snapshot.Mean() / 1000)
+			throttleTimeGauge.
+				WithLabelValues(keyspace, changefeedID, brokerID, p99).
+				Set(snapshot.Percentile(0.99) / 1000)
 		}
 	}
 }
@@ -192,18 +206,22 @@ func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
 	changefeedID := m.changefeedID.Name()
 	for id := range m.brokers {
 		brokerID := strconv.Itoa(int(id))
-		OutgoingByteRateGauge.
+		outgoingByteRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
-		RequestRateGauge.
+		requestRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
-		RequestLatencyGauge.
+		requestLatencyGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
-		RequestLatencyGauge.
+		requestLatencyGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 		requestsInFlightGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
 		responseRateGauge.
 			DeleteLabelValues(keyspace, changefeedID, brokerID)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, avg)
+		throttleTimeGauge.
+			DeleteLabelValues(keyspace, changefeedID, brokerID, p99)
 
 	}
 }

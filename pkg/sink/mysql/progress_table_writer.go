@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
@@ -148,7 +147,7 @@ func (w *ProgressTableWriter) flushBatch(
 	query := builder.String()
 	_, err := w.db.ExecContext(w.ctx, query, args...)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 	}
 	return nil
 }
@@ -165,7 +164,7 @@ func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 
 	createDB := "CREATE DATABASE IF NOT EXISTS `" + filter.TiCDCSystemSchema + "`"
 	if _, err := w.db.ExecContext(ctx, createDB); err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute sql, sql info:%s", createDB)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute sql, sql info:%s", createDB)))
 	}
 	createTable := "CREATE TABLE IF NOT EXISTS `" + filter.TiCDCSystemSchema + "`.`" + progressTableName + "` (" +
 		"changefeed_id VARCHAR(128) NOT NULL COMMENT 'Unique identifier for the changefeed synchronization task'," +
@@ -176,7 +175,7 @@ func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 		"PRIMARY KEY (changefeed_id, cluster_id, database_name, table_name)" +
 		") COMMENT='TiCDC synchronization progress table for HardDelete safety check'"
 	if _, err := w.db.ExecContext(ctx, createTable); err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute sql, sql info:%s", createTable)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute sql, sql info:%s", createTable)))
 	}
 
 	w.progressTableInit = true
@@ -252,7 +251,7 @@ func (w *ProgressTableWriter) removeTableBatch(changefeed, clusterID string, tab
 	query := builder.String()
 	_, err := w.db.ExecContext(w.ctx, query, args...)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 	}
 	return nil
 }
@@ -269,7 +268,7 @@ func (w *ProgressTableWriter) removeDatabase(changefeed, clusterID, dbName strin
 	query := builder.String()
 	_, err := w.db.ExecContext(w.ctx, query, changefeed, clusterID, dbName)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs([]interface{}{changefeed, clusterID, dbName}))))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute query, query info:%s, args:%v; ", query, util.RedactArgs([]interface{}{changefeed, clusterID, dbName}))))
 	}
 	return nil
 }

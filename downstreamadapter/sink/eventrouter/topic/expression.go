@@ -68,15 +68,14 @@ func (e Expression) validate() error {
 		return nil
 	}
 
-	return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e)
+	return errors.ErrKafkaInvalidConfig.GenWithStack("invalid topic expression: %s", e)
 }
 
 // ValidateForAvro checks whether topic pattern is {schema}_{table}, the only allowed
 func (e Expression) validateForAvro() error {
 	if ok := avroTopicNameRE.MatchString(string(e)); !ok {
-		return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e,
-			"topic rule for Avro must contain {schema} and {table}",
-		)
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"invalid topic expression %s: topic rule for Avro must contain {schema} and {table}", e)
 	}
 
 	return nil

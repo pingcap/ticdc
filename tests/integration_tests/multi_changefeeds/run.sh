@@ -17,7 +17,7 @@ function run() {
 
 	# Start first CDC server (single node)
 	echo "Starting first CDC server..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300"
 
 	# Create sink URI based on sink type
 	TOPIC_NAME="ticdc-autorandom-test-$RANDOM"
@@ -66,14 +66,15 @@ function run() {
 
 	# Start second CDC server (second node)
 	echo "Starting second CDC server..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301"
+	# This node must stay down after the scale-in step.
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301" --logsuffix "1"
 
 	# Wait for coordinator to balance changefeeds
 	sleep 15
 
 	# Start third CDC server (third node)
 	echo "Starting third CDC server..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8302"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8302" --logsuffix "2"
 
 	# Wait for coordinator to rebalance changefeeds across 3 nodes
 	sleep 20
@@ -100,7 +101,12 @@ function run() {
 	# Wait for all data to be processed
 	sleep 30
 
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_cdc_server_guard --workdir "$WORK_DIR"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 

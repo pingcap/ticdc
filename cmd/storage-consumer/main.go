@@ -20,12 +20,14 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -81,6 +83,7 @@ func init() {
 }
 
 func main() {
+	debug.SetMemoryLimit(8 * 1024 * 1024 * 1024)
 	var consumer *consumer
 	var err error
 
@@ -103,7 +106,7 @@ func main() {
 		if consumer != nil {
 			consumer.sink.Close()
 		}
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			return 1
 		}
 		return 0

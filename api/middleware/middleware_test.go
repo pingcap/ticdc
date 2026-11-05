@@ -24,14 +24,52 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	plog "github.com/pingcap/log"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestLogMiddlewareMasksCredentialQuery(t *testing.T) {
+	originalMode := cerrors.RedactLogEnabled.Load()
+	t.Cleanup(func() { cerrors.RedactLogEnabled.Store(originalMode) })
+
+	for _, mode := range []string{cerrors.RedactLogDisable, cerrors.RedactLogMarker, cerrors.RedactLogEnable} {
+		cerrors.RedactLogEnabled.Store(mode)
+		core, observed := observer.New(zapcore.InfoLevel)
+		restore := plog.ReplaceGlobals(zap.New(core), nil)
+
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet,
+			"/api?token=secret-value&key=bare-key-material&region=west&keyspace=default#token=fragment-secret-value", nil)
+		LogMiddleware()(c)
+
+		restore()
+		require.Len(t, observed.All(), 1)
+		query := observed.All()[0].ContextMap()["query"].(string)
+		require.NotContains(t, query, "secret-value")
+		require.NotContains(t, query, "bare-key-material")
+		require.NotContains(t, query, "fragment-secret-value")
+		if mode == cerrors.RedactLogDisable {
+			require.Contains(t, query, "key=xxxxx")
+			require.Contains(t, query, "region=west")
+			require.Contains(t, query, "keyspace=xxxxx")
+			require.Contains(t, query, "#token=xxxxx")
+		}
+	}
+}
+
 func TestForwardToServer(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	restore := plog.ReplaceGlobals(zap.New(core), nil)
+	defer restore()
+
 	// Setup mock target server
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify received headers
@@ -50,7 +88,7 @@ func TestForwardToServer(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 
 	// Create test request
-	req := httptest.NewRequest("GET", "/test-path", nil)
+	req := httptest.NewRequest("GET", "/test-path?region=west#token=forward-secret-value", nil)
 	req.Header.Set("X-Original-Header", "original-value")
 	c.Request = req
 
@@ -61,6 +99,17 @@ func TestForwardToServer(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "test-value", w.Header().Get("X-Test-Header"))
 	require.Equal(t, "test response", w.Body.String())
+	var loggedURL string
+	for _, entry := range observed.All() {
+		if entry.Message == "forwarding request to another server" {
+			loggedURL = entry.ContextMap()["url"].(string)
+			break
+		}
+	}
+	require.NotEmpty(t, loggedURL)
+	require.Contains(t, loggedURL, "region=west")
+	require.NotContains(t, loggedURL, "forward-secret-value")
+	require.Contains(t, loggedURL, "token=xxxxx")
 }
 
 func TestForwardToServerExceedMaxForwardTimes(t *testing.T) {
@@ -201,6 +250,57 @@ func TestForwardToCoordinator(t *testing.T) {
 			if tt.ts != nil {
 				tt.ts.Close()
 			}
+		})
+	}
+}
+
+func TestErrorHandleMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{
+			name:       "no error returns 200",
+			err:        nil,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "registered bad-request error returns 400",
+			err:        cerrors.ErrAPIInvalidParam.GenWithStackByArgs("bad input"),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "duplicate changefeed returns 400",
+			err:        cerrors.ErrChangeFeedAlreadyExists.GenWithStackByArgs("foo"),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "unclassified error returns 500",
+			err:        errors.New("boom"),
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(ErrorHandleMiddleware())
+			router.GET("/test", func(c *gin.Context) {
+				if tc.err != nil {
+					_ = c.Error(tc.err)
+					return
+				}
+				c.Status(http.StatusOK)
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
 }

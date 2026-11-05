@@ -77,7 +77,7 @@ run_basic_upgrade_case() {
 	echo "Switching to new arch..."
 	export TICDC_NEWARCH=true
 
-	run_cdc_server --workdir "$WORK_DIR" --binary $CDC_BINARY --logsuffix "new-arch"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary $CDC_BINARY --logsuffix "new-arch"
 
 	sleep 5
 
@@ -93,8 +93,11 @@ run_basic_upgrade_case() {
 
 	echo "Checking data consistency for basic case..."
 	check_table_exists migration_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "new-arch"
 	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "new-arch"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
 	export TICDC_NEWARCH=true
@@ -140,7 +143,7 @@ run_scheduler_upgrade_case() {
 	echo "Switching scheduler case to new arch..."
 	export TICDC_NEWARCH=true
 
-	run_cdc_server --workdir "$WORK_DIR" --binary $CDC_BINARY --logsuffix "new-arch"
+	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary $CDC_BINARY --logsuffix "new-arch"
 
 	sleep 5
 
@@ -166,8 +169,11 @@ run_scheduler_upgrade_case() {
 
 	echo "Checking data consistency for scheduler case..."
 	check_table_exists scheduler_upgrade.big_table ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "new-arch"
 	check_sync_diff "$WORK_DIR" "$CUR/conf/scheduler_diff_config.toml"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "new-arch"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
 	export TICDC_NEWARCH=true

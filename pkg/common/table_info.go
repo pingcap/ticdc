@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -58,7 +59,7 @@ func UnquoteName(name string) string {
 
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
-	return strings.Replace(name, "`", "``", -1)
+	return strings.ReplaceAll(name, "`", "``")
 }
 
 const (
@@ -116,8 +117,29 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-func (ti *TableInfo) InitPrivateFields() {
+func (ti *TableInfo) String() string {
 	if ti == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"TableInfo{schema:%s, table:%s, tableID:%d, isPartition:%t, targetSchema:%s, targetTable:%s, charset:%s, collate:%s, hasPKOrNotNullUK:%t, activeActiveTable:%t, softDeleteTable:%t, updateTS:%d}",
+		ti.TableName.Schema,
+		ti.TableName.Table,
+		ti.TableName.TableID,
+		ti.TableName.IsPartition,
+		ti.TableName.GetTargetSchema(),
+		ti.TableName.GetTargetTable(),
+		ti.Charset,
+		ti.Collate,
+		ti.HasPKOrNotNullUK,
+		ti.ActiveActiveTable,
+		ti.SoftDeleteTable,
+		ti.UpdateTS,
+	)
+}
+
+func (ti *TableInfo) initPreSQLs() {
+	if ti == nil || ti.columnSchema == nil {
 		return
 	}
 
@@ -142,10 +164,10 @@ func (ti *TableInfo) InitPrivateFields() {
 
 // CloneWithRouting creates a shallow copy of TableInfo with routing applied.
 // The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
+// - preSQLs will be initialized lazily using the new TableName
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -277,6 +299,11 @@ func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
+// HasClusteredPrimaryKey reports whether record keys are derived from the primary key.
+func (ti *TableInfo) HasClusteredPrimaryKey() bool {
+	return ti.columnSchema.PKIsHandle || ti.columnSchema.IsCommonHandle
+}
+
 func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
@@ -289,6 +316,7 @@ func (ti *TableInfo) GetUpdateTS() uint64 {
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
 	}
@@ -296,6 +324,7 @@ func (ti *TableInfo) GetPreInsertSQL() string {
 }
 
 func (ti *TableInfo) GetPreReplaceSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLReplace] == "" {
 		log.Panic("preSQLs[preSQLReplace] is not initialized")
 	}
@@ -303,6 +332,7 @@ func (ti *TableInfo) GetPreReplaceSQL() string {
 }
 
 func (ti *TableInfo) GetPreUpdateSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLUpdate] == "" {
 		log.Panic("preSQLs[preSQLUpdate] is not initialized")
 	}
@@ -478,6 +508,28 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return ti.HasPKOrNotNullUK
 }
 
+// SetHandleKeyFlags records how the primary key is stored as the row handle,
+// mirroring TiDB's table info: a single integer primary key column is the row
+// handle (PKIsHandle), any other primary key is a common handle. Callers that
+// locate a row by the handle key - the MySQL sink's WHERE clause for example -
+// read the key from these flags, so a composite primary key must not be reported
+// as PKIsHandle: doing so makes them fall back to a single column of the table.
+func SetHandleKeyFlags(tableInfo *model.TableInfo) {
+	primary := tables.FindPrimaryIndex(tableInfo)
+	if primary == nil {
+		return
+	}
+
+	if len(primary.Columns) == 1 {
+		column := model.FindColumnInfo(tableInfo.Columns, primary.Columns[0].Name.L)
+		if column != nil && mysql.IsIntegerType(column.GetType()) {
+			tableInfo.PKIsHandle = true
+			return
+		}
+	}
+	tableInfo.IsCommonHandle = true
+}
+
 func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	// If the table has primary key, it is eligible.
 	// the PKIsHandle can not handle all primary key cases, for example:
@@ -525,6 +577,26 @@ func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	}
 
 	return false
+}
+
+// IsSplitable returns whether a table with the given primary key storage and indexes
+// is eligible for split in all sinks.
+// A clustered primary key keeps changes to the same logical row in the same
+// record span. Nonclustered primary keys and other unique keys do not.
+func IsSplitable(hasClusteredPrimaryKey bool, indices []*model.IndexInfo) bool {
+	if !hasClusteredPrimaryKey {
+		return false
+	}
+
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
 }
 
 // GetIndex return the corresponding index by the given name.
@@ -626,7 +698,12 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 // GetOrderedHandleKeyColumnIDs returns the ordered handle-key column IDs.
 // It prefers the primary key columns (PKIndex) when available; otherwise,
 // it falls back to the not-null unique key selected during schema init.
+// A table info without column schema, such as a placeholder for a DML decoded
+// before its DDL, has no handle key.
 func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.HandleKeyIDList
 }
 
@@ -698,7 +775,5 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
-	result.InitPrivateFields()
-	return result
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }

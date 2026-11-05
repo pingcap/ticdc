@@ -72,6 +72,36 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 	require.Equal(t, 0, len(handler.droppedEvents))
 }
 
+func TestParallelDynamicStreamRemovePathDropsBufferedEvent(t *testing.T) {
+	handler := &mockHandler{}
+	var handleWait sync.WaitGroup
+	handleWait.Add(1)
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount: 1,
+		UseBuffer:   true,
+		handleWait:  &handleWait,
+	})
+	stream.Start()
+	defer stream.Close()
+
+	const path = "test/path"
+	require.NoError(t, stream.AddPath(path, "dest"))
+	event := &mockEvent{id: 1, path: path}
+	stream.Push(path, event)
+	require.NoError(t, stream.RemovePath(path))
+	handleWait.Done()
+
+	require.Eventually(t, func() bool {
+		if stream.GetMetrics().PendingQueueLen != 0 {
+			return false
+		}
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		return len(handler.droppedEvents) == 1 && handler.droppedEvents[0] == event
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, []*mockEvent{event}, handler.drainDroppedEvents())
+}
+
 func TestParallelDynamicStreamMetrics(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}

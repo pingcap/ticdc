@@ -105,14 +105,24 @@ const (
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
 
 	// Node drain related
-	TypeNodeHeartbeatRequest            IOType = 42
-	TypeSetNodeLivenessRequest          IOType = 43
-	TypeSetNodeLivenessResponse         IOType = 44
-	TypeSetDispatcherDrainTargetRequest IOType = 45
+	TypeNodeHeartbeatRequest               IOType = 42
+	TypeSetNodeLivenessRequest             IOType = 43
+	TypeSetNodeLivenessResponse            IOType = 44
+	TypeSetDispatcherDrainTargetRequest    IOType = 45
+	TypeNodeHeartbeatResponse              IOType = 46
+	TypeEventBrokerDispatcherCount         IOType = 47
+	TypeEventBrokerDispatcherCountRequest  IOType = 48
+	TypeEventBrokerDispatcherCountResponse IOType = 49
 )
 
 func (t IOType) String() string {
 	switch t {
+	case TypeEventBrokerDispatcherCount:
+		return "EventBrokerDispatcherCount"
+	case TypeEventBrokerDispatcherCountRequest:
+		return "EventBrokerDispatcherCountRequest"
+	case TypeEventBrokerDispatcherCountResponse:
+		return "EventBrokerDispatcherCountResponse"
 	case TypeBatchDMLEvent:
 		return "BatchDMLEvent"
 	case TypeDDLEvent:
@@ -203,6 +213,8 @@ func (t IOType) String() string {
 		return "SetNodeLivenessResponse"
 	case TypeSetDispatcherDrainTargetRequest:
 		return "SetDispatcherDrainTargetRequest"
+	case TypeNodeHeartbeatResponse:
+		return "NodeHeartbeatResponse"
 	default:
 	}
 	return "Unknown"
@@ -248,8 +260,12 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
+func (r DispatcherRequest) IsLowLatencyMode() bool {
+	return r.LowLatencyMode
+}
+
 func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
-	return r.DispatcherRequest.FilterConfig
+	return r.FilterConfig
 }
 
 func (r DispatcherRequest) SyncPointEnabled() bool {
@@ -273,15 +289,15 @@ func (r DispatcherRequest) GetBdrMode() bool {
 }
 
 func (r DispatcherRequest) GetIntegrity() *integrity.Config {
-	if r.DispatcherRequest.Integrity == nil {
+	if r.Integrity == nil {
 		return &integrity.Config{
 			IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
 			CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 		}
 	}
 	return &integrity.Config{
-		IntegrityCheckLevel:   util.AddressOf(r.DispatcherRequest.Integrity.IntegrityCheckLevel),
-		CorruptionHandleLevel: util.AddressOf(r.DispatcherRequest.Integrity.CorruptionHandleLevel),
+		IntegrityCheckLevel:   util.AddressOf(r.Integrity.IntegrityCheckLevel),
+		CorruptionHandleLevel: util.AddressOf(r.Integrity.CorruptionHandleLevel),
 	}
 }
 
@@ -291,6 +307,10 @@ func (r DispatcherRequest) GetEpoch() uint64 {
 
 func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
 	return r.OutputRawChangeEvent
+}
+
+func (r DispatcherRequest) EnableIgnoreUpdateOnlyColumns() bool {
+	return r.DispatcherRequest.EnableIgnoreUpdateOnlyColumns
 }
 
 func (r DispatcherRequest) GetTxnAtomicity() config.AtomicityLevel {
@@ -323,6 +343,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &common.LogCoordinatorBroadcastRequest{}
 	case TypeEventStoreState:
 		m = &logservicepb.EventStoreState{}
+	case TypeEventBrokerDispatcherCount:
+		m = &logservicepb.EventBrokerDispatcherCount{}
+	case TypeEventBrokerDispatcherCountRequest:
+		m = &logservicepb.EventBrokerDispatcherCountRequest{}
+	case TypeEventBrokerDispatcherCountResponse:
+		m = &logservicepb.EventBrokerDispatcherCountResponse{}
 	case TypeReusableEventServiceRequest:
 		m = &logservicepb.ReusableEventServiceRequest{}
 	case TypeReusableEventServiceResponse:
@@ -395,6 +421,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.SetNodeLivenessResponse{}
 	case TypeSetDispatcherDrainTargetRequest:
 		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
+	case TypeNodeHeartbeatResponse:
+		m = &heartbeatpb.NodeHeartbeatResponse{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -445,6 +473,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorBroadcastRequest
 	case *logservicepb.EventStoreState:
 		ioType = TypeEventStoreState
+	case *logservicepb.EventBrokerDispatcherCount:
+		ioType = TypeEventBrokerDispatcherCount
+	case *logservicepb.EventBrokerDispatcherCountRequest:
+		ioType = TypeEventBrokerDispatcherCountRequest
+	case *logservicepb.EventBrokerDispatcherCountResponse:
+		ioType = TypeEventBrokerDispatcherCountResponse
 	case *logservicepb.ReusableEventServiceRequest:
 		ioType = TypeReusableEventServiceRequest
 	case *logservicepb.ReusableEventServiceResponse:
@@ -515,6 +549,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeSetNodeLivenessResponse
 	case *heartbeatpb.SetDispatcherDrainTargetRequest:
 		ioType = TypeSetDispatcherDrainTargetRequest
+	case *heartbeatpb.NodeHeartbeatResponse:
+		ioType = TypeNodeHeartbeatResponse
 	default:
 		panic("unknown io type")
 	}

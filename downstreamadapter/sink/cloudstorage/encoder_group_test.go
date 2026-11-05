@@ -16,14 +16,15 @@ package cloudstorage
 import (
 	"context"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -174,6 +175,15 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	})
 
 	dispatcherID := commonType.NewDispatcherID()
+	var flushCount atomic.Int64
+	var enqueueCount atomic.Int64
+	event := newTestDMLEvent(dispatcherID, 100)
+	event.AddPostFlushFunc(func() {
+		flushCount.Add(1)
+	})
+	event.AddPostEnqueueFunc(func() {
+		enqueueCount.Add(1)
+	})
 	taskValue := newDMLTask(
 		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
@@ -184,7 +194,8 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 			TableInfoVersion: 1,
 			DispatcherID:     dispatcherID,
 		},
-		newTestDMLEvent(dispatcherID, 100),
+		event,
+		nil,
 	)
 	require.NoError(t, group.add(ctx, taskValue))
 
@@ -201,6 +212,15 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 				}
 				task := future.task
 				require.Equal(t, taskValue, task)
+				require.Nil(t, task.rowEvents)
+				require.Len(t, task.encodedMsgs, 1)
+				require.NotNil(t, task.encodedMsgs[0].Callback)
+				task.encodedMsgs[0].Callback()
+				require.Equal(t, int64(1), flushCount.Load())
+				require.Equal(t, int64(1), enqueueCount.Load())
+				require.NotNil(t, task.postEnqueue)
+				task.postEnqueue()
+				require.Equal(t, int64(1), enqueueCount.Load())
 				done <- struct{}{}
 				return nil
 			}
@@ -229,6 +249,7 @@ func newTestTxnEncoderConfig(t *testing.T) *common.Config {
 		config.ProtocolCsv,
 		replicaConfig.Sink,
 		config.DefaultMaxMessageBytes,
+		config.DefaultMaxMessageBytes,
 	)
 	require.NoError(t, err)
 	return encoderConfig
@@ -249,6 +270,8 @@ func newTestDMLEvent(dispatcherID commonType.DispatcherID, tableID int64) *commo
 		PhysicalTableID:  tableID,
 		TableInfo:        tableInfo,
 		TableInfoVersion: 1,
+		Length:           1,
+		RowTypes:         []commonType.RowType{commonType.RowTypeInsert},
 		Rows:             chunk.MutRowFromValues(1, "hello world").ToRow().Chunk(),
 	}
 }

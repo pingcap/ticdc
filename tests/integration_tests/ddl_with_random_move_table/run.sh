@@ -24,9 +24,9 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
 	TOPIC_NAME="ticdc-ddl-with-random-move-table-$RANDOM"
 	case $SINK_TYPE in
@@ -152,8 +152,15 @@ main() {
 
 	sleep 10
 
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 
+	stop_cdc_server_guards
 	cleanup_process $CDC_BINARY
 }
 
@@ -193,6 +200,10 @@ main_with_consistent() {
 		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 		ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 
 		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
@@ -200,7 +211,14 @@ main_with_consistent() {
 			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 	else
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "0"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "1"
+		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "2"
+		stop_cdc_server_guards
 		cleanup_process $CDC_BINARY
 	fi
 }

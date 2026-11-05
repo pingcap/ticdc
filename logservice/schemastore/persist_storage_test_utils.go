@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -131,13 +130,13 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 	batch := db.NewBatch()
 	defer batch.Close()
 	for _, dbInfo := range dbInfos {
-		addSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
+		// Encryption is disabled, so this call cannot return an encryption error.
+		_ = addSchemaInfoToBatchWithEncryption(
+			context.Background(), batch, snapTs, dbInfo.dbInfo, nil, 0,
+		)
 		for _, tableInfo := range dbInfo.tables {
-			tableInfoValue, err := json.Marshal(tableInfo)
-			if err != nil {
-				log.Panic("marshal table info fail", zap.Error(err))
-			}
-			addTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
+			_, _, _, _, _ = addTableInfoToBatchWithEncryption(
+				context.Background(), batch, snapTs, dbInfo.dbInfo, tableInfo, nil, 0, nil)
 		}
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {
@@ -249,6 +248,36 @@ func buildDropSchemaJobForTest(schemaID int64, finishedTs uint64) *model.Job {
 			FinishedTS: finishedTs,
 		},
 	}
+}
+
+func buildRecoverSchemaJobForTest(schemaID int64, schemaName string, tableInfos []*model.TableInfo, finishedTs uint64) *model.Job {
+	recoverTableInfos := make([]*model.RecoverTableInfo, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
+		recoverTableInfos = append(recoverTableInfos, &model.RecoverTableInfo{
+			SchemaID:      schemaID,
+			TableInfo:     tableInfo,
+			SnapshotTS:    finishedTs,
+			OldSchemaName: schemaName,
+			OldTableName:  tableInfo.Name.O,
+		})
+	}
+	job := &model.Job{
+		Version:  model.JobVersion2,
+		Type:     model.ActionRecoverSchema,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+	job.FillArgs(&model.RecoverArgs{
+		RecoverInfo: &model.RecoverSchemaInfo{
+			DBInfo:            &model.DBInfo{ID: schemaID, Name: ast.NewCIStr(schemaName)},
+			RecoverTableInfos: recoverTableInfos,
+			SnapshotTS:        finishedTs,
+			OldSchemaName:     ast.NewCIStr(schemaName),
+		},
+	})
+	return job
 }
 
 func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {

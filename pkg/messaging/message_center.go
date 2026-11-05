@@ -20,12 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	pkgerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -298,7 +296,7 @@ func (mc *messageCenter) SendEvent(msg *TargetMessage) error {
 		// For example, if the target is not discovered yet, the caller can retry later.
 		// If the target is removed, the caller must remove the objects that was sending
 		// message to this target to avoid blocking.
-		return pkgerror.AppError{Type: pkgerror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", msg.To)}
+		return errors.AppError{Type: errors.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", msg.To)}
 	}
 	return target.sendEvent(msg)
 }
@@ -316,7 +314,7 @@ func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
 	target, ok := mc.remoteTargets.m[msg.To]
 	mc.remoteTargets.RUnlock()
 	if !ok {
-		return errors.WithStack(pkgerror.AppError{Type: pkgerror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %v not found", msg.To.String())})
+		return errors.WithStack(errors.AppError{Type: errors.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %v not found", msg.To.String())})
 	}
 	return target.sendCommand(msg)
 }
@@ -388,8 +386,8 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
-	commandChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("command")
-	eventChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("event")
+	commandChLen := messagingReceiveChannelLength.WithLabelValues("command")
+	eventChLen := messagingReceiveChannelLength.WithLabelValues("event")
 	for {
 		select {
 		case <-ticker.C:
@@ -446,7 +444,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 
 	to := node.ID(msg.To)
 	if to != s.id() {
-		err := pkgerror.AppError{Type: pkgerror.ErrorTypeTargetMismatch, Reason: fmt.Sprintf("The receiver %s not match with the message center id %s", to, s.id())}
+		err := errors.AppError{Type: errors.ErrorTypeTargetMismatch, Reason: fmt.Sprintf("The receiver %s not match with the message center id %s", to, s.id())}
 		log.Error("Target mismatch", zap.Error(err))
 		return err
 	}
@@ -468,12 +466,12 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 				zap.Stringer("localID", s.messageCenter.id),
 				zap.String("localAddr", s.messageCenter.addr),
 				zap.Stringer("remoteID", targetId))
-			err := &pkgerror.AppError{Type: pkgerror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
+			err := &errors.AppError{Type: errors.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
 			return err
 		}
 		return nil
 	}, retry.WithIsRetryableErr(func(err error) bool {
-		return err != context.DeadlineExceeded
+		return !errors.Is(err, context.DeadlineExceeded)
 	}), retry.WithMaxTries(10))
 	if err != nil {
 		log.Error("Failed to get remote target", zap.Error(err))

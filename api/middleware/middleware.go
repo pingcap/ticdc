@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -75,7 +76,7 @@ func LogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := strings.TrimPrefix(util.MaskSensitiveDataInURIForError("?"+c.Request.URL.RawQuery), "?")
 		user, _, _ := c.Request.BasicAuth()
 		c.Next()
 
@@ -183,7 +184,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 		}
 	}
 	log.Info("forwarding request to another server",
-		zap.String("url", c.Request.RequestURI),
+		zap.String("url", util.MaskSensitiveDataInURIForError(c.Request.RequestURI)),
 		zap.String("method", c.Request.Method),
 		zap.Any("fromID", fromID),
 		zap.String("toAddr", toAddr),
@@ -223,7 +224,32 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	}
 }
 
-// KeyspaceCheckerMiddleware check if the request keyspace is valid
+// KeyspaceNameCheckerMiddleware checks that a keyspace name is specified in
+// next-gen mode. It is used by APIs that only access TiCDC metadata and do not
+// require the upstream keyspace to still exist.
+func KeyspaceNameCheckerMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// We do not need to check keyspace for classic mode. If classic mode
+		// supports multiple keyspaces in the future, this needs to be revisited.
+		if kerneltype.IsClassic() {
+			c.Next()
+			return
+		}
+
+		if c.Query(api.APIOpVarKeyspace) == "" {
+			err := errors.ErrAPIInvalidParam.GenWithStack(
+				"missing required query parameter keyspace, please specify --keyspace or -k",
+			)
+			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// KeyspaceCheckerMiddleware checks if the request keyspace exists.
 func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// we not need to check keyspace for classic mode
@@ -275,4 +301,9 @@ func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
 		}
 	}
 	return meta
+}
+
+// SetKeyspaceInContext stores keyspace metadata for downstream middleware.
+func SetKeyspaceInContext(c *gin.Context, meta *keyspacepb.KeyspaceMeta) {
+	c.Set(ctxKeyspaceKey, meta)
 }
