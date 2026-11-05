@@ -15,8 +15,10 @@
 package coordinator
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -54,4 +56,42 @@ func TestGetChangefeedErrorMetricLabelsIncludesErrorTime(t *testing.T) {
 // error records without an occurrence timestamp render as an empty field instead of a misleading date.
 func TestNormalizeChangefeedErrorMetricTimeHandlesZeroTime(t *testing.T) {
 	require.Equal(t, "", normalizeChangefeedErrorMetricTime(time.Time{}))
+}
+
+func TestNormalizeChangefeedErrorMetricMessageProducesValidUTF8(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "normalize whitespace",
+			message: "sink retry \n warning",
+			want:    "sink retry warning",
+		},
+		{
+			name:    "replace invalid UTF-8",
+			message: string([]byte{'a', 0xff, 'b'}),
+			want:    "a\uFFFDb",
+		},
+		{
+			name:    "truncate ASCII",
+			message: strings.Repeat("a", changefeedErrorMetricMsgLimit+1),
+			want:    strings.Repeat("a", changefeedErrorMetricMsgLimit-3) + "...",
+		},
+		{
+			name:    "truncate at rune boundary",
+			message: strings.Repeat("a", changefeedErrorMetricMsgLimit-4) + "世ab",
+			want:    strings.Repeat("a", changefeedErrorMetricMsgLimit-4) + "...",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := normalizeChangefeedErrorMetricMessage(test.message)
+			require.Equal(t, test.want, got)
+			require.LessOrEqual(t, len(got), changefeedErrorMetricMsgLimit)
+			require.True(t, utf8.ValidString(got))
+		})
+	}
 }

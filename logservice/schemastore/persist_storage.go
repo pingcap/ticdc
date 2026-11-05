@@ -37,6 +37,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -751,6 +753,32 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 	}
 }
 
+func isAddFullTextIndexDDL(job *model.Job) bool {
+	if !strings.Contains(strings.ToUpper(job.Query), "FULLTEXT") {
+		return false
+	}
+
+	p := parser.New()
+	p.SetSQLMode(job.SQLMode)
+	stmt, err := p.ParseOneStmt(job.Query, job.Charset, job.Collate)
+	if err != nil {
+		return false
+	}
+
+	alterTable, ok := stmt.(*ast.AlterTableStmt)
+	if !ok {
+		return false
+	}
+	for _, spec := range alterTable.Specs {
+		if spec.Tp == ast.AlterTableAddConstraint &&
+			spec.Constraint != nil &&
+			spec.Constraint.Tp == ast.ConstraintFulltext {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	p.mu.Lock()
 
@@ -761,7 +789,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
 	// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
-	if strings.Contains(strings.ToUpper(job.Query), "ADD FULLTEXT INDEX") {
+	if isAddFullTextIndexDDL(job) {
 		job.Type = filter.ActionAddFullTextIndex
 	}
 	// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
