@@ -517,13 +517,6 @@ func TestOnDropLogsOnlyForActiveSubscription(t *testing.T) {
 	require.Zero(t, observedLogs.FilterMessage("drop region event").Len())
 
 	span.stopped.Store(false)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	handler.eventSink.ctx = ctx
-	handler.OnDrop(regionEvent{states: []*regionFeedState{state}})
-	require.Zero(t, observedLogs.FilterMessage("drop region event").Len())
-
-	handler.eventSink.ctx = t.Context()
 	handler.OnDrop(regionEvent{states: []*regionFeedState{state}})
 	entries := observedLogs.FilterMessage("drop region event").All()
 	require.Len(t, entries, 1)
