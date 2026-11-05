@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"net/url"
@@ -31,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/logger"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/uber-go/atomic"
@@ -48,12 +46,10 @@ const (
 )
 
 type consumer struct {
-	g             *errgroup.Group
 	reader        *reader
 	conductor     *conductor
 	decoder       *inputDecoder
 	writer        *writer
-	upstreamDB    *sql.DB
 	profileServer *http.Server
 }
 
@@ -80,29 +76,32 @@ func newConsumer(ctx context.Context, options *options) (c *consumer) {
 	checkpoint := new(atomic.Uint64)
 	memory := newMemoryBudget()
 	confirmable := make(chan struct{}, 1)
-	upstreamDB := newUpstreamDB(ctx, upstreamURI)
-	tables := simple.NewTableInfoCache()
-	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, codecConfig, memory, confirmable, checkpoint, upstreamDB, tables)
+	reader := newReader(ctx, upstreamURI, consumerID, replicaConfig, codecConfig, memory, confirmable, checkpoint)
 	defer func() {
 		if c != nil {
 			return
 		}
 		reader.close()
-		if upstreamDB != nil {
-			if closeErr := upstreamDB.Close(); closeErr != nil {
-				log.Warn("consumer upstream database close failed", zap.Error(closeErr))
-			}
-		}
 	}()
-	decoder := newInputDecoder(reader.client.Decoders(), tables, checkpoint)
-	conductor := newConductor(memory, reader.client, decoder, codecConfig, checkpoint, confirmable)
+	streams := reader.client.Streams()
+	decoder := newInputDecoder(ctx, codecConfig, replicaConfig, streams, upstreamURI, checkpoint)
+	defer func() {
+		if c != nil {
+			return
+		}
+		decoder.close()
+	}()
+	streamIDs := make([]int32, len(streams))
+	for index, stream := range streams {
+		streamIDs[index] = stream.id
+	}
+	conductor := newConductor(memory, reader.client, streamIDs, codecConfig, checkpoint, confirmable)
 	writer := newWriter(ctx, options.downstreamURI, replicaConfig, memory)
 	return &consumer{
 		reader:        reader,
 		decoder:       decoder,
 		conductor:     conductor,
 		writer:        writer,
-		upstreamDB:    upstreamDB,
 		profileServer: newProfileServer(options.enableProfiling),
 	}
 }
@@ -236,37 +235,6 @@ func newCodecConfig(upstreamURI *url.URL, replicaConfig *config.ReplicaConfig) *
 	return codecConfig
 }
 
-func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
-	if upstreamURI.Scheme != config.KafkaScheme && upstreamURI.Scheme != config.KafkaSSLScheme {
-		return nil
-	}
-	dsn := upstreamURI.Query().Get("upstream-tidb-dsn")
-	if dsn == "" {
-		return nil
-	}
-	upstreamDB, err := sql.Open("mysql", dsn)
-	if err != nil {
-		log.Panic("consumer upstream database open failed", zap.Error(err))
-	}
-	defer func() {
-		if err == nil {
-			return
-		}
-		if closeErr := upstreamDB.Close(); closeErr != nil {
-			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
-		}
-	}()
-	upstreamDB.SetMaxOpenConns(10)
-	upstreamDB.SetMaxIdleConns(10)
-	upstreamDB.SetConnMaxLifetime(10 * time.Minute)
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err = upstreamDB.PingContext(ctx); err != nil {
-		log.Panic("consumer upstream database connection failed", zap.Error(err))
-	}
-	return upstreamDB
-}
-
 func newProfileServer(enabled bool) *http.Server {
 	if !enabled {
 		return nil
@@ -277,48 +245,40 @@ func newProfileServer(enabled bool) *http.Server {
 	}
 }
 
-func (c *consumer) consume(ctx context.Context) error {
-	c.g, ctx = errgroup.WithContext(ctx)
+func (c *consumer) start(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 	if c.profileServer != nil {
-		c.g.Go(func() error {
+		g.Go(func() error {
 			if err := c.profileServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Error("consumer profiling server failed", zap.Error(err))
 				return err
 			}
 			return nil
 		})
+		g.Go(func() error {
+			<-ctx.Done()
+			if err := c.profileServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Warn("consumer profiling server close failed", zap.Error(err))
+			}
+			return nil
+		})
 	}
 	tasks := make(chan []task, 1)
-	writeDone := make(chan struct{})
-	c.g.Go(func() error {
+	g.Go(func() error {
 		return c.reader.start(ctx, c.decoder, tasks)
 	})
-	c.g.Go(func() error {
-		defer close(writeDone)
+	g.Go(func() error {
 		return c.conductor.start(ctx, tasks, c.writer)
 	})
-	c.g.Go(func() error {
+	g.Go(func() error {
 		return c.writer.start(ctx)
 	})
-	<-ctx.Done()
-	// Stop dispatching before the caller closes the sink.
-	<-writeDone
-	return context.Cause(ctx)
+	return g.Wait()
 }
 
 func (c *consumer) stop() {
-	if c.profileServer != nil {
-		if closeErr := c.profileServer.Close(); closeErr != nil {
-			log.Warn("consumer profiling server close failed", zap.Error(closeErr))
-		}
-	}
-	_ = c.g.Wait()
 	c.writer.close()
 	c.conductor.close()
 	c.reader.close()
-	if c.upstreamDB != nil {
-		if closeErr := c.upstreamDB.Close(); closeErr != nil {
-			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
-		}
-	}
+	c.decoder.close()
 }

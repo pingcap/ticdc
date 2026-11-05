@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"iter"
 	"net/url"
 
@@ -24,11 +23,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+// streamSpec identifies one source input that needs a persistent decoder.
+type streamSpec struct {
+	id    int32
+	topic string
+}
 
 // Run owns source reading and decoding. Advance and Confirm may run concurrently.
 // Boundary is conductor-owned. Close runs after all callers have stopped.
@@ -42,9 +46,9 @@ type Reader interface {
 	Boundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary
 	ContinueReading(bool)
 	Confirm(ctx context.Context, checkpoint uint64) error
-	// Decoders returns the decoder cursors created with the reader. Sources
-	// that decode files directly have no persistent streams and return nil.
-	Decoders() map[int32]codecCommon.Decoder
+	// Streams describes the source inputs that need a persistent decoder.
+	// Storage returns nil because each file is decoded transiently.
+	Streams() []streamSpec
 	Close()
 }
 
@@ -106,17 +110,15 @@ func newReader(
 	memory *memoryBudget,
 	confirmable chan struct{},
 	checkpoint *atomic.Uint64,
-	upstreamDB *sql.DB,
-	tables *simple.TableInfoCache,
 ) *reader {
 	var client Reader
 	switch sourceTypeFromURI(upstreamURI) {
 	case sourceKafka:
-		client = newKafkaReader(ctx, upstreamURI, consumerID, codecConfig, memory, replicaConfig, confirmable, upstreamDB, tables)
+		client = newKafkaReader(ctx, upstreamURI, consumerID, codecConfig, memory, replicaConfig, confirmable)
 	case sourcePulsar:
-		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, codecConfig, memory, confirmable, upstreamDB, tables)
+		client = newPulsarReader(ctx, upstreamURI, consumerID, replicaConfig, memory, confirmable)
 	default:
-		client = newStorageReader(ctx, upstreamURI, replicaConfig, codecConfig, memory)
+		client = newStorageReader(ctx, upstreamURI, replicaConfig, codecConfig.Protocol, memory)
 	}
 	return &reader{
 		client:      client,

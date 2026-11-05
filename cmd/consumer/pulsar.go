@@ -17,7 +17,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"iter"
 	"net/url"
 	"strings"
@@ -31,8 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -59,7 +56,6 @@ type pulsarReader struct {
 	topic       string
 	memory      *memoryBudget
 	partitions  map[string]*pulsarPartition
-	decoders    map[int32]codecCommon.Decoder
 	confirmable chan<- struct{}
 }
 
@@ -68,11 +64,8 @@ func newPulsarReader(
 	upstreamURI *url.URL,
 	consumerID string,
 	replicaConfig *config.ReplicaConfig,
-	codecConfig *codecCommon.Config,
 	memory *memoryBudget,
 	confirmable chan<- struct{},
-	upstreamDB *sql.DB,
-	tables *simple.TableInfoCache,
 ) (reader *pulsarReader) {
 	if err := context.Cause(ctx); err != nil {
 		log.Panic("Pulsar reader initialization canceled", zap.Error(err))
@@ -194,10 +187,6 @@ func newPulsarReader(
 	for id, partitionTopic := range topics {
 		partitions[partitionTopic] = &pulsarPartition{stream: int32(id)}
 	}
-	decoders := make(map[int32]codecCommon.Decoder, len(partitions))
-	for _, partition := range partitions {
-		decoders[partition.stream] = newSourceDecoder(ctx, int(partition.stream), codecConfig, topic, upstreamDB, tables)
-	}
 	c := &pulsarReader{
 		readLimit:   newReadLimit(memory),
 		client:      client,
@@ -205,7 +194,6 @@ func newPulsarReader(
 		topic:       topic,
 		memory:      memory,
 		partitions:  partitions,
-		decoders:    decoders,
 		confirmable: confirmable,
 	}
 	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
@@ -216,8 +204,12 @@ type pulsarInput struct {
 	message pulsar.ConsumerMessage
 }
 
-func (c *pulsarReader) Decoders() map[int32]codecCommon.Decoder {
-	return c.decoders
+func (c *pulsarReader) Streams() []streamSpec {
+	streams := make([]streamSpec, 0, len(c.partitions))
+	for _, partition := range c.partitions {
+		streams = append(streams, streamSpec{id: partition.stream, topic: c.topic})
+	}
+	return streams
 }
 
 func (c *pulsarReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {

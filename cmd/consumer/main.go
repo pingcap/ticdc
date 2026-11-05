@@ -73,7 +73,7 @@ func newCommand() *cobra.Command {
 func start(ctx context.Context, options *options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c := newConsumer(ctx, options)
-	err := c.consume(ctx)
+	err := c.start(ctx)
 	cancel()
 	c.stop()
 	return err

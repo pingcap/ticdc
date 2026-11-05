@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -79,8 +78,6 @@ type storageReader struct {
 	nextTableID      int64
 	storage          storeapi.Storage
 	memory           *memoryBudget
-	codecConfig      *codecCommon.Config
-	selectors        *columnselector.ColumnSelectors
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -100,7 +97,7 @@ func newStorageReader(
 	ctx context.Context,
 	upstreamURI *url.URL,
 	replicaConfig *config.ReplicaConfig,
-	codecConfig *codecCommon.Config,
+	protocol config.Protocol,
 	memory *memoryBudget,
 ) *storageReader {
 	if upstreamURI.Scheme == config.FileScheme && upstreamURI.Path == "" {
@@ -113,29 +110,19 @@ func newStorageReader(
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
-	var selectors *columnselector.ColumnSelectors
-	if codecConfig.Protocol == config.ProtocolCsv {
-		selectors, err = columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
-		if err != nil {
-			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
-		}
-	}
-
 	c := &storageReader{
 		readLimit:      newReadLimit(memory),
 		storage:        storage,
 		memory:         memory,
-		codecConfig:    codecConfig,
-		selectors:      selectors,
 		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
-		fileExtension:  helper.GetFileExtension(codecConfig.Protocol),
+		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
 		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
-	log.Info("Storage reader initialized", zap.String("protocol", codecConfig.Protocol.String()))
+	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
 	return c
 }
 
@@ -305,7 +292,7 @@ func (*storageFile) storageRead()     {}
 func (*storageDDL) storageRead()      {}
 func (storageWatermark) storageRead() {}
 
-func (*storageReader) Decoders() map[int32]codecCommon.Decoder {
+func (*storageReader) Streams() []streamSpec {
 	return nil
 }
 
@@ -315,7 +302,7 @@ func (c *storageReader) Run(ctx context.Context, decoder *inputDecoder, tasks ch
 
 func (c *storageReader) decode(ctx context.Context, decoder *inputDecoder, input storageRead) iter.Seq2[task, error] {
 	if file, ok := input.(*storageFile); ok {
-		return c.decodeFile(ctx, decoder, file)
+		return decoder.decodeStorageFile(ctx, file, c.memory)
 	}
 	return func(yield func(task, error) bool) {
 		switch input := input.(type) {
@@ -547,21 +534,21 @@ func (s *readSchema) tableInfo() *common.TableInfo {
 	return s.table
 }
 
-func (c *storageReader) decodeFile(ctx context.Context, input *inputDecoder, file *storageFile) iter.Seq2[task, error] {
+func (p *inputDecoder) decodeStorageFile(ctx context.Context, file *storageFile, memory *memoryBudget) iter.Seq2[task, error] {
 	return func(yield func(task, error) bool) {
-		defer c.memory.release(int64(len(file.contents)))
+		defer memory.release(int64(len(file.contents)))
 		table := file.schema.tableInfo()
 		var decoder codecCommon.Decoder
-		switch c.codecConfig.Protocol {
+		switch p.codecConfig.Protocol {
 		case config.ProtocolCsv:
 			var err error
-			decoder, err = csv.NewDecoderWithColumnSelector(ctx, c.codecConfig, table, file.contents, c.selectors.GetForTableInfo(table))
+			decoder, err = csv.NewDecoderWithColumnSelector(ctx, p.codecConfig, table, file.contents, p.selectors.GetForTableInfo(table))
 			if err != nil {
 				yield(nil, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
 				return
 			}
 		case config.ProtocolCanalJSON:
-			decoder = canal.NewTxnDecoder(c.codecConfig)
+			decoder = canal.NewTxnDecoder(p.codecConfig)
 			decoder.AddKeyValue(nil, file.contents)
 		default:
 			yield(nil, errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported"))
@@ -581,8 +568,8 @@ func (c *storageReader) decodeFile(ctx context.Context, input *inputDecoder, fil
 				continue
 			}
 			message := decoder.NextDMLMessage()
-			c.memory.reserve(message.ApproximateSize)
-			task := input.messageTask(scope, message)
+			memory.reserve(message.ApproximateSize)
+			task := p.messageTask(scope, message)
 			task.table, task.tableID = table, file.tableID
 			if !yield(task, nil) {
 				return

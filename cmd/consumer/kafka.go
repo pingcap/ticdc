@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	"iter"
 	"math"
 	"net/url"
@@ -38,7 +37,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -70,12 +68,11 @@ type kafkaReader struct {
 	router           *eventrouter.EventRouter
 	client           *kgo.Client
 	topic            string
-	codecConfig      *codecCommon.Config
+	protocol         config.Protocol
 	memory           *memoryBudget
 	prefetchedBytes  int64 // SDK bytes already included in the shared budget.
 	confirmable      chan<- struct{}
 	partitions       map[int32]*kafkaPartition
-	decoders         map[int32]codecCommon.Decoder
 	readSequence     uint64
 	pausedPartitions int
 	pollCancel       context.CancelFunc // Wake a poll when admission pauses every partition.
@@ -96,8 +93,6 @@ func newKafkaReader(
 	memory *memoryBudget,
 	replicaConfig *config.ReplicaConfig,
 	confirmable chan<- struct{},
-	upstreamDB *sql.DB,
-	tables *simple.TableInfoCache,
 ) (reader *kafkaReader) {
 	if upstreamURI.Host == "" {
 		log.Panic("Kafka upstream URI must include an endpoint")
@@ -181,21 +176,15 @@ func newKafkaReader(
 	for partitionID := range topicMetadata.Partitions {
 		partitions[partitionID] = &kafkaPartition{}
 	}
-	decoders := make(map[int32]codecCommon.Decoder, len(partitions))
-	for partitionID := range partitions {
-		decoders[partitionID] = newSourceDecoder(ctx, int(partitionID), codecConfig, topic, upstreamDB, tables)
-	}
-
 	log.Info("Kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
 		readLimit:   newReadLimit(memory),
 		client:      client,
 		topic:       topic,
-		codecConfig: codecConfig,
+		protocol:    protocol,
 		memory:      memory,
 		confirmable: confirmable,
 		partitions:  partitions,
-		decoders:    decoders,
 		router:      router,
 		control: &readBoundary{
 			reached:   helper.GetDDLDispatchRule(protocol) == helper.PartitionAll,
@@ -210,8 +199,12 @@ type kafkaInput struct {
 	message *kgo.Record
 }
 
-func (c *kafkaReader) Decoders() map[int32]codecCommon.Decoder {
-	return c.decoders
+func (c *kafkaReader) Streams() []streamSpec {
+	streams := make([]streamSpec, 0, len(c.partitions))
+	for partitionID := range c.partitions {
+		streams = append(streams, streamSpec{id: partitionID, topic: c.topic})
+	}
+	return streams
 }
 
 func (c *kafkaReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
@@ -251,7 +244,7 @@ func (c *kafkaReader) decode(ctx context.Context, decoder *inputDecoder, input k
 					log.Panic("Kafka message byte size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", id), zap.Int64("offset", input.message.Offset), zap.Int("maxMessageBytes", c.maxMessageBytes), zap.Int("receivedBytes", size))
 				}
 				task.offset = input.message.Offset
-				task.skipKeyOnlyDelete = c.codecConfig.Protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
+				task.skipKeyOnlyDelete = c.protocol == config.ProtocolAvro && task.message.RowType == common.RowTypeUpdate
 			}
 			if !yield(result, nil) {
 				return

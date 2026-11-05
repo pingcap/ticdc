@@ -18,13 +18,17 @@ import (
 	"context"
 	"database/sql"
 	"iter"
+	"net/url"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 )
@@ -80,6 +84,9 @@ type inputWatermark struct {
 // simple schema cache. Parallel conversion workers receive captured messages,
 // never these decoders.
 type inputDecoder struct {
+	codecConfig       *codecCommon.Config
+	upstreamDB        *sql.DB
+	selectors         *columnselector.ColumnSelectors
 	decoders          map[int32]codecCommon.Decoder
 	schemas           *simple.TableInfoCache
 	checkpoint        *atomic.Uint64
@@ -87,14 +94,43 @@ type inputDecoder struct {
 }
 
 func newInputDecoder(
-	decoders map[int32]codecCommon.Decoder,
-	schemas *simple.TableInfoCache,
+	ctx context.Context,
+	codecConfig *codecCommon.Config,
+	replicaConfig *config.ReplicaConfig,
+	streams []streamSpec,
+	upstreamURI *url.URL,
 	checkpoint *atomic.Uint64,
 ) *inputDecoder {
+	var selectors *columnselector.ColumnSelectors
+	if codecConfig.Protocol == config.ProtocolCsv {
+		var err error
+		selectors, err = columnselector.New(replicaConfig.Sink, putil.GetOrZero(replicaConfig.CaseSensitive))
+		if err != nil {
+			log.Panic("consumer column selection configuration is invalid", zap.Error(err))
+		}
+	}
+	tables := simple.NewTableInfoCache()
+	upstreamDB := newUpstreamDB(ctx, upstreamURI)
+	decoders := make(map[int32]codecCommon.Decoder, len(streams))
+	for _, stream := range streams {
+		decoders[stream.id] = newSourceDecoder(ctx, int(stream.id), codecConfig, stream.topic, upstreamDB, tables)
+	}
 	return &inputDecoder{
-		decoders:   decoders,
-		schemas:    schemas,
-		checkpoint: checkpoint,
+		codecConfig: codecConfig,
+		upstreamDB:  upstreamDB,
+		selectors:   selectors,
+		decoders:    decoders,
+		schemas:     tables,
+		checkpoint:  checkpoint,
+	}
+}
+
+func (p *inputDecoder) close() {
+	if p.upstreamDB == nil {
+		return
+	}
+	if err := p.upstreamDB.Close(); err != nil {
+		log.Warn("consumer upstream database close failed", zap.Error(err))
 	}
 }
 
@@ -192,6 +228,37 @@ func (p *inputDecoder) cleanHistory() {
 		p.schemas.ReleaseBefore(checkpoint)
 		p.cleanedCheckpoint = checkpoint
 	}
+}
+
+func newUpstreamDB(ctx context.Context, upstreamURI *url.URL) *sql.DB {
+	if upstreamURI.Scheme != config.KafkaScheme && upstreamURI.Scheme != config.KafkaSSLScheme {
+		return nil
+	}
+	dsn := upstreamURI.Query().Get("upstream-tidb-dsn")
+	if dsn == "" {
+		return nil
+	}
+	upstreamDB, err := sql.Open("mysql", dsn)
+	if err != nil {
+		log.Panic("consumer upstream database open failed", zap.Error(err))
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := upstreamDB.Close(); closeErr != nil {
+			log.Warn("consumer upstream database close failed", zap.Error(closeErr))
+		}
+	}()
+	upstreamDB.SetMaxOpenConns(10)
+	upstreamDB.SetMaxIdleConns(10)
+	upstreamDB.SetConnMaxLifetime(10 * time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = upstreamDB.PingContext(ctx); err != nil {
+		log.Panic("consumer upstream database connection failed", zap.Error(err))
+	}
+	return upstreamDB
 }
 
 func newSourceDecoder(

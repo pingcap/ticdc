@@ -530,13 +530,13 @@ func ddlBlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string)
 func newConductor(
 	memory *memoryBudget,
 	reader Reader,
-	input *inputDecoder,
+	streamIDs []int32,
 	codecConfig *codecCommon.Config,
 	checkpoint *atomic.Uint64,
 	confirmable chan struct{},
 ) *conductor {
-	streams := make(map[int32]*streamWatermark, len(input.decoders))
-	for id := range input.decoders {
+	streams := make(map[int32]*streamWatermark, len(streamIDs))
+	for _, id := range streamIDs {
 		streams[id] = &streamWatermark{}
 	}
 	_, orderedDML := reader.(*kafkaReader)
