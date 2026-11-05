@@ -446,6 +446,14 @@ func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	for subID := SubscriptionID(1); subID <= 100; subID++ {
 		worker.controlQueue.push(deregisterRequest{subID: subID})
 	}
+	require.Eventually(t, func() bool {
+		return worker.controlQueue.len() == 0
+	}, time.Second, time.Millisecond)
+	select {
+	case <-resultCh:
+		t.Fatal("worker returned before receiving a region request")
+	default:
+	}
 
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
 	submitRegionForAdmission(t, admission, region, 1)

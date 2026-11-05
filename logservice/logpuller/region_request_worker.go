@@ -180,16 +180,23 @@ func (s *regionRequestWorker) Run(ctx context.Context) error {
 }
 
 func (s *regionRequestWorker) waitForRegionRequest(ctx context.Context) (*regionReq, error) {
-	// Without a stream there are no remote registrations to deregister.
-	s.controlQueue.drain()
-	req, err := s.admission.pop(ctx, nil)
-	if err != nil {
-		return nil, err
+	for {
+		// Without a stream there are no remote registrations to deregister.
+		s.controlQueue.drain()
+		req, err := s.admission.pop(ctx, s.controlQueue.ready())
+		if err != nil {
+			return nil, err
+		}
+		if req == nil {
+			// A control request interrupted admission. Drop it and keep waiting
+			// without creating an idle stream.
+			continue
+		}
+		// Drop controls that raced with selecting the first request. Any later
+		// controls will be handled by the stream send loop.
+		s.controlQueue.drain()
+		return req, nil
 	}
-	// Drop controls that raced with selecting the first request. Any later
-	// controls will be handled by the stream send loop.
-	s.controlQueue.drain()
-	return req, nil
 }
 
 func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
