@@ -230,7 +230,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 	rowTypesList := make([]common.RowType, 0)
 
 	batchSQL := func(events []*commonEvent.DMLEvent) {
-		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || events[0].CommitTs < events[0].ReplicatingTs
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || events[0].CommitTs <= events[0].ReplicatingTs
 
 		if len(events) == 1 {
 			// only one event, we don't need to do batch
@@ -297,7 +297,7 @@ func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]st
 		if event.Len() == 0 {
 			continue
 		}
-		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 		sqls, vals, rowTypes := w.generateSQLForSingleEvent(event, inSafeMode)
 		queries = append(queries, sqls...)
 		args = append(args, vals...)
@@ -593,7 +593,8 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
-	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+	// Only events committed strictly after ReplicatingTs can leave replay safe mode.
+	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
