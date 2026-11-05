@@ -491,7 +491,7 @@ func TestMysqlSinkBatchCreateTablesAcknowledgement(t *testing.T) {
 				"CREATE TABLE `t2` (`id` INT);",
 			}
 			event := &commonEvent.DDLEvent{
-				Type:       byte(timodel.ActionCreateTables),
+				Type:       byte(model.ActionCreateTables),
 				SchemaName: "upstream",
 				Query:      strings.Join(queries, ""),
 				StartTs:    1,
