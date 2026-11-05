@@ -5026,7 +5026,7 @@ func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
 		view := newEligibleTableInfoForTest(500, "v")
 		view.View = &model.ViewInfo{}
 		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
-			dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+			dbInfo: &model.DBInfo{ID: 10, Name: parser_model.NewCIStr("test")},
 			tables: []*model.TableInfo{view},
 		}})
 		t.Cleanup(func() { require.NoError(t, storage.close()) })
@@ -5052,7 +5052,7 @@ func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
 		replace := helper.DDL2Job("CREATE OR REPLACE VIEW view_lifecycle.v AS SELECT 2 AS id")
 		path := t.TempDir()
 		storage := newPersistentStorageForTest(path, []mockDBInfo{{
-			dbInfo: &model.DBInfo{ID: create.SchemaID, Name: ast.NewCIStr("view_lifecycle")},
+			dbInfo: &model.DBInfo{ID: create.SchemaID, Name: parser_model.NewCIStr("view_lifecycle")},
 			tables: []*model.TableInfo{create.BinlogInfo.TableInfo},
 		}})
 		t.Cleanup(func() { require.NoError(t, storage.close()) })
