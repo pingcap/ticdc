@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -40,8 +39,8 @@ const storeReconnectBackoff = time.Second
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount  = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
-	metricBatchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
+	metricsResolvedTsCount  = pullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = batchResolvedEventSize.WithLabelValues("event-store")
 )
 
 type deregisterRequest struct {
@@ -528,6 +527,17 @@ func createRegionRequest(clusterID uint64, region regionInfo) *cdcpb.ChangeDataR
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
 		FilterLoop:   region.filterLoop,
-		ScanPriority: normalizeScanPriority(region.scanPriority),
+		ScanPriority: convertScanPriority(region.scanPriority),
+	}
+}
+
+func convertScanPriority(priority ScanPriorityLevel) cdcpb.ScanPriority {
+	switch priority {
+	case ScanPriorityHigh:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+	case ScanPriorityLow:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
+	default:
+		return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 	}
 }

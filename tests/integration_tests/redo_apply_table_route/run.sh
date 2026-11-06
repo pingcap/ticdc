@@ -5,6 +5,8 @@
 #   It first runs a table_route-style SQL workload through normal replication,
 #   then blocks MySQL DML writes, writes more source DML, and applies redo logs
 #   to confirm the replayed rows still land in routed downstream tables.
+#   Replay also covers generated columns, keyspaces containing underscores,
+#   and transaction spill file descriptor cleanup.
 
 set -euo pipefail
 
@@ -12,7 +14,7 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$CUR/../_utils/test_prepare"
 
 WORK_DIR="$OUT_DIR/$TEST_NAME"
-CDC_BINARY=cdc.test
+CDC_BINARY=${CDC_BINARY:-cdc.test}
 SINK_TYPE="$1"
 
 REDO_DIR="/tmp/tidb_cdc_test/redo_apply_table_route/redo"
@@ -104,7 +106,63 @@ function write_redo_only_dml() {
 	run_sql "INSERT INTO source_db.orders VALUES (100, 100, 1000.00);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "INSERT INTO source_extra_db.external_users VALUES (100, 'redo_external', 'redo_external@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "UPDATE source_extra_db.external_users SET email = 'redo_external_alice@example.com' WHERE id = 1;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_db.recovery_guard VALUES (1, 'stale-redo-value');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	local workload="$WORK_DIR/spill_updates.sql"
+	local txn
+	echo 'SET autocommit = 1;' >"$workload"
+	for ((txn = 0; txn < 160; txn++)); do
+		echo 'UPDATE source_db.generated_updates SET uk = uk + 64;'
+	done >>"$workload"
+	run_sql_file "$workload" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	local updated_rows
+	updated_rows=$(query_count \
+		"SELECT COUNT(*) AS cnt FROM source_db.generated_updates WHERE uk = id + 10240 AND g = uk + 1;" \
+		"$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	require_equal "$updated_rows" "64" "unique key update workload did not complete"
 	run_sql "INSERT INTO source_db.finish_mark VALUES (2);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+}
+
+function prepare_redo_snapshots() {
+	local changefeed_id="$1"
+	local keyspace="$2"
+	# Keep the original logs for the later changefeed restart. Rewrite only
+	# snapshot filenames to exercise non-default keyspaces on classic TiDB too.
+	python3 - "$REDO_DIR" "$WORK_DIR/redo-keyspace" "$keyspace" "$changefeed_id" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+source, snapshot = map(Path, sys.argv[1:3])
+keyspace, changefeed = sys.argv[3:5]
+snapshot.mkdir()
+for path in source.iterdir():
+    if path.suffix not in (".log", ".meta"):
+        continue
+    capture = path.name.split("_", 1)[0]
+    fields = 2 if path.suffix == ".meta" else 3
+    suffix = path.name.rsplit("_", fields)[1:]
+    name = "_".join([capture, keyspace, changefeed, *suffix])
+    shutil.copyfile(path, snapshot / name)
+assert list(snapshot.glob("*.meta")), "redo metadata was not generated"
+PY
+}
+
+function prepare_keyspace_recovery_guard() {
+	local changefeed_id="$1"
+	local keyspace="$2"
+	local recovered_ts="$3"
+	local table_id
+	table_id=$(mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -Nse \
+		"SELECT TIDB_TABLE_ID FROM information_schema.tables WHERE table_schema = 'source_db' AND table_name = 'recovery_guard'")
+	# The target has newer data than the snapshot. Correctly parsing the keyspace
+	# must find its recovery metadata and keep the older redo INSERT from replaying.
+	run_sql "INSERT INTO target_db.recovery_guard_routed VALUES (1, 'newer-downstream-value');
+INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint)
+SELECT 'default', '$keyspace/$changefeed_id', ddl_ts, table_id, finished, is_syncpoint
+FROM tidb_cdc.ddl_ts_v1 WHERE ticdc_cluster_id = '$KEYSPACE_NAME' AND changefeed = '$KEYSPACE_NAME/$changefeed_id';
+REPLACE INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint)
+VALUES ('default', '$keyspace/$changefeed_id', '$recovered_ts', $table_id, 1, 0);" \
+		"$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 }
 
 function verify_redo_apply_route() {
@@ -139,6 +197,13 @@ function verify_redo_apply_route() {
 	check_contains "redo_external_alice@example.com"
 	run_sql "SELECT name AS routed_name FROM target_extra_db.external_users_routed WHERE id = 100;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	check_contains "redo_external"
+	run_sql "SELECT v AS recovered_value FROM target_db.recovery_guard_routed WHERE id = 1;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "newer-downstream-value"
+	mysql -h"$UP_TIDB_HOST" -P"$UP_TIDB_PORT" -uroot -Nse \
+		'SELECT id, uk, g, v FROM source_db.generated_updates ORDER BY id' >"$WORK_DIR/generated-source.txt"
+	mysql -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -uroot -Nse \
+		'SELECT id, uk, g, v FROM target_db.generated_updates_routed ORDER BY id' >"$WORK_DIR/generated-target.txt"
+	diff -u "$WORK_DIR/generated-source.txt" "$WORK_DIR/generated-target.txt"
 
 	check_table_not_exists source_db.users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	check_table_not_exists source_extra_db.external_users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
@@ -174,8 +239,10 @@ function run() {
 
 	check_cdc_server_guard --workdir "$WORK_DIR"
 	stop_cdc_server_guards
-	cleanup_process "$CDC_BINARY"
+	cleanup_process "$(basename "$CDC_BINARY")"
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
+	# Preserve raw UPDATE records in redo so replay must spill deferred inserts.
+	GO_FAILPOINTS+=';github.com/pingcap/ticdc/pkg/eventservice/OutputRawRedoUpdates=return(true)'
 	run_cdc_server_with_guard --max-restarts 3 --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	write_redo_only_dml
@@ -188,22 +255,32 @@ function run() {
 
 	check_cdc_server_guard --workdir "$WORK_DIR"
 	stop_cdc_server_guards
-	cleanup_process "$CDC_BINARY"
+	cleanup_process "$(basename "$CDC_BINARY")"
 	export GO_FAILPOINTS=''
 
 	local target_users_before_redo
 	target_users_before_redo=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 	require_equal "$target_users_before_redo" "$pre_redo_users_count" "failpoint did not block MySQL DML before redo apply"
 
-	"$CDC_BINARY" redo apply \
-		--tmp-dir="$tmp_download_path/apply" \
-		--storage="$storage_path" \
-		--sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?safe-mode=true" \
-		2>&1 | tee "$WORK_DIR/redo_apply.log" || {
+	local redo_keyspace="redo_tenant_a"
+	prepare_redo_snapshots "$changefeed_id" "$redo_keyspace"
+	prepare_keyspace_recovery_guard "$changefeed_id" "$redo_keyspace" "$current_tso"
+
+	# Disable GC so finalizers cannot hide leaked file descriptors. A fixed
+	# replay needs only a bounded number of descriptors for 160 spilled txns.
+	(
+		ulimit -n 256
+		export GOGC=off
+		"$CDC_BINARY" redo apply --enable-profiling=false \
+			--tmp-dir="$tmp_download_path/apply" \
+			--storage="file://$WORK_DIR/redo-keyspace" \
+			--sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?safe-mode=true"
+	) 2>&1 | tee "$WORK_DIR/redo_apply.log" || {
 		echo "Redo apply failed"
 		cat "$WORK_DIR/redo_apply.log"
 		exit 1
 	}
+	test -s "$tmp_download_path/apply/_insert_storage.tmp"
 
 	verify_redo_apply_route
 
@@ -214,7 +291,7 @@ function run() {
 
 	check_cdc_server_guard --workdir "$WORK_DIR"
 	stop_cdc_server_guards
-	cleanup_process "$CDC_BINARY"
+	cleanup_process "$(basename "$CDC_BINARY")"
 }
 
 trap 'stop_test "$WORK_DIR"' EXIT

@@ -42,14 +42,29 @@ const (
 
 func TestKafkaClientSelection(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "client-selection")
-	require.Equal(t, KafkaClientSarama, NewOptions().Client)
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
 
 	for _, test := range []struct {
-		name     string
-		uri      string
-		expected string
-		wantErr  bool
+		name          string
+		enableFranzGo bool
+		uri           string
+		expected      string
+		wantErr       bool
 	}{
+		{
+			name:     "default selects sarama",
+			uri:      "kafka://127.0.0.1:9092/topic",
+			expected: KafkaClientSarama,
+		},
+		{
+			name:          "server enables franz",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic",
+			expected:      KafkaClientFranz,
+		},
 		{
 			name:     "URI selects sarama",
 			uri:      "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
@@ -61,12 +76,34 @@ func TestKafkaClientSelection(t *testing.T) {
 			expected: KafkaClientFranz,
 		},
 		{
+			name:          "URI selects sarama over server default",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=sarama",
+			expected:      KafkaClientSarama,
+		},
+		{
+			name:          "URI selects franz with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=franz",
+			expected:      KafkaClientFranz,
+		},
+		{
 			name:    "invalid client",
 			uri:     "kafka://127.0.0.1:9092/topic?kafka-client=other",
 			wantErr: true,
 		},
+		{
+			name:          "invalid client with server enabled",
+			enableFranzGo: true,
+			uri:           "kafka://127.0.0.1:9092/topic?kafka-client=other",
+			wantErr:       true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			serverConfig := originalConfig.Clone()
+			serverConfig.Debug.EnableKafkaFranzGo = test.enableFranzGo
+			config.StoreGlobalServerConfig(serverConfig)
+
 			sinkURI, err := url.Parse(test.uri)
 			require.NoError(t, err)
 
@@ -103,7 +140,7 @@ func TestFactorySelection(t *testing.T) {
 			o.BrokerEndpoints = cluster.ListenAddrs()
 			o.Topic = topic
 
-			factory, err := NewFactory(context.Background(), o, changefeedID)
+			factory, err := NewFactory(context.Background(), o, changefeedID, nil)
 			require.NoError(t, err)
 			require.IsType(t, test.expected, factory)
 

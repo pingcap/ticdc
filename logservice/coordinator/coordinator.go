@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -283,6 +282,15 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(target node.ID, req *log
 }
 
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
+	// Hold the membership lock through the update so node removal cannot
+	// clean up a report and then have an in-flight report recreate it.
+	// Keep the same lock order as handleNodeChange: nodes, then changefeedStates.
+	c.nodes.Lock()
+	defer c.nodes.Unlock()
+	if _, alive := c.nodes.m[from]; !alive {
+		return
+	}
+
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
 	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
@@ -312,8 +320,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					zap.Uint64("changefeedGIDHigh", gid.High))
 				// If the changefeed has no more nodes, remove the changefeed state and its associated metrics.
 				if len(state.nodeStates) == 0 {
-					metrics.ChangefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
-					metrics.ChangefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
+					changefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
 					log.Info("changefeed state removed as it has no active nodes",
 						zap.Stringer("changefeedID", state.cfID),
@@ -339,8 +347,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				nodeStates:                   make(map[node.ID]uint64),
 				nodesReportedSinceLastUpdate: make(map[node.ID]struct{}),
 				nodeReportPhyTs:              make(map[node.ID]int64),
-				resolvedTsGauge:              metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
-				resolvedTsLagGauge:           metrics.ChangefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsGauge:              changefeedResolvedTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+				resolvedTsLagGauge:           changefeedResolvedTsLagGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 			}
 		}
 		changefeedState := c.changefeedStates.m[gid]

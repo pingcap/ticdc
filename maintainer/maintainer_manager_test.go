@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -72,6 +71,100 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	t.Cleanup(func() {
 		require.ErrorIs(t, <-errCh, context.Canceled)
 	})
+}
+
+func TestManagerIgnoresInvalidMessages(t *testing.T) {
+	manager := &Manager{}
+	tests := []struct {
+		name    string
+		handler messaging.MessageHandler
+		msgType messaging.IOType
+		message []messaging.IOTypeT
+	}{
+		{
+			name:    "missing maintainer manager payload",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCoordinatorBootstrapRequest,
+		},
+		{
+			name:    "missing maintainer payload",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+		},
+		{
+			name:    "add maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeAddMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.AddMaintainerRequest{}},
+		},
+		{
+			name:    "remove maintainer without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRemoveMaintainerRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.RemoveMaintainerRequest{}},
+		},
+		{
+			name:    "bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerBootstrapResponse{}},
+		},
+		{
+			name:    "post bootstrap response without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeMaintainerPostBootstrapResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerPostBootstrapResponse{}},
+		},
+		{
+			name:    "heartbeat request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeHeartBeatRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.HeartBeatRequest{}},
+		},
+		{
+			name:    "nil block status request",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{(*heartbeatpb.BlockStatusRequest)(nil)},
+		},
+		{
+			name:    "block status request without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeBlockStatusRequest,
+			message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{}},
+		},
+		{
+			name:    "checkpoint message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeCheckpointTsMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.CheckpointTsMessage{}},
+		},
+		{
+			name:    "redo progress message without changefeed ID",
+			handler: manager.recvMessages,
+			msgType: messaging.TypeRedoResolvedTsProgressMessage,
+			message: []messaging.IOTypeT{&heartbeatpb.RedoResolvedTsProgressMessage{}},
+		},
+		{
+			name:    "close response without changefeed ID",
+			handler: manager.recvMaintainerMessage,
+			msgType: messaging.TypeMaintainerCloseResponse,
+			message: []messaging.IOTypeT{&heartbeatpb.MaintainerCloseResponse{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &messaging.TargetMessage{
+				From:    "node1",
+				Type:    tt.msgType,
+				Message: tt.message,
+			}
+			require.NotPanics(t, func() {
+				require.NoError(t, tt.handler(context.Background(), msg))
+			})
+		})
+	}
 }
 
 func newAddMaintainerRequestForEpoch(
@@ -114,25 +207,25 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 	cleanup := func() {
 		keyspace := cfID.Keyspace()
 		name := cfID.Name()
-		metrics.MaintainerGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
-		metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+		maintainerGauge.DeleteLabelValues(keyspace, name)
+		maintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+		maintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+		maintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+		maintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+		maintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+		maintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
-		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+		tableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
 
-		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
-		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
-		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
-		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		scheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+		scheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+		spanCountGauge.DeleteLabelValues(keyspace, name, "default")
+		spanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		tableCountGauge.DeleteLabelValues(keyspace, name, "default")
+		tableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 	}
 	cleanup()
 	t.Cleanup(cleanup)
@@ -149,17 +242,17 @@ func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	oldMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
-	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(maintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.True(t, oldMaintainer == currentMaintainer)
 	require.Equal(t, uint64(1), currentMaintainer.currentMaintainerEpoch())
-	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(maintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.checkpointTsGauge.Set(123)
-	require.Equal(t, float64(123), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
+	require.Equal(t, float64(123), promtestutil.ToFloat64(maintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 }
 
 func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testing.T) {
@@ -181,14 +274,14 @@ func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testi
 	require.True(t, ok)
 	require.False(t, oldMaintainer == currentMaintainer)
 	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
-	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(maintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.checkpointTsGauge.Set(456)
 	maintainers.cleanupRemovedMaintainer(cfID, oldMaintainer)
 	maintainerAfterStaleCleanup, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.True(t, currentMaintainer == maintainerAfterStaleCleanup)
-	require.Equal(t, float64(456), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
+	require.Equal(t, float64(456), promtestutil.ToFloat64(maintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.markRemoved()
 	currentMaintainer.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))

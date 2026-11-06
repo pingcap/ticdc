@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -120,7 +119,7 @@ func NewSharedInfo(
 		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:            newBlockEventExecutor(),
 		errCh:                    errCh,
-		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricHandleDDLHis:       handleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -252,6 +251,14 @@ func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockSta
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
+func (d *BasicDispatcher) offerRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus, canceled <-chan struct{}) bool {
+	return d.sharedInfo.blockStatusBuffer.offerRetryStatus(status, canceled)
+}
+
+func (d *BasicDispatcher) cancelRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	d.sharedInfo.blockStatusBuffer.cancelRetryStatus(status)
+}
+
 // offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
 // duplicate completions are filtered before another protobuf allocation.
 func (d *BasicDispatcher) offerDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
@@ -345,7 +352,8 @@ func (s *SharedInfo) Close() {
 	if s.blockExecutor != nil {
 		s.blockExecutor.Close()
 	}
+	s.blockStatusBuffer.Close()
 	keyspace := s.changefeedID.Keyspace()
 	changefeedID := s.changefeedID.Name()
-	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	handleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }

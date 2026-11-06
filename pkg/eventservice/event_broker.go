@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
@@ -806,7 +805,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
-		metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
+		eventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
 		return
 	}
 
@@ -814,7 +813,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
-		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		eventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
@@ -823,7 +822,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	defer finishActiveScan()
 	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
 	if interrupted {
-		metrics.EventServiceInterruptScanCount.Inc()
+		eventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
@@ -1529,7 +1528,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
-	metrics.EventServiceResetDispatcherCount.Inc()
+	eventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
 	// stale reset request, ignore it.
@@ -1778,7 +1777,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		availableInMsg, ok := holder[changefeedID.ID()]
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
+			eventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
 		}
 		if m.HasUsageRatio() {
 			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {

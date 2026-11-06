@@ -151,6 +151,8 @@ func (c *ColumnSelectors) VerifyTables(
 				return errors.ErrColumnSelectorFailed.GenWithStack(
 					"no primary key columns or unique key columns obtained after filter out, table: %+v", table.TableName)
 			}
+			// Only the first matching selector applies to this table, as in Get.
+			break
 		}
 	}
 	return nil

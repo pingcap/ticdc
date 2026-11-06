@@ -62,9 +62,6 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 	for _, idx := range offsets {
 		colInfo := tableInfo.GetColumns()[idx]
 		value := common.ExtractColVal(&rowData, colInfo, idx)
-		if value == nil {
-			continue
-		}
 		r.hasher.Write([]byte(colInfo.Name.O), []byte(common.ColumnValueString(value)))
 	}
 

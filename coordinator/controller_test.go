@@ -38,6 +38,7 @@ import (
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -54,8 +55,32 @@ func (noopScheduler) Name() string {
 	return pkgscheduler.BasicScheduler
 }
 
+func TestCollectMetricsResetsChangefeedErrorInfo(t *testing.T) {
+	changefeedErrorInfoGauge.Reset()
+	t.Cleanup(changefeedErrorInfoGauge.Reset)
+
+	registry := prometheus.NewPedanticRegistry()
+	RegisterMetrics(registry)
+	changefeed.RegisterMetrics(registry)
+	changefeedErrorInfoGauge.WithLabelValues(
+		common.DefaultKeyspaceName, "test-error-metrics", "failed", "1000", "CDC:ErrTest", "test",
+	).Set(1)
+	count, err := testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	controller := &Controller{}
+	require.ErrorIs(t, controller.collectMetrics(ctx), context.Canceled)
+
+	count, err = testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
+
 func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
 
 	keyspace := common.DefaultKeyspaceName
 	keyspaceID := uint32(123)
@@ -69,7 +94,7 @@ func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
 		config.StateRemoved,
 	} {
 		t.Run(string(state), func(t *testing.T) {
-			metrics.ResetOwnerChangefeedMetrics()
+			changefeed.ResetOwnerChangefeedMetrics()
 			name := string(state) + "-metrics"
 
 			updateChangefeedCheckpointMetrics(
@@ -80,8 +105,8 @@ func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
 				checkpointTs,
 				pdTime,
 			)
-			require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-			require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+			require.Equal(t, 1, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 1, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsLagGauge))
 
 			updateChangefeedCheckpointMetrics(
 				keyspace,
@@ -91,15 +116,15 @@ func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
 				checkpointTs,
 				pdTime,
 			)
-			require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-			require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+			require.Equal(t, 0, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 0, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsLagGauge))
 		})
 	}
 }
 
 func TestUpdateAllChangefeedCheckpointMetrics(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
 
 	cfID := common.NewChangeFeedIDWithName("bootstrap-metrics", common.DefaultKeyspaceName)
 	checkpointTs := oracle.ComposeTS(1000, 0)
@@ -116,10 +141,10 @@ func TestUpdateAllChangefeedCheckpointMetrics(t *testing.T) {
 	controller.updateAllChangefeedCheckpointMetrics(time.UnixMilli(2000))
 
 	require.Equal(t, float64(1000), testutil.ToFloat64(
-		metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
+		changefeed.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 	))
 	require.Equal(t, float64(1), testutil.ToFloat64(
-		metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+		changefeed.ChangefeedCheckpointTsLagGauge.WithLabelValues(
 			cfID.Keyspace(), cfID.Name(), metrics.FormatKeyspaceID(common.DefaultKeyspaceID),
 		),
 	))
@@ -494,8 +519,8 @@ func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
 }
 
 func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
 
 	testCases := []struct {
 		name          string
@@ -617,8 +642,8 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 }
 
 func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
