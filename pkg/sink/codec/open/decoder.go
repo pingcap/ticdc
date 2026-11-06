@@ -446,7 +446,7 @@ func (b *decoder) cachedTable(key any) *cachedTable {
 func (b *decoder) cacheTable(cacheKey tableCacheKey, key *messageKey, columns map[string]column) *cachedTable {
 	info := b.newTableInfo(key, &messageRow{Update: columns})
 	cached := &cachedTable{info: info, columns: make(map[string]column, len(columns))}
-	var names []string
+	names := make([]string, 0, len(info.GetColumns()))
 	for _, col := range info.GetColumns() {
 		name := commonType.QuoteName(col.Name.O)
 		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {

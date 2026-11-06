@@ -35,9 +35,10 @@ func TestDecoderMessageSchemaIsIndependent(t *testing.T) {
 		info := d.queryTableInfo(key, &messageRow{Update: cols})
 		require.Equal(t, tp, info.GetColumns()[0].GetType())
 		common.RequireRowLocatorByPrimaryKey(t, info, "id")
-		if i == 0 {
+		switch i {
+		case 0:
 			first = info
-		} else if i == 2 {
+		case 2:
 			require.Same(t, first, info, "old schemas remain reusable without receiving DDL")
 		}
 	}
