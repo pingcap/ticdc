@@ -305,8 +305,11 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 		block := result.ddl
 		// Failover can resend an old DDL after a newer one. Query is part of
 		// its identity because split DDLs can share the timestamp and table.
+		// Do not compare against the checkpoint: message sinks deliver
+		// independent partitions, so an older DDL can arrive after the global
+		// checkpoint has already moved past it.
 		key := ddl.KeyOf(block)
-		if w.ddlWrites[key] || (key.CommitTs > 0 && key.CommitTs <= w.checkpoint) {
+		if w.ddlWrites[key] {
 			if result.release != nil {
 				result.release()
 			}
@@ -668,7 +671,9 @@ func (w *Writer) advanceCheckpoint() {
 }
 
 func (w *Writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
-	if dml.CommitTs > 0 && dml.CommitTs <= max(w.checkpoint, w.tableCheckpoints[dml.PhysicalTableID]) {
+	// Only the table checkpoint is safe here. The global checkpoint can pass a
+	// row that is still in another Kafka partition or storage table file.
+	if dml.CommitTs > 0 && dml.CommitTs <= w.tableCheckpoints[dml.PhysicalTableID] {
 		return nil, nil
 	}
 	if dml.CommitTs == 0 || len(dml.TableInfo.GetOrderedHandleKeyColumnIDs()) == 0 {
