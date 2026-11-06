@@ -41,7 +41,7 @@ type pulsarReader struct {
 	partitions map[string]int32
 }
 
-func newPulsarReader(ctx context.Context, opts Options) *pulsarReader {
+func newPulsarReader(opts Options) *pulsarReader {
 	upstreamURI := opts.UpstreamURI
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig

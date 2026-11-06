@@ -65,7 +65,7 @@ func Open(ctx context.Context, opts Options) Reader {
 	case Kafka:
 		return newKafkaReader(ctx, opts)
 	case Pulsar:
-		return newPulsarReader(ctx, opts)
+		return newPulsarReader(opts)
 	default:
 		return newStorageReader(ctx, opts)
 	}

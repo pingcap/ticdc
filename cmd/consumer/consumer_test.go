@@ -55,7 +55,8 @@ func TestStorageConductorSchemaProgress(t *testing.T) {
 		data, err := json.Marshal(schema)
 		require.NoError(t, err)
 		writeConsumerTestFile(t, root, schema.Path(false, 0), data)
-		key := cloudstorage.DMLPathKey{SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t", TableVersion: version}}
+		schemaKey := cloudstorage.SchemaPathKey{Schema: "test", Table: "t", TableVersion: version}
+		key := cloudstorage.DMLPathKey{SchemaPathKey: schemaKey}
 		index := cloudstorage.FileIndex{Idx: 1}
 		path := key.GenerateDMLFilePath(&index, ".csv", 6)
 		writeConsumerTestFile(t, root, path, []byte(fmt.Sprintf("\"I\",\"t\",\"test\",%d,1\n", version+10)))

@@ -153,20 +153,20 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 	return group
 }
 
-// Close releases the upstream metadata connection.
 // ReleaseSchemas drops schema history that is no longer reachable from the
 // durable checkpoint.
-func (g *Group) ReleaseSchemas(checkpoint uint64) {
-	if g.schemas != nil && checkpoint != 0 {
-		g.schemas.ReleaseBefore(checkpoint)
+func (d *Group) ReleaseSchemas(checkpoint uint64) {
+	if d.schemas != nil && checkpoint != 0 {
+		d.schemas.ReleaseBefore(checkpoint)
 	}
 }
 
-func (p *Group) Close() {
-	if p.upstreamDB == nil {
+// Close releases the upstream metadata connection.
+func (d *Group) Close() {
+	if d.upstreamDB == nil {
 		return
 	}
-	if err := p.upstreamDB.Close(); err != nil {
+	if err := d.upstreamDB.Close(); err != nil {
 		log.Warn("consumer upstream database close failed", zap.Error(err))
 	}
 }

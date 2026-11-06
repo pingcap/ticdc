@@ -22,6 +22,7 @@ import (
 	"maps"
 	"math"
 	"reflect"
+	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/consumer/budget"
@@ -189,11 +190,10 @@ func (w *Writer) AddDDL(block *event.DDLEvent, release func()) {
 // lastInFlight returns the newest in-flight write for tableID. Admission only
 // needs that write, so scanning avoids building a per-table map for every row.
 func (w *Writer) lastInFlight(tableID int64) *dmlWrite {
-	for i := len(w.inFlight) - 1; i >= 0; i-- {
-		items := w.inFlight[i].items
-		for j := len(items) - 1; j >= 0; j-- {
-			if items[j].dml.PhysicalTableID == tableID {
-				return items[j]
+	for _, batch := range slices.Backward(w.inFlight) {
+		for _, item := range slices.Backward(batch.items) {
+			if item.dml.PhysicalTableID == tableID {
+				return item
 			}
 		}
 	}
@@ -202,9 +202,9 @@ func (w *Writer) lastInFlight(tableID int64) *dmlWrite {
 
 // lastPending returns the newest pending write for tableID.
 func (w *Writer) lastPending(tableID int64) *dmlWrite {
-	for i := len(w.pendingDML) - 1; i >= 0; i-- {
-		if w.pendingDML[i].dml.PhysicalTableID == tableID {
-			return w.pendingDML[i]
+	for _, item := range slices.Backward(w.pendingDML) {
+		if item.dml.PhysicalTableID == tableID {
+			return item
 		}
 	}
 	return nil
