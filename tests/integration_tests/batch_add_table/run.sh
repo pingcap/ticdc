@@ -27,7 +27,15 @@ function run_with_fast_create_table() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
-	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	local start_ts
+	local retry_table
+	if [ "$SINK_TYPE" == "mysql" ]; then
+		# Generate the batch before starting replication so its first table can
+		# already exist downstream when the original batch is replayed.
+		start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	else
+		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	fi
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/changefeed.toml" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/changefeed.toml" "" ;;
@@ -43,9 +51,42 @@ function run_with_fast_create_table() {
 		check_table_exists test.t_$i ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 
+	if [ "$SINK_TYPE" == "mysql" ]; then
+		# Require a real ActionCreateTables job, excluding the filtered table.
+		local batch_query
+		batch_query=$(mysql -h "$UP_TIDB_HOST" -P "$UP_TIDB_PORT" -u root -N -B --raw -e \
+			"SELECT QUERY FROM information_schema.ddl_jobs
+			 WHERE DB_NAME = 'test' AND JOB_TYPE = 'create tables'
+			 AND QUERY NOT REGEXP 't_1([^0-9]|$)'
+			 ORDER BY JOB_ID LIMIT 1;")
+		if [ -z "$batch_query" ]; then
+			echo "expected a batch CREATE TABLE job without the filtered table"
+			exit 1
+		fi
+		printf '%s\n' "$batch_query" >"$WORK_DIR/batch_create_retry.log"
+		local first_query=${batch_query%%;*}
+		local remaining_query=${batch_query#*;}
+		if [[ "$remaining_query" =~ (t_[0-9]+) ]]; then
+			retry_table=${BASH_REMATCH[1]}
+		else
+			echo "expected another CREATE TABLE after the first statement"
+			exit 1
+		fi
+		run_sql "USE test; $first_query;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+		cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	fi
+
 	for ((i = 1; i <= 100; i++)); do
 		mysql -h ${UP_TIDB_HOST} -P ${UP_TIDB_PORT} -u root -D "test" -e "insert into t_$i values(1,2)"
 	done
+
+	if [ "$SINK_TYPE" == "mysql" ]; then
+		# Error 1050 for the first CREATE must not skip this later CREATE or its DML.
+		check_table_exists "test.$retry_table" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 30
+		ensure 10 "run_sql 'SELECT COUNT(*) AS replicated_rows FROM test.$retry_table WHERE a = 1 AND b = 2;' \
+			$DOWN_TIDB_HOST $DOWN_TIDB_PORT && check_contains 'replicated_rows: 1'"
+		check_logs_contains "$WORK_DIR" "Execute DDL failed, but error can be ignored"
+	fi
 
 	check_table_exists test.t_100 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
