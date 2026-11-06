@@ -105,6 +105,42 @@ func TestRunDispatchNoHandler(t *testing.T) {
 	r.runDispatch(ctx, msgChan)
 }
 
+func TestRunDispatchDropsEmptyMessage(t *testing.T) {
+	t.Parallel()
+	r := newRouter()
+	handled := false
+	r.registerHandler("topic1", func(context.Context, *TargetMessage) error {
+		handled = true
+		return nil
+	})
+
+	msgChan := make(chan *TargetMessage, 2)
+	msgChan <- nil
+	msgChan <- &TargetMessage{Topic: "topic1"}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	r.runDispatch(ctx, msgChan)
+	assert.False(t, handled)
+}
+
+func TestRunDispatchStopsWhenMessageChannelCloses(t *testing.T) {
+	r := newRouter()
+	msgChan := make(chan *TargetMessage)
+	close(msgChan)
+
+	done := make(chan struct{})
+	go func() {
+		r.runDispatch(context.Background(), msgChan)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("router did not stop after the message channel was closed")
+	}
+}
+
 func TestConcurrentAccess(t *testing.T) {
 	r := newRouter()
 	var wg sync.WaitGroup

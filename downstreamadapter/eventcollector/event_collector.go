@@ -521,11 +521,16 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 }
 
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
-	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
+	if targetMessage == nil || len(targetMessage.Message) != 1 {
+		log.Warn("invalid dispatcher heartbeat response message, ignore it", zap.Any("msg", targetMessage))
+		return
 	}
 
-	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+	response, ok := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+	if !ok || response == nil {
+		log.Warn("invalid dispatcher heartbeat response payload, ignore it", zap.Any("msg", targetMessage))
+		return
+	}
 	for _, ds := range response.DispatcherStates {
 		// This means that the dispatcher is removed in the event service we have to reset it.
 		if ds.State == event.DSStateRemoved {

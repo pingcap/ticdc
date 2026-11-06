@@ -922,6 +922,42 @@ func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
 }
 
+func TestMsgToDispatcherInfoRejectsMalformedRequests(t *testing.T) {
+	dispatcherID := common.NewDispatcherID().ToPB()
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName).ToPB()
+	validRemove := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+		ActionType:   eventpb.ActionType_ACTION_TYPE_REMOVE,
+		DispatcherId: dispatcherID,
+		ChangefeedId: changefeedID,
+		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+	}}
+	validRegister := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+		ActionType:   eventpb.ActionType_ACTION_TYPE_REGISTER,
+		DispatcherId: dispatcherID,
+		ChangefeedId: changefeedID,
+		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		FilterConfig: &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+			Rules: []string{"*.*"},
+		}},
+	}}
+
+	infos := msgToDispatcherInfo(&messaging.TargetMessage{Message: []messaging.IOTypeT{
+		nil,
+		&commonEvent.DispatcherHeartbeat{},
+		&messaging.DispatcherRequest{},
+		&messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+		}},
+		&messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+			TableSpan:  &heartbeatpb.TableSpan{TableID: 1},
+		}},
+		validRemove,
+		validRegister,
+	}})
+	require.Equal(t, []DispatcherInfo{validRemove, validRegister}, infos)
+}
+
 func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
 	t.Helper()
 

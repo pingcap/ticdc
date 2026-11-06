@@ -16,6 +16,7 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -878,4 +879,11 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 
 func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
 	return config.CaptureID(m.ownerID), nil
+}
+
+func (m *mockEtcdClient) GetOwnerRevision(_ context.Context, captureID config.CaptureID) (int64, error) {
+	if string(captureID) != m.ownerID {
+		return 0, fmt.Errorf("capture %s is not the owner", captureID)
+	}
+	return 1, nil
 }

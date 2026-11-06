@@ -1696,6 +1696,49 @@ func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *tes
 	}
 }
 
+func TestValidBootstrapSpanInfo(t *testing.T) {
+	const tableID int64 = 42
+	newSpanInfo := func() *heartbeatpb.BootstrapTableSpan {
+		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
+		return &heartbeatpb.BootstrapTableSpan{
+			ID:              common.NewDispatcherID().ToPB(),
+			Span:            &span,
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		}
+	}
+	tableSplitMap := map[int64]bool{tableID: true}
+
+	tests := []struct {
+		name   string
+		mutate func(*heartbeatpb.BootstrapTableSpan)
+	}{
+		{name: "missing id", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.ID = nil }},
+		{name: "zero id", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.ID = &heartbeatpb.DispatcherID{} }},
+		{name: "missing span", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span = nil }},
+		{name: "wrong mode", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Mode = common.RedoMode }},
+		{name: "zero checkpoint", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.CheckpointTs = 0 }},
+		{name: "wrong keyspace", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.KeyspaceID++ }},
+		{name: "unknown table", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.TableID++ }},
+		{name: "empty range", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.EndKey = info.Span.StartKey }},
+		{name: "reversed range", mutate: func(info *heartbeatpb.BootstrapTableSpan) {
+			info.Span.StartKey, info.Span.EndKey = info.Span.EndKey, info.Span.StartKey
+		}},
+	}
+
+	require.True(t, validBootstrapSpanInfo(
+		newSpanInfo(), tableSplitMap, common.DefaultMode, common.DefaultKeyspaceID))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := newSpanInfo()
+			test.mutate(info)
+			require.False(t, validBootstrapSpanInfo(
+				info, tableSplitMap, common.DefaultMode, common.DefaultKeyspaceID))
+		})
+	}
+}
+
 func TestFinishBootstrapReplacesTerminalSpanOfAddedTable(t *testing.T) {
 	for _, state := range []heartbeatpb.ComponentState{heartbeatpb.ComponentState_Stopped, heartbeatpb.ComponentState_Removed} {
 		t.Run(state.String(), func(t *testing.T) {
