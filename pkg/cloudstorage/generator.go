@@ -47,8 +47,7 @@ const (
 	defaultIndexFileName                 = "meta/CDC.index"
 
 	// The following constants are used to generate file paths.
-	schemaFileNameFormat           = "schema_%d_%010d.json"
-	dispatcherSchemaFileNameFormat = "schema_%s_%d_%010d.json"
+	schemaFileNameFormat = "schema_%d_%010d.json"
 	// The database schema is stored in the following path:
 	// <schema>/meta/schema_{tableVersion}_{checksum}.json
 	dbSchemaPrefix = "%s/meta/"
@@ -59,7 +58,7 @@ const (
 	tableIDPrefix = "%s/meta/"
 )
 
-var schemaRE = regexp.MustCompile(`meta/schema_(\d+_)?\d+_\d{10}\.json$`)
+var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
 
 // IsSchemaFile reports whether path matches a schema file under a meta
 // directory.
@@ -67,33 +66,21 @@ func IsSchemaFile(path string) bool {
 	return schemaRE.MatchString(path)
 }
 
-// SchemaFileName identifies a schema file. DispatcherID is set for DML-generated
-// schemas when table-across-nodes is enabled. DDL and legacy files have no scope.
-type SchemaFileName struct {
-	TableVersion uint64
-	Checksum     uint32
-	DispatcherID string
-}
-
-func (s SchemaFileName) String() string {
-	if s.DispatcherID != "" {
-		return fmt.Sprintf(dispatcherSchemaFileNameFormat, s.DispatcherID, s.TableVersion, s.Checksum)
-	}
-	return fmt.Sprintf(schemaFileNameFormat, s.TableVersion, s.Checksum)
-}
-
-// Parse fills SchemaFileName from a schema file name or path. Invalid names panic.
-func (s *SchemaFileName) Parse(schemaPath string) {
+// mustParseSchemaFileName returns tableVersion and checksum encoded in a schema
+// file name. Invalid names panic.
+func mustParseSchemaFileName(path string) (uint64, uint32) {
 	reportErr := func(reason string, fields ...zap.Field) {
 		fields = append([]zap.Field{
-			zap.String("schemaPath", schemaPath),
+			zap.String("schemaPath", path),
 			zap.String("reason", reason),
 		}, fields...)
 		log.Panic("failed to parse schema file name", fields...)
 	}
 
-	parts := strings.Split(path.Base(schemaPath), "_")
-	if (len(parts) != 3 && len(parts) != 4) || parts[0] != "schema" {
+	// For <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json, the parts
+	// should be ["<schema>/<table>/meta/schema", "{tableVersion}", "{checksum}.json"].
+	parts := strings.Split(path, "_")
+	if len(parts) < 3 {
 		reportErr("invalid path format")
 	}
 
@@ -107,24 +94,17 @@ func (s *SchemaFileName) Parse(schemaPath string) {
 	if err != nil {
 		reportErr("invalid table version", zap.Error(err))
 	}
-	*s = SchemaFileName{TableVersion: tableVersion, Checksum: uint32(tableChecksum)}
-	if len(parts) == 4 {
-		if parts[1] == "" || strings.Trim(parts[1], "0123456789") != "" {
-			reportErr("invalid dispatcher ID")
-		}
-		s.DispatcherID = parts[1]
-	}
+	return tableVersion, uint32(tableChecksum)
 }
 
 // generateSchemaFilePath returns the schema file path.
 // When table is empty, output is <schema>/meta/schema_<version>_<checksum>.json.
 // When omitSchema is true, output is <table-path>/meta/schema_<version>_<checksum>.json.
 // Otherwise output is <schema>/<table>/meta/schema_<version>_<checksum>.json.
-// A nonempty dispatcherID is inserted before the version in the file name.
 func generateSchemaFilePath(
-	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool, dispatcherID string,
+	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool,
 ) string {
-	name := SchemaFileName{TableVersion: tableVersion, Checksum: checksum, DispatcherID: dispatcherID}.String()
+	name := fmt.Sprintf(schemaFileNameFormat, tableVersion, checksum)
 	if omitSchema {
 		return path.Join(fmt.Sprintf(tableIDPrefix, table), name)
 	}
@@ -178,14 +158,12 @@ type VersionedTableName struct {
 	// Source:
 	// 1. DDL finishedTs for schema-changing DDLs.
 	// 2. Checkpoint/startTs during dispatcher recover/move.
-	// Usage:
-	// 1. CheckOrWriteSchema compares it with stored schema versions in the same
-	//    dispatcher scope to detect stale DML.
-	// 2. If no exact schema file exists, an older schema with the same checksum
-	//    and dispatcher scope can supply the output version via versionMap.
+	// If no exact schema file exists but an equivalent schema checksum exists,
+	// storage sink may reuse an older/newer existing schema version as the
+	// output directory version via versionMap.
 	TableInfoVersion uint64
 	// DispatcherID identifies the dispatcher producing this table stream.
-	// It participates in schema/index/data file names when table-across-nodes is enabled.
+	// It participates in index/data file names when table-across-nodes is enabled.
 	DispatcherID commonType.DispatcherID
 }
 
@@ -236,19 +214,16 @@ func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
 }
 
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
-// The first return value is the schema version that must be used in later
-// data/index paths. The second return value is true when storage already has a
-// newer schema with the same checksum in the same dispatcher scope, so the caller
-// should discard the old DML batch. Unscoped files are only compared when
-// table-across-nodes is disabled. Storage errors are returned from checking,
-// walking, or writing schema files.
+// It returns the effective schema version to use in later data/index paths.
+// An existing schema with the same checksum can be reused regardless of whether
+// its version is older or newer than the input version.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
 	tableInfo *commonType.TableInfo,
-) (uint64, bool, error) {
+) (uint64, error) {
 	if version, ok := f.versionMap[table]; ok {
-		return version, false, nil
+		return version, nil
 	}
 
 	keyspace := f.changefeedID.Keyspace()
@@ -262,22 +237,19 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	var schemaFile SchemaFile
 	schemaFile.Build(event, f.config.OutputColumnID)
-	if f.config.EnableTableAcrossNodes {
-		schemaFile.DispatcherID = table.DispatcherID.String()
-	}
 
 	// Case 1: point check if the schema file exists.
 	schemaFilePath := schemaFile.Path(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	exist, err := f.storage.FileExists(ctx, schemaFilePath)
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
-		return table.TableInfoVersion, false, nil
+		return table.TableInfoVersion, nil
 	}
 	// walk the table meta path to find the last schema file
-	checksum := schemaFile.Checksum()
+	_, checksum := mustParseSchemaFileName(schemaFilePath)
 	schemaFileCount := 0
 	lastVersion := uint64(0)
 	tablePathPart := generateTablePath(schemaFile.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
@@ -285,43 +257,23 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if f.config.UseTableIDAsPath {
 		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	}
-	filePrefix := "schema_"
-	if schemaFile.DispatcherID != "" {
-		filePrefix += schemaFile.DispatcherID + "_"
-	}
-	hasNewerSchemaVersion := false
+	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
-		ObjPrefix: filePrefix,
+		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
-		if !IsSchemaFile(path) {
-			return nil
-		}
-		var fileName SchemaFileName
-		fileName.Parse(path)
-		// A schema written by another span cannot establish whether this
-		// dispatcher's DML has been persisted. Legacy files have no span identity.
-		if fileName.DispatcherID != schemaFile.DispatcherID {
-			return nil
-		}
 		schemaFileCount++
-		if fileName.Checksum != checksum {
+		if !strings.HasSuffix(path, checksumSuffix) {
 			return nil
 		}
-		version := fileName.TableVersion
-		if version > table.TableInfoVersion {
-			hasNewerSchemaVersion = true
-		}
+		version, _ := mustParseSchemaFileName(path)
 		if version > lastVersion {
 			lastVersion = version
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, false, err
-	}
-	if hasNewerSchemaVersion {
-		return table.TableInfoVersion, true, nil
+		return 0, err
 	}
 
 	// Case 2: the table meta path is not empty.
@@ -335,7 +287,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		// record the last version of the schema file.
 		// we don't need to write schema file to external storage again.
 		f.versionMap[table] = lastVersion
-		return lastVersion, false, nil
+		return lastVersion, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:
@@ -350,13 +302,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	if err := writelease.WaitForWrite(ctx, f.writeGate); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if err := f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	f.versionMap[table] = table.TableInfoVersion
-	return table.TableInfoVersion, false, nil
+	return table.TableInfoVersion, nil
 }
 
 // SetClock sets the clock used by GenerateDateStr. It is used by tests.
