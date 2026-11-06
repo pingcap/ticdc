@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -231,6 +232,7 @@ func TestProcessMessage(t *testing.T) {
 }
 
 func TestRemoveLastDispatcher(t *testing.T) {
+	initialDispatcherCount := testutil.ToFloat64(eventCollectorRegisteredDispatcherCount)
 	ctx := context.Background()
 	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
 	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)
@@ -252,6 +254,7 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	c.AddDispatcher(d1, 1024)
 	c.AddDispatcher(d2, 1024)
 	c.AddDispatcher(d3, 1024)
+	require.Equal(t, initialDispatcherCount+3, testutil.ToFloat64(eventCollectorRegisteredDispatcherCount))
 
 	// Check that changefeed stats are created
 	_, ok := c.changefeedMap.Load(cfID1.ID())
@@ -261,15 +264,24 @@ func TestRemoveLastDispatcher(t *testing.T) {
 
 	// Remove one dispatcher from cfID1, stat should still exist
 	c.RemoveDispatcher(d1)
+	require.Equal(t, initialDispatcherCount+2, testutil.ToFloat64(eventCollectorRegisteredDispatcherCount))
 	_, ok = c.changefeedMap.Load(cfID1.ID())
 	require.True(t, ok, "changefeedStat for cfID1 should still exist after removing one dispatcher")
 
+	// Removing the same dispatcher again must not decrement the count.
+	c.RemoveDispatcher(d1)
+	require.Equal(t, initialDispatcherCount+2, testutil.ToFloat64(eventCollectorRegisteredDispatcherCount))
+
 	// Remove the last dispatcher from cfID1, stat should be removed
 	c.RemoveDispatcher(d2)
+	require.Equal(t, initialDispatcherCount+1, testutil.ToFloat64(eventCollectorRegisteredDispatcherCount))
 	_, ok = c.changefeedMap.Load(cfID1.ID())
 	require.False(t, ok, "changefeedStat for cfID1 should be removed after removing the last dispatcher")
 	_, ok = c.changefeedMap.Load(cfID2.ID())
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
+
+	c.RemoveDispatcher(d3)
+	require.Equal(t, initialDispatcherCount, testutil.ToFloat64(eventCollectorRegisteredDispatcherCount))
 }
 
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
