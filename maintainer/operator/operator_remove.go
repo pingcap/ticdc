@@ -98,7 +98,7 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 		from == m.nodeID &&
 		(status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed) {
-		m.replicaSet.UpdateStatus(status)
+		m.replicaSet.UpdateRemovedStatus(status)
 		log.Info("dispatcher report non-working status",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
 		m.finished.Store(true)
