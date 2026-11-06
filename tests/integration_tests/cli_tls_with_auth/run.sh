@@ -134,7 +134,15 @@ EOF
 
 	# Update changefeed
 	cdc_cli_changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
-	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid?keyspace=$KEYSPACE_NAME" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
+	changefeed_url="https://127.0.0.1:8300/api/v2/changefeeds/$uuid?keyspace=$KEYSPACE_NAME"
+	unauthenticated_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$changefeed_url" \
+		--cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem")
+	if [[ "$unauthenticated_status" != "401" ]]; then
+		echo "[$(date)] <<<<< unauthenticated changefeed query should return 401, got ${unauthenticated_status} >>>>>"
+		exit 1
+	fi
+	changefeed_info=$(curl -s --user "${TICDC_USER}:${TICDC_PASSWORD}" -X GET "$changefeed_url" \
+		--cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
