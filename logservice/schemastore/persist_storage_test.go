@@ -3961,9 +3961,9 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("exchange partition", func(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
-		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
+		job.Query = "ALTER TABLE `with table` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
-		ddl, _ := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		ddl, err := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
 			databaseMap: map[int64]*BasicDatabaseInfo{
 				100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
@@ -3979,6 +3979,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 				},
 			},
 		})
+		require.NoError(t, err)
 
 		assert.Equal(t,
 			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p``0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
@@ -4823,6 +4824,66 @@ func TestRegisteredTableInfoForComplexDDL(t *testing.T) {
 }
 
 func TestBuildSchemaAndViewDDLEvents(t *testing.T) {
+	t.Run("drop snapshot view and reuse name", func(t *testing.T) {
+		view := newEligibleTableInfoForTest(500, "v")
+		view.View = &model.ViewInfo{}
+		storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{{
+			dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")},
+			tables: []*model.TableInfo{view},
+		}})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		drop := buildDropViewJobForTest(10, 1000)
+		drop.TableID, drop.TableName = view.ID, "v"
+		require.NoError(t, storage.handleDDLJob(drop))
+		require.NotContains(t, storage.tableMap, view.ID)
+		require.NotContains(t, storage.databaseMap[10].Tables, view.ID)
+		require.NoError(t, storage.handleDDLJob(buildCreateTableJobForTest(10, 600, "v", 1100)))
+		job := buildCreateTableJobForTest(10, 700, "copy", 1200)
+		job.Query = "CREATE TABLE `test`.`copy` LIKE `test`.`v`"
+		event, err := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+			job: job, databaseMap: storage.databaseMap, tableMap: storage.tableMap,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(600), event.ExtraTableID)
+	})
+	t.Run("replace snapshot view", func(t *testing.T) {
+		helper := commonEvent.NewEventTestHelper(t)
+		t.Cleanup(helper.Close)
+		helper.DDL2Job("CREATE DATABASE view_lifecycle")
+		create := helper.DDL2Job("CREATE VIEW view_lifecycle.v AS SELECT 1 AS id")
+		replace := helper.DDL2Job("CREATE OR REPLACE VIEW view_lifecycle.v AS SELECT 2 AS id")
+		path := t.TempDir()
+		storage := newPersistentStorageForTest(path, []mockDBInfo{{
+			dbInfo: &model.DBInfo{ID: create.SchemaID, Name: ast.NewCIStr("view_lifecycle")},
+			tables: []*model.TableInfo{create.BinlogInfo.TableInfo},
+		}})
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		storage.kvStorage = helper.Storage()
+		require.NoError(t, storage.handleDDLJob(replace))
+		require.NotContains(t, storage.tableMap, create.TableID)
+		require.NotContains(t, storage.databaseMap[create.SchemaID].Tables, create.TableID)
+		require.NoError(t, storage.close())
+		storage = loadPersistentStorageFromPathForTest(path, replace.BinlogInfo.FinishedTS+1)
+		require.NotContains(t, storage.tableMap, create.TableID)
+		assertPhysicalTableIDs(t, storage, replace.BinlogInfo.FinishedTS, nil)
+	})
+	t.Run("recover schema with view", func(t *testing.T) {
+		view := newEligibleTableInfoForTest(500, "v")
+		view.View = &model.ViewInfo{}
+		storage := newPersistentStorageForTest(t.TempDir(), nil)
+		t.Cleanup(func() { require.NoError(t, storage.close()) })
+		job := buildRecoverSchemaJobForTest(10, "test", []*model.TableInfo{
+			newEligibleTableInfoForTest(200, "t"), view,
+		}, 1000)
+		require.NoError(t, storage.handleDDLJob(job))
+		events, err := storage.fetchTableTriggerDDLEvents(nil, 999, 10)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Len(t, events[0].MultipleTableInfos, 2)
+		require.Equal(t, []commonEvent.Table{{SchemaID: 10, TableID: 200, Splitable: true}}, events[0].NeedAddedTables)
+		require.Equal(t, []commonEvent.SchemaTableName{{SchemaName: "test", TableName: "t"}}, events[0].TableNameChange.AddName)
+		assertPhysicalTableIDs(t, storage, 1000, []int64{200})
+	})
 	testCases := []struct {
 		name                 string
 		raw                  PersistedDDLEvent
@@ -4919,6 +4980,72 @@ func TestAddIndexPersistsIndexIDsInDDLEvent(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, byte(model.ActionAddIndex), events[0].Type)
 	require.Equal(t, expectedIndexIDs, events[0].IndexIDs)
+}
+
+func TestIsAddFullTextIndexDDL(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		sqlMode mysql.SQLMode
+		want    bool
+	}{
+		{
+			name:  "add fulltext index",
+			query: "ALTER TABLE t ADD FULLTEXT INDEX (c) WITH PARSER standard",
+			want:  true,
+		},
+		{
+			name:  "add fulltext key with quoted table",
+			query: "alter table `add fulltext index` add fulltext key idx (c)",
+			want:  true,
+		},
+		{
+			name:    "ANSI quoted table",
+			query:   `ALTER TABLE "t" ADD FULLTEXT INDEX idx (c)`,
+			sqlMode: mysql.ModeANSIQuotes,
+			want:    true,
+		},
+		{
+			name:  "phrase in table name",
+			query: "CREATE TABLE `x add fulltext index` (id INT)",
+		},
+		{
+			name:  "phrase in column name",
+			query: "ALTER TABLE t ADD COLUMN `add fulltext index` INT",
+		},
+		{
+			name:  "phrase in string literal",
+			query: "ALTER TABLE t COMMENT = 'add fulltext index'",
+		},
+		{
+			name:  "phrase in comment",
+			query: "ALTER TABLE t /* ADD FULLTEXT INDEX idx (c) */ ADD COLUMN c INT",
+		},
+		{
+			name:  "invalid query",
+			query: "not ddl ADD FULLTEXT INDEX",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := &model.Job{Query: test.query, SQLMode: test.sqlMode}
+			require.Equal(t, test.want, isAddFullTextIndexDDL(job))
+		})
+	}
+}
+
+func TestHandleDDLJobDoesNotReclassifyFullTextPhraseInIdentifier(t *testing.T) {
+	storage := newPersistentStorageForTest(t.TempDir(), []mockDBInfo{
+		{dbInfo: &model.DBInfo{ID: 10, Name: ast.NewCIStr("test")}},
+	})
+	t.Cleanup(func() { require.NoError(t, storage.close()) })
+
+	job := buildCreateTableJobForTest(10, 100, "x add fulltext index", 1000)
+	job.Query = "CREATE TABLE `x add fulltext index` (id INT)"
+	require.NoError(t, storage.handleDDLJob(job))
+	require.Equal(t, model.ActionCreateTable, job.Type)
+	require.Contains(t, storage.tableMap, int64(100))
 }
 
 func TestHandleDDLJobSkipRules(t *testing.T) {

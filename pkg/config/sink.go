@@ -155,7 +155,7 @@ type SinkConfig struct {
 	// SchemaRegistry is only available when the downstream is MQ using avro protocol
 	// or debezium protocol with Confluent Avro encoding.
 	SchemaRegistry *string `toml:"schema-registry" json:"schema-registry,omitempty"`
-	// EncoderConcurrency is only available when the downstream is MQ.
+	// EncoderConcurrency is only available when the downstream is MQ or Storage.
 	EncoderConcurrency *int `toml:"encoder-concurrency" json:"encoder-concurrency,omitempty"`
 	// Terminator is NOT available when the downstream is DB.
 	Terminator *string `toml:"terminator" json:"terminator,omitempty"`
@@ -1087,7 +1087,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 ) error {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err))
 	}
 
 	var useTableIDAsPathFromURI *bool

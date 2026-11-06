@@ -532,6 +532,10 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 	}
 	if !IsMQScheme(uri.Scheme) {
 		info.rmMQOnlyFields()
+		// Encoder concurrency is shared by MQ and storage sinks.
+		if !IsStorageScheme(uri.Scheme) {
+			info.Config.Sink.EncoderConcurrency = nil
+		}
 	} else {
 		// remove schema registry for MQ downstream with
 		// protocol other than avro or debezium-avro
@@ -568,7 +572,6 @@ func (info *ChangeFeedInfo) rmMQOnlyFields() {
 		rule.TopicRule = ""
 	}
 	info.Config.Sink.SchemaRegistry = nil
-	info.Config.Sink.EncoderConcurrency = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil
 	info.Config.Sink.DeleteOnlyOutputHandleKeyColumns = nil
 	info.Config.Sink.ContentCompatible = nil

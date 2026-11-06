@@ -21,9 +21,78 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRedoDMLEventPreservesStoredGeneratedColumn(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+	helper.DDL2Job("create table test.redo_generated(id int primary key, g int as (id + 1) stored, v int)")
+	const insertSQL = "insert into test.redo_generated(id, v) values (1, 10)"
+
+	for _, tc := range []struct {
+		sql     string
+		rowType commonType.RowType
+		value   int64
+	}{
+		{insertSQL, commonType.RowTypeInsert, 10},
+		{"update test.redo_generated set v = 20 where id = 1", commonType.RowTypeUpdate, 20},
+		{"delete from test.redo_generated where id = 1", commonType.RowTypeDelete, 10},
+	} {
+		helper.Tk().MustExec("delete from test.redo_generated")
+		var dml *DMLEvent
+		switch tc.rowType {
+		case commonType.RowTypeInsert:
+			dml = helper.DML2Event("test", "redo_generated", insertSQL)
+		case commonType.RowTypeUpdate:
+			dml, _ = helper.DML2UpdateEvent("test", "redo_generated", insertSQL, tc.sql)
+		case commonType.RowTypeDelete:
+			dml = helper.DML2DeleteEvent("test", "redo_generated", insertSQL, tc.sql)
+		}
+		row, ok := dml.GetNextRow()
+		require.True(t, ok)
+		redoLog := (&RedoRowEvent{
+			StartTs: dml.StartTs, CommitTs: dml.CommitTs,
+			PhysicalTableID: dml.PhysicalTableID, TableInfo: dml.TableInfo, Event: row,
+		}).ToRedoLog()
+		data, err := redoLog.MarshalMsg(nil)
+		require.NoError(t, err)
+		var decoded RedoLog
+		_, err = decoded.UnmarshalMsg(data)
+		require.NoError(t, err)
+		restored := decoded.RedoRow.ToDMLEvent()
+		defer restored.PostFlush()
+
+		generated := restored.TableInfo.GetColumns()[1]
+		require.True(t, generated.IsGenerated(), tc.sql)
+		require.True(t, generated.GeneratedStored)
+		require.True(t, commonType.IsColCDCVisible(generated))
+		for _, sql := range []string{
+			restored.TableInfo.GetPreInsertSQL(),
+			restored.TableInfo.GetPreReplaceSQL(),
+			restored.TableInfo.GetPreUpdateSQL(),
+		} {
+			require.NotContains(t, sql, "`g`")
+			require.Contains(t, sql, "`v`")
+		}
+		restoredRow, ok := restored.GetNextRow()
+		require.True(t, ok)
+		require.Equal(t, tc.rowType, restoredRow.RowType)
+		values := restoredRow.Row
+		if tc.rowType == commonType.RowTypeDelete {
+			values = restoredRow.PreRow
+		}
+		require.Equal(t, int64(2), values.GetInt64(1))
+		require.Equal(t, tc.value, values.GetInt64(2))
+		if tc.rowType == commonType.RowTypeInsert {
+			helper.Tk().MustExec("delete from test.redo_generated")
+			helper.Tk().MustExec(restored.TableInfo.GetPreInsertSQL(), int64(1), tc.value)
+			helper.Tk().MustQuery("select id, g, v from test.redo_generated").Check(testkit.Rows("1 2 10"))
+		}
+	}
+}
 
 func TestRedoUsesRoutedTableNames(t *testing.T) {
 	helper := NewEventTestHelper(t)

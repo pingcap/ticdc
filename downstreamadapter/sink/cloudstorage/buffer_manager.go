@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -249,7 +248,7 @@ func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, r
 	if err := c.enqueueFlushTask(ctx, flushTask{batch: batch}); err != nil {
 		return err
 	}
-	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), reason).Inc()
+	cloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), reason).Inc()
 	return nil
 }
 
