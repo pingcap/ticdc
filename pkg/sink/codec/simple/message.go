@@ -258,7 +258,11 @@ type message struct {
 	// SQL is only for the DDL event.
 	SQL      string `json:"sql,omitempty"`
 	CommitTs uint64 `json:"commitTs"`
-	BuildTs  int64  `json:"buildTs"`
+	// StartTs is the transaction start TSO. Present on DML messages only when
+	// simple-include-start-ts is enabled. omitempty keeps the pre-feature format
+	// when the field is unset (zero).
+	StartTs uint64 `json:"startTs,omitempty"`
+	BuildTs int64  `json:"buildTs"`
 	// SchemaVersion is for the DML event.
 	SchemaVersion uint64 `json:"schemaVersion,omitempty"`
 
@@ -339,6 +343,9 @@ func (a *jsonMarshaller) newDMLMessage(
 		SchemaVersion:      event.TableInfo.GetUpdateTS(),
 		HandleKeyOnly:      onlyHandleKey,
 		ClaimCheckLocation: claimCheckFileName,
+	}
+	if a.config.SimpleIncludeStartTs {
+		m.StartTs = event.StartTs
 	}
 	if event.IsInsert() {
 		m.Type = DMLTypeInsert
