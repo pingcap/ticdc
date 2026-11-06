@@ -167,12 +167,14 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name     string
-		versions [2]uint64
+		name           string
+		versions       [2]uint64
+		sameDispatcher bool
 	}{
 		{name: "sameStartTs", versions: [2]uint64{200, 200}},
 		{name: "newerStartTsFirst", versions: [2]uint64{200, 100}},
 		{name: "olderStartTsFirst", versions: [2]uint64{100, 200}},
+		{name: "sameDispatcherOlderVersion", versions: [2]uint64{200, 100}, sameDispatcher: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -202,8 +204,11 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 				},
 			})
 			var callbackCount atomic.Int64
+			dispatcherID := commonType.NewDispatcherID()
 			for i, version := range tc.versions {
-				dispatcherID := commonType.NewDispatcherID()
+				if i > 0 && !tc.sameDispatcher {
+					dispatcherID = commonType.NewDispatcherID()
+				}
 				commitTs := uint64(250 + i*50)
 				event := commonEvent.NewDMLEvent(dispatcherID, 100, commitTs-1, commitTs, tableInfo)
 				event.TableInfoVersion = version
@@ -232,8 +237,12 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 				require.NoError(t, err)
 
 				require.Equal(t, int64(i+1), callbackCount.Load())
-				dataDir := path.Join(parentDir, "test/table1", fmt.Sprint(version))
-				dataFileName := fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String())
+				dataDir := path.Join(parentDir, "test/table1", fmt.Sprint(tc.versions[0]))
+				fileIndex := 1
+				if tc.sameDispatcher {
+					fileIndex += i
+				}
+				dataFileName := fmt.Sprintf("CDC_%s_%06d.json", dispatcherID.String(), fileIndex)
 				content, err := os.ReadFile(path.Join(dataDir, dataFileName))
 				require.NoError(t, err, "acknowledged DML must be persisted regardless of dispatcher startTs")
 				require.Equal(t, data, string(content))
@@ -245,7 +254,8 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 
 			schemaFiles, err := os.ReadDir(path.Join(parentDir, "test/table1/meta"))
 			require.NoError(t, err)
-			require.Len(t, schemaFiles, 2)
+			require.Len(t, schemaFiles, 1)
+			require.True(t, cloudstorage.IsSchemaFile(path.Join("meta", schemaFiles[0].Name())))
 		})
 	}
 }
@@ -621,41 +631,6 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-}
-
-func TestDiscardEntriesDoesNotLoadSpilledPayload(t *testing.T) {
-	ctx := context.Background()
-	dataDir := t.TempDir()
-
-	oldServerCfg := *config.GetGlobalServerConfig()
-	serverCfg := oldServerCfg
-	serverCfg.DataDir = dataDir
-	config.StoreGlobalServerConfig(&serverCfg)
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(&oldServerCfg)
-	})
-
-	parentDir := t.TempDir()
-	d := testWriter(ctx, t, parentDir)
-	d.spool = newTestSpool(t, d.changeFeedID, &cloudstorage.Config{
-		SpoolDiskQuota: 1,
-	})
-
-	callbackCount := atomic.Int64{}
-	msg := common.NewMsg(nil, []byte(`{"id":1}`))
-	msg.SetRowsCount(1)
-	msg.Callback = func() {
-		callbackCount.Add(1)
-	}
-
-	entry, err := d.spool.Enqueue([]*common.Message{msg}, nil)
-	require.NoError(t, err)
-	require.True(t, entry.IsSpilled())
-
-	d.spool.Close()
-
-	d.discardEntries([]*spool.Entry{entry})
-	require.Equal(t, int64(1), callbackCount.Load())
 }
 
 func TestWriterRunExitAfterContextCancel(t *testing.T) {

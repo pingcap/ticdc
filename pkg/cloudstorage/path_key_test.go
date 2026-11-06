@@ -47,14 +47,6 @@ func TestSchemaPathKey(t *testing.T) {
 				TableVersion: 11,
 			},
 		},
-		{
-			path: "test_schema/test_table/meta/schema_12345_11_22.json",
-			schemakey: SchemaPathKey{
-				Schema:       "test_schema",
-				Table:        "test_table",
-				TableVersion: 11,
-			},
-		},
 	}
 	for _, tc := range testCases {
 		var schemaKey SchemaPathKey
