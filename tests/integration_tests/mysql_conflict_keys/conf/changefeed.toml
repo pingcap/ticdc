@@ -1,0 +1,5 @@
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/mysql_conflict_keys/redo"
+flush-interval = 2000
+meta-flush-interval = 200

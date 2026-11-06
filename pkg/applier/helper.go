@@ -115,22 +115,24 @@ func splitUpdateEvent(
 	deleteEvent := &commonEvent.RedoDMLEvent{
 		PreColumns: updateEvent.PreColumns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			PreColumns:   updateEvent.Row.PreColumns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			PreColumns:         updateEvent.Row.PreColumns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
 
 	insertEvent := &commonEvent.RedoDMLEvent{
 		Columns: updateEvent.Columns,
 		Row: &commonEvent.DMLEventInRedoLog{
-			StartTs:      updateEvent.Row.StartTs,
-			CommitTs:     updateEvent.Row.CommitTs,
-			Table:        updateEvent.Row.Table,
-			Columns:      updateEvent.Row.Columns,
-			IndexColumns: updateEvent.Row.IndexColumns,
+			StartTs:            updateEvent.Row.StartTs,
+			CommitTs:           updateEvent.Row.CommitTs,
+			Table:              updateEvent.Row.Table,
+			Columns:            updateEvent.Row.Columns,
+			IndexColumns:       updateEvent.Row.IndexColumns,
+			IndexColumnLengths: updateEvent.Row.IndexColumnLengths,
 		},
 	}
 
