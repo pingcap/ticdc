@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
+	redoCommon "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -44,9 +44,15 @@ func newMetricCollector(changefeedID common.ChangeFeedID) *metricCollector {
 		rowTotalCount:       metrics.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
 		rowWriteLogDuration: metrics.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoRowLogFileType),
 
+<<<<<<< HEAD
 		ddlTotalCount:       metrics.RedoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 		ddlWriteLogDuration: metrics.RedoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
 		ddlWorkerBusyRatio:  metrics.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+=======
+		ddlTotalCount:       redoTotalRowsCountGauge.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+		ddlWriteLogDuration: redoWriteLogDurationHistogram.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+		ddlWorkerBusyRatio:  redoCommon.RedoWorkerBusyRatio.WithLabelValues(keyspace, name, redo.RedoDDLLogFileType),
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663))
 	}
 }
 
@@ -70,5 +76,5 @@ func (m *metricCollector) close() {
 		metrics.RedoWriteLogDurationHistogram.DeleteLabelValues(m.keyspace, m.name, logType)
 		metrics.RedoTotalRowsCountGauge.DeleteLabelValues(m.keyspace, m.name, logType)
 	}
-	metrics.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
+	redoCommon.RedoWorkerBusyRatio.DeleteLabelValues(m.keyspace, m.name, redo.RedoDDLLogFileType)
 }
