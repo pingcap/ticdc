@@ -753,9 +753,10 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 								if !ok {
 									break
 								}
-								if row.RowType == common.RowTypeDelete {
+								switch row.RowType {
+								case common.RowTypeDelete:
 									deleted[row.PreRow.GetInt64(0)]++
-								} else if row.RowType == common.RowTypeInsert {
+								case common.RowTypeInsert:
 									inserted[row.Row.GetInt64(0)]++
 								}
 							}
@@ -939,7 +940,7 @@ func TestEventScannerCleansSameCommitDDLSpillBeforeFollowingTxn(t *testing.T) {
 			}
 			var allEvents []event.Event
 			completed := false
-			for attempt := 0; attempt < 10; attempt++ {
+			for attempt := range 10 {
 				ok, request := broker.getScanTaskRequest(disp)
 				require.True(t, ok)
 				_, events, progress, interrupted, err := scanner.scan(context.Background(), disp, request, limit)
@@ -979,9 +980,10 @@ func TestEventScannerCleansSameCommitDDLSpillBeforeFollowingTxn(t *testing.T) {
 							if !ok {
 								break
 							}
-							if row.RowType == common.RowTypeDelete {
+							switch row.RowType {
+							case common.RowTypeDelete:
 								deleted[row.PreRow.GetInt64(0)]++
-							} else if row.RowType == common.RowTypeInsert {
+							case common.RowTypeInsert:
 								inserted[row.Row.GetInt64(0)]++
 							}
 						}
