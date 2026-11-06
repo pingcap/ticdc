@@ -698,8 +698,16 @@ func TestEventScannerSpillsSplitUKUpdateInLargeTxn(t *testing.T) {
 }
 
 func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
-	for _, failure := range []string{"append", "iterator close"} {
-		t.Run(failure, func(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		failure       string
+		sameCommitDDL bool
+	}{
+		{name: "append", failure: "append"},
+		{name: "iterator close", failure: "iterator close"},
+		{name: "same-commit DDL iterator close", failure: "iterator close", sameCommitDDL: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			setLargeTxnThresholdForTest(t, 0)
 			helper := event.NewEventTestHelper(t)
 			defer helper.Close()
@@ -726,7 +734,11 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 			disp := newDispatcherStat(info, 1, 1, nil, status)
 			makeDispatcherReady(disp)
 			require.NoError(t, broker.addDispatcher(info))
-			broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(info.GetTableSpan().TableID, *ddl)
+			createDDL := *ddl
+			if tc.sameCommitDDL {
+				createDDL.FinishedTs = updates[0].StartTs
+			}
+			broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(info.GetTableSpan().TableID, createDDL)
 			require.NoError(t, store.AppendEvents(info.GetID(), updates[0].CRTs, updates...))
 			disp.receivedResolvedTs.Store(updates[0].CRTs)
 			disp.eventStoreCommitTs.Store(updates[0].CRTs)
@@ -736,6 +748,7 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 			limit := scanLimit{maxDMLBytes: 1, isInUnitTest: true}
 			deleted := make(map[int64]int)
 			inserted := make(map[int64]int)
+			sameCommitDDLCount := 0
 			scan := func() (scanProgress, bool, error) {
 				request, ok := disp.getScanRequest()
 				require.True(t, ok)
@@ -743,6 +756,9 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 					context.Background(), disp, request, limit)
 				if err == nil {
 					for _, e := range events {
+						if tc.sameCommitDDL && e.GetType() == event.TypeDDLEvent && e.GetCommitTs() == updates[0].CRTs {
+							sameCommitDDLCount++
+						}
 						batch, ok := e.(*event.BatchDMLEvent)
 						if !ok {
 							continue
@@ -780,7 +796,13 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 			originalSize, err := state.spill.file.Size()
 			require.NoError(t, err)
 
-			if failure == "append" {
+			if tc.sameCommitDDL {
+				// Reach the transaction boundary and same-commit DDL in the failing scan.
+				broker.schemaStore.(*mockSchemaStore).AppendDDLEvent(info.GetTableSpan().TableID,
+					event.DDLEvent{FinishedTs: updates[0].CRTs, TableInfo: ddl.TableInfo})
+				limit.maxDMLBytes = 1 << 30
+			}
+			if tc.failure == "append" {
 				require.NoError(t, state.spill.Close())
 			} else {
 				scanner.eventGetter = &closeOnceEventGetter{
@@ -802,6 +824,9 @@ func TestEventScannerKeepsPublishedSpillOnOriginalScanRetry(t *testing.T) {
 			require.Nil(t, disp.getLargeTxnState())
 			require.Equal(t, map[int64]int{1: 1, 2: 1, 3: 1}, deleted)
 			require.Equal(t, map[int64]int{1: 1, 2: 1, 3: 1}, inserted)
+			if tc.sameCommitDDL {
+				require.Equal(t, 1, sameCommitDDLCount)
+			}
 		})
 	}
 }
