@@ -325,6 +325,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 	c.dispatcherMap.Delete(target.GetId())
+	eventCollectorRegisteredDispatcherCount.Dec()
 
 	v, ok := c.changefeedMap.Load(changefeedID.ID())
 	if !ok {
