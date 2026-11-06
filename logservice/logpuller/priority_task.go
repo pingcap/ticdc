@@ -13,17 +13,35 @@
 
 package logpuller
 
-import "github.com/pingcap/kvproto/pkg/cdcpb"
+// ScanPriorityLevel controls TiCDC's local region scheduling and admission.
+type ScanPriorityLevel uint8
 
-func normalizeScanPriority(priority cdcpb.ScanPriority) cdcpb.ScanPriority {
-	if priority == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH {
-		return cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+const (
+	ScanPriorityUnknown ScanPriorityLevel = iota
+	ScanPriorityLow
+	ScanPriorityHigh
+)
+
+func (priority ScanPriorityLevel) String() string {
+	switch priority {
+	case ScanPriorityHigh:
+		return "SCAN_PRIORITY_HIGH"
+	case ScanPriorityLow:
+		return "SCAN_PRIORITY_LOW"
+	default:
+		return "SCAN_PRIORITY_UNKNOWN"
 	}
-	return cdcpb.ScanPriority_SCAN_PRIORITY_LOW
 }
 
-func isHighScanPriority(priority cdcpb.ScanPriority) bool {
-	return normalizeScanPriority(priority) == cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+func normalizeScanPriority(priority ScanPriorityLevel) ScanPriorityLevel {
+	if priority == ScanPriorityHigh {
+		return ScanPriorityHigh
+	}
+	return ScanPriorityLow
+}
+
+func isHighScanPriority(priority ScanPriorityLevel) bool {
+	return normalizeScanPriority(priority) == ScanPriorityHigh
 }
 
 type regionPriorityTask struct {
@@ -42,7 +60,7 @@ func newRegionPriorityTask(regionInfo regionInfo, sequence uint64) *regionPriori
 	}
 }
 
-func (pt *regionPriorityTask) priority() cdcpb.ScanPriority {
+func (pt *regionPriorityTask) priority() ScanPriorityLevel {
 	return normalizeScanPriority(pt.regionInfo.scanPriority)
 }
 

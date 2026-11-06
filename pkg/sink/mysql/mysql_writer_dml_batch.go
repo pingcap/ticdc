@@ -65,7 +65,8 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 
 // generateNormalSQL converts a single DMLEvent into SQL statements, respecting safe mode.
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
-	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+	// Only events committed strictly after ReplicatingTs can leave replay safe mode.
+	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
@@ -152,7 +153,7 @@ func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]st
 		if event.Len() == 0 {
 			continue
 		}
-		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 		sqls, vals, rowTypes := w.generateSQLForSingleEvent(event, inSafeMode)
 		queries = append(queries, sqls...)
 		args = append(args, vals...)
@@ -195,7 +196,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 		return []string{}, [][]interface{}{}, []common.RowType{}
 	}
 
-	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || events[0].CommitTs < events[0].ReplicatingTs
+	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || events[0].CommitTs <= events[0].ReplicatingTs
 
 	if len(events) == 1 {
 		// only one event, we don't need to do batch
@@ -586,6 +587,12 @@ func (w *Writer) groupRowsByType(
 				args,
 				eventTableInfo,
 				nil, nil)
+			// Include both row images in the size estimate used to limit batch updates.
+			var approximateSize int64
+			for i := 0; i < row.Row.Len(); i++ {
+				approximateSize += int64(len(row.PreRow.GetRaw(i)) + len(row.Row.GetRaw(i)))
+			}
+			newUpdateRow.SetApproximateDataSize(approximateSize)
 			updateRow = append(updateRow, newUpdateRow)
 			if len(updateRow) >= w.cfg.MaxMultiUpdateRowCount {
 				updateRows = append(updateRows, updateRow)

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -30,11 +31,12 @@ import (
 
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
+	statistics   *statistics.Statistics
 	client       *kgo.Client
 	closed       atomic.Bool
 }
 
-func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
+func newFranzFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stats *statistics.Statistics) (Factory, error) {
 	adminOpts, err := clientOptions(ctx, o)
 	if err != nil {
 		return nil, err
@@ -88,6 +90,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 		zap.Duration("writeTimeout", o.WriteTimeout))
 	return &franzFactory{
 		changefeedID: changefeedID,
+		statistics:   stats,
 		client:       client,
 	}, nil
 }
@@ -106,9 +109,10 @@ func (f *franzFactory) SyncProducer(context.Context) (SyncProducer, error) {
 	}, nil
 }
 
-func (f *franzFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
+func (f *franzFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) {
 	return &asyncProducer{
 		client:       f.client,
+		statistics:   f.statistics,
 		changefeedID: f.changefeedID,
 		resultCh:     make(chan asyncProduceResult, 1),
 	}, nil

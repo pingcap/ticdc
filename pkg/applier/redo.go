@@ -173,6 +173,9 @@ func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
 
 func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	defer func() {
+		if err := ra.updateSplitter.tempStorage.close(); err != nil {
+			log.Warn("close redo transaction temporary files failed", zap.Error(err))
+		}
 		if err := ra.spillStore.Cleanup(); err != nil {
 			log.Warn("cleanup redo spill store failed", zap.Error(err))
 		}

@@ -224,7 +224,7 @@ func TestSyncpointReclamationRestoresLaggingScanQuota(t *testing.T) {
 				},
 			}
 			slowProgress := make(chan struct{}, 1)
-			slowMode := int64(common.DefaultMode)
+			slowMode := common.DefaultMode
 			if withRedo {
 				slowMode = common.RedoMode
 			}

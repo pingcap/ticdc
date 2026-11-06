@@ -23,23 +23,23 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
 	mysqlmock "github.com/pingcap/ticdc/pkg/sink/mysql/mock"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -63,8 +63,8 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.BatchDMLEnable = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
@@ -86,8 +86,8 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	statistics := metrics.NewStatistics(changefeedID, common.DefaultKeyspaceID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	stats := statistics.New(changefeedID, common.DefaultKeyspaceID)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, stats, nil)
 	t.Cleanup(writer.Close)
 
 	if kerneltype.IsNextGen() {
@@ -494,7 +494,7 @@ func TestMysqlWriterExecRecoverSchemaDDL(t *testing.T) {
 	defer db.Close()
 
 	ddlEvent := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionRecoverSchema),
+		Type:       byte(model.ActionRecoverSchema),
 		SchemaName: "test",
 		Query:      "FLASHBACK DATABASE `test`",
 	}
@@ -652,7 +652,7 @@ func TestWaitAsyncDDLDoneUsesParameters(t *testing.T) {
 			writer.cfg.ServerInfo = version.ParseServerInfo(tc.serverVersion)
 
 			event := &commonEvent.DDLEvent{
-				Type: byte(timodel.ActionCreateTable),
+				Type: byte(model.ActionCreateTable),
 				BlockedTables: &commonEvent.InfluencedTables{
 					InfluenceType: commonEvent.InfluenceTypeNormal,
 					TableIDs:      []int64{0},
@@ -688,7 +688,7 @@ func TestGetDDLStateFromTiDBUsesParameters(t *testing.T) {
 
 	state, err := getDDLStateFromTiDB(context.Background(), db, ddl, createTime)
 	require.NoError(t, err)
-	require.Equal(t, timodel.JobStateDone, state)
+	require.Equal(t, model.JobStateDone, state)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -703,7 +703,7 @@ func TestExecDDLUsesControlAsyncDBOnlyForTiDBAddIndex(t *testing.T) {
 	writer.cfg.AsyncDDLTimeout = "30m"
 
 	addIndexEvent := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionAddIndex),
+		Type:       byte(model.ActionAddIndex),
 		Query:      "alter table t add index idx_name(name);",
 		SchemaName: "test",
 		TableName:  "t",
@@ -720,7 +720,7 @@ func TestExecDDLUsesControlAsyncDBOnlyForTiDBAddIndex(t *testing.T) {
 	require.NoError(t, controlMock.ExpectationsWereMet())
 
 	addColumnEvent := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionAddColumn),
+		Type:       byte(model.ActionAddColumn),
 		Query:      "alter table t add column age int;",
 		SchemaName: "test",
 		TableName:  "t",
@@ -748,7 +748,7 @@ func TestExecDDLUsesControlDBForMySQLAddIndex(t *testing.T) {
 	writer.cfg.AsyncDDLTimeout = "30m"
 
 	addIndexEvent := &commonEvent.DDLEvent{
-		Type:       byte(timodel.ActionAddIndex),
+		Type:       byte(model.ActionAddIndex),
 		Query:      "alter table t add index idx_name(name);",
 		SchemaName: "test",
 		TableName:  "t",
@@ -891,7 +891,7 @@ func TestWriterAsyncDDL(t *testing.T) {
 		require.NotNil(t, addIndexjob)
 
 		addIndexddlEvent := &commonEvent.DDLEvent{
-			Type:       byte(timodel.ActionAddIndex),
+			Type:       byte(model.ActionAddIndex),
 			Query:      addIndexjob.Query,
 			SchemaName: addIndexjob.SchemaName,
 			TableName:  addIndexjob.TableName,

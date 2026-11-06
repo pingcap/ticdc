@@ -69,34 +69,30 @@ func prepareRegionForSendTest(region regionInfo) regionInfo {
 	return region
 }
 
-func TestCreateRegionRequestScanPriority(t *testing.T) {
+func TestConvertScanPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		priority cdcpb.ScanPriority
+		priority ScanPriorityLevel
 		expected cdcpb.ScanPriority
 	}{
 		{
 			name:     "high",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
+			priority: ScanPriorityHigh,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_HIGH,
 		},
 		{
 			name:     "low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
+			priority: ScanPriorityLow,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 		{
 			name:     "unknown defaults to low",
-			priority: cdcpb.ScanPriority_SCAN_PRIORITY_UNKNOWN,
+			priority: ScanPriorityUnknown,
 			expected: cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
-			region.scanPriority = tc.priority
-
-			req := createRegionRequest(1, region)
-			require.Equal(t, tc.expected, req.GetScanPriority())
+			require.Equal(t, tc.expected, convertScanPriority(tc.priority))
 		})
 	}
 }

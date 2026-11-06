@@ -265,7 +265,7 @@ func TestRegionFailureHandlerRoutesErrors(t *testing.T) {
 			region := createFailureRecoveryTestRegion(t, SubscriptionID(1), 1)
 			// Keep this test focused on error routing. High priority bypasses the
 			// scan-priority clock lookup when a range retry is constructed.
-			region.scanPriority = cdcpb.ScanPriority_SCAN_PRIORITY_HIGH
+			region.scanPriority = ScanPriorityHigh
 			err := handler.handleError(t.Context(), newRegionErrorInfo(region, testCase.err))
 			if testCase.expectedError {
 				require.Error(t, err)
