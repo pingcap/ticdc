@@ -153,7 +153,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				tableVersion, hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
+				tableVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -161,18 +161,6 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
 					return err
-				}
-				if hasNewerSchemaVersion {
-					d.discardEntries(tableTask.entries)
-					tableTask.entries = nil
-					log.Warn("ignore messages belonging to an old schema version",
-						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
-						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-						zap.String("table", table.TableNameWithPhysicTableID.Table),
-						zap.Uint64("version", table.TableInfoVersion),
-						zap.Int("shardID", d.shardID))
-					continue
 				}
 				table.TableInfoVersion = tableVersion
 
@@ -215,12 +203,6 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			flushDuration := time.Since(start)
 			flushTimeSlice += flushDuration
 		}
-	}
-}
-
-func (d *writer) discardEntries(entries []*spool.Entry) {
-	for _, entry := range entries {
-		d.spool.Discard(entry)
 	}
 }
 

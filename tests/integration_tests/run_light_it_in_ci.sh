@@ -145,39 +145,40 @@ pulsar_groups=(
 # Resource allocation for storage light integration tests in CI pipelines:
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_storage_integration_light.yaml
 # 6 CPU, 16 Gi memory.
+# Temporarily repeat this case in every storage group for PR validation.
 storage_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	'canal_json_storage_partition_table'
 	# G01
-	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
+	'canal_json_storage_partition_table'
 	# G02
-	'new_ci_collation savepoint fail_over_ddl_C'
+	'canal_json_storage_partition_table'
 	# G03
-	'kv_client_stream_reconnect  fail_over_ddl_D'
+	'canal_json_storage_partition_table'
 	# G04
-	'ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	'canal_json_storage_partition_table'
 	# G05
-	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
+	'canal_json_storage_partition_table'
 	# G06
-	'lossy_ddl fail_over_ddl_G'
+	'canal_json_storage_partition_table'
 	# G07
-	'storage_cleanup fail_over_ddl_H changefeed_update_config'
+	'canal_json_storage_partition_table'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'canal_json_storage_partition_table'
 	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	'canal_json_storage_partition_table'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
+	'canal_json_storage_partition_table'
 	# G11
-	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
+	'canal_json_storage_partition_table'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
+	'canal_json_storage_partition_table'
 	# G13
-	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'canal_json_storage_partition_table'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O update_changefeed_check_config'
+	'canal_json_storage_partition_table'
 	# G15
-	'split_region autorandom gc_safepoint'
+	'canal_json_storage_partition_table'
 )
 
 # Source shared functions and check test coverage

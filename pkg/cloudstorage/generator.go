@@ -158,12 +158,9 @@ type VersionedTableName struct {
 	// Source:
 	// 1. DDL finishedTs for schema-changing DDLs.
 	// 2. Checkpoint/startTs during dispatcher recover/move.
-	// Usage:
-	// 1. CheckOrWriteSchema uses it to detect whether incoming DML is older than
-	//    the latest schema version already stored.
-	// 2. If no exact schema file exists but an equivalent schema checksum exists,
-	//    storage sink may reuse an older/newer existing schema version as the
-	//    output directory version via versionMap.
+	// If no exact schema file exists but an equivalent schema checksum exists,
+	// storage sink may reuse an older/newer existing schema version as the
+	// output directory version via versionMap.
 	TableInfoVersion uint64
 	// DispatcherID identifies the dispatcher producing this table stream.
 	// It participates in index/data file names when table-across-nodes is enabled.
@@ -217,18 +214,16 @@ func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
 }
 
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
-// The first return value is the schema version that must be used in later
-// data/index paths. The second return value is true when storage already has a
-// newer schema with the same checksum, so the caller should discard the old DML
-// batch. Storage errors are returned from checking, walking, or writing schema
-// files.
+// It returns the effective schema version to use in later data/index paths.
+// An existing schema with the same checksum can be reused regardless of whether
+// its version is older or newer than the input version.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
 	tableInfo *commonType.TableInfo,
-) (uint64, bool, error) {
+) (uint64, error) {
 	if version, ok := f.versionMap[table]; ok {
-		return version, false, nil
+		return version, nil
 	}
 
 	keyspace := f.changefeedID.Keyspace()
@@ -247,11 +242,11 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	schemaFilePath := schemaFile.Path(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	exist, err := f.storage.FileExists(ctx, schemaFilePath)
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
-		return table.TableInfoVersion, false, nil
+		return table.TableInfoVersion, nil
 	}
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaFileName(schemaFilePath)
@@ -263,7 +258,6 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	}
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
-	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
 		ObjPrefix: "schema_",
@@ -273,19 +267,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			return nil
 		}
 		version, _ := mustParseSchemaFileName(path)
-		if version > table.TableInfoVersion {
-			hasNewerSchemaVersion = true
-		}
 		if version > lastVersion {
 			lastVersion = version
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, false, err
-	}
-	if hasNewerSchemaVersion {
-		return table.TableInfoVersion, true, nil
+		return 0, err
 	}
 
 	// Case 2: the table meta path is not empty.
@@ -299,7 +287,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		// record the last version of the schema file.
 		// we don't need to write schema file to external storage again.
 		f.versionMap[table] = lastVersion
-		return lastVersion, false, nil
+		return lastVersion, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:
@@ -314,13 +302,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	if err := writelease.WaitForWrite(ctx, f.writeGate); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if err := f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	f.versionMap[table] = table.TableInfoVersion
-	return table.TableInfoVersion, false, nil
+	return table.TableInfoVersion, nil
 }
 
 // SetClock sets the clock used by GenerateDateStr. It is used by tests.

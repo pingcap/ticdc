@@ -1,0 +1,11 @@
+[filter]
+rules = ["storage_split_span_schema.t"]
+
+[sink]
+protocol = "canal-json"
+date-separator = "none"
+
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 1
+region-count-per-span = 1
