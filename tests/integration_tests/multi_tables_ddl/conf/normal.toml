@@ -15,7 +15,13 @@ rules = [
     "multi_tables_ddl_test.rename_mix_normal_2_done",
     "multi_tables_ddl_test.rename_mix_part_2_done",
     "multi_tables_ddl_test.finish_mark",
+    "view_ddl_test.*",
+    "view_recover_test.*",
 ]
+
+[[filter.event-filters]]
+matcher = ["view_ddl_test.rename_view_ignored_table_*", "view_ddl_test.rename_view_ignored_view_*"]
+ignore-event = ["rename table"]
 
 [sink.csv]
 include-commit-ts = true
