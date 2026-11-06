@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -28,6 +29,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func newTestStatistics(t *testing.T) *statistics.Statistics {
+	stats := statistics.New(common.NewChangefeedID4Test(common.DefaultKeyspaceName, t.Name()), common.DefaultKeyspaceID)
+	t.Cleanup(stats.Close)
+	return stats
+}
 
 func TestAsyncSendClosed(t *testing.T) {
 	producer := &asyncProducer{}
@@ -73,6 +80,7 @@ func TestAsyncCallbackStopsWithClient(t *testing.T) {
 	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
 	require.NoError(t, err)
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-close"),
 		resultCh:     make(chan asyncProduceResult, 1),
@@ -122,6 +130,7 @@ func TestAsyncCallbackOnce(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-success"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
@@ -167,6 +176,7 @@ func TestAsyncCallbackIsolation(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-callback-isolation"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),
@@ -227,6 +237,7 @@ func TestAsyncProduceFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	producer := &asyncProducer{
+		statistics:   newTestStatistics(t),
 		client:       client,
 		changefeedID: common.NewChangefeedID4Test(common.DefaultKeyspaceName, "async-error"),
 		resultCh:     make(chan asyncProduceResult, producerMaxBufferedRecords),

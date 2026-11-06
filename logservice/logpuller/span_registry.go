@@ -15,16 +15,15 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
@@ -75,7 +74,7 @@ type subscribedSpan struct {
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
 	// baseScanPriority is the minimum priority for every Region in this subscription.
-	baseScanPriority cdcpb.ScanPriority
+	baseScanPriority ScanPriorityLevel
 	priorityPolicy   scanPriorityPolicy
 }
 
@@ -144,7 +143,7 @@ func newSubscribedSpan(
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
 			resolveLockRateLimiter.cancel(key)
-			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
+			subscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
 	return rt
@@ -190,7 +189,21 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	res := span.rangeLock.IterAll(span.tryResolveLock)
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Any("ranges", res))
+		zap.Int("lockedRegionCount", res.LockedRegionCount),
+		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+		zap.Any("fastestRegion", res.FastestRegion),
+		zap.Any("slowestRegion", res.SlowestRegion))
+}
+
+// formatUnlockedRanges formats unlocked ranges for logging. The span keys may
+// contain row handles, so they are redacted according to the log redaction mode.
+func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
+	res := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		res = append(res, fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, resolvedTs: %d",
+			r.Span.TableID, util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+	}
+	return res
 }
 
 func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
@@ -238,14 +251,14 @@ func (r *spanRegistry) UpdateMetrics() {
 		}
 	}
 	r.RUnlock()
-	metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
+	subscriptionClientSubscribedRegionCount.Set(float64(count))
 
 	if pullerMinResolvedTs != 0 {
 		pdTime := r.pdClock.CurrentTime()
 		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
 		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 		if resolvedTsLag > 0 {
-			metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
+			logPullerResolvedTsLag.Set(resolvedTsLag)
 		}
 	}
 }
@@ -346,7 +359,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()

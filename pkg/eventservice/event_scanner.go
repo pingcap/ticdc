@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -26,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -143,7 +143,7 @@ func (s *eventScanner) scan(
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}
-	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
+	eventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
 	scanCtx.merger = newEventMerger(events)
 	scanCtx.processor = newDMLProcessor(
@@ -576,10 +576,10 @@ func (s *session) isContextDone() bool {
 
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
-	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
-	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	metrics.EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
+	eventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
+	eventServiceScannedCount.Observe(float64(s.scannedEntryCount))
+	eventServiceScannedTxnCount.Observe(float64(s.dmlCount))
+	eventServiceScannedDMLSize.Observe(float64(s.eventBytes))
 }
 
 func (s *session) appendEvents(events []event.Event) {
@@ -838,6 +838,12 @@ func newDMLProcessor(
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true

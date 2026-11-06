@@ -20,14 +20,16 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -37,6 +39,7 @@ type newPulsarDMLProducerFunc func(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	stats *statistics.Statistics,
 ) (dmlProducer, error)
 
 type newPulsarDDLProducerFunc func(
@@ -52,7 +55,7 @@ type sink struct {
 	ddlProducer ddlProducer
 
 	comp       component
-	statistics *metrics.Statistics
+	statistics *statistics.Statistics
 
 	protocol      config.Protocol
 	partitionRule helper.DDLDispatchRule
@@ -101,8 +104,9 @@ func newPulsarDMLProducer(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
 	failpointCh chan error,
+	stats *statistics.Statistics,
 ) (dmlProducer, error) {
-	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh, stats)
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +138,8 @@ func newWithComponent(
 	var (
 		dmlProducer dmlProducer
 		ddlProducer ddlProducer
-		statistics  *metrics.Statistics
 	)
+	stats := statistics.New(changefeedID, keyspaceID)
 	defer func() {
 		if err != nil {
 			if ddlProducer != nil {
@@ -144,16 +148,13 @@ func newWithComponent(
 			if dmlProducer != nil {
 				dmlProducer.close()
 			}
-			if statistics != nil {
-				statistics.Close()
-			}
+			stats.Close()
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics = metrics.NewStatistics(changefeedID, keyspaceID, "pulsar")
-	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh, stats)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +176,7 @@ func newWithComponent(
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		comp:          comp,
-		statistics:    statistics,
+		statistics:    stats,
 		isNormal:      atomic.NewBool(true),
 		ctx:           ctx,
 	}, nil
@@ -260,16 +261,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err := writelease.WaitForWrite(s.ctx, s.writeGate); err != nil {
 			return err
 		}
-		ddlType := e.GetDDLType().String()
-		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
-			})
-		} else {
-			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
-			})
-		}
+		err = s.statistics.RecordDDLExecution(e.GetDDLType().String(), func() error {
+			if s.partitionRule == helper.PartitionAll {
+				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
+			}
+			return s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
+		})
 		if err != nil {
 			return err
 		}
@@ -312,9 +309,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case ts, ok := <-s.checkpointTsChan:
 			if !ok {
-				log.Info("pulsar sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 
@@ -411,9 +405,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		default:
 			event, ok := s.eventChan.Get()
 			if !ok {
-				log.Info("pulsar sink event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			schema := event.TableInfo.GetSchemaName()
@@ -492,9 +483,6 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 	default:
 		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
-			log.Info("pulsar sink row event channel closed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
 		buffer = buffer[:0]
@@ -523,9 +511,6 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		default:
 			event, ok := s.rowChan.Get()
 			if !ok {
-				log.Info("pulsar sink row event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
@@ -547,9 +532,6 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case future, ok := <-outCh:
 			if !ok {
-				log.Info("pulsar sink encoder group output channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
@@ -560,13 +542,9 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 				start := time.Now()
-				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
-						return 0, 0, err
-					}
-					return message.GetRowsCount(), int64(message.Length()), nil
-				}); err != nil {
+				message.SetPartitionKey(future.Key.PartitionKey)
+				helper.TrackDMLMessage(message, s.statistics)
+				if err = s.dmlProducer.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 					return errors.Trace(err)
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
@@ -591,6 +569,11 @@ func (s *sink) Close() {
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+
+	labels := prometheus.Labels{"changefeed": s.changefeedID.String()}
+	publishedDDLSchemaTableCount.DeletePartialMatch(labels)
+	publishedDMLSchemaTableCount.DeletePartialMatch(labels)
+	publishedMessageTypeResolvedCount.DeletePartialMatch(labels)
 }
 
 func (s *sink) BatchCount() int {

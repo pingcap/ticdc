@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -197,6 +196,23 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	closedEpoch, closed := m.closedMaintainerEpochs[cfId]
 	m.mutex.Unlock()
 
+	if exists && manager.IsClosingOrClosed() {
+		manager.MaintainerFenceMu.Lock()
+		if !manager.CanUpdateMaintainer(from, maintainerEpoch) || !manager.TryClose(false) {
+			manager.MaintainerFenceMu.Unlock()
+			// Leave bootstrap pending until the old manager has released its resources.
+			return nil
+		}
+		m.mutex.Lock()
+		delete(m.dispatcherManagers, cfId)
+		m.recordClosedMaintainerEpochLocked(cfId, manager.GetMaintainerEpoch(), false)
+		closedEpoch, closed = m.closedMaintainerEpochs[cfId]
+		m.mutex.Unlock()
+		manager.MaintainerFenceMu.Unlock()
+		dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+		exists = false
+	}
+
 	var err error
 	if !exists {
 		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
@@ -263,7 +279,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		delete(m.closedMaintainerEpochs, cfId)
 		m.mutex.Unlock()
-		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
+		dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	}
 
 	manager.MaintainerFenceMu.Lock()
@@ -668,10 +684,13 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		decGauge := false
 		manager.MaintainerFenceMu.Lock()
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
+			// Preserve removal tombstones if bootstrap later retires this manager.
+			m.mutex.Lock()
+			m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
+			m.mutex.Unlock()
 			if closed := manager.TryClose(req.Removed); closed {
 				m.mutex.Lock()
 				delete(m.dispatcherManagers, cfId)
-				m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 				m.mutex.Unlock()
 				decGauge = true
 				response.Success = true
@@ -691,7 +710,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		}
 		manager.MaintainerFenceMu.Unlock()
 		if decGauge {
-			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+			dispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
 		}
 	}
 

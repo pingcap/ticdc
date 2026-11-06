@@ -19,6 +19,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/statistics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/rcrowley/go-metrics"
@@ -28,6 +29,7 @@ import (
 
 type saramaFactory struct {
 	changefeedID   common.ChangeFeedID
+	statistics     *statistics.Statistics
 	option         *options
 	metricRegistry metrics.Registry
 }
@@ -35,7 +37,7 @@ type saramaFactory struct {
 func (*saramaFactory) Close() {}
 
 // newSaramaFactory constructs a Factory with sarama implementation.
-func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID) (Factory, error) {
+func newSaramaFactory(ctx context.Context, o *options, changefeedID common.ChangeFeedID, stats *statistics.Statistics) (Factory, error) {
 	start := time.Now()
 	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start)
@@ -76,6 +78,7 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 
 	return &saramaFactory{
 		changefeedID:   changefeedID,
+		statistics:     stats,
 		option:         o,
 		metricRegistry: metrics.NewRegistry(),
 	}, nil
@@ -174,6 +177,7 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 	}
 	return &saramaAsyncProducer{
 		client:       client,
+		statistics:   f.statistics,
 		producer:     p,
 		changefeedID: f.changefeedID,
 		closed:       atomic.NewBool(false),

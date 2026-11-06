@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -227,4 +228,30 @@ func TestRawKVEntry_IsUpdate(t *testing.T) {
 		}
 		require.False(t, entry.IsUpdate())
 	})
+}
+
+func TestRawKVEntryStringRedaction(t *testing.T) {
+	original := errors.RedactLogEnabled.Load()
+	defer errors.RedactLogEnabled.Store(original)
+
+	entry := &RawKVEntry{
+		OpType:   OpTypePut,
+		Key:      []byte("key-secret"),
+		Value:    []byte("value-secret"),
+		OldValue: []byte("old-secret"),
+		StartTs:  1,
+		CRTs:     2,
+		RegionID: 3,
+	}
+
+	errors.RedactLogEnabled.Store("OFF")
+	require.Equal(t, "OpType: 1, Key: key-secret, Value: value-secret, OldValue: old-secret, "+
+		"StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+
+	errors.RedactLogEnabled.Store("ON")
+	require.Equal(t, "OpType: 1, Key: ?, Value: ?, OldValue: ?, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
+
+	errors.RedactLogEnabled.Store("MARKER")
+	require.Equal(t, "OpType: 1, Key: ‹key-secret›, Value: ‹value-secret›, "+
+		"OldValue: ‹old-secret›, StartTs: 1, CRTs: 2, RegionID: 3", entry.String())
 }
