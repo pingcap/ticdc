@@ -25,6 +25,12 @@ type (
 	ErrCode      = perrors.ErrCode
 )
 
+const (
+	RedactLogEnable  = perrors.RedactLogEnable
+	RedactLogDisable = perrors.RedactLogDisable
+	RedactLogMarker  = perrors.RedactLogMarker
+)
+
 var (
 	Is               = errors.Is
 	As               = errors.As

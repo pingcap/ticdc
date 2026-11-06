@@ -61,6 +61,8 @@ function run() {
    cert-allowed-cn = [\"fake_cn\"]
    client-user-required = true
    client-allowed-user = [\"ticdc\"]
+  [debug]
+   enable-kafka-franz-go = true
   " >$WORK_DIR/server.toml
 	run_cdc_server \
 		--workdir $WORK_DIR \
