@@ -1,13 +1,14 @@
-package main
+package writer
 
 import (
 	"cmp"
 	"slices"
 
+	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
@@ -30,7 +31,7 @@ func (noopMerger) sequential() bool {
 }
 
 type csvMerger struct {
-	memory *memoryBudget
+	memory *budget.Budget
 	sort   bool
 }
 
@@ -40,9 +41,7 @@ func (m *csvMerger) sequential() bool {
 
 func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	if m.sort {
-		slices.SortStableFunc(items, func(x, y *dmlWrite) int {
-			return cmp.Or(cmp.Compare(x.dml.CommitTs, y.dml.CommitTs), cmp.Compare(x.dml.RowTypes[0], y.dml.RowTypes[0]))
-		})
+		slices.SortStableFunc(items, compareCSVRows)
 	}
 	for _, item := range items {
 		item.sequential = true
@@ -128,7 +127,7 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	return prepared
 }
 
-func newRowMerger(cfg *codecCommon.Config, memory *memoryBudget) rowMerger {
+func newRowMerger(cfg *common.Config, memory *budget.Budget) rowMerger {
 	if cfg.Protocol != config.ProtocolCsv {
 		return noopMerger{}
 	}
@@ -136,4 +135,8 @@ func newRowMerger(cfg *codecCommon.Config, memory *memoryBudget) rowMerger {
 		memory: memory,
 		sort:   cfg.OutputOldValue && cfg.IncludeCommitTs,
 	}
+}
+
+func compareCSVRows(x, y *dmlWrite) int {
+	return cmp.Or(cmp.Compare(x.dml.CommitTs, y.dml.CommitTs), cmp.Compare(x.dml.RowTypes[0], y.dml.RowTypes[0]))
 }

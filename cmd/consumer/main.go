@@ -54,7 +54,9 @@ func newCommand() *cobra.Command {
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			return start(command.Context(), options)
+			ctx := command.Context()
+			c := newConsumer(ctx, options)
+			return c.start(ctx)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -68,13 +70,4 @@ func newCommand() *cobra.Command {
 	flags.StringVar(&options.logFile, "log-file", "cdc_consumer.log", "log file path")
 	flags.BoolVar(&options.enableProfiling, "enable-profiling", false, "enable pprof on "+profileAddress)
 	return command
-}
-
-func start(ctx context.Context, options *options) error {
-	ctx, cancel := context.WithCancel(ctx)
-	c := newConsumer(ctx, options)
-	err := c.start(ctx)
-	cancel()
-	c.stop()
-	return err
 }

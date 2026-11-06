@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package source
 
 import (
 	"context"
 	"encoding/json"
 	"io"
-	"iter"
+	"io/fs"
 	"maps"
-	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,24 +30,24 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
-	putil "github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-const storageScanInterval = 2 * time.Second
+const (
+	storageScanInterval = 2 * time.Second
+	storageScanPageSize = 1000
+)
 
 type storageMetadata struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
@@ -77,14 +79,14 @@ type storageReader struct {
 	tableIDs         map[storageTableKey]int64
 	nextTableID      int64
 	storage          storeapi.Storage
-	memory           *memoryBudget
+	memory           *budget.Budget
 	continuing       atomic.Bool
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
 	sourceCheckpoint uint64
 	watermark        uint64
-	schemas          map[cloudstorage.SchemaPathKey]*readSchema
+	schemas          map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile
 	fileIndices      map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64
 	ddlWatermarks    map[string]uint64
 	pendingSchema    chan struct{} // Header decoding determines the next file groups.
@@ -93,30 +95,28 @@ type storageReader struct {
 	scanned          bool
 }
 
-// newConsumer validates and adjusts replicaConfig before opening the source.
-func newStorageReader(
-	ctx context.Context,
-	upstreamURI *url.URL,
-	replicaConfig *config.ReplicaConfig,
-	protocol config.Protocol,
-	memory *memoryBudget,
-) *storageReader {
-	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
+// newStorageReader opens the storage described by the upstream URI.
+func newStorageReader(ctx context.Context, opts Options) *storageReader {
+	upstreamURI := opts.UpstreamURI
+	replicaConfig := opts.ReplicaConfig
+	protocol := opts.CodecConfig.Protocol
+	memory := opts.Budget
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
 	c := &storageReader{
 		storage:        storage,
 		memory:         memory,
-		dateSeparator:  putil.GetOrZero(replicaConfig.Sink.DateSeparator),
+		dateSeparator:  util.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
-		fileIndexWidth: putil.GetOrZero(replicaConfig.Sink.FileIndexWidth),
-		schemas:        make(map[cloudstorage.SchemaPathKey]*readSchema),
+		fileIndexWidth: util.GetOrZero(replicaConfig.Sink.FileIndexWidth),
+		schemas:        make(map[cloudstorage.SchemaPathKey]*cloudstorage.SchemaFile),
 		fileIndices:    make(map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]uint64),
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
-	log.Info("Storage reader initialized", zap.String("protocol", protocol.String()))
+	log.Info("storage reader initialized", zap.String("protocol", protocol.String()))
 	return c
 }
 
@@ -125,11 +125,7 @@ func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, erro
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage file")
 	}
-	defer func() {
-		if err := reader.Close(); err != nil {
-			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(err))
-		}
-	}()
+	defer closeStorageFile(reader, path)
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage file")
@@ -137,16 +133,22 @@ func (c *storageReader) readFile(ctx context.Context, path string) ([]byte, erro
 	return data, nil
 }
 
+func (c *storageReader) ddlWatermark(table string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ddlWatermarks[table]
+}
+
 func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPathKey]map[cloudstorage.FileIndexKey]storageIndexRange, error) {
 	// Read already rejects older schema versions after observing their DDL.
 	// Retire those caches at the next scan, after its captured inputs are drained.
 	for key := range c.fileIndices {
-		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+		if key.TableVersion < c.ddlWatermark(key.GetKey()) {
 			delete(c.fileIndices, key)
 		}
 	}
 	for key := range c.schemas {
-		if key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+		if key.TableVersion < c.ddlWatermark(key.GetKey()) {
 			delete(c.schemas, key)
 		}
 	}
@@ -171,7 +173,7 @@ func (c *storageReader) scanFiles(ctx context.Context) (map[cloudstorage.DMLPath
 		if err := key.ParseIndexFilePath(c.dateSeparator, path); err != nil {
 			continue // Ignore unsupported index paths in a shared Storage directory.
 		}
-		if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+		if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || key.TableVersion < c.ddlWatermark(key.GetKey()) {
 			continue
 		}
 		paths = append(paths, &storageIndex{
@@ -212,27 +214,31 @@ func (c *storageReader) readIndices(ctx context.Context, paths []*storageIndex) 
 	workers := min(8, len(paths))
 	for worker := range workers {
 		g.Go(func() error {
-			for index := worker; index < len(paths) && ctx.Err() == nil; index += workers {
-				path := paths[index]
-				data, err := c.readFile(ctx, path.path)
-				if err != nil {
-					return err
-				}
-				path.index, err = cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
-				if err != nil {
-					return err
-				}
-			}
-			return context.Cause(ctx)
+			return c.readIndexWorker(ctx, paths, worker, workers)
 		})
 	}
 	return g.Wait()
 }
 
+func (c *storageReader) readIndexWorker(ctx context.Context, paths []*storageIndex, worker, workers int) error {
+	for index := worker; index < len(paths) && ctx.Err() == nil; index += workers {
+		path := paths[index]
+		data, err := c.readFile(ctx, path.path)
+		if err != nil {
+			return err
+		}
+		path.index, err = cloudstorage.ParseFileIndexFromFileName(strings.TrimSuffix(string(data), "\n"), c.fileExtension)
+		if err != nil {
+			return err
+		}
+	}
+	return context.Cause(ctx)
+}
+
 func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstorage.SchemaPathKey, bool, error) {
 	var key cloudstorage.SchemaPathKey
 	key.Parse(path)
-	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermarks[key.GetKey()] {
+	if (c.sourceCheckpoint > 0 && key.TableVersion > c.sourceCheckpoint) || c.schemas[key] != nil || key.TableVersion < c.ddlWatermark(key.GetKey()) {
 		return key, false, nil
 	}
 	data, err := c.readFile(ctx, path)
@@ -251,104 +257,39 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	if file.Checksum() != uint32(checksum) || key.TableVersion != file.TableVersion {
 		return key, false, errors.ErrCodecDecode.FastGenByArgs("Storage schema checksum or table version does not match its path")
 	}
-	c.schemas[key] = &readSchema{
-		file: &file,
-	}
+	c.schemas[key] = &file
 	return key, true, nil
 }
 
-type (
-	storageRead interface {
-		storageRead()
-	}
-	storageFile struct {
-		contents []byte
-		schema   *readSchema
-		tableID  int64
-	}
-)
-
-type storageDDL struct {
-	schema     *readSchema
-	ddl        *event.DDLEvent
-	registered chan struct{}
-}
-type storageDDLRegistration struct {
-	reader *storageReader
-	ddl    *storageDDL
-}
-
-func (r storageDDLRegistration) done() {
-	r.reader.registerDDL(r.ddl)
-}
-
-type storageWatermark uint64
-
-func (*storageFile) storageRead() {
-}
-
-func (*storageDDL) storageRead() {
-}
-
-func (storageWatermark) storageRead() {
-}
-
-func (*storageReader) Streams() []streamSpec {
+func (*storageReader) Streams() []Stream {
 	return nil
 }
 
-func (c *storageReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
-	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
-}
-
-func (c *storageReader) decode(ctx context.Context, decoder *inputDecoder, input storageRead) iter.Seq2[task, error] {
-	if file, ok := input.(*storageFile); ok {
-		return decoder.decodeStorageFile(ctx, file, c.memory)
-	}
-	return func(yield func(task, error) bool) {
-		switch input := input.(type) {
-		case *storageDDL:
-			input.ddl.TableInfo = input.schema.tableInfo()
-			registration := storageDDLRegistration{
-				reader: c,
-				ddl:    input,
-			}
-			if !yield(&inputDDL{
-				ddl: input.ddl,
-				scope: inputScope{
-					ddlBoundary: &readBoundary{
-						reached: true,
-					},
-				},
-				registration: registration,
-			}, nil) {
-				return
-			}
-		case storageWatermark:
-			yield(&watermark{watermark: uint64(input)}, nil)
-		}
-	}
-}
-
-func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
+func (c *storageReader) Read(ctx context.Context) ([]*Input, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		if c.pendingSchema != nil {
+		c.mu.Lock()
+		pendingSchema := c.pendingSchema
+		c.mu.Unlock()
+		if pendingSchema != nil {
 			select {
 			case <-ctx.Done():
 				return nil, context.Cause(ctx)
-			case <-c.pendingSchema:
-				c.pendingSchema = nil
+			case <-pendingSchema:
+				c.mu.Lock()
+				if c.pendingSchema == pendingSchema {
+					c.pendingSchema = nil
+				}
+				c.mu.Unlock()
 			}
 		}
 		if len(c.inputs) == 0 {
 			if c.scanned && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				watermark := storageWatermark(c.sourceCheckpoint)
-				return []storageRead{watermark}, nil
+				return []*Input{{Watermark: c.sourceCheckpoint}}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -358,9 +299,7 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 		input := c.inputs[0]
 		key := input.key
 		tableKey := key.GetKey()
-		c.mu.Lock()
-		ddlWatermark := c.ddlWatermarks[tableKey]
-		c.mu.Unlock()
+		ddlWatermark := c.ddlWatermark(tableKey)
 		switch {
 		case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
 			c.inputs[0].index.Idx++
@@ -372,7 +311,7 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 		if schema == nil {
 			log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
 		}
-		if key.IsSchemaFileDMLPathKey() && (schema.file.Query == "" || key.TableVersion <= ddlWatermark) {
+		if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
 			continue
 		}
 		if key.TableVersion < ddlWatermark {
@@ -380,8 +319,11 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 			continue
 		}
 		if key.IsSchemaFileDMLPathKey() {
-			ddl := c.readDDL(schema)
-			return []storageRead{ddl}, nil
+			pendingSchema = make(chan struct{})
+			c.mu.Lock()
+			c.pendingSchema = pendingSchema
+			c.mu.Unlock()
+			return []*Input{{File: &File{Schema: schema}}}, nil
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -398,7 +340,7 @@ func (c *storageReader) Read(ctx context.Context) ([]storageRead, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []storageRead{data}, nil
+		return []*Input{data}, nil
 	}
 }
 
@@ -450,41 +392,13 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDDL(schema *readSchema) *storageDDL {
-	c.pendingSchema = make(chan struct{})
-	scope := event.InfluenceTypeNormal
-	switch {
-	case schema.file.Schema == "" || timodel.ActionType(schema.file.Type) == timodel.ActionCreateView:
-		scope = event.InfluenceTypeAll
-	case schema.file.Table == "":
-		scope = event.InfluenceTypeDB
-	}
-	ddl := &event.DDLEvent{
-		FinishedTs:    schema.file.TableVersion,
-		Type:          schema.file.Type,
-		Query:         schema.file.Query,
-		SchemaName:    schema.file.Schema,
-		TableName:     schema.file.Table,
-		BlockedTables: &event.InfluencedTables{InfluenceType: scope},
-	}
-	return &storageDDL{
-		schema:     schema,
-		ddl:        ddl,
-		registered: c.pendingSchema,
-	}
-}
-
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *readSchema, tableID int64) (*storageFile, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*Input, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 	file, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
 	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Warn("Storage input file close failed", zap.String("path", path), zap.Error(err))
-		}
-	}()
+	defer closeStorageFile(file, path)
 	size, err := file.GetFileSize()
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
@@ -493,16 +407,20 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	if _, err := io.ReadFull(file, data); err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
-	if c.continuing.Load() {
+	continuing := c.continuing.Load()
+	if continuing {
 		c.memory.ForceAcquire(size)
-	} else if err := c.memory.Acquire(ctx, size); err != nil {
-		return nil, err
+	}
+	if !continuing {
+		if err := c.memory.Acquire(ctx, size); err != nil {
+			return nil, err
+		}
 	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &storageFile{
-		contents: data,
-		schema:   schema,
-		tableID:  tableID,
+	return &Input{
+		Value: data,
+		Bytes: size,
+		File:  &File{Schema: schema, TableID: tableID},
 	}, nil
 }
 
@@ -510,92 +428,146 @@ func (c *storageReader) ContinueReading(enabled bool) {
 	c.continuing.Store(enabled)
 }
 
-func (c *storageReader) Advance(_ []readUpdate) {
+func (c *storageReader) Semantics() Semantics {
+	return Semantics{}
 }
 
-// The source can read the next schema only after the conductor registers this DDL.
-func (c *storageReader) registerDDL(input *storageDDL) {
+func (*storageReader) Advance(Progress) bool {
+	return true
+}
+
+func (c *storageReader) MarkProcessed(tables []event.SchemaTableName, timestamp uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ddl, file := input.ddl, input.schema.file
-	key := common.QuoteSchema(file.Schema, file.Table)
-	c.ddlWatermarks[key] = max(c.ddlWatermarks[key], file.TableVersion)
-	if ddl.Type == byte(timodel.ActionRenameTable) {
-		old := ddl.BlockedTableNames[0]
-		oldKey := common.QuoteSchema(old.SchemaName, old.TableName)
-		c.ddlWatermarks[oldKey] = max(c.ddlWatermarks[oldKey], file.TableVersion)
+	for _, table := range tables {
+		key := common.QuoteSchema(table.SchemaName, table.TableName)
+		c.ddlWatermarks[key] = max(c.ddlWatermarks[key], timestamp)
 	}
-	close(input.registered)
-}
-
-func (c *storageReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
-	// File rows are ready for writing without waiting for other files.
-	return nil
-}
-
-func (c *storageReader) Confirm(_ context.Context, _ uint64) error {
-	return nil
+	// The schema DDL is delivered, so the rows that depend on it can be read.
+	if c.pendingSchema != nil {
+		close(c.pendingSchema)
+		c.pendingSchema = nil
+	}
 }
 
 func (c *storageReader) Close() {
 	c.storage.Close()
 }
 
-// The reader supplies schema contents. Its decoder materializes TableInfo;
-// conversion workers receive that captured immutable metadata.
-type readSchema struct {
-	file  *cloudstorage.SchemaFile
-	table *common.TableInfo
-}
-
-func (s *readSchema) tableInfo() *common.TableInfo {
-	if s.table == nil {
-		s.table = s.file.TableInfo()
-		s.table.UpdateTS = s.file.TableVersion
+func closeStorageFile(file io.Closer, path string) {
+	if err := file.Close(); err != nil {
+		log.Warn("storage input file close failed", zap.String("path", path), zap.Error(err))
 	}
-	return s.table
 }
 
-func (p *inputDecoder) decodeStorageFile(ctx context.Context, file *storageFile, memory *memoryBudget) iter.Seq2[task, error] {
-	return func(yield func(task, error) bool) {
-		defer memory.Release(int64(len(file.contents)))
-		table := file.schema.tableInfo()
-		var decoder codecCommon.Decoder
-		switch p.codecConfig.Protocol {
-		case config.ProtocolCsv:
+// Discover metadata on every scan so new tables, dates and dispatcher indexes
+// remain visible. Data-file contents and sequence numbers come from the indexes.
+func (c *storageReader) metadataPaths(ctx context.Context) ([]string, error) {
+	var paths []string
+	uri := c.storage.URI()
+	if root, local := strings.CutPrefix(uri, "file://"); local {
+		// WalkDir uses directory entries, avoiding a stat for every data file.
+		err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+			return collectLocalMetadata(ctx, root, &paths, name, entry, err)
+		})
+		return paths, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan local Storage metadata")
+	}
+	if !strings.HasPrefix(uri, "s3://") && !strings.HasPrefix(uri, "gcs://") {
+		return c.listMetadata(ctx)
+	}
+
+	// These backends support ordered listing with StartAfter. Small directories
+	// use normal listing; a full page of data files lets us skip the remaining
+	// sequences in that directory without adding requests for small directories.
+	var after string
+	for {
+		var (
+			next          string
+			directory     string
+			dataFiles     int
+			cursorIgnored bool
+		)
+		err := c.storage.WalkDir(ctx, &storeapi.WalkOption{StartAfter: after, ListCount: storageScanPageSize}, func(name string, _ int64) error {
 			var err error
-			decoder, err = csv.NewDecoderWithColumnSelector(ctx, p.codecConfig, table, file.contents, p.selectors.GetForTableInfo(table))
-			if err != nil {
-				yield(nil, errors.WrapError(errors.ErrCodecDecode, err, "create CSV decoder"))
-				return
-			}
-		case config.ProtocolCanalJSON:
-			decoder = canal.NewTxnDecoder(p.codecConfig)
-			decoder.AddKeyValue(nil, file.contents)
-		default:
-			yield(nil, errors.ErrCodecDecode.GenWithStackByArgs("storage consumer protocol is unsupported"))
-			return
+			next, cursorIgnored, err = c.scanMetadataEntry(after, name, &paths, &directory, &dataFiles)
+			return err
+		})
+		if err != nil && (!errors.Is(err, io.EOF) || (next == "" && !cursorIgnored)) {
+			return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "discover Storage metadata")
 		}
-		scope := inputScope{dmlBoundary: &readBoundary{reached: true}}
-		for {
-			if err := context.Cause(ctx); err != nil {
-				yield(nil, err)
-				return
-			}
-			kind, more := decoder.HasNext()
-			if !more {
-				break
-			}
-			if kind != codecCommon.MessageTypeRow {
-				continue
-			}
-			message := decoder.NextDMLMessage()
-			memory.ForceAcquire(message.ApproximateSize)
-			task := p.messageTask(scope, message)
-			task.table, task.tableID = table, file.tableID
-			if !yield(task, nil) {
-				return
+		if cursorIgnored {
+			// Preserve discovery on compatible services that ignore StartAfter.
+			return c.listMetadata(ctx)
+		}
+		if next == "" {
+			return paths, nil
+		}
+		after = next
+	}
+}
+
+func (c *storageReader) listMetadata(ctx context.Context) ([]string, error) {
+	var paths []string
+	err := c.storage.WalkDir(ctx, &storeapi.WalkOption{}, func(name string, _ int64) error {
+		return collectStorageMetadata(&paths, name)
+	})
+	return paths, errors.WrapError(errors.ErrExternalStorageAPI, err, "scan Storage metadata")
+}
+
+func isStorageMetadata(name string) bool {
+	return cloudstorage.IsSchemaFile(name) || strings.HasSuffix(name, ".index")
+}
+
+func collectLocalMetadata(ctx context.Context, root string, paths *[]string, name string, entry fs.DirEntry, err error) error {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if entry.IsDir() {
+		return nil
+	}
+	relative, err := filepath.Rel(root, name)
+	if err != nil {
+		return err
+	}
+	name = filepath.ToSlash(relative)
+	if isStorageMetadata(name) {
+		*paths = append(*paths, name)
+	}
+	return nil
+}
+
+func (c *storageReader) scanMetadataEntry(after, name string, paths *[]string, directory *string, dataFiles *int) (string, bool, error) {
+	if name <= after {
+		return "", true, io.EOF
+	}
+	filename := path.Base(name)
+	if strings.HasPrefix(filename, "CDC") && strings.HasSuffix(filename, c.fileExtension) {
+		if parent := path.Dir(name); parent != *directory {
+			*directory, *dataFiles = parent, 0
+		}
+		*dataFiles++
+		if *dataFiles >= storageScanPageSize {
+			*dataFiles = 0
+			_, err := cloudstorage.ParseFileIndexFromFileName(filename, c.fileExtension)
+			var key cloudstorage.DMLPathKey
+			if err == nil && key.ParseIndexFilePath(c.dateSeparator, path.Join(*directory, "meta", "CDC.index")) == nil {
+				// Skip data-file names while preserving metadata and later siblings.
+				return path.Join(*directory, "CDD"), false, io.EOF
 			}
 		}
 	}
+	return "", false, collectStorageMetadata(paths, name)
+}
+
+func collectStorageMetadata(paths *[]string, name string) error {
+	if isStorageMetadata(name) {
+		*paths = append(*paths, name)
+	}
+	return nil
 }

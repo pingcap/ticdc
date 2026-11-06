@@ -12,62 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package source
 
 import (
 	"cmp"
 	"context"
-	"iter"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
-type pulsarRecord struct {
-	through   uint64
-	messageID pulsar.MessageID
-}
-
-const pulsarRecordBytes = int64(unsafe.Sizeof(pulsarRecord{}))
-
-type pulsarPartition struct {
-	stream   int32
-	parsedTs uint64 // Parser-owned maximum event timestamp in the parsed prefix.
-	records  []pulsarRecord
-	mu       sync.Mutex // Protects decoded positions, shared by the decoder and Confirm.
-}
-
 type pulsarReader struct {
-	client      pulsar.Client
-	consumer    pulsar.Consumer
-	topic       string
-	memory      *memoryBudget
-	continuing  atomic.Bool
-	partitions  map[string]*pulsarPartition
-	confirmable chan<- struct{}
+	client     pulsar.Client
+	consumer   pulsar.Consumer
+	topic      string
+	memory     *budget.Budget
+	continuing atomic.Bool
+	partitions map[string]int32
 }
 
-func newPulsarReader(
-	ctx context.Context,
-	upstreamURI *url.URL,
-	consumerID string,
-	replicaConfig *config.ReplicaConfig,
-	memory *memoryBudget,
-	confirmable chan<- struct{},
-) *pulsarReader {
+func newPulsarReader(ctx context.Context, opts Options) *pulsarReader {
+	upstreamURI := opts.UpstreamURI
+	consumerID := opts.ConsumerID
+	replicaConfig := opts.ReplicaConfig
+	memory := opts.Budget
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Pulsar topic", zap.String("topic", topic))
@@ -89,9 +67,9 @@ func newPulsarReader(
 		ConnectionTimeout:     5 * time.Second,
 		OperationTimeout:      5 * time.Second,
 		TLSValidateHostname:   true,
-		TLSTrustCertsFilePath: cmp.Or(query.Get("ca"), putil.GetOrZero(pulsarConfig.TLSTrustCertsFilePath)),
-		TLSCertificateFile:    cmp.Or(query.Get("cert"), putil.GetOrZero(pulsarConfig.TLSCertificateFile)),
-		TLSKeyFilePath:        cmp.Or(query.Get("key"), putil.GetOrZero(pulsarConfig.TLSKeyFilePath)),
+		TLSTrustCertsFilePath: cmp.Or(query.Get("ca"), util.GetOrZero(pulsarConfig.TLSTrustCertsFilePath)),
+		TLSCertificateFile:    cmp.Or(query.Get("cert"), util.GetOrZero(pulsarConfig.TLSCertificateFile)),
+		TLSKeyFilePath:        cmp.Or(query.Get("key"), util.GetOrZero(pulsarConfig.TLSKeyFilePath)),
 		Logger:                pulsarutil.NewPulsarLogger(log.L()),
 		MemoryLimitBytes:      64 << 20,
 	}
@@ -110,10 +88,10 @@ func newPulsarReader(
 			*value = query.Get(name)
 		}
 	}
-	token := cmp.Or(query.Get("authentication-token"), putil.GetOrZero(pulsarConfig.AuthenticationToken))
-	tokenFile := cmp.Or(query.Get("token-from-file"), putil.GetOrZero(pulsarConfig.TokenFromFile))
-	certificate := cmp.Or(query.Get("auth-tls-certificate-path"), putil.GetOrZero(pulsarConfig.AuthTLSCertificatePath))
-	key := cmp.Or(query.Get("auth-tls-private-key-path"), putil.GetOrZero(pulsarConfig.AuthTLSPrivateKeyPath))
+	token := cmp.Or(query.Get("authentication-token"), util.GetOrZero(pulsarConfig.AuthenticationToken))
+	tokenFile := cmp.Or(query.Get("token-from-file"), util.GetOrZero(pulsarConfig.TokenFromFile))
+	certificate := cmp.Or(query.Get("auth-tls-certificate-path"), util.GetOrZero(pulsarConfig.AuthTLSCertificatePath))
+	key := cmp.Or(query.Get("auth-tls-private-key-path"), util.GetOrZero(pulsarConfig.AuthTLSPrivateKeyPath))
 	if (certificate == "") != (key == "") {
 		log.Panic("Pulsar authentication certificate and key must be configured together")
 	}
@@ -170,79 +148,33 @@ func newPulsarReader(
 	if err != nil {
 		log.Panic("Pulsar topic subscription failed", zap.String("topic", topic), zap.String("consumerID", consumerID), zap.Error(err))
 	}
-	partitions := make(map[string]*pulsarPartition, len(topics))
+	partitions := make(map[string]int32, len(topics))
 	for id, partitionTopic := range topics {
-		partitions[partitionTopic] = &pulsarPartition{stream: int32(id)}
+		partitions[partitionTopic] = int32(id)
 	}
 	c := &pulsarReader{
-		client:      client,
-		consumer:    consumer,
-		topic:       topic,
-		memory:      memory,
-		partitions:  partitions,
-		confirmable: confirmable,
+		client:     client,
+		consumer:   consumer,
+		topic:      topic,
+		memory:     memory,
+		partitions: partitions,
 	}
-	log.Info("Pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
+	log.Info("pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c
 }
 
-func (c *pulsarReader) Streams() []streamSpec {
-	streams := make([]streamSpec, 0, len(c.partitions))
+func (c *pulsarReader) Streams() []Stream {
+	streams := make([]Stream, 0, len(c.partitions))
 	for _, partition := range c.partitions {
-		streams = append(streams, streamSpec{
-			id:    partition.stream,
-			topic: c.topic,
+		streams = append(streams, Stream{
+			ID:    partition,
+			Topic: c.topic,
 		})
 	}
 	return streams
 }
 
-func (c *pulsarReader) Run(ctx context.Context, decoder *inputDecoder, tasks chan<- []task) error {
-	return readAndDecode(ctx, decoder, c.Read, c.decode, tasks)
-}
-
-func (c *pulsarReader) decode(ctx context.Context, decoder *inputDecoder, message pulsar.ConsumerMessage) iter.Seq2[task, error] {
-	partition := c.partitions[message.Topic()]
-	scope := inputScope{
-		stream: partition.stream,
-		dmlBoundary: &readBoundary{
-			reached: true,
-		},
-		ddlOrder: commitOrder,
-	}
-	return func(yield func(task, error) bool) {
-		defer c.memory.Release(int64(len(message.Key()) + len(message.Payload())))
-		for work, err := range decoder.decodeMessage(ctx, scope, []byte(message.Key()), message.Payload(), c.memory) {
-			if err == nil {
-				through := taskTimestamp(work)
-				partition.parsedTs = max(partition.parsedTs, through)
-			}
-			if progress, ok := work.(*inputWatermark); ok && err == nil {
-				// Preserve the legacy consumer's topic-wide checkpoint semantics.
-				progress.sourceCheckpoint = true
-			}
-			if !yield(work, err) {
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-		partition.mu.Lock()
-		c.memory.ForceAcquire(pulsarRecordBytes)
-		partition.records = append(
-			partition.records,
-			pulsarRecord{
-				through:   partition.parsedTs,
-				messageID: message.ID(),
-			},
-		)
-		partition.mu.Unlock()
-		notifyConfirmation(c.confirmable)
-	}
-}
-
-func (c *pulsarReader) Read(ctx context.Context) ([]pulsar.ConsumerMessage, error) {
+func (c *pulsarReader) Read(ctx context.Context) ([]*Input, error) {
 	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
@@ -250,23 +182,36 @@ func (c *pulsarReader) Read(ctx context.Context) ([]pulsar.ConsumerMessage, erro
 	case message = <-c.consumer.Chan():
 	}
 	var (
-		batch []pulsar.ConsumerMessage
+		batch []*Input
 		bytes int64
 	)
 	for {
-		partition := c.partitions[message.Topic()]
-		if partition == nil {
+		partition, ok := c.partitions[message.Topic()]
+		if !ok {
 			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 		}
 		size := int64(len(message.Key()) + len(message.Payload()))
-		if c.continuing.Load() {
+		continuing := c.continuing.Load()
+		if continuing {
 			c.memory.ForceAcquire(size)
-		} else if err := c.memory.Acquire(ctx, size); err != nil {
-			return nil, err
 		}
-		batch = append(batch, message)
+		if !continuing {
+			if err := c.memory.Acquire(ctx, size); err != nil {
+				return nil, err
+			}
+		}
+		id := message.ID()
+		batch = append(batch, &Input{
+			Stream: partition,
+			Key:    []byte(message.Key()),
+			Value:  message.Payload(),
+			Bytes:  size,
+			Ack: func(ctx context.Context) error {
+				return c.confirmPosition(ctx, id)
+			},
+		})
 		bytes += size
-		if len(batch) >= batchRows || bytes >= batchBytes || c.memory.used() >= c.memory.limit {
+		if len(batch) >= readBatchRows || bytes >= readBatchBytes || c.memory.Used() >= c.memory.Limit() {
 			return batch, nil
 		}
 		select {
@@ -283,54 +228,27 @@ func (c *pulsarReader) ContinueReading(enabled bool) {
 	c.continuing.Store(enabled)
 }
 
-func (c *pulsarReader) Advance(_ []readUpdate) {
+func (c *pulsarReader) Semantics() Semantics {
+	// Pulsar preserves per-partition order but DDLs can be decoded out of order.
+	return Semantics{DDLsCanReorder: true}
 }
 
-func (c *pulsarReader) Boundary(_ []event.SchemaTableName, _ uint64) *readBoundary {
-	// Topic checkpoints advance the global input watermark directly.
-	return nil
-}
-
-func (c *pulsarReader) Confirm(ctx context.Context, checkpoint uint64) error {
-	if checkpoint == 0 {
-		return nil
-	}
-	for _, partition := range c.partitions {
-		partition.mu.Lock()
-		var count int
-		for _, record := range partition.records {
-			if record.through > checkpoint {
-				break
-			}
-			count++
-		}
-		if count == 0 {
-			partition.mu.Unlock()
-			continue
-		}
-		messageID := partition.records[count-1].messageID
-		partition.mu.Unlock()
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		if err := c.consumer.AckIDCumulative(messageID); err != nil {
-			return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
-		}
-		partition.mu.Lock()
-		records := partition.records
-		clear(records[:count])
-		partition.records = records[count:]
-		c.memory.Release(int64(count) * pulsarRecordBytes)
-		partition.mu.Unlock()
-	}
-	return nil
+func (c *pulsarReader) Advance(Progress) bool {
+	// Pulsar uses global watermarks and has no selective reading boundary.
+	return true
 }
 
 func (c *pulsarReader) Close() {
 	c.consumer.Close()
 	c.client.Close()
-	for _, partition := range c.partitions {
-		c.memory.Release(int64(len(partition.records)) * pulsarRecordBytes)
-		partition.records = nil
+}
+
+func (c *pulsarReader) confirmPosition(ctx context.Context, id pulsar.MessageID) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
 	}
+	if err := c.consumer.AckIDCumulative(id); err != nil {
+		return errors.WrapError(errors.ErrInternalCheckFailed, err, "confirm Pulsar messages")
+	}
+	return nil
 }

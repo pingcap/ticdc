@@ -418,7 +418,7 @@ func TestDecodedBytesOwnTheirPayload(t *testing.T) {
 	require.NoError(t, err)
 	decoder := NewDecoder(common.NewConfig(config.ProtocolAvro), 0, manager, "topic", nil).(*decoder)
 	decoder.codecs.Add(schemamanager.NewConfluentSchemaID(1), codec)
-	decoded, _, err := decoder.decodeRawBytes(t.Context(), raw)
+	decoded, _, _, err := decoder.decodeRawBytes(t.Context(), raw)
 	require.NoError(t, err)
 	clear(raw)
 	require.Equal(t, []byte("hello"), decoded["blob"])

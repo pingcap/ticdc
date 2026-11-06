@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+// Package budget accounts for the memory owned by the consumer conductor.
+package budget
 
 import (
 	"context"
@@ -21,7 +22,7 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/uber-go/atomic"
 	"go.uber.org/zap"
 )
@@ -36,23 +37,25 @@ const (
 	goMemoryLimitRatio = 0.9
 )
 
-// memoryBudget is a soft budget for raw input, captured data, decoded rows and
+// Budget is a soft budget for raw input, captured data, decoded rows and
 // pending transport positions. Each owner releases its own allocation.
 // The limit scales with the process memory limit; it does not model process or
 // object overhead.
-type memoryBudget struct {
-	limit   int64
-	bytes   atomic.Int64
-	waiting atomic.Bool
-	mu      sync.Mutex
-	changed chan struct{}
+type Budget struct {
+	limit     int64
+	bytes     atomic.Int64
+	waiting   atomic.Bool
+	requested atomic.Int64
+	mu        sync.Mutex
+	changed   chan struct{}
 }
 
-func newMemoryBudget() *memoryBudget {
-	limit, err := putil.GetMemoryLimit()
+// New builds a budget from the process memory limit.
+func New() *Budget {
+	limit, err := util.GetMemoryLimit()
 	if err != nil || limit == 0 {
 		log.Info("consumer memory quota", zap.Int64("quotaBytes", defaultMemoryBudget))
-		return &memoryBudget{
+		return &Budget{
 			limit: defaultMemoryBudget,
 		}
 	}
@@ -66,33 +69,52 @@ func newMemoryBudget() *memoryBudget {
 		zap.Uint64("processLimitBytes", limit),
 		zap.Int64("goMemoryLimitBytes", goLimit),
 		zap.Int64("quotaBytes", quota))
-	return &memoryBudget{
+	return &Budget{
 		limit: quota,
 	}
 }
 
-func (m *memoryBudget) used() int64 {
-	return m.bytes.Load()
+// Limit is the maximum number of accounted bytes.
+func (b *Budget) Limit() int64 {
+	return b.limit
+}
+
+// Used is the number of currently accounted bytes.
+func (b *Budget) Used() int64 {
+	return b.bytes.Load()
 }
 
 // Acquire blocks until the budget can admit n bytes. Read callers use it after
 // reading an input so a full budget stops the read loop without blocking owners
 // that already hold data.
-func (m *memoryBudget) Acquire(ctx context.Context, n int64) error {
+func (b *Budget) Acquire(ctx context.Context, n int64) error {
 	if n < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", n))
 	}
 	for {
-		used := m.bytes.Load()
-		if used+n <= m.limit {
-			if m.bytes.CAS(used, used+n) {
+		used := b.bytes.Load()
+		if used+n <= b.limit {
+			if b.bytes.CAS(used, used+n) {
 				return nil
 			}
 			continue
 		}
-		changed := m.changes()
-		if m.bytes.Load()+n <= m.limit {
-			continue
+		if err := b.wait(ctx, n); err != nil {
+			return err
+		}
+	}
+}
+
+func (b *Budget) wait(ctx context.Context, n int64) error {
+	// There is one source read loop. Store n+1 so a blocked Acquire(0)
+	// can be distinguished from having no pending admission.
+	b.requested.Store(n + 1)
+	defer b.requested.Store(0)
+	b.notify()
+	for {
+		changed := b.changes()
+		if b.bytes.Load()+n <= b.limit {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -104,38 +126,44 @@ func (m *memoryBudget) Acquire(ctx context.Context, n int64) error {
 
 // ForceAcquire records memory that is already allocated or must be admitted for
 // a dependency. It never blocks.
-func (m *memoryBudget) ForceAcquire(bytes int64) {
+func (b *Budget) ForceAcquire(bytes int64) {
 	if bytes < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))
 	}
-	m.bytes.Add(bytes)
+	b.bytes.Add(bytes)
 }
 
-// Subscribe before checking an admission condition to avoid missing a release.
-// A release wakes every subscriber; callers decide whether to wait again.
-func (m *memoryBudget) changes() <-chan struct{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.changed == nil {
-		m.changed = make(chan struct{})
+// changes subscribes before checking an admission condition to avoid missing a
+// release. A release wakes every subscriber; callers decide whether to wait
+// again.
+func (b *Budget) changes() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed == nil {
+		b.changed = make(chan struct{})
 	}
-	m.waiting.Store(true)
-	return m.changed
+	b.waiting.Store(true)
+	return b.changed
 }
 
-func (m *memoryBudget) Release(bytes int64) {
+// Release returns previously acquired bytes to the budget.
+func (b *Budget) Release(bytes int64) {
 	if bytes == 0 {
 		return
 	}
-	m.bytes.Add(-bytes)
-	if !m.waiting.Load() {
+	b.bytes.Add(-bytes)
+	b.notify()
+}
+
+func (b *Budget) notify() {
+	if !b.waiting.Load() {
 		return
 	}
-	m.mu.Lock()
-	if m.changed != nil {
-		close(m.changed)
-		m.changed = nil
+	b.mu.Lock()
+	if b.changed != nil {
+		close(b.changed)
+		b.changed = nil
 	}
-	m.waiting.Store(false)
-	m.mu.Unlock()
+	b.waiting.Store(false)
+	b.mu.Unlock()
 }
