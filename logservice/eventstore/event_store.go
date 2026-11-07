@@ -77,7 +77,7 @@ type Subscriber struct {
 type EventStore interface {
 	common.SubModule
 
-	// Note: changefeedID is just a tag for dispatcher, avoid abuse it
+	// RegisterDispatcher registers a consumer; mode and changefeedID scope redo sharing.
 	RegisterDispatcher(
 		changefeedID common.ChangeFeedID,
 		dispatcherID common.DispatcherID,
@@ -87,6 +87,7 @@ type EventStore interface {
 		onlyReuse bool,
 		bdrMode bool,
 		lowLatencyMode bool,
+		mode int64,
 	) bool
 
 	UnregisterDispatcher(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID)
@@ -124,6 +125,8 @@ type EventIteratorWithScanPosition interface {
 }
 
 type dispatcherStat struct {
+	changefeedID common.ChangeFeedID
+	mode         int64
 	dispatcherID common.DispatcherID
 	// data span of this dispatcher
 	tableSpan *heartbeatpb.TableSpan
@@ -238,8 +241,11 @@ func eventWithCallbackSizer(e eventWithCallback) int {
 }
 
 type eventStore struct {
-	pdClock   pdutil.Clock
-	subClient logpuller.SubscriptionClient
+	// registerMu serializes lookup and creation so paired registrations cannot
+	// both miss an existing subscription. Subscribe must run without dispatcherMeta.
+	registerMu sync.Mutex
+	pdClock    pdutil.Clock
+	subClient  logpuller.SubscriptionClient
 
 	dbs            []*pebble.DB
 	pebbleCache    *pebble.Cache
@@ -488,7 +494,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
-	_ common.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -496,7 +502,15 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 	bdrMode bool,
 	lowLatencyMode bool,
+	mode int64,
 ) (success bool) {
+	enableRedoDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableRedoDataSharing
+	unlockRegistration := func() {}
+	if enableRedoDataSharing {
+		e.registerMu.Lock()
+		unlockRegistration = sync.OnceFunc(e.registerMu.Unlock)
+		defer unlockRegistration()
+	}
 	if e.closed.Load() {
 		return false
 	}
@@ -540,6 +554,8 @@ func (e *eventStore) RegisterDispatcher(
 	}()
 
 	stat := &dispatcherStat{
+		changefeedID: changefeedID,
+		mode:         mode,
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
 		keyspaceID:   dispatcherSpan.KeyspaceID,
@@ -554,6 +570,11 @@ func (e *eventStore) RegisterDispatcher(
 	requiredConfig := subscriptionConfig{
 		bdrMode:        bdrMode,
 		lowLatencyMode: lowLatencyMode,
+	}
+
+	if !onlyReuse && enableRedoDataSharing &&
+		e.reuseRedoSubscription(stat, dispatcherSpan, startTs, requiredConfig, wrappedNotifier) {
+		return true
 	}
 
 	if enableDataSharing {
@@ -665,6 +686,10 @@ func (e *eventStore) RegisterDispatcher(
 	}
 	e.dispatcherMeta.tableStats[tableKey][subStat.subID] = subStat
 	e.dispatcherMeta.Unlock()
+
+	// The new subscription is now discoverable. Do not serialize unrelated
+	// registrations behind a potentially blocked upstream Subscribe call.
+	unlockRegistration()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
 		now := time.Now()

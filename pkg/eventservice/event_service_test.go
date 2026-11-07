@@ -675,6 +675,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	_ bool,
 	_ bool,
 	_ bool,
+	_ int64,
 ) bool {
 	if m.registerDispatcherHook != nil && !m.registerDispatcherHook() {
 		return false
