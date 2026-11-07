@@ -37,6 +37,7 @@ import (
 
 const (
 	defaultConflictDetectorSlots uint64 = 16 * 1024
+	cleanupTLSInitTimeout               = 30 * time.Second
 )
 
 // Sink is responsible for writing data to mysql downstream.
@@ -84,7 +85,7 @@ func Verify(
 	config *config.ChangefeedConfig,
 ) error {
 	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
-	_, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
+	cfg, dmlDB, controlDB, controlAsyncDB, err := mysql.NewMysqlConfigAndDBs(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
@@ -93,7 +94,7 @@ func Verify(
 	if controlAsyncDB != nil {
 		_ = controlAsyncDB.Close()
 	}
-	return nil
+	return cfg.CloseTLS()
 }
 
 func New(
@@ -508,6 +509,11 @@ func (s *Sink) Close() {
 	if s.activeActiveSyncStatsCollector != nil {
 		s.activeActiveSyncStatsCollector.Close()
 	}
+	if err := s.cfg.CloseTLS(); err != nil {
+		log.Warn("failed to close mysql sink TLS",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Error(err))
+	}
 	s.statistics.Close()
 	mysql.DeleteDMLEventRowsAffectedMetrics(s.changefeedID)
 
@@ -533,7 +539,20 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 
 	// Remove-changefeed cleanup must stay available even if the sink has already
 	// closed its long-lived DB connection in the normal close path.
-	dsnStr, err := mysql.GenerateDSN(context.Background(), s.cfg)
+	cleanupTLSCtx, cancelCleanupTLS := context.WithTimeout(context.Background(), cleanupTLSInitTimeout)
+	cleanupCfg, err := s.cfg.NewCleanupConfig(cleanupTLSCtx)
+	cancelCleanupTLS()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := cleanupCfg.CloseTLS(); closeErr != nil {
+			log.Warn("close mysql cleanup TLS source meet error",
+				zap.Any("changefeed", s.changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
+
+	dsnStr, err := mysql.GenerateDSN(context.Background(), cleanupCfg)
 	if err != nil {
 		return err
 	}
@@ -548,7 +567,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 		}
 	}()
 
-	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
+	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, cleanupCfg, s.changefeedID, nil, nil)
 	defer cleanupWriter.Close()
 	cleanupWriter.SetWriteGate(s.writeGate)
 	return cleanupWriter.RemoveDDLTsItem()
