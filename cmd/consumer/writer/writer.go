@@ -305,8 +305,11 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 		block := result.ddl
 		// Failover can resend an old DDL after a newer one. Query is part of
 		// its identity because split DDLs can share the timestamp and table.
+		// The global checkpoint covers rows, not DDL visibility: a schema file
+		// or Kafka DDL can become visible after progress has passed it, so only
+		// the in-process write record can prove it was applied.
 		key := ddl.KeyOf(block)
-		if w.ddlWrites[key] || (key.CommitTs > 0 && key.CommitTs <= w.checkpoint) {
+		if w.ddlWrites[key] {
 			if result.release != nil {
 				result.release()
 			}

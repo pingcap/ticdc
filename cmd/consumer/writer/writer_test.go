@@ -215,12 +215,14 @@ func TestCSVMergerCombinesSplitUpdate(t *testing.T) {
 
 func TestDDLReleaseIsCalled(t *testing.T) {
 	memory := budget.New()
-	w := newWriterForTest(&recordingSink{}, memory, codecCommon.NewConfig(config.ProtocolOpen))
+	target := &recordingSink{}
+	w := newWriterForTest(target, memory, codecCommon.NewConfig(config.ProtocolOpen))
 	called := false
 	w.AddDDL(testDDL(100, nil), func() { called = true })
 	w.Advance(Progress{Watermark: 200})
 	require.NoError(t, w.Flush(context.Background()))
 	require.True(t, called)
+	require.Len(t, target.blocks, 1, "a DDL accepted after progress passed it must still be written")
 }
 
 func TestAddDMLChecksLatestInFlightTable(t *testing.T) {
