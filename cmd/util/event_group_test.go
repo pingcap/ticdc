@@ -36,6 +36,29 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type dmlMessageDecoderStub struct {
+	messages []*codeccommon.DMLMessage
+}
+
+func (d *dmlMessageDecoderStub) AddKeyValue(_, _ []byte) {}
+
+func (d *dmlMessageDecoderStub) HasNext() (codeccommon.MessageType, bool) {
+	return codeccommon.MessageTypeRow, len(d.messages) > 0
+}
+
+func (d *dmlMessageDecoderStub) NextResolvedEvent() uint64 { return 0 }
+
+func (d *dmlMessageDecoderStub) NextDMLMessage() *codeccommon.DMLMessage {
+	if len(d.messages) == 0 {
+		return nil
+	}
+	message := d.messages[0]
+	d.messages = d.messages[1:]
+	return message
+}
+
+func (d *dmlMessageDecoderStub) NextDDLEvent() *commonEvent.DDLEvent { return nil }
+
 func newTestDMLMessage(commitTs uint64) *codeccommon.DMLMessage {
 	return codeccommon.NewDMLMessageFromEvent(newTestDMLEvent(commitTs, common.RowTypeInsert))
 }

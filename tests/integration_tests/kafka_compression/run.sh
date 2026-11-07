@@ -15,7 +15,7 @@ function test_compression() {
 	TOPIC_NAME="ticdc-kafka-compression-$1-test-$RANDOM"
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true&kafka-version=${KAFKA_VERSION}&compression=$1"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c $1
-	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true"
+	run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true"
 	run_sql_file $CUR/data/$1_data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_table_exists test.$1_finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200

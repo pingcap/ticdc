@@ -97,9 +97,9 @@ EOF
 	fi
 
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --ca "${WORK_DIR}/ca.cert.pem" --auth-tls-private-key-path "${WORK_DIR}/broker_client.key-pk8.pem" --auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem" ;;
+	kafka) run_consumer $WORK_DIR $SINK_URI ;;
+	storage) run_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_consumer "$WORK_DIR" $SINK_URI $WORK_DIR/pulsar_test.toml ;;
 	esac
 
 	test_recover_schema

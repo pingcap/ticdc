@@ -25,7 +25,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -43,24 +45,27 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
+const decoderTableCacheSize = 128
+
 type tableCacheKey struct {
-	schema      string
-	table       string
-	ddlCommitTs uint64
+	schema     string
+	table      string
+	columns    string
+	snapshotTs uint64
 }
 
 type cachedTable struct {
-	columns    map[string]column
-	info       *commonType.TableInfo
-	projection string
+	columns        map[string]column
+	info           *commonType.TableInfo
+	projection     string
+	numericEnumSet bool
 }
 
 type decoder struct {
-	// Keep old intervals available for delayed decoding of buffered messages.
-	tables      map[tableCacheKey]*cachedTable
-	ddlCommitTs map[[2]string][]uint64
-	keyBytes    []byte
-	valueBytes  []byte
+	tableMu    sync.Mutex
+	tables     *lru.Cache
+	keyBytes   []byte
+	valueBytes []byte
 
 	nextKey *messageKey
 
@@ -137,6 +142,7 @@ func (b *decoder) hasNext() bool {
 // HasNext implements the Decoder interface
 func (b *decoder) HasNext() (common.MessageType, bool) {
 	if !b.hasNext() {
+		b.keyBytes, b.valueBytes = nil, nil
 		return common.MessageTypeUnknown, false
 	}
 
@@ -196,17 +202,6 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
 
-	// Every partition decoder must record the boundary, even though only
-	// partition zero executes the DDL downstream.
-	schema, table := result.SchemaName, result.TableName
-	switch m.Type {
-	case timodel.ActionRenameTable, timodel.ActionRenameTables, timodel.ActionExchangeTablePartition:
-		// These DDLs affect multiple names. Start a new cache interval for all
-		// tables rather than relying on the single name carried by the message.
-		schema, table = "", ""
-	}
-	b.addDDLCommitTs(schema, table, result.FinishedTs)
-
 	// only the DDL comes from the first partition will be processed.
 	if b.idx == 0 {
 		tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
@@ -233,9 +228,11 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 		rowType = b.rowTypeFromDMLValue(value)
 	}
 	tableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
+	message := common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
 		return b.decodeDMLMessage(&key, value)
 	})
+	message.ApproximateSize = int64(len(value) + len(key.Schema) + len(key.Table) + len(key.ClaimCheckLocation))
+	return message
 }
 
 func (b *decoder) nextDMLValue() []byte {
@@ -324,24 +321,31 @@ func buildColumns(
 	return columns
 }
 
-// snapshotColumns uses protocol metadata so snapshot rows have the same chunk
-// layout as ordinary messages. Cached columns never retain row values.
+// Snapshot schemas are reusable at the exact snapshot timestamp. This works
+// even when another decoder handled the DDL or rows on either side of it.
 func (b *decoder) snapshotColumns(ctx context.Context, key *messageKey, ts uint64, conditions map[string]any, columns map[string]column) map[string]column {
-	schema, table := key.Schema, key.Table
-	cacheKey := b.tableCacheKey(key)
-	cached := b.tables[cacheKey]
+	cacheKey := tableCacheKey{schema: key.Schema, table: key.Table, snapshotTs: ts}
+	b.tableMu.Lock()
+	cached := b.cachedTable(cacheKey)
+	if cached != nil && !cached.acceptsDelete(columns) {
+		cached = nil
+	}
+	b.tableMu.Unlock()
 	var holder *common.ColumnsHolder
 	if cached == nil {
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions)
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, key.Schema, key.Table, conditions)
 		columns = buildColumns(holder, columns)
-		b.queryTableInfo(key, &messageRow{Update: columns})
-		cached = b.tables[cacheKey]
+		b.tableMu.Lock()
+		definition := tableCacheKey{schema: key.Schema, table: key.Table, columns: columnSignature(columns)}
+		cached = b.cachedTable(definition)
+		if cached == nil {
+			cached = b.cacheTable(definition, key, columns)
+		}
+		b.tables.Add(cacheKey, cached)
+		b.tableMu.Unlock()
 	}
-	// On a cold cache, ENUM/SET names need another query to obtain numeric values.
-	if holder == nil || slices.ContainsFunc(cached.info.GetColumns(), func(col *timodel.ColumnInfo) bool {
-		return col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet
-	}) {
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, schema, table, conditions, cached.projection)
+	if holder == nil || cached.numericEnumSet {
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, ts, key.Schema, key.Table, conditions, cached.projection)
 	}
 	result := maps.Clone(cached.columns)
 	for i, typ := range holder.Types {
@@ -416,32 +420,72 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context, key *m
 	return b.assembleDMLEvent(msgKey, rowMsg)
 }
 
-// DML at the DDL commit timestamp is flushed before that DDL.
-func (b *decoder) tableCacheKey(key *messageKey) tableCacheKey {
-	var version uint64
-	for _, name := range [][2]string{{"", ""}, {key.Schema, ""}, {key.Schema, key.Table}} {
-		timestamps := b.ddlCommitTs[name]
-		i, _ := slices.BinarySearch(timestamps, key.Ts)
-		if i > 0 {
-			version = max(version, timestamps[i-1])
-		}
+// Match the complete column definition, independently of which DDLs this
+// decoder has received. Row values are never part of the cache key or entry.
+func columnSignature(columns map[string]column) string {
+	var key []byte
+	for _, name := range slices.Sorted(maps.Keys(columns)) {
+		col := columns[name]
+		key = binary.AppendUvarint(key, uint64(len(name)))
+		key = append(key, name...)
+		key = append(key, col.Type)
+		key = binary.LittleEndian.AppendUint64(key, col.Flag)
 	}
-	return tableCacheKey{schema: key.Schema, table: key.Table, ddlCommitTs: version}
+	return string(key)
 }
 
-func (b *decoder) addDDLCommitTs(schema, table string, ts uint64) {
-	if ts == 0 {
-		return
+func (b *decoder) cachedTable(key any) *cachedTable {
+	if b.tables != nil {
+		if cached, ok := b.tables.Get(key); ok {
+			return cached.(*cachedTable)
+		}
 	}
-	if b.ddlCommitTs == nil {
-		b.ddlCommitTs = make(map[[2]string][]uint64)
+	return nil
+}
+
+func (b *decoder) cacheTable(cacheKey tableCacheKey, key *messageKey, columns map[string]column) *cachedTable {
+	info := b.newTableInfo(key, &messageRow{Update: columns})
+	cached := &cachedTable{info: info, columns: make(map[string]column, len(columns))}
+	names := make([]string, 0, len(info.GetColumns()))
+	for _, col := range info.GetColumns() {
+		name := commonType.QuoteName(col.Name.O)
+		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
+			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+			cached.numericEnumSet = true
+		}
+		names = append(names, name)
 	}
-	name := [2]string{schema, table}
-	timestamps := b.ddlCommitTs[name]
-	i, exists := slices.BinarySearch(timestamps, ts)
-	if !exists {
-		b.ddlCommitTs[name] = slices.Insert(timestamps, i, ts)
+	cached.projection = strings.Join(names, ",")
+	for name, col := range columns {
+		col.Value, col.WhereHandle = nil, nil
+		cached.columns[name] = col
 	}
+	if b.tables == nil {
+		b.tables, _ = lru.New(decoderTableCacheSize)
+	}
+	b.tables.Add(cacheKey, cached)
+	return cached
+}
+
+// A partial DELETE may borrow a full layout only if every supplied column has
+// the same type and flags, and every locator column is present. Extra columns
+// are NULL and do not participate in the DELETE predicate.
+func (c *cachedTable) acceptsDelete(columns map[string]column) bool {
+	if len(c.info.GetOrderedHandleKeyColumnIDs()) == 0 {
+		return false
+	}
+	for name, col := range columns {
+		cached, ok := c.columns[name]
+		if !ok || cached.Type != col.Type || cached.Flag != col.Flag {
+			return false
+		}
+	}
+	for _, col := range c.info.GetColumns() {
+		if _, ok := columns[col.Name.O]; c.info.IsHandleKey(col.ID) && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -449,37 +493,29 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 	if columns == nil {
 		columns = value.Delete
 	}
-	tableKey := b.tableCacheKey(key)
-	if cached := b.tables[tableKey]; cached != nil {
-		id := cached.info.TableName.TableID
-		key.Partition = &id
-		return cached.info
-	}
-	info := b.newTableInfo(key, value)
-	// A delete can contain only handle columns. Use a complete row to seed
-	// the cache; a cold delete must not define the layout of later inserts.
+	cacheKey := tableCacheKey{schema: key.Schema, table: key.Table, columns: columnSignature(columns)}
+	name := [2]string{key.Schema, key.Table}
+	b.tableMu.Lock()
+	defer b.tableMu.Unlock()
+	var cached *cachedTable
 	if value.Update == nil {
-		return info
-	}
-	metadata := make(map[string]column, len(columns))
-	for name, col := range columns {
-		col.Value = nil
-		col.WhereHandle = nil
-		metadata[name] = col
-	}
-	names := make([]string, 0, len(columns))
-	for _, col := range info.GetColumns() {
-		name := commonType.QuoteName(col.Name.O)
-		if col.GetType() == mysql.TypeEnum || col.GetType() == mysql.TypeSet {
-			name = "CAST(" + name + " AS UNSIGNED) AS " + name
+		cached = b.cachedTable(name)
+		if cached != nil && !cached.acceptsDelete(columns) {
+			cached = nil
 		}
-		names = append(names, name)
 	}
-	if b.tables == nil {
-		b.tables = make(map[tableCacheKey]*cachedTable)
+	if cached == nil {
+		cached = b.cachedTable(cacheKey)
 	}
-	b.tables[tableKey] = &cachedTable{columns: metadata, info: info, projection: strings.Join(names, ",")}
-	return info
+	if cached == nil {
+		cached = b.cacheTable(cacheKey, key, columns)
+	}
+	if value.Update != nil {
+		b.tables.Add(name, cached)
+	}
+	id := cached.info.TableName.TableID
+	key.Partition = &id
+	return cached.info
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {

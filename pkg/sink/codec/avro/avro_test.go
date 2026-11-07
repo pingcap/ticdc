@@ -544,16 +544,16 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 
 	for _, withWatermark := range []bool{false, true} {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
-			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
-			decoder.AddKeyValue(insert.Key, insert.Value)
+			dec := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil).(*decoder)
+			dec.AddKeyValue(insert.Key, insert.Value)
 			// The consumer may defer materialization until after receiving the delete.
-			insertMessage := decoder.NextDMLMessage()
+			insertMessage := dec.NextDMLMessage()
 			value := deleted.Value
 			if !withWatermark {
 				value = nil
 			}
-			decoder.AddKeyValue(deleted.Key, value)
-			deleteEvent := decoder.NextDMLMessage().ToDMLEvent()
+			dec.AddKeyValue(deleted.Key, value)
+			deleteEvent := dec.NextDMLMessage().ToDMLEvent()
 			t.Cleanup(deleteEvent.PostFlush)
 			insertEvent := insertMessage.ToDMLEvent()
 			t.Cleanup(insertEvent.PostFlush)
@@ -561,12 +561,31 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 			require.Equal(t, insertEvent.TableInfo.GetColumns(), deleteEvent.TableInfo.GetColumns())
 			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete}, deleteEvent.RowTypes)
 			require.Equal(t, 2, deleteEvent.Rows.NumCols())
-			require.Equal(t, int64(1), deleteEvent.Rows.GetRow(0).GetInt64(0))
 			require.True(t, deleteEvent.Rows.GetRow(0).IsNull(1))
+			require.Equal(t, int64(1), deleteEvent.Rows.GetRow(0).GetInt64(0))
 			common.RequireRowLocatorByPrimaryKey(t, deleteEvent.TableInfo, "id")
 			if withWatermark {
 				require.Equal(t, uint64(1025), deleteEvent.CommitTs)
 			}
+			// A new key schema for the same table must not borrow the old
+			// INT locator. Late messages with the old schema still reuse it.
+			changedKey, err := GenCodec(`{"type":"record","namespace":"default.test","name":"person","fields":[{"name":"id","type":{"type":"long","connect.parameters":{"tidb_type":"BIGINT"}}}]}`)
+			require.NoError(t, err)
+			dec.codecs.Add(schemamanager.NewConfluentSchemaID(999), changedKey)
+			header, err := schemamanager.BuildConfluentWireHeader(999)
+			require.NoError(t, err)
+			key, err := changedKey.BinaryFromNative(header, map[string]any{"id": int64(1 << 40)})
+			require.NoError(t, err)
+			dec.AddKeyValue(key, nil)
+			changed := dec.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(changed.PostFlush)
+			require.Len(t, changed.TableInfo.GetColumns(), 1)
+			require.Equal(t, mysql.TypeLonglong, changed.TableInfo.GetColumns()[0].GetType())
+			require.Equal(t, int64(1<<40), changed.Rows.GetRow(0).GetInt64(0))
+			dec.AddKeyValue(deleted.Key, value)
+			late := dec.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(late.PostFlush)
+			require.Equal(t, insertEvent.TableInfo.GetColumns(), late.TableInfo.GetColumns())
 		})
 	}
 }

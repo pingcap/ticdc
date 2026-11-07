@@ -33,9 +33,8 @@ function prepare() {
 	SINK_PARA="{\"replica_config\":{\"force_replicate\":true}, \"changefeed_id\":\"tidb-mysql-test\", \"sink_uri\":\"$SINK_URI\", \"start_ts\":$start_ts}"
 	curl -X POST -H "'Content-type':'application/json'" http://127.0.0.1:8300/api/v2/changefeeds?keyspace=$KEYSPACE_NAME -d "$SINK_PARA"
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
+	storage | pulsar) run_consumer "$WORK_DIR" "$SINK_URI" ;;
 	esac
 }
 
