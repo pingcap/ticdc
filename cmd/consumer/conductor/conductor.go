@@ -751,7 +751,11 @@ func (c *Conductor) accept(work decode.Event) error {
 		ts := value.ResolvedTs
 		c.inputMarker, c.hasInputMarker = max(c.inputMarker, ts), true
 		c.readThrough = max(c.readThrough, ts)
-		if c.control == nil {
+		// A source without streams (storage) publishes a global checkpoint.
+		// Partitioned sources must keep per-stream progress: a resolved event
+		// on one partition says nothing about the others, so the global
+		// watermark is the minimum over all streams.
+		if len(c.streams) == 0 {
 			c.watermark = max(c.watermark, ts)
 			break
 		}

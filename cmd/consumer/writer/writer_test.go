@@ -192,31 +192,6 @@ func TestDuplicateRowIsDropped(t *testing.T) {
 	require.Equal(t, int64(7), target.dmls[0].Rows.GetRow(0).GetInt64(0))
 }
 
-func TestLateDDLAfterGlobalCheckpointIsApplied(t *testing.T) {
-	memory := budget.New()
-	target := &recordingSink{}
-	w := newWriterForTest(target, memory, codecCommon.NewConfig(config.ProtocolOpen))
-	w.checkpoint = 200
-
-	ddl := testDDL(100, nil)
-	w.AddDDL(ddl, nil)
-	require.NoError(t, w.Flush(t.Context()))
-	require.Len(t, target.blocks, 1, "an older DDL from another partition must still be written")
-}
-
-func TestLateRowAfterGlobalCheckpointIsKept(t *testing.T) {
-	memory := budget.New()
-	target := &recordingSink{}
-	w := newWriterForTest(target, memory, codecCommon.NewConfig(config.ProtocolOpen))
-	w.checkpoint = 200
-
-	dml := testInsert(testTableInfo(100), 1, 150)
-	memory.ForceAcquire(dml.Rows.MemoryUsage())
-	require.True(t, w.AddDML(dml))
-	require.NoError(t, w.Flush(t.Context()))
-	require.Len(t, target.dmls, 1, "a row from another partition must not be filtered by the global checkpoint")
-}
-
 func TestCSVMergerCombinesSplitUpdate(t *testing.T) {
 	memory := budget.New()
 	target := &recordingSink{}

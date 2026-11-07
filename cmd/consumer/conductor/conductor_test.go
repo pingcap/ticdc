@@ -165,6 +165,30 @@ func TestReadingBoundaries(t *testing.T) {
 	require.True(t, boundary.reached)
 }
 
+func TestResolvedEventsUseMinimumWatermark(t *testing.T) {
+	memory := budget.New()
+	reader := &fakeReader{streams: []source.Stream{
+		{ID: 0, Topic: "t"},
+		{ID: 1, Topic: "t"},
+	}}
+	c := New(memory, reader)
+
+	require.NoError(t, c.accept(decode.Event{
+		Origin: source.Origin{Stream: 0},
+		Event:  &event.ResolvedEvent{ResolvedTs: 200},
+	}))
+	c.collectWatermarks()
+	require.Equal(t, uint64(0), c.watermark,
+		"one partition's resolved timestamp must not advance the global watermark")
+
+	require.NoError(t, c.accept(decode.Event{
+		Origin: source.Origin{Stream: 1},
+		Event:  &event.ResolvedEvent{ResolvedTs: 100},
+	}))
+	c.collectWatermarks()
+	require.Equal(t, uint64(100), c.watermark)
+}
+
 func TestDDLOrdersEarlierAndLaterRows(t *testing.T) {
 	memory := budget.New()
 	c := New(memory, &fakeReader{})
