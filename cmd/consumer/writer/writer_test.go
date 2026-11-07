@@ -213,6 +213,19 @@ func TestCSVMergerCombinesSplitUpdate(t *testing.T) {
 	require.Zero(t, memory.Used())
 }
 
+func TestLateRowAfterGlobalCheckpointIsKept(t *testing.T) {
+	memory := budget.New()
+	target := &recordingSink{}
+	w := newWriterForTest(target, memory, codecCommon.NewConfig(config.ProtocolOpen))
+	w.checkpoint = 200
+
+	dml := testInsert(testTableInfo(100), 1, 150)
+	memory.ForceAcquire(dml.Rows.MemoryUsage())
+	require.True(t, w.AddDML(dml))
+	require.NoError(t, w.Flush(t.Context()))
+	require.Len(t, target.dmls, 1, "a row from another partition must not be filtered by the global checkpoint")
+}
+
 func TestDDLReleaseIsCalled(t *testing.T) {
 	memory := budget.New()
 	target := &recordingSink{}

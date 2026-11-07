@@ -671,7 +671,10 @@ func (w *Writer) advanceCheckpoint() {
 }
 
 func (w *Writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
-	if dml.CommitTs > 0 && dml.CommitTs <= max(w.checkpoint, w.tableCheckpoints[dml.PhysicalTableID]) {
+	// The global checkpoint can pass a row that is still in another Kafka
+	// partition or storage table file. Only the table checkpoint proves that
+	// this table's rows through that timestamp were already written.
+	if dml.CommitTs > 0 && dml.CommitTs <= w.tableCheckpoints[dml.PhysicalTableID] {
 		return nil, nil
 	}
 	if dml.CommitTs == 0 || len(dml.TableInfo.GetOrderedHandleKeyColumnIDs()) == 0 {
