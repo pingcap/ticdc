@@ -723,6 +723,10 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
+	e.collectBlockStatusRequestWithWindow(ctx, 10*time.Millisecond)
+}
+
+func (e *DispatcherManager) collectBlockStatusRequestWithWindow(ctx context.Context, batchWindow time.Duration) {
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
@@ -752,10 +756,10 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 		}
 
-		// Batch from the first observed status for up to 10ms. We drain ready
+		// Batch from the first observed status for up to the window. We drain ready
 		// entries first, then keep waiting until the same deadline so late arrivals
 		// still join the current request instead of being delayed to the next batch.
-		deadline := time.Now().Add(10 * time.Millisecond)
+		deadline := time.Now().Add(batchWindow)
 	loop:
 		for {
 			var ok bool
