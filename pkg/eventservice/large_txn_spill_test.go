@@ -59,6 +59,52 @@ func TestLargeTxnInsertSpillReadOrder(t *testing.T) {
 	require.Nil(t, actual)
 }
 
+func TestLargeTxnOriginalScanRollbackRetriesAfterPartialWrite(t *testing.T) {
+	info := newMockDispatcherInfoForTest(t)
+	disp := newDispatcherStat(info, 1, 1, nil,
+		newChangefeedStatus(info.GetChangefeedID(), 0))
+	state, err := disp.getOrCreateLargeTxnState(t.TempDir(),
+		info.GetTableSpan().TableID, nil, 90, 100)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, disp.cleanupLargeTxnState()) }()
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(1)))
+	checkpoint, err := disp.snapshotOriginalScan()
+	require.NoError(t, err)
+	require.NotNil(t, checkpoint)
+
+	_, err = state.spill.file.Append([]byte("second row"))
+	require.NoError(t, err)
+	_, err = state.spill.file.Size()
+	require.NoError(t, err)
+	err = state.spill.file.Truncate(checkpoint.offset + 4)
+	require.NoError(t, err)
+	disp.markLargeTxnDrainInserts(90, 100, true, 101)
+
+	path := state.spill.file.Path()
+	backupPath := path + ".backup"
+	require.NoError(t, os.Rename(path, backupPath))
+	require.Error(t, disp.rollbackOriginalScan(checkpoint))
+	require.Error(t, disp.recoverOriginalScan())
+	require.NoError(t, os.Rename(backupPath, path))
+	require.NoError(t, disp.recoverOriginalScan())
+	require.Equal(t, largeTxnScanPhaseOriginal, state.getPhase())
+	size, err := state.spill.file.Size()
+	require.NoError(t, err)
+	require.Equal(t, checkpoint.offset, size)
+
+	require.NoError(t, state.appendInsert(context.Background(), newTestSpillRawKVEntry(2)))
+	reader, err := state.spill.NewReader()
+	require.NoError(t, err)
+	for _, expected := range []int{1, 2} {
+		entry, err := reader.Next(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, newTestSpillRawKVEntry(expected).Key, entry.Key)
+	}
+	_, err = reader.Next(context.Background())
+	require.ErrorIs(t, err, io.EOF)
+	require.NoError(t, reader.Close())
+}
+
 func TestLargeTxnInsertSpillCreatesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data-dir", largeTxnInsertSpillDirName)
 

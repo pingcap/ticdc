@@ -262,6 +262,21 @@ func finishCurrentSplitTxn(ctx *txnScanContext, next nextTxnMeta) (bool, error) 
 	); err != nil {
 		return false, err
 	}
+	if processor.cleanupLargeTxnAfterScan && next.commitTs != 0 {
+		// Keep the completed spill for rollback until the iterator closes, but
+		// stop before another transaction can try to use its dispatcher state.
+		events := ctx.merger.mergeWithPrecedingDDLs(processor.getCurrentBatchDML())
+		if next.commitTs > currentCommitTs {
+			events = append(events, ctx.merger.resolveDDLEvents(currentCommitTs)...)
+			events = append(events, event.NewResolvedEvent(
+				currentCommitTs, ctx.session.dispatcherStat.id, ctx.session.dispatcherStat.epoch))
+			ctx.session.progress = newTxnScanProgress(currentCommitTs, 0)
+		} else {
+			ctx.session.progress = newTxnScanProgress(currentCommitTs, currentStartTs)
+		}
+		ctx.session.appendEvents(events)
+		return true, nil
+	}
 	if !processor.hasLargeTxnState(currentStartTs, currentCommitTs) {
 		return false, nil
 	}
@@ -535,7 +550,7 @@ func (p *dmlProcessor) hasSpilledInsertsForCurrentTxn() bool {
 }
 
 func (p *dmlProcessor) hasLargeTxnState(startTs uint64, commitTs uint64) bool {
-	if p.dispatcherStat == nil {
+	if p.dispatcherStat == nil || p.cleanupLargeTxnAfterScan {
 		return false
 	}
 	state := p.dispatcherStat.getLargeTxnState()
@@ -560,7 +575,8 @@ func (p *dmlProcessor) flushSpilledInsertsIntoCurrentTxn() error {
 		insertRow, err := state.nextInsert(p.ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return p.dispatcherStat.cleanupLargeTxnState()
+				p.cleanupLargeTxnAfterScan = true
+				return nil
 			}
 			return err
 		}
