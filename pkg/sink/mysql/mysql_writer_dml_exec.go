@@ -260,7 +260,7 @@ func (w *Writer) logDMLTxnErr(
 ) error {
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
-			zap.String("changefeed", changefeed),
+			zap.String("changefeedID", changefeed),
 			zap.Duration("duration", time.Since(start)),
 			zap.Any("tsPairs", dmls.tsPairs),
 			zap.Int("count", dmls.rowCount),
@@ -270,7 +270,7 @@ func (w *Writer) logDMLTxnErr(
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
 			log.Error("execute DMLs with error, can not retry",
-				zap.String("changefeed", changefeed),
+				zap.String("changefeedID", changefeed),
 				zap.Duration("duration", time.Since(start)),
 				zap.Any("tsPairs", dmls.tsPairs),
 				zap.Int("count", dmls.rowCount),

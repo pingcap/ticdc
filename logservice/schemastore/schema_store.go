@@ -198,7 +198,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.Int64("tableID", event.Job.TableID),
 			zap.String("tableName", event.Job.TableName),
 			zap.Any("type", event.Job.Type),
-			zap.String("DDL", event.Job.Query),
+			zap.String("ddlQuery", event.Job.Query),
 			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
 			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 			zap.Any("storeSchemaVersion", s.schemaVersion),
@@ -226,7 +226,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Int64("tableID", event.Job.TableID),
 				zap.String("tableName", event.Job.TableName),
 				zap.Any("type", event.Job.Type),
-				zap.String("DDL", event.Job.Query),
+				zap.String("ddlQuery", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 				zap.Uint64("jobCommitTs", event.CommitTs),
@@ -258,14 +258,14 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Int64("tableID", ddlEvent.Job.TableID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
-		zap.String("query", ddlEvent.Job.Query))
+		zap.String("ddlQuery", ddlEvent.Job.Query))
 
 	serverConfig := config.GetGlobalServerConfig()
 	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
 		if ts == ddlEvent.CommitTs {
 			log.Info("ignore ddl job by commit ts",
 				zap.Uint64("commitTs", ts),
-				zap.String("query", ddlEvent.Job.Query))
+				zap.String("ddlQuery", ddlEvent.Job.Query))
 			return
 		}
 	}

@@ -508,13 +508,13 @@ func (e *eventStore) RegisterDispatcher(
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs))
 	}
 
@@ -523,7 +523,7 @@ func (e *eventStore) RegisterDispatcher(
 		if success {
 			log.Info("register dispatcher success",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -531,7 +531,7 @@ func (e *eventStore) RegisterDispatcher(
 		} else {
 			log.Info("register dispatcher failed",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -587,10 +587,10 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.Unlock()
 						log.Info("reuse existing subscription with exact span match",
 							zap.Stringer("dispatcherID", dispatcherID),
-							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+							zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.Uint64("startTs", startTs),
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 						return true
 					}
@@ -613,10 +613,10 @@ func (e *eventStore) RegisterDispatcher(
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 			log.Info("reuse existing subscription with smallest containing span",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
+				zap.String("subscriptionTableSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
@@ -734,7 +734,7 @@ func (e *eventStore) RegisterDispatcher(
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -1329,7 +1329,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 					lastLogTime := subStat.lastLogLagTime.Load()
 					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
 						log.Warn("resolved ts lag is too large for initialized subscription",
-							zap.Uint64("subID", uint64(subStat.subID)),
+							zap.Uint64("subscriptionID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),

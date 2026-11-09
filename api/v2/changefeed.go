@@ -1651,7 +1651,7 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
 	if !ok {
-		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("changefeed", changefeedID.String()))
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("changefeedID", changefeedID.String()))
 		_ = c.Error(errors.ErrMaintainerNotFounded)
 		return
 	}

@@ -595,7 +595,7 @@ func (oc *Controller) addMergeOccupyOperators(
 		log.Error("failed to add occupy dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Int64("group", replicaSet.GetGroupID()),
-			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.String("tableSpan", common.FormatTableSpan(replicaSet.Span)),
 			zap.String("operator", occupyOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil, false

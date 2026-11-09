@@ -13,6 +13,7 @@ Read this before adding, removing, or rewriting logs.
 - Do not add `DEBUG` logs by default. Delete low-value logs instead of moving them to `DEBUG`.
 - Keep `message` stable and concise: summarize what happened, why it happened, and what the system will do next.
 - Put object details in stable camelCase `zap` fields such as `changefeedID`, `nodeID`, `dispatcherID`, `regionID`, `subscriptionID`, and `requestID`.
+- One concept has one field name. Identifiers end with `ID`; timestamps end with `Ts`. Use `tableID` for the numeric table ID and `tableSpan` for the formatted key range, never `table` for either. Use `ddlQuery` for DDL text, `ddlType` for the type, and `zap.Error(err)` for errors. Do not put a formatted range in a field named `span`, `subSpan`, or `dispatcherSpan`; when one log carries both the dispatcher's and the subscription's range, name them `tableSpan` and `subscriptionTableSpan`. Summarize other structured values in explicit fields instead of passing objects to `zap.Any`.
 - Message strings should not include function names and should avoid `-` (use spaces instead).
 - Avoid per-object or per-iteration logs, duplicated logs on the same error path, large objects, raw payloads, and long error dumps in default logs.
 - Use metrics for counts, scale, frequency, and trends; use windowed summaries or representative samples for high-cardinality events.
