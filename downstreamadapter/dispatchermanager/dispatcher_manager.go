@@ -1301,11 +1301,6 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	log.Info("remove dispatcher done",
-		zap.String("keyspace", e.changefeedID.Keyspace()),
-		zap.String("changefeedID", e.changefeedID.Name()),
-		zap.Stringer("dispatcherID", id),
-	)
 }
 
 func (e *DispatcherManager) cleanMetrics() {

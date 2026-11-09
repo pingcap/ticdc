@@ -526,6 +526,8 @@ func (t *RemoveDispatcherTask) Execute() time.Time {
 		// Successfully closed, execute Remove
 		t.dispatcherItem.Remove()
 		log.Info("remove dispatcher done",
+			zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+			zap.String("changefeedID", t.manager.changefeedID.Name()),
 			zap.Stringer("dispatcherID", t.dispatcherItem.GetId()),
 			zap.Int("retryCount", t.retryCount))
 		return time.Time{} // Task completed

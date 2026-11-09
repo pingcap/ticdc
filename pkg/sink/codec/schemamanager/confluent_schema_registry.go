@@ -126,8 +126,6 @@ func (m *confluentSchemaManager) Register(
 	schemaDefinition string,
 ) (SchemaID, error) {
 	id := SchemaID{}
-	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
-
 	reqBody := registerRequest{
 		Schema: schemaDefinition,
 	}
@@ -137,8 +135,6 @@ func (m *confluentSchemaManager) Register(
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
-	log.Info("Registering schema", zap.ByteString("payload", payload))
-
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
 		err = util.MaskSensitiveDataInURLError(err)
@@ -167,12 +163,22 @@ func (m *confluentSchemaManager) Register(
 		// https://docs.confluent.io/platform/current/schema-registry/develop/api.html \
 		// #post--subjects-(string-%20subject)-versions
 		// 409 for incompatible schema
-		log.Error(
-			"Failed to register schema to the Registry, HTTP error",
+		fields := []zap.Field{
+			zap.String("schemaName", schemaName),
 			zap.Int("status", resp.StatusCode),
-			zap.ByteString("requestBody", payload),
-			zap.ByteString("responseBody", body),
-		)
+		}
+		var registryErr struct {
+			ErrorCode int    `json:"error_code"`
+			Message   string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &registryErr); err == nil && registryErr.Message != "" {
+			fields = append(fields,
+				zap.Int("errorCode", registryErr.ErrorCode),
+				zap.String("message", registryErr.Message))
+		} else {
+			fields = append(fields, zap.Int("responseLength", len(body)))
+		}
+		log.Error("Failed to register schema to the Registry, HTTP error", fields...)
 		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
 		)
@@ -193,8 +199,8 @@ func (m *confluentSchemaManager) Register(
 	}
 
 	log.Info("Registered schema successfully",
-		zap.Int("schemaID", jsonResp.SchemaID),
-		zap.ByteString("body", body))
+		zap.String("schemaName", schemaName),
+		zap.Int("schemaID", jsonResp.SchemaID))
 
 	id.confluentSchemaID = jsonResp.SchemaID
 	return id, nil

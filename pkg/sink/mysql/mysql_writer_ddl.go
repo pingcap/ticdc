@@ -214,7 +214,6 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		zap.Int64("tableID", event.GetTableID()),
 		zap.Uint64("startTs", event.GetStartTs()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
-		zap.String("ddlQuery", event.GetDDLQuery()),
 	}
 
 	if useSessionTimestamp {

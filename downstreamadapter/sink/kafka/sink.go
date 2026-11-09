@@ -508,8 +508,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("tableID", e.GetTableID()),
 			zap.Uint64("startTs", e.GetStartTs()),
-			zap.Uint64("commitTs", e.GetCommitTs()),
-			zap.String("ddlQuery", e.GetDDLQuery()))
+			zap.Uint64("commitTs", e.GetCommitTs()))
 	}
 	return nil
 }

@@ -704,7 +704,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Int64("tableID", ddl.GetTableID()),
 				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.String("ddlQuery", ddl.Query),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()
 			ddl.AddPostFlushFunc(func() {
@@ -1386,30 +1385,18 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
-	addTableCheckpointBlockerLen := 0
-	if d.addTableCheckpointBlocker != nil {
-		addTableCheckpointBlockerLen = d.addTableCheckpointBlocker.len()
-	}
-	log.Info("dispatcher is not ready to close",
-		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
-		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
-		zap.Stringer("dispatcherID", d.id),
-		zap.Int64("mode", d.mode),
-		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
-		zap.Int("addTableCheckpointBlockerLen", addTableCheckpointBlockerLen),
-		zap.Int("tableProgressLen", d.tableProgress.Len()),
-		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false
 }
 
 // It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *BasicDispatcher) removeDispatcher() {
+	resendTaskCount := len(d.resendTaskMap.Keys())
 	log.Info("remove dispatcher",
 		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
 		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
-		zap.Int64("mode", d.mode))
+		zap.Int64("mode", d.mode),
+		zap.Int("resendTaskCount", resendTaskCount))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
@@ -1426,8 +1413,5 @@ func (d *BasicDispatcher) removeDispatcher() {
 	identifiers := d.resendTaskMap.Keys()
 	for _, identifier := range identifiers {
 		d.cancelResendTask(identifier)
-		log.Info("cancel resend task before remove dispatcher",
-			zap.Stringer("dispatcherID", d.id),
-			zap.Any("identifier", identifier))
 	}
 }
