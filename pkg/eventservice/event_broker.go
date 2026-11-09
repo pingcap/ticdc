@@ -1118,7 +1118,7 @@ func (c *eventBroker) removeInactiveDispatchers() {
 	removeInactive := func(_, value any) bool {
 		d := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if c.isInactiveDispatcher(d) {
-			log.Warn("remove in-active dispatcher",
+			log.Warn("remove dispatcher since it's inactive",
 				zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
 				zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
 				zap.Stringer("dispatcherID", d.id),
@@ -1408,12 +1408,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			c.dispatcherCount.Inc()
 			c.metricsCollector.metricDispatcherCount.Inc()
 		}
-		log.Info("table trigger dispatcher register dispatcher",
+		log.Info("add dispatcher done",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()),
+			zap.String("kind", "tableTrigger"),
 			zap.Uint64("clusterID", c.tidbClusterID))
 		return nil
 	}
@@ -1441,7 +1442,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 	if !success {
 		if !info.IsOnlyReuse() {
-			log.Error("register dispatcher to eventStore failed",
+			log.Error("add dispatcher failed",
 				zap.String("keyspace", changefeedID.Keyspace()),
 				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", id),
@@ -1482,7 +1483,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.dispatcherCount.Inc()
 		c.metricsCollector.metricDispatcherCount.Inc()
 	}
-	log.Info("register dispatcher",
+	log.Info("add dispatcher done",
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
@@ -1555,7 +1556,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		_ = c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
 	}
 
-	log.Info("remove dispatcher",
+	log.Info("remove dispatcher done",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeedID", changefeedID.Name()),

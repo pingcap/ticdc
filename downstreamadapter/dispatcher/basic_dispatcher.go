@@ -1413,7 +1413,7 @@ func (d *BasicDispatcher) removeDispatcher() {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
+		log.Error("remove dispatcher failed",
 			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
 			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),

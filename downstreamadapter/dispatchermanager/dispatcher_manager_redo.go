@@ -151,11 +151,13 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 		err := e.collectRedoMeta(e.ctx)
 		e.handleError(e.ctx, err)
 	}()
-	log.Info("table trigger redo dispatcher created",
+	log.Info("add dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", redoDispatcher.GetId()),
 		zap.Uint64("startTs", redoDispatcher.GetStartTs()),
+		zap.String("kind", "tableTrigger"),
+		zap.Bool("redo", true),
 	)
 	return nil
 }
@@ -238,18 +240,20 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.metricRedoEventDispatcherCount.Inc()
 		}
 
-		log.Info("new redo dispatcher created",
+		log.Info("add dispatcher done",
 			zap.String("keyspace", e.changefeedID.Keyspace()),
 			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.Int64("startTs", startTsList[idx]),
-			zap.Bool("skipDMLAsStartTs", scheduleSkipDMLAsStartTsList[idx]))
+			zap.Bool("skipDMLAsStartTs", scheduleSkipDMLAsStartTsList[idx]),
+			zap.Bool("redo", true))
 	}
 	e.metricRedoCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
-	log.Info("batch create new redo dispatchers",
+	log.Info("add dispatchers done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Int("count", len(dispatcherIds)),
+		zap.Bool("redo", true),
 		zap.Duration("duration", time.Since(start)),
 	)
 	return nil
@@ -287,10 +291,12 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		e.sharedInfo,
 	)
 
-	log.Info("new redo dispatcher created(merge dispatcher)",
+	log.Info("add dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
-		zap.Stringer("dispatcherID", mergedDispatcherID))
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.String("kind", "merge"),
+		zap.Bool("redo", true))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -319,10 +325,11 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	} else {
 		e.metricRedoEventDispatcherCount.Dec()
 	}
-	log.Info("redo dispatcher completely stopped, and delete it from event dispatcher manager",
+	log.Info("remove dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
+		zap.Bool("redo", true),
 	)
 }
 

@@ -525,7 +525,7 @@ func (t *RemoveDispatcherTask) Execute() time.Time {
 	if ok {
 		// Successfully closed, execute Remove
 		t.dispatcherItem.Remove()
-		log.Info("dispatcher removed successfully",
+		log.Info("remove dispatcher done",
 			zap.Stringer("dispatcherID", t.dispatcherItem.GetId()),
 			zap.Int("retryCount", t.retryCount))
 		return time.Time{} // Task completed

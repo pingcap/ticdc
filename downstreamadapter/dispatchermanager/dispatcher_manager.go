@@ -498,11 +498,12 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			FastGenByArgs("table trigger event dispatcher was not created")
 	}
-	log.Info("table trigger event dispatcher created",
+	log.Info("add dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", tableTriggerDispatcher.GetId()),
 		zap.Uint64("startTs", tableTriggerDispatcher.GetStartTs()),
+		zap.String("kind", "tableTrigger"),
 	)
 	return nil
 }
@@ -683,7 +684,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.metricEventDispatcherCount.Inc()
 		}
 
-		log.Info("new dispatcher created",
+		log.Info("add dispatcher done",
 			zap.String("keyspace", e.changefeedID.Keyspace()),
 			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
@@ -691,7 +692,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
 	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
-	log.Info("batch create new dispatchers",
+	log.Info("add dispatchers done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Int("count", len(dispatcherIds)),
@@ -1046,10 +1047,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		&e.redoGlobalTs,
 	)
 
-	log.Info("new dispatcher created(merge dispatcher)",
+	log.Info("add dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
-		zap.Stringer("dispatcherID", mergedDispatcherID))
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.String("kind", "merge"))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -1299,7 +1301,7 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	log.Info("event dispatcher completely stopped, and delete it from event dispatcher manager",
+	log.Info("remove dispatcher done",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),

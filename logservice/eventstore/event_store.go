@@ -506,12 +506,12 @@ func (e *eventStore) RegisterDispatcher(
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	eventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
-		log.Warn("register dispatcher with large startTs lag",
+		log.Warn("add dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
-		log.Info("register dispatcher",
+		log.Info("add dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("startTs", startTs))
 	}
@@ -519,14 +519,14 @@ func (e *eventStore) RegisterDispatcher(
 	start := time.Now()
 	defer func() {
 		if success {
-			log.Info("register dispatcher success",
+			log.Info("add dispatcher done",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
 				zap.Duration("duration", time.Since(start)))
 		} else {
-			log.Info("register dispatcher failed",
+			log.Info("add dispatcher failed",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
@@ -753,7 +753,7 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
-	log.Info("unregister dispatcher done",
+	log.Info("remove dispatcher done",
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", dispatcherID))
