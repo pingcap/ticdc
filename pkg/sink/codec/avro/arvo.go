@@ -522,10 +522,6 @@ func (a *BatchEncoder) value2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: row to schema",
-		zap.ByteString("schema", str),
-		zap.Bool("enableTiDBExtension", a.config.EnableRowChecksum),
-		zap.Bool("enableRowLevelChecksum", a.config.EnableRowChecksum))
 	return string(str), nil
 }
 
@@ -542,7 +538,6 @@ func (a *BatchEncoder) key2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: key to schema", zap.ByteString("schema", str))
 	return string(str), nil
 }
 

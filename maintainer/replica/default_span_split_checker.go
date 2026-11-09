@@ -68,7 +68,9 @@ func NewDefaultSpanSplitChecker(
 	refresher *RegionCountRefresher,
 ) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
-		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
+		log.Panic("scheduler config is nil, please check the config",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()))
 	}
 
 	return &defaultSpanSplitChecker{
@@ -99,7 +101,10 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		return
 	}
 	if !replica.enabledSplit {
-		log.Debug("default span split checker: replica not enabled to split, skip add", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()))
+		log.Debug("default span split checker: replica not enabled to split, skip add",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
+			zap.String("replica", replica.ID.String()))
 		return
 	}
 	s.allTasks[replica.ID] = &spanSplitStatus{
@@ -125,7 +130,10 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
+		log.Warn("default span split checker: replica not found",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
+			zap.String("replica", replica.ID.String()))
 		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {
@@ -142,7 +150,12 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		}
 	}
 
-	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
+	log.Debug("default span split checker: update status",
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeedID", s.changefeedID.Name()),
+		zap.String("replica", replica.ID.String()),
+		zap.Int("trafficScore", status.trafficScore),
+		zap.Int("regionCount", status.regionCount))
 
 	if !s.enableTableAcrossNodes {
 		return

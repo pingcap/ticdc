@@ -150,7 +150,7 @@ func (f *fileWorkerGroup) Run(
 		f.close()
 		log.Warn("redo file workers closed",
 			zap.String("keyspace", f.cfg.ChangeFeedID().Keyspace()),
-			zap.String("changefeed", f.cfg.ChangeFeedID().Name()),
+			zap.String("changefeedID", f.cfg.ChangeFeedID().Name()),
 			zap.Error(err))
 	}()
 
@@ -165,7 +165,7 @@ func (f *fileWorkerGroup) Run(
 	}
 	log.Info("redo file workers started",
 		zap.String("keyspace", f.cfg.ChangeFeedID().Keyspace()),
-		zap.String("changefeed", f.cfg.ChangeFeedID().Name()),
+		zap.String("changefeedID", f.cfg.ChangeFeedID().Name()),
 		zap.Int("workerNum", f.workerNum))
 	return eg.Wait()
 }

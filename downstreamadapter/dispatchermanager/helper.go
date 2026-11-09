@@ -347,7 +347,8 @@ func handleScheduleCreate(
 	if common.IsRedoMode(config.Mode) {
 		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		log.Debug("store current working add operator for redo dispatcher",
-			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("keyspace", req.ChangefeedID.Keyspace),
+			zap.String("changefeedID", req.ChangefeedID.Name),
 			zap.String("dispatcherID", dispatcherID.String()),
 			zap.Any("operator", req),
 		)
@@ -355,7 +356,8 @@ func handleScheduleCreate(
 	} else {
 		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		log.Debug("store current working add operator",
-			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("keyspace", req.ChangefeedID.Keyspace),
+			zap.String("changefeedID", req.ChangefeedID.Name),
 			zap.String("dispatcherID", dispatcherID.String()),
 			zap.Any("operator", req),
 		)
@@ -378,13 +380,15 @@ func handleScheduleRemove(
 		if _, exists := dispatcherManager.redoDispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 			log.Debug("store current working remove operator for redo dispatcher",
-				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("keyspace", req.ChangefeedID.Keyspace),
+				zap.String("changefeedID", req.ChangefeedID.Name),
 				zap.String("dispatcherID", dispatcherID.String()),
 				zap.Any("operator", req),
 			)
 		} else {
 			log.Debug("redo dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("keyspace", req.ChangefeedID.Keyspace),
+				zap.String("changefeedID", req.ChangefeedID.Name),
 				zap.String("dispatcherID", dispatcherID.String()),
 				zap.Any("operator", req),
 			)
@@ -398,13 +402,15 @@ func handleScheduleRemove(
 		if _, exists := dispatcherManager.dispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 			log.Debug("store current working remove operator",
-				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("keyspace", req.ChangefeedID.Keyspace),
+				zap.String("changefeedID", req.ChangefeedID.Name),
 				zap.String("dispatcherID", dispatcherID.String()),
 				zap.Any("operator", req),
 			)
 		} else {
 			log.Debug("dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("keyspace", req.ChangefeedID.Keyspace),
+				zap.String("changefeedID", req.ChangefeedID.Name),
 				zap.String("dispatcherID", dispatcherID.String()),
 				zap.Any("operator", req),
 			)
@@ -425,7 +431,8 @@ func createDispatcherByInfo(
 		if err != nil {
 			if IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed, keep add operators for redo dispatchers",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("keyspace", dispatcherManager.changefeedID.Keyspace()),
+					zap.String("changefeedID", dispatcherManager.changefeedID.Name()),
 					zap.Int("count", len(redoInfos)),
 					zap.Error(err),
 				)
@@ -440,7 +447,8 @@ func createDispatcherByInfo(
 		if err != nil {
 			if IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed, keep add operators",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("keyspace", dispatcherManager.changefeedID.Keyspace()),
+					zap.String("changefeedID", dispatcherManager.changefeedID.Name()),
 					zap.Int("count", len(infos)),
 					zap.Error(err),
 				)
@@ -468,7 +476,8 @@ func deleteCreatedOperators[T dispatcher.Dispatcher](
 			req := v.(SchedulerDispatcherRequest)
 			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 				log.Debug("delete current working add operator",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("keyspace", dispatcherManager.changefeedID.Keyspace()),
+					zap.String("changefeedID", dispatcherManager.changefeedID.Name()),
 					zap.String("dispatcherID", info.ID.String()),
 					zap.String("dispatcherKind", dispatcherKind),
 					zap.Any("operator", req),
@@ -860,9 +869,10 @@ func logStaleMaintainerControlMessage(
 	admission maintainerRequestAdmission,
 	extraFields ...zap.Field,
 ) {
-	fields := make([]zap.Field, 0, 5+len(extraFields))
+	fields := make([]zap.Field, 0, 6+len(extraFields))
 	fields = append(fields,
-		zap.String("changefeedID", changefeedID.String()),
+		zap.String("keyspace", changefeedID.GetKeyspace()),
+		zap.String("changefeedID", changefeedID.GetName()),
 		zap.String("from", from.String()),
 		zap.Uint64(epochField, maintainerEpoch),
 		zap.Uint64("currentMaintainerEpoch", admission.currentEpoch),

@@ -100,7 +100,7 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 	defer func() {
 		log.Warn("redo encoding workers closed",
 			zap.String("keyspace", e.changefeed.Keyspace()),
-			zap.String("changefeed", e.changefeed.Name()),
+			zap.String("changefeedID", e.changefeed.Name()),
 			zap.Error(err))
 		if err != nil {
 			select {
@@ -119,7 +119,7 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 	}
 	log.Info("redo log encoding workers started",
 		zap.String("keyspace", e.changefeed.Keyspace()),
-		zap.String("changefeed", e.changefeed.Name()),
+		zap.String("changefeedID", e.changefeed.Name()),
 		zap.Int("workerNum", e.workerNum))
 	return g.Wait()
 }
@@ -150,7 +150,7 @@ func (e *encodingWorkerGroup) runWorker(ctx context.Context, idx int) error {
 			if event == nil {
 				log.Warn("received nil event in redo encoding worker",
 					zap.String("keyspace", e.changefeed.Keyspace()),
-					zap.String("changefeed", e.changefeed.Name()))
+					zap.String("changefeedID", e.changefeed.Name()))
 				continue
 			}
 			redoLogEvent, err := toPolymorphicDMLEvent(event)

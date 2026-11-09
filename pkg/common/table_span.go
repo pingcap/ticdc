@@ -45,7 +45,7 @@ func (d *DataRange) GetEndTs() uint64 {
 }
 
 func (d *DataRange) String() string {
-	return fmt.Sprintf("span: %s, startTs: %d, endTs: %d", d.Span.String(), d.CommitTsStart, d.CommitTsEnd)
+	return fmt.Sprintf("span: %s, startTs: %d, endTs: %d", FormatTableSpan(d.Span), d.CommitTsStart, d.CommitTsEnd)
 }
 
 func (d *DataRange) Equal(other *DataRange) bool {

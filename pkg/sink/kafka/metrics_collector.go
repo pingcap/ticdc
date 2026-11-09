@@ -81,7 +81,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 		case <-ctx.Done():
 			log.Info("kafka metrics collector stopped",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()))
+				zap.String("changefeedID", m.changefeedID.Name()))
 			return
 		case <-refreshMetricsTicker.C:
 			m.collectBrokerMetrics()

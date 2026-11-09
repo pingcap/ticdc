@@ -545,9 +545,10 @@ func addToStatusDynamicStream(d Dispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.AddPath(d.GetId(), d)
 	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed",
-			zap.Stringer("changefeedID", d.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.GetId()),
+		log.Error("add dispatcher failed",
+			zap.String("keyspace", d.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", d.GetChangefeedID().Name()),
+			zap.Stringer("dispatcherID", d.GetId()),
 			zap.Error(err))
 	}
 }

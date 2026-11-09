@@ -120,7 +120,8 @@ func (m *Backoff) checkFailedStatus(status *heartbeatpb.MaintainerStatus) (bool,
 			m.checkpointTs = status.CheckpointTs
 		}
 		log.Error("changefeed maintainer report a fast fail error",
-			zap.Stringer("changefeed", m.id),
+			zap.String("keyspace", m.id.Keyspace()),
+			zap.String("changefeedID", m.id.Name()),
 			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.String("node", err.Node),
 			zap.String("code", err.Code),
@@ -158,7 +159,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, confi
 				"its checkpointTs is greater than lastRetryCheckpointTs,"+
 				"it will be changed to normal state",
 				zap.String("keyspace", m.id.Keyspace()),
-				zap.String("changefeed", m.id.Name()),
+				zap.String("changefeedID", m.id.Name()),
 				zap.Uint64("checkpointTs", status.CheckpointTs))
 			// reset the retry backoff
 			m.resetErrRetry()
@@ -172,13 +173,15 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, confi
 		if m.isRestarting.Load() {
 			// FIXME: What does ignore the error mean?
 			log.Info("changefeed is already in restarting progress, ignore the error",
-				zap.String("changefeed", m.id.Name()),
+				zap.String("keyspace", m.id.Keyspace()),
+				zap.String("changefeedID", m.id.Name()),
 				zap.Any("err", status.Err[len(status.Err)-1].Message),
 			)
 		}
 
 		log.Error("changefeed maintainer report an error",
-			zap.Stringer("changefeed", m.id),
+			zap.String("keyspace", m.id.Keyspace()),
+			zap.String("changefeedID", m.id.Name()),
 			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.String("node", status.Err[len(status.Err)-1].Node),
 			zap.String("code", status.Err[len(status.Err)-1].Code),
@@ -232,7 +235,8 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		log.Error("The changefeed won't be restarted as it has been experiencing failures for "+
 			"an extended duration",
 			zap.Duration("maxElapsedTime", m.errBackoff.MaxElapsedTime),
-			zap.Stringer("changefeed", m.id),
+			zap.String("keyspace", m.id.Keyspace()),
+			zap.String("changefeedID", m.id.Name()),
 			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		)
@@ -240,7 +244,8 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 	}
 	// if any error is occurred , we should set the changefeed state to warning and stop the changefeed
 	log.Warn("changefeed meets an error, will be stopped",
-		zap.Stringer("changefeed", m.id),
+		zap.String("keyspace", m.id.Keyspace()),
+		zap.String("changefeedID", m.id.Name()),
 		zap.Uint64("checkpointTs", m.checkpointTs),
 		zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		zap.Any("error", errs))

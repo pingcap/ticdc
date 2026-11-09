@@ -89,7 +89,7 @@ func NewRedoMeta(
 	if m.flushIntervalInMs < redo.MinFlushIntervalInMs {
 		log.Warn("redo flush interval is too small, use default value",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Int64("interval", m.flushIntervalInMs))
 		m.flushIntervalInMs = redo.DefaultMetaFlushIntervalInMs
 	}
@@ -136,7 +136,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	if err != nil {
 		log.Warn("redo: pre clean redo logs fail",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Error(err))
 		return err
 	}
@@ -144,7 +144,7 @@ func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	if err != nil {
 		log.Warn("redo: init redo meta fail",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Error(err))
 		return err
 	}
@@ -173,17 +173,17 @@ func (m *RedoMeta) Run(ctx context.Context) error {
 func (m *RedoMeta) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if ok := m.metaResolvedTs.checkAndSetUnflushed(resolvedTs); !ok {
 		log.Warn("update redo meta with a regressed resolved ts, ignore",
-			zap.Uint64("currResolvedTs", m.metaResolvedTs.getFlushed()),
-			zap.Uint64("recvResolvedTs", resolvedTs),
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.Uint64("currResolvedTs", m.metaResolvedTs.getFlushed()),
+			zap.Uint64("recvResolvedTs", resolvedTs))
 	}
 	if ok := m.metaCheckpointTs.checkAndSetUnflushed(checkpointTs); !ok {
 		log.Warn("update redo meta with a regressed checkpoint ts, ignore",
-			zap.Uint64("currCheckpointTs", m.metaCheckpointTs.getFlushed()),
-			zap.Uint64("recvCheckpointTs", checkpointTs),
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.Uint64("currCheckpointTs", m.metaCheckpointTs.getFlushed()),
+			zap.Uint64("recvCheckpointTs", checkpointTs))
 	}
 }
 
@@ -211,8 +211,9 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	err := m.extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
 		log.Info("redo: meta manager walk dir",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
-			zap.String("path", path), zap.Int64("size", size))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.String("path", path),
+			zap.Int64("size", size))
 		// TODO: use prefix to accelerate traverse operation
 		if !strings.HasSuffix(path, redo.MetaEXT) {
 			return nil
@@ -223,8 +224,9 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 		if err != nil {
 			log.Warn("redo: read meta file failed",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()),
-				zap.String("path", path), zap.Error(err))
+				zap.String("changefeedID", m.changeFeedID.Name()),
+				zap.String("path", path),
+				zap.Error(err))
 			if !util.IsNotExistInExtStorage(err) {
 				return err
 			}
@@ -235,8 +237,9 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 		if err != nil {
 			log.Error("redo: unmarshal meta data failed",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()),
-				zap.Error(err), zap.ByteString("data", data))
+				zap.String("changefeedID", m.changeFeedID.Name()),
+				zap.Error(err),
+				zap.ByteString("data", data))
 			return err
 		}
 		metas = append(metas, &meta)
@@ -251,7 +254,7 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	if checkpointTs == 0 || resolvedTs == 0 {
 		log.Panic("checkpointTs or resolvedTs is 0 when initializing redo meta in owner",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Uint64("checkpointTs", checkpointTs),
 			zap.Uint64("resolvedTs", resolvedTs))
 	}
@@ -264,7 +267,7 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	flushedMeta := m.GetFlushedMeta()
 	log.Info("redo: meta manager flush init meta success",
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
+		zap.String("changefeedID", m.changeFeedID.Name()),
 		zap.Uint64("checkpointTs", flushedMeta.CheckpointTs),
 		zap.Uint64("resolvedTs", flushedMeta.ResolvedTs))
 
@@ -326,15 +329,17 @@ func (m *RedoMeta) shouldRemoved(path string, checkPointTs uint64) bool {
 	if err != nil {
 		log.Error("parse file name failed",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
-			zap.String("path", path), zap.Error(err))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.String("path", path),
+			zap.Error(err))
 		return false
 	}
 	if fileType != redo.RedoDDLLogFileType && fileType != redo.RedoRowLogFileType {
 		log.Panic("unknown file type",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
-			zap.String("path", path), zap.Any("fileType", fileType))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.String("path", path),
+			zap.Any("fileType", fileType))
 	}
 
 	// if commitTs == checkPointTs, the DDL may be executed in the owner,
@@ -369,7 +374,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	}
 	log.Info("redo meta write deleted mark",
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()))
+		zap.String("changefeedID", m.changeFeedID.Name()))
 
 	if err := writelease.WaitForWrite(ctx, m.writeGate); err != nil {
 		return err
@@ -390,7 +395,7 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
 			log.Debug("Redo meta has not changed for a long time, table trigger redo dispatcher may be stuck",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()),
+				zap.String("changefeedID", m.changeFeedID.Name()),
 				zap.Duration("lastFlushTime", time.Since(m.lastFlushTime)),
 				zap.Any("meta", unflushed))
 		}
@@ -399,7 +404,7 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 
 	log.Debug("Flush redo meta",
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
+		zap.String("changefeedID", m.changeFeedID.Name()),
 		zap.Any("meta", unflushed))
 	if err := m.flush(ctx, unflushed); err != nil {
 		return err
@@ -446,7 +451,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	if err := m.extStorage.WriteFile(ctx, metaFile, data); err != nil {
 		log.Error("redo: meta manager flush meta write file failed",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Error(err))
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
@@ -460,7 +465,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 		if err != nil && !util.IsNotExistInExtStorage(err) {
 			log.Error("redo: meta manager flush meta delete file failed",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()),
+				zap.String("changefeedID", m.changeFeedID.Name()),
 				zap.Error(err))
 			return errors.WrapError(errors.ErrExternalStorageAPI, err)
 		}
@@ -469,7 +474,7 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 
 	log.Debug("flush meta to s3",
 		zap.String("keyspace", m.changeFeedID.Keyspace()),
-		zap.String("changefeed", m.changeFeedID.Name()),
+		zap.String("changefeedID", m.changeFeedID.Name()),
 		zap.String("metaFile", metaFile),
 		zap.Any("cost", time.Since(start).Milliseconds()))
 	m.metricFlushLogDuration.Observe(time.Since(start).Seconds())
@@ -508,7 +513,7 @@ func (m *RedoMeta) bgFlushMeta(egCtx context.Context) (err error) {
 		ticker.Stop()
 		log.Info("redo metaManager bgFlushMeta exits",
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeed", m.changeFeedID.Name()),
+			zap.String("changefeedID", m.changeFeedID.Name()),
 			zap.Error(err))
 	}()
 
@@ -535,7 +540,7 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 		case <-egCtx.Done():
 			log.Info("redo meta GC exits as context cancelled",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()))
+				zap.String("changefeedID", m.changeFeedID.Name()))
 			return errors.Trace(egCtx.Err())
 		case <-ticker.C:
 			ckpt := m.metaCheckpointTs.getFlushed()
@@ -547,16 +552,17 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 			}
 			preCkpt = ckpt
 			log.Debug("redo meta GC is triggered",
-				zap.Uint64("checkpointTs", ckpt),
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeed", m.changeFeedID.Name()))
+				zap.String("changefeedID", m.changeFeedID.Name()),
+				zap.Uint64("checkpointTs", ckpt))
 			err := util.RemoveFilesIf(egCtx, m.extStorage, func(path string) bool {
 				return m.shouldRemoved(path, ckpt)
 			}, nil)
 			if err != nil {
 				log.Warn("redo meta log GC fail",
 					zap.String("keyspace", m.changeFeedID.Keyspace()),
-					zap.String("changefeed", m.changeFeedID.Name()), zap.Error(err))
+					zap.String("changefeedID", m.changeFeedID.Name()),
+					zap.Error(err))
 				return errors.Trace(err)
 			}
 		}

@@ -15,7 +15,6 @@ package replica
 
 import (
 	"bytes"
-	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -24,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -66,15 +66,15 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		Mode:         mode,
 	})
-	log.Info("new span replication created",
-		zap.Stringer("changefeedID", cfID),
-		zap.String("id", id.String()),
-		zap.Int64("schemaID", SchemaID),
+	log.Info("span replication created",
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.String("changefeedID", cfID.Name()),
+		zap.String("dispatcherID", id.String()),
 		zap.Int64("tableID", span.TableID),
-		zap.String("groupID", replica.GetGroupName(r.groupID)),
+		zap.String("tableSpan", common.FormatTableSpan(span)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.Int64("schemaID", SchemaID),
+		zap.Int64("groupID", r.groupID))
 	return r
 }
 
@@ -91,17 +91,17 @@ func NewWorkingSpanReplication(
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
-	log.Info("new working span replication created",
-		zap.Stringer("changefeedID", cfID),
+	log.Info("span replication created",
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("dispatcherID", id.String()),
-		zap.String("nodeID", nodeID.String()),
-		zap.Uint64("checkpointTs", status.CheckpointTs),
-		zap.String("componentStatus", status.ComponentStatus.String()),
-		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
+		zap.String("tableSpan", common.FormatTableSpan(span)),
+		zap.Uint64("checkpointTs", status.CheckpointTs),
+		zap.Int64("schemaID", SchemaID),
 		zap.Int64("groupID", r.groupID),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.String("nodeID", nodeID.String()),
+		zap.String("componentStatus", status.ComponentStatus.String()))
 	return r
 }
 
@@ -127,7 +127,8 @@ func (r *SpanReplication) IsSplitEnabled() bool {
 func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 	if status == nil || status.CheckpointTs == 0 {
 		log.Panic("add replica with invalid checkpoint ts",
-			zap.Stringer("changefeedID", r.ChangefeedID),
+			zap.String("keyspace", r.ChangefeedID.Keyspace()),
+			zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("dispatcherID", r.ID.String()),
 			zap.Uint64("checkpointTs", status.CheckpointTs),
 		)
@@ -147,18 +148,17 @@ func (r *SpanReplication) initGroupID() {
 	totalSpan := common.TableIDToComparableSpan(span.KeyspaceID, span.TableID)
 	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range",
-			zap.Stringer("changefeedID", r.ChangefeedID),
-			zap.String("dispatcherID", r.ID.String()), zap.Int64("tableID", span.TableID),
-			zap.String("totalSpan", totalSpan.String()),
-			zap.String("start", hex.EncodeToString(span.StartKey)),
-			zap.String("end", hex.EncodeToString(span.EndKey)))
+			zap.String("keyspace", r.ChangefeedID.Keyspace()),
+			zap.String("changefeedID", r.ChangefeedID.Name()),
+			zap.String("dispatcherID", r.ID.String()),
+			zap.Int64("tableID", span.TableID),
+			zap.String("totalSpan", common.FormatTableSpan(&totalSpan)),
+			zap.String("start", util.RedactKey(span.StartKey)),
+			zap.String("end", util.RedactKey(span.EndKey)))
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
-	log.Info("init groupID",
-		zap.Stringer("changefeedID", r.ChangefeedID), zap.Any("groupID", r.groupID),
-		zap.Any("span", common.FormatTableSpan(&span)), zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
@@ -318,7 +318,8 @@ func (r *SpanReplication) NewAddDispatcherMessage(
 			// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
 			// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
 			log.Debug("use committed checkpoint for stale ddl barrier",
-				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("keyspace", r.ChangefeedID.Keyspace()),
+				zap.String("changefeedID", r.ChangefeedID.Name()),
 				zap.String("dispatcherID", r.ID.String()),
 				zap.Int64("tableID", r.Span.TableID),
 				zap.String("operatorType", operatorType.String()),
@@ -328,7 +329,8 @@ func (r *SpanReplication) NewAddDispatcherMessage(
 			skipDMLAsStartTs = false
 		} else {
 			log.Debug("clamp dispatcher start ts to committed checkpoint",
-				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("keyspace", r.ChangefeedID.Keyspace()),
+				zap.String("changefeedID", r.ChangefeedID.Name()),
 				zap.String("dispatcherID", r.ID.String()),
 				zap.Int64("tableID", r.Span.TableID),
 				zap.String("operatorType", operatorType.String()),

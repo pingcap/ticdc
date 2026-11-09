@@ -136,7 +136,7 @@ func (a *saramaAdminClient) GetTopicsMeta(_ context.Context, topics []string, ig
 			}
 			log.Warn("kafka topic metadata refresh failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("changefeedID", a.changefeed.Name()),
 				zap.String("topic", meta.Name),
 				zap.Error(meta.Err))
 			continue
@@ -232,7 +232,7 @@ func (a *saramaAdminClient) Close() {
 		if err := a.admin.Close(); err != nil {
 			log.Warn("kafka admin client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("changefeedID", a.changefeed.Name()),
 				zap.Error(err))
 		}
 		return
@@ -241,7 +241,7 @@ func (a *saramaAdminClient) Close() {
 		if err := a.client.Close(); err != nil {
 			log.Warn("kafka client close failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("changefeedID", a.changefeed.Name()),
 				zap.Error(err))
 		}
 	}

@@ -84,7 +84,7 @@ type iterateEventTablesFuncArgs struct {
 func (args *updateSchemaMetadataFuncArgs) addTableToDB(tableID int64, schemaID int64) {
 	databaseInfo, ok := args.databaseMap[schemaID]
 	if !ok {
-		log.Panic("database not found.", zap.Int64("schemaID", schemaID), zap.Int64("tableID", tableID))
+		log.Panic("database not found.", zap.Int64("tableID", tableID), zap.Int64("schemaID", schemaID))
 	}
 	databaseInfo.Tables[tableID] = true
 }
@@ -92,7 +92,7 @@ func (args *updateSchemaMetadataFuncArgs) addTableToDB(tableID int64, schemaID i
 func (args *updateSchemaMetadataFuncArgs) removeTableFromDB(tableID int64, schemaID int64) {
 	databaseInfo, ok := args.databaseMap[schemaID]
 	if !ok {
-		log.Panic("database not found.", zap.Int64("schemaID", schemaID), zap.Int64("tableID", tableID))
+		log.Panic("database not found.", zap.Int64("tableID", tableID), zap.Int64("schemaID", schemaID))
 	}
 	delete(databaseInfo.Tables, tableID)
 }
@@ -2033,9 +2033,9 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 		}
 	}
 	log.Panic("should not reach here",
+		zap.Int64("tableID", tableID),
 		zap.Any("type", event.Type),
-		zap.String("query", event.Query),
-		zap.Int64("tableID", tableID))
+		zap.String("query", event.Query))
 	return nil, false
 }
 
@@ -2092,9 +2092,9 @@ func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (
 		}
 	}
 	log.Panic("should not reach here",
+		zap.Int64("tableID", tableID),
 		zap.Bool("isPartitionTable", isPartitionTable(event.TableInfo)),
-		zap.Int64("eventTableID", event.TableID),
-		zap.Int64("tableID", tableID))
+		zap.Int64("eventTableID", event.TableID))
 	return nil, false
 }
 
@@ -2868,10 +2868,10 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",
+				zap.Int64("tableID", rawEvent.TableID),
 				zap.String("DDL", rawEvent.Query),
 				zap.Int64("jobID", rawEvent.ID),
-				zap.Int64("schemaID", rawEvent.SchemaID),
-				zap.Int64("tableID", rawEvent.TableID))
+				zap.Int64("schemaID", rawEvent.SchemaID))
 		}
 	} else {
 		if !ignorePrevTable {
@@ -2926,10 +2926,10 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",
+				zap.Int64("tableID", rawEvent.TableID),
 				zap.String("DDL", rawEvent.Query),
 				zap.Int64("jobID", rawEvent.ID),
-				zap.Int64("schemaID", rawEvent.SchemaID),
-				zap.Int64("tableID", rawEvent.TableID))
+				zap.Int64("schemaID", rawEvent.SchemaID))
 		}
 	}
 	// For rename table, we only set NotSync to true when the previous table is filtered.

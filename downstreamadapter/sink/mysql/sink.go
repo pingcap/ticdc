@@ -203,14 +203,14 @@ func newMySQLSinkWithDBs(
 		if err != nil {
 			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Error(err))
 		} else if supported {
 			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
 		} else {
 			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.Stringer("changefeed", changefeedID))
+				zap.String("changefeedID", changefeedID.Name()))
 		}
 	}
 
@@ -402,7 +402,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	default:
 		log.Panic("mysql sink meet unknown event type",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Any("event", event))
 	}
 	if err != nil {
@@ -424,7 +424,8 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 
 	if err := s.progressTableWriter.Flush(ts); err != nil {
 		log.Warn("failed to update active active progress table",
-			zap.String("changefeed", s.changefeedID.DisplayName.String()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Error(err))
 		return
 	}
@@ -517,7 +518,8 @@ func (s *Sink) Close() {
 func (s *Sink) closeDBPool(role string, db *sql.DB) {
 	if err := db.Close(); err != nil {
 		log.Warn("failed to close mysql sink db pool",
-			zap.String("changefeed", s.changefeedID.String()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.String("dbRole", role),
 			zap.Error(err))
 	}
@@ -544,7 +546,9 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 	defer func() {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Warn("close mysql cleanup db meet error",
-				zap.Any("changefeed", s.changefeedID.String()), zap.Error(closeErr))
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeedID", s.changefeedID.Name()),
+				zap.Error(closeErr))
 		}
 	}()
 

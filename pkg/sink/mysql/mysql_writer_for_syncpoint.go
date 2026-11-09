@@ -53,7 +53,9 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	var secondaryTs string
 	err = row.Scan(&secondaryTs)
 	if err != nil {
-		log.Info("sync table: get tidb_current_ts err", zap.String("changefeed", w.ChangefeedID.String()))
+		log.Info("sync table: get tidb_current_ts err",
+			zap.String("keyspace", w.ChangefeedID.Keyspace()),
+			zap.String("changefeedID", w.ChangefeedID.Name()))
 		err2 := tx.Rollback()
 		if err2 != nil {
 			log.Error("failed to write syncpoint table", zap.Error(err))

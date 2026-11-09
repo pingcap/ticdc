@@ -379,7 +379,8 @@ func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.
 		return false
 	}
 	log.Info("dispatcher removed in current event service, retry registration",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
 	if !s.beginRegister(serverID) {
@@ -429,7 +430,8 @@ func (s *dispatcherSession) resetCurrentEventService() {
 	serverID := s.connState.getCurrentEventServiceID()
 	if serverID.IsEmpty() {
 		log.Warn("skip reset because current event service is empty",
-			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+			zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 			zap.Stringer("dispatcher", s.target.GetId()))
 		return
 	}
@@ -457,7 +459,8 @@ func (s *dispatcherSession) doResetLocked(serverID node.ID, resetTs uint64) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	s.sendMessage(msg)
 	log.Info("send reset dispatcher request to event service",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcher", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("epoch", epoch),
@@ -483,7 +486,8 @@ func (s *dispatcherSession) remove() {
 // cleanup of a stale registration on another event service.
 func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcher", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(
@@ -564,7 +568,8 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked(resetTs uint64) {
 		return
 	}
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcher", s.target.GetId()))
 	s.doResetLocked(s.localServerID, resetTs)
 }
@@ -572,12 +577,14 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked(resetTs uint64) {
 func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {
 	if s.readyCallback != nil {
 		log.Panic("ready callback should be nil when accepting remote ready",
-			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+			zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 			zap.Stringer("dispatcher", s.target.GetId()),
 			zap.Stringer("eventServiceID", serverID))
 	}
 	log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcher", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
 	s.doResetLocked(serverID, s.target.GetCheckpointTs())
@@ -672,7 +679,8 @@ func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 		return
 	}
 	log.Info("set remote candidates",
-		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.String("keyspace", s.target.GetChangefeedID().Keyspace()),
+		zap.String("changefeedID", s.target.GetChangefeedID().Name()),
 		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Int64("tableID", s.target.GetTableSpan().TableID),
 		zap.Strings("nodes", nodes))

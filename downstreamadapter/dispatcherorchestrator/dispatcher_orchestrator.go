@@ -217,7 +217,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if !exists {
 		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
 			log.Warn("drop stale maintainer bootstrap request after close",
-				zap.String("changefeed", cfId.Name()),
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
 				zap.String("from", from.String()),
 				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
 				zap.Uint64("closedMaintainerEpoch", closedEpoch))
@@ -226,7 +227,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		cfConfig := &config.ChangefeedConfig{}
 		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
 			log.Panic("failed to unmarshal changefeed config",
-				zap.String("changefeedID", cfId.Name()), zap.Error(err))
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
+				zap.Error(err))
 		}
 		start := time.Now()
 		var initializingManager *dispatchermanager.DispatcherManager
@@ -252,11 +255,17 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		if err != nil {
 			if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
 				log.Info("dispatcher manager write path closed while creating dispatcher manager",
-					zap.Stringer("changefeedID", cfId), zap.Duration("duration", time.Since(start)), zap.Error(err))
+					zap.String("keyspace", cfId.Keyspace()),
+					zap.String("changefeedID", cfId.Name()),
+					zap.Duration("duration", time.Since(start)),
+					zap.Error(err))
 				return nil
 			}
 			log.Error("failed to create new dispatcher manager",
-				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
@@ -266,7 +275,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				Err:             newRunningError(from, err),
 			}
 			log.Error("create new dispatcher manager failed",
-				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
 
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
@@ -285,7 +297,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	manager.MaintainerFenceMu.Lock()
 	if !manager.CanUpdateMaintainer(from, maintainerEpoch) {
 		log.Warn("drop stale maintainer bootstrap request",
-			zap.String("changefeed", cfId.Name()),
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
 			zap.String("from", from.String()),
 			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
@@ -308,7 +321,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
 		log.Warn("drop stale maintainer bootstrap request after trigger validation",
-			zap.String("changefeed", cfId.Name()),
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
 			zap.String("from", from.String()),
 			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
@@ -468,7 +482,8 @@ func ensureBootstrapTableTriggerDispatcher(
 	if err := create(); err != nil {
 		if !dispatchermanager.IsWritePathClosedError(err) {
 			log.Error("failed to create table trigger dispatcher",
-				zap.Stringer("changefeedID", cfID),
+				zap.String("keyspace", cfID.Keyspace()),
+				zap.String("changefeedID", cfID.Name()),
 				zap.String("triggerName", triggerName),
 				zap.Error(err))
 		}
@@ -485,7 +500,8 @@ func validateBootstrapNoTableTriggerDispatcher(
 	// A nil trigger ID is valid only after local trigger cleanup has removed the
 	// previous owner; otherwise owner transfer would leave stale DDL ownership.
 	log.Error("table trigger dispatcher present during nil trigger bootstrap",
-		zap.Stringer("changefeedID", cfID),
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("actualDispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
@@ -503,7 +519,8 @@ func validateBootstrapTableTriggerDispatcherID(
 		return nil
 	}
 	log.Error("table trigger dispatcher id mismatch during bootstrap",
-		zap.Stringer("changefeedID", cfID),
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
 		zap.Stringer("actualDispatcherID", currentID))
@@ -521,14 +538,16 @@ func (m *DispatcherOrchestrator) handleBootstrapTriggerError(
 ) error {
 	if dispatchermanager.IsWritePathClosedError(err) {
 		log.Info("dispatcher manager write path closed while creating table trigger dispatcher",
-			zap.Stringer("changefeedID", cfID),
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()),
 			zap.String("triggerName", triggerName),
 			zap.Error(err))
 		return nil
 	}
 	if m.fenced.Load() || m.closed.Load() {
 		log.Info("dispatcher orchestrator closed while creating table trigger dispatcher",
-			zap.Stringer("changefeedID", cfID),
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()),
 			zap.String("triggerName", triggerName),
 			zap.Error(err))
 		return nil
@@ -555,13 +574,15 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 
 	if !exists {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
-			zap.Any("changefeedID", cfId.Name()))
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()))
 		return nil
 	}
 	manager.MaintainerFenceMu.Lock()
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
-			zap.String("changefeed", cfId.Name()),
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
 			zap.String("from", from.String()),
 			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
@@ -574,7 +595,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("receive post bootstrap request but there is no table trigger event dispatcher")
 		log.Error("receive post bootstrap request but there is no table trigger event dispatcher",
-			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
+			zap.Error(err))
 		manager.MaintainerFenceMu.Unlock()
 		return m.sendPostBootstrapErrorResponse(from, req, err)
 	}
@@ -582,7 +605,8 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	actualDispatcherID := common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId)
 	if expectedDispatcherID != actualDispatcherID {
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
-			zap.Any("changefeedID", cfId.Name()),
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
 			zap.String("actualDispatcherID", actualDispatcherID.String()))
 
@@ -598,12 +622,16 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if err != nil {
 		if dispatchermanager.IsWritePathClosedError(err) {
 			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
-				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
+				zap.Error(err))
 			manager.MaintainerFenceMu.Unlock()
 			return nil
 		}
 		log.Error("failed to initialize table trigger event dispatcher",
-			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			zap.String("keyspace", cfId.Keyspace()),
+			zap.String("changefeedID", cfId.Name()),
+			zap.Error(err))
 		manager.MaintainerFenceMu.Unlock()
 		return m.handleDispatcherError(from, req.ChangefeedID, req.MaintainerEpoch, err)
 	}
@@ -612,12 +640,16 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		if err != nil {
 			if dispatchermanager.IsWritePathClosedError(err) {
 				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
-					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+					zap.String("keyspace", cfId.Keyspace()),
+					zap.String("changefeedID", cfId.Name()),
+					zap.Error(err))
 				manager.MaintainerFenceMu.Unlock()
 				return nil
 			}
 			log.Error("failed to initialize table trigger redo dispatcher",
-				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
+				zap.Error(err))
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, req.MaintainerEpoch, err)
 		}
@@ -702,7 +734,8 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 			// acknowledge the stale sender so removal-only maintainers can stop retrying.
 			response.Success = true
 			log.Warn("drop stale maintainer close request",
-				zap.String("changefeed", cfId.Name()),
+				zap.String("keyspace", cfId.Keyspace()),
+				zap.String("changefeedID", cfId.Name()),
 				zap.String("from", from.String()),
 				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
@@ -715,7 +748,9 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	}
 
 	log.Info("try close dispatcher manager",
-		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
+		zap.String("keyspace", cfId.Keyspace()),
+		zap.String("changefeedID", cfId.Name()),
+		zap.Bool("success", response.Success))
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
@@ -961,7 +996,8 @@ func retrieveOperatorsForBootstrapResponse(
 				return true
 			}
 			log.Info("include stale remove operator in bootstrap response",
-				zap.String("changefeed", changefeedID.String()),
+				zap.String("keyspace", changefeedID.GetKeyspace()),
+				zap.String("changefeedID", changefeedID.GetName()),
 				zap.String("dispatcherID", req.Config.DispatcherID.String()),
 				zap.String("from", req.From.String()),
 				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
@@ -979,11 +1015,13 @@ func retrieveOperatorsForBootstrapResponse(
 			if !dispatcherExists {
 				if common.IsRedoMode(req.Config.Mode) {
 					log.Error("Redo dispatcher not found, this should not happen",
-						zap.String("changefeed", changefeedID.String()),
+						zap.String("keyspace", changefeedID.GetKeyspace()),
+						zap.String("changefeedID", changefeedID.GetName()),
 						zap.String("dispatcherID", req.Config.DispatcherID.String()))
 				} else {
 					log.Error("Dispatcher not found, this should not happen",
-						zap.String("changefeed", changefeedID.String()),
+						zap.String("keyspace", changefeedID.GetKeyspace()),
+						zap.String("changefeedID", changefeedID.GetName()),
 						zap.String("dispatcherID", req.Config.DispatcherID.String()))
 				}
 			}

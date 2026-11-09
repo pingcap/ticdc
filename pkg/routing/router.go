@@ -126,7 +126,7 @@ func NewRouter(
 		if err != nil {
 			log.Warn("router failed to initialize",
 				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.String("changefeed", changefeedID.Name()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Strings("matcher", r.Matcher),
 				zap.Error(err))
 			return Router{}, errors.WrapError(errors.ErrInvalidTableRoutingRule, err)
@@ -328,7 +328,7 @@ func (r Router) RouteTable(originSchema, originTable string) RouteBinding {
 	if originSchema == "" || originTable == "" {
 		log.Warn("table route requires complete source table name",
 			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
+			zap.String("changefeedID", r.changefeedID.Name()),
 			zap.String("schema", originSchema),
 			zap.String("table", originTable))
 		return RouteBinding{}

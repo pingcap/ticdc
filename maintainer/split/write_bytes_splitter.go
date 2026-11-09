@@ -66,7 +66,7 @@ func (m *writeBytesSplitter) split(
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
@@ -75,7 +75,7 @@ func (m *writeBytesSplitter) split(
 	splitInfo := m.splitRegionsByWrittenBytesV1(span.TableID, regions, spansNum)
 	log.Info("split span by written keys",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
 		zap.Uint64s("weights", splitInfo.Weights),

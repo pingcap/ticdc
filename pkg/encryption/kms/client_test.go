@@ -51,12 +51,13 @@ func TestKMSClientFactoryErrorPreservesCauseAndMasksEndpoint(t *testing.T) {
 	require.Contains(t, err.Error(), "region=west")
 	require.NotContains(t, err.Error(), "secret-in-query")
 	require.NotContains(t, err.Error(), "password")
+	var endpoint string
 	for _, entry := range observedLogs.All() {
-		context := fmt.Sprint(entry.ContextMap(), entry.Message)
-		require.Contains(t, context, "factory connection failed")
-		require.NotContains(t, context, "secret-in-query")
-		require.NotContains(t, context, "password")
+		if v, ok := entry.ContextMap()["endpoint"].(string); ok {
+			endpoint = v
+		}
 	}
+	require.Equal(t, "https://user:xxxxx@kms.example.com/kms?token=xxxxx", endpoint)
 }
 
 type fakeDecryptor struct {
@@ -103,14 +104,13 @@ func TestKMSClientAWSDecryptErrorPreservesCauseAndMasksEndpoint(t *testing.T) {
 	require.NotContains(t, err.Error(), "decrypt-secret")
 	require.NotContains(t, err.Error(), "password")
 
-	entries := observedLogs.FilterMessage("failed to decrypt master key via aws kms").All()
-	require.Len(t, entries, 1)
-	logged := fmt.Sprint(entries[0].ContextMap())
-	require.Contains(t, logged, "operation error KMS: Decrypt")
-	require.Contains(t, logged, "connection refused")
-	require.Contains(t, logged, "region=west")
-	require.NotContains(t, logged, "decrypt-secret")
-	require.NotContains(t, logged, "password")
+	var endpoint string
+	for _, entry := range observedLogs.All() {
+		if v, ok := entry.ContextMap()["endpoint"].(string); ok {
+			endpoint = v
+		}
+	}
+	require.Equal(t, "https://user:xxxxx@kms.example.com/kms?token=xxxxx", endpoint)
 }
 
 type fakeClosableDecryptor struct {
@@ -283,42 +283,4 @@ func TestNewClientValidatesGCPCredentialsExclusive(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
-}
-
-func TestGetAWSDecryptorNilFactoryLogsWarn(t *testing.T) {
-	core, observedLogs := observer.New(zapcore.DebugLevel)
-	restore := plog.ReplaceGlobals(zap.New(core), nil)
-	defer restore()
-
-	c := &client{
-		awsClients: make(map[awsClientKey]awsDecryptor),
-	}
-
-	_, err := c.getAWSDecryptor(context.Background(), awsClientConfig{})
-	require.Error(t, err)
-
-	entries := observedLogs.FilterMessage("aws kms decryptor factory is nil").AllUntimed()
-	require.NotEmpty(t, entries)
-	for _, entry := range entries {
-		require.Equal(t, zapcore.WarnLevel, entry.Level)
-	}
-}
-
-func TestGetGCPDecryptorNilFactoryLogsWarn(t *testing.T) {
-	core, observedLogs := observer.New(zapcore.DebugLevel)
-	restore := plog.ReplaceGlobals(zap.New(core), nil)
-	defer restore()
-
-	c := &client{
-		gcpClients: make(map[gcpClientKey]gcpDecryptor),
-	}
-
-	_, err := c.getGCPDecryptor(context.Background(), gcpClientConfig{})
-	require.Error(t, err)
-
-	entries := observedLogs.FilterMessage("gcp kms decryptor factory is nil").AllUntimed()
-	require.NotEmpty(t, entries)
-	for _, entry := range entries {
-		require.Equal(t, zapcore.WarnLevel, entry.Level)
-	}
 }

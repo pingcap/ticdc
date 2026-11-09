@@ -52,6 +52,11 @@ const (
 
 // RawKVEntry represents a kv change or a resolved ts event
 // TODO: use a different struct
+var (
+	_ fmt.Stringer = RawKVEntry{}
+	_ fmt.Stringer = (*RawKVEntry)(nil)
+)
+
 type RawKVEntry struct {
 	OpType  OpType `msg:"op_type"`  // offset 0 bytes
 	CRTs    uint64 `msg:"crts"`     // offset 4 bytes
@@ -132,7 +137,7 @@ func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error)
 	return deleteRow, insertRow, nil
 }
 
-func (v *RawKVEntry) String() string {
+func (v RawKVEntry) String() string {
 	return fmt.Sprintf(
 		"OpType: %v, Key: %s, Value: %s, OldValue: %s, StartTs: %d, CRTs: %d, RegionID: %d",
 		v.OpType, util.RedactValue(string(v.Key)), util.RedactValue(string(v.Value)),

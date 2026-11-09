@@ -139,10 +139,9 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 	if ok {
 		if oldPartitions.(int32) != partitions {
 			m.topics.Store(topic, partitions)
-			log.Info(
-				"kafka topic partition count changed",
+			log.Info("kafka topic partition count changed",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
-				zap.String("changefeed", m.changefeedID.Name()),
+				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.String("topic", topic),
 				zap.Int32("oldPartitionNum", oldPartitions.(int32)),
 				zap.Int32("newPartitionNum", partitions),
@@ -167,10 +166,9 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(ctx context.Context) (ma
 	start := time.Now()
 	numPartitions, err := m.admin.GetTopicsPartitionsNum(ctx, topics)
 	if err != nil {
-		log.Warn(
-			"kafka topic metadata refresh failed",
+		log.Warn("kafka topic metadata refresh failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err),
 		)
@@ -221,7 +219,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 	if err != nil {
 		log.Warn("kafka topic metadata refresh failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("topic", topicName),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
@@ -247,10 +245,9 @@ func (m *kafkaTopicManager) createTopic(ctx context.Context, topicName string) (
 		ReplicationFactor: m.cfg.ReplicationFactor,
 	})
 	if err != nil {
-		log.Error(
-			"kafka topic creation failed",
+		log.Error("kafka topic creation failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
-			zap.String("changefeed", m.changefeedID.Name()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("topic", topicName),
 			zap.Int32("partitionNum", m.cfg.PartitionNum),
 			zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
@@ -296,10 +293,9 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	}
 	m.tryUpdatePartitionsAndLogging(topicName, partitionNum)
 
-	log.Info(
-		"kafka topic created",
+	log.Info("kafka topic created",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("topic", topicName),
 		zap.Int32("partitionNum", partitionNum),
 		zap.Int16("replicationFactor", m.cfg.ReplicationFactor),
@@ -327,7 +323,7 @@ func (m *kafkaTopicManager) tryStoreTopicMeta(
 func (m *kafkaTopicManager) useConfiguredPartitionNum(topicName string, cause error) int32 {
 	log.Warn("kafka topic creation skipped due to authorization failure",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("topic", topicName),
 		zap.Int32("partitionNum", m.cfg.PartitionNum),
 		zap.Error(cause))

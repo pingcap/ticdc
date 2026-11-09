@@ -157,7 +157,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
+						zap.String("changefeedID", changefeed),
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
 					return err
@@ -167,7 +167,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					tableTask.entries = nil
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
+						zap.String("changefeedID", changefeed),
 						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 						zap.String("table", table.TableNameWithPhysicTableID.Table),
 						zap.Uint64("version", table.TableInfoVersion),
@@ -181,7 +181,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err != nil {
 					log.Error("failed to generate data file path",
 						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
+						zap.String("changefeedID", changefeed),
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
 					return err
@@ -195,7 +195,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, payload); err != nil {
 					log.Error("failed to write data file to external storage",
 						zap.String("keyspace", keyspace),
-						zap.String("changefeed", changefeed),
+						zap.String("changefeedID", changefeed),
 						zap.String("path", dataFilePath),
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
@@ -205,7 +205,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 				log.Debug("write file to storage success",
 					zap.String("keyspace", keyspace),
-					zap.String("changefeed", changefeed),
+					zap.String("changefeedID", changefeed),
 					zap.String("path", dataFilePath),
 					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
@@ -241,7 +241,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	if err := d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n")); err != nil {
 		log.Error("failed to write index file to external storage",
 			zap.String("keyspace", keyspace),
-			zap.String("changefeed", changefeed),
+			zap.String("changefeedID", changefeed),
 			zap.String("path", indexFilePath),
 			zap.Int("shardID", d.shardID),
 			zap.Error(err))
@@ -281,15 +281,19 @@ func (d *writer) writeFile(ctx context.Context, filePath string, data []byte) er
 	if _, err = writer.Write(ctx, data); err != nil {
 		if closeErr := writer.Close(ctx); closeErr != nil {
 			log.Warn("failed to close writer after write failure",
-				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-				zap.String("path", filePath), zap.Error(closeErr))
+				zap.String("keyspace", keyspace),
+				zap.String("changefeedID", changefeed),
+				zap.String("path", filePath),
+				zap.Error(closeErr))
 		}
 		return err
 	}
 	if err = writer.Close(ctx); err != nil {
 		log.Error("failed to close concurrency writer",
-			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
-			zap.String("path", filePath), zap.Error(err))
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
+			zap.String("path", filePath),
+			zap.Error(err))
 		return err
 	}
 	return nil

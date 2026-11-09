@@ -56,7 +56,7 @@ func New(ctx context.Context, config *config.LargeMessageHandleConfig, changefee
 	if err != nil {
 		log.Error("external storage creation failed",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.String("storageURI", util.MaskSensitiveDataInURI(config.ClaimCheckStorageURI)),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))

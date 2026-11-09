@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
@@ -218,8 +219,8 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err = s.sendDDLEvent(v)
 	default:
 		log.Error("pulsar sink doesn't support this type of block event",
-			zap.String("namespace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
 		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
 	}
@@ -239,10 +240,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		if message == nil {
 			log.Info("Skip ddl event",
-				zap.Uint64("startTs", event.GetStartTs()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeedID", s.changefeedID.Name()),
+				zap.Int64("tableID", e.GetTableID()),
+				zap.Uint64("startTs", e.GetStartTs()),
 				zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("query", e.Query),
-				zap.Stringer("changefeed", s.changefeedID))
+				zap.String("ddlQuery", util.RedactValue(e.Query)))
 			continue
 		}
 		common.SetDDLMessageLogInfo(message, e)
@@ -272,8 +275,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 	}
 	log.Info("pulsar sink send DDL event",
-		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeedID", s.changefeedID.Name()),
+		zap.Int64("tableID", event.GetTableID()),
+		zap.Uint64("startTs", event.GetStartTs()),
+		zap.Uint64("commitTs", event.GetCommitTs()))
 	return nil
 }
 
@@ -451,7 +457,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Error(err))
 			return errors.Trace(err)
 		}
@@ -557,7 +563,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
 		log.Warn("kafka sink table schema store is not set",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Uint64("ts", ts))
 		return nil
 	}

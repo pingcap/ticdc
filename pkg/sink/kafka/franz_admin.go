@@ -135,7 +135,7 @@ func (a *admin) GetTopicsMeta(ctx context.Context, topics []string, ignoreTopicE
 		if ignoreTopicError && errors.Is(err, kerr.TopicAuthorizationFailed) {
 			log.Warn("kafka topic metadata refresh failed",
 				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("changefeedID", a.changefeed.Name()),
 				zap.String("topic", resource),
 				zap.Error(err))
 			return make(map[string]TopicDetail), nil
@@ -154,7 +154,7 @@ func topicDetailsFromMetadata(changefeedID common.ChangeFeedID, meta kadm.Metada
 			if ignoreTopicError {
 				log.Warn("kafka topic metadata refresh failed",
 					zap.String("keyspace", changefeedID.Keyspace()),
-					zap.String("changefeed", changefeedID.Name()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.String("topic", topic),
 					zap.Error(kerr.UnknownTopicOrPartition))
 				continue
@@ -173,7 +173,7 @@ func topicDetailsFromMetadata(changefeedID common.ChangeFeedID, meta kadm.Metada
 		if ignoreTopicError {
 			log.Warn("kafka topic metadata refresh failed",
 				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.String("changefeed", changefeedID.Name()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.String("topic", topic),
 				zap.Error(detail.Err))
 			continue

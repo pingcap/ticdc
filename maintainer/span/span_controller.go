@@ -183,7 +183,8 @@ func (c *Controller) AdvanceMaintainerCommittedCheckpointTs(ts uint64) {
 func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	if c.IsTableExists(table.TableID) {
 		log.Warn("table already add, ignore",
-			zap.String("changefeed", c.changefeedID.Name()),
+			zap.String("keyspace", c.changefeedID.Keyspace()),
+			zap.String("changefeedID", c.changefeedID.Name()),
 			zap.Int64("schema", table.SchemaID),
 			zap.Int64("table", table.TableID))
 		return
@@ -492,7 +493,8 @@ func (c *Controller) ReplaceReplicaSet(
 	for _, old := range oldReplications {
 		if _, ok := c.allTasks[old.ID]; !ok {
 			log.Panic("old replica set not found",
-				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("keyspace", c.changefeedID.Keyspace()),
+				zap.String("changefeedID", c.changefeedID.Name()),
 				zap.String("span", old.ID.String()))
 		}
 		oldCheckpointTs := old.GetStatus().GetCheckpointTs()

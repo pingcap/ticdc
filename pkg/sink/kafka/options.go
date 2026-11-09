@@ -227,7 +227,8 @@ func (o *options) setPartitionNum(changefeedID common.ChangeFeedID, realPartitio
 
 	if o.PartitionNum < realPartitionCount {
 		log.Warn("configured kafka partition count is lower than topic partition count",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Int32("configuredPartitionNum", o.PartitionNum),
 			zap.Int32("topicPartitionNum", realPartitionCount))
 		return nil
@@ -698,8 +699,10 @@ func adjustExistingTopicOption(ctx context.Context, changefeedID common.ChangeFe
 	maxMessageBytes, found, err := getTopicMaxMessageBytes(ctx, admin, info.Name)
 	if err != nil || !found {
 		log.Warn("kafka topic `max.message.bytes` unavailable, using configured value",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes),
+			zap.Error(err))
 		maxMessageBytes = options.MaxMessageBytes
 	}
 	options.MaxMessageBytes = maxMessageBytes
@@ -713,8 +716,10 @@ func adjustNewTopicOptions(ctx context.Context, admin AdminClient, changefeedID 
 	messageMaxBytes, found, err := getBrokerMaxMessageBytes(ctx, admin)
 	if err != nil || !found {
 		log.Warn("kafka broker `message.max.bytes` unavailable, using configured value",
-			zap.String("namespace", changefeedID.Keyspace()), zap.String("changefeed", changefeedID.Name()),
-			zap.Int("maxMessageBytes", options.MaxMessageBytes), zap.Error(err))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Int("maxMessageBytes", options.MaxMessageBytes),
+			zap.Error(err))
 		messageMaxBytes = options.MaxMessageBytes
 	}
 	options.MaxMessageBytes = messageMaxBytes

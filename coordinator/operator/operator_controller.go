@@ -144,7 +144,8 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 		log.Warn("add operator failed, cannot bump changefeed epoch",
 			zap.String("role", oc.role),
 			zap.String("operator", op.String()),
-			zap.Stringer("changefeed", op.ID()),
+			zap.String("keyspace", op.ID().Keyspace()),
+			zap.String("changefeedID", op.ID().Name()),
 			zap.Error(err))
 		return false
 	}
@@ -317,9 +318,11 @@ func (oc *Controller) stopChangefeed(
 		}
 	}
 
-	var originNode node.ID
-	var originEpoch uint64
-	var useOriginEpoch bool
+	var (
+		originNode     node.ID
+		originEpoch    uint64
+		useOriginEpoch bool
+	)
 	if !hasMaintainerEpoch {
 		originNode, originEpoch, useOriginEpoch = oc.moveOriginStopTargetLocked(cfID)
 	}
@@ -331,9 +334,10 @@ func (oc *Controller) stopChangefeed(
 	}
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()),
 			zap.String("role", oc.role),
-			zap.Bool("removed", removed),
-			zap.String("changefeed", cfID.Name()))
+			zap.Bool("removed", removed))
 		scheduledNode = oc.selfNode.ID
 	}
 
@@ -371,8 +375,9 @@ func (oc *Controller) pushStopChangefeedOperator(
 		if ok {
 			if oldStop.changefeedRemoved {
 				log.Info("changefeed is in removing progress, skip the stop operator",
-					zap.String("role", oc.role),
-					zap.String("changefeed", cfID.Name()))
+					zap.String("keyspace", cfID.Keyspace()),
+					zap.String("changefeedID", cfID.Name()),
+					zap.String("role", oc.role))
 				return oldStop
 			}
 			if !remove {
@@ -384,8 +389,9 @@ func (oc *Controller) pushStopChangefeedOperator(
 			}
 		}
 		log.Info("changefeed is stopped, replace the old one",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()),
 			zap.String("role", oc.role),
-			zap.String("changefeed", cfID.Name()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()

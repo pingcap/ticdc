@@ -667,9 +667,9 @@ func tryGetEndTsFromLog(db *sql.DB, tableName string) (result uint64, ok bool) {
 	}
 	log.Info("total files", zap.Any("file", cdcLogFiles))
 
-	logRegex := regexp.MustCompile(`handle a ddl job`)
+	logRegex := regexp.MustCompile(`ddl job applied`)
 	tableNameRegex := regexp.MustCompile(tableName + "`")
-	timeStampRegex := regexp.MustCompile(`jobFinishTs=([0-9]+)`)
+	timeStampRegex := regexp.MustCompile(`commitTs=([0-9]+)`)
 	for _, f := range cdcLogFiles {
 		file, err := os.Open(f)
 		if err != nil {

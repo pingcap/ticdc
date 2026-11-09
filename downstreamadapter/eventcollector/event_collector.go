@@ -256,13 +256,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	readyCallback func(),
 ) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcher", target.GetId()))
-	defer func() {
-		log.Info("add dispatcher done",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("mode", target.GetMode()))
-	}()
+	start := time.Now()
 	eventCollectorRegisteredDispatcherCount.Inc()
 
 	stat := newDispatcherStat(target, c, readyCallback)
@@ -283,21 +277,35 @@ func (c *EventCollector) PrepareAddDispatcher(
 	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
-		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+		log.Warn("add dispatcher failed",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("dispatcherID", target.GetId()),
+			zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+			zap.Error(err))
 	}
 	stat.run()
+	log.Info("add dispatcher done",
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
+		zap.Stringer("dispatcherID", target.GetId()),
+		zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+		zap.Uint64("startTs", target.GetStartTs()),
+		zap.Int64("mode", target.GetMode()),
+		zap.Duration("duration", time.Since(start)))
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
 func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService, startTs uint64) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("commit add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()),
-		zap.Int64("tableID", target.GetTableSpan().GetTableID()), zap.Uint64("startTs", startTs))
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
-		log.Warn("dispatcher not found when commit add dispatcher",
-			zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()),
-			zap.Int64("tableID", target.GetTableSpan().GetTableID()), zap.Uint64("startTs", startTs))
+		log.Warn("add dispatcher failed since dispatcher not found",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("dispatcherID", target.GetId()),
+			zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+			zap.Uint64("startTs", startTs))
 		return
 	}
 	stat := value.(*dispatcherStat)
@@ -306,11 +314,22 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("remove dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()))
+	start := time.Now()
+	var remaining *int32
 	defer func() {
-		log.Info("remove dispatcher done",
-			zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()),
-			zap.Int64("tableID", target.GetTableSpan().GetTableID()))
+		fields := []zap.Field{
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("dispatcherID", target.GetId()),
+			zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+			zap.Uint64("startTs", target.GetStartTs()),
+			zap.Int64("mode", target.GetMode()),
+			zap.Duration("duration", time.Since(start)),
+		}
+		if remaining != nil {
+			fields = append(fields, zap.Int32("remaining", *remaining))
+		}
+		log.Info("remove dispatcher done", fields...)
 	}()
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
@@ -322,25 +341,28 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 	ds := c.getDynamicStream(target.GetMode())
 	err := ds.RemovePath(target.GetId())
 	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
+		log.Error("remove dispatcher failed",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("dispatcherID", target.GetId()),
+			zap.Int64("tableID", target.GetTableSpan().GetTableID()),
+			zap.Error(err))
 	}
 	c.dispatcherMap.Delete(target.GetId())
 
 	v, ok := c.changefeedMap.Load(changefeedID.ID())
 	if !ok {
-		log.Warn("changefeed stat not found when removing dispatcher", zap.Stringer("changefeedID", changefeedID))
+		log.Warn("changefeed stat not found when removing dispatcher",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()))
 		return
 	}
 	cfStat := v.(*changefeedStat)
-	remaining := cfStat.dispatcherCount.Add(-1)
-	log.Info("remove dispatcher from changefeed stat",
-		zap.Stringer("changefeedID", changefeedID),
-		zap.Int32("remaining", remaining))
-	if remaining == 0 {
+	r := cfStat.dispatcherCount.Add(-1)
+	remaining = &r
+	if r == 0 {
 		if _, ok := c.changefeedMap.LoadAndDelete(changefeedID.ID()); ok {
-			stat := v.(*changefeedStat)
-			stat.removeMetrics()
-			log.Info("last dispatcher removed, clean up changefeed stat", zap.Stringer("changefeedID", target.GetChangefeedID()))
+			cfStat.removeMetrics()
 		}
 	}
 }

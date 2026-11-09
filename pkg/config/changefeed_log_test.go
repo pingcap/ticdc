@@ -32,12 +32,7 @@ func TestRmUnusedFieldsMasksUnparsableSinkURIInLog(t *testing.T) {
 	info := &ChangeFeedInfo{SinkURI: "mysql://root:verysecure@127.0.0.1:port/", Config: GetDefaultReplicaConfig()}
 	info.RmUnusedFields()
 
-	entries := logs.FilterMessage("failed to parse the sink uri").All()
+	entries := logs.All()
 	require.Len(t, entries, 1)
-	for _, field := range entries[0].Context {
-		require.NotContains(t, field.String, "verysecure")
-		if err, ok := field.Interface.(error); ok {
-			require.NotContains(t, err.Error(), "verysecure")
-		}
-	}
+	require.Equal(t, "<invalid uri>", entries[0].ContextMap()["sinkURI"])
 }

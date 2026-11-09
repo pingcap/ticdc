@@ -44,7 +44,7 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 	if duration > 2*time.Second {
 		log.Warn("kafka configuration initialization is slow",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Duration("duration", duration))
 	}
 	if err != nil {
@@ -63,8 +63,9 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 		return nil, err
 	}
 	log.Info("kafka sink configuration resolved",
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.String("namespace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),
@@ -91,7 +92,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	if duration > 2*time.Second {
 		log.Warn("kafka client initialization is slow",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Duration("duration", duration))
 	}
 	if err != nil {
@@ -104,7 +105,7 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	if duration > 2*time.Second {
 		log.Warn("kafka admin client initialization is slow",
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Duration("duration", duration))
 	}
 	if err != nil {
