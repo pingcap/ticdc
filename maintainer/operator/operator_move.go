@@ -90,7 +90,8 @@ func (m *MoveDispatcherOperator) enterAddDest() {
 // Caller must hold m.lck.
 func (m *MoveDispatcherOperator) finishAsAbsent() {
 	log.Info("move dispatcher operator aborted, mark span absent for rescheduling",
-		zap.Stringer("changefeedID", m.replicaSet.ChangefeedID),
+		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()),
 		zap.String("dispatcherID", m.replicaSet.ID.String()),
 		zap.String("origin", m.origin.String()),
 		zap.String("dest", m.dest.String()))
@@ -253,7 +254,8 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
-		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.state = moveStateDoneNoPostFinish
 }
@@ -284,7 +286,8 @@ func (m *MoveDispatcherOperator) PostFinish() {
 	}
 
 	log.Info("move dispatcher operator finished",
-		zap.Stringer("changefeedID", m.replicaSet.ChangefeedID),
+		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()),
 		zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
 }

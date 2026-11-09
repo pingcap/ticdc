@@ -24,6 +24,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -105,7 +106,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID, dmls)
 			failpoint.Return(err)
 		})
 
@@ -120,13 +121,13 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				Number:  uint16(mysql.ErrDupEntry),
 				Message: "Duplicate entry",
 			})
-			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID, dmls)
 			failpoint.Return(err)
 		})
 
 		err := tryExec()
 		if err != nil {
-			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
+			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID, dmls))
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
@@ -255,12 +256,13 @@ func (w *Writer) multiStmtExecute(
 
 // logDMLTxnErr prints retryable/irretryable errors with contextual information.
 func (w *Writer) logDMLTxnErr(
-	err error, start time.Time, changefeed string,
+	err error, start time.Time, changefeed common.ChangeFeedID,
 	dmls *preparedDMLs,
 ) error {
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
-			zap.String("changefeedID", changefeed),
+			zap.String("keyspace", changefeed.Keyspace()),
+			zap.String("changefeedID", changefeed.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Any("tsPairs", dmls.tsPairs),
 			zap.Int("count", dmls.rowCount),
@@ -270,7 +272,8 @@ func (w *Writer) logDMLTxnErr(
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
 			log.Error("execute DMLs with error, can not retry",
-				zap.String("changefeedID", changefeed),
+				zap.String("keyspace", changefeed.Keyspace()),
+				zap.String("changefeedID", changefeed.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Any("tsPairs", dmls.tsPairs),
 				zap.Int("count", dmls.rowCount),

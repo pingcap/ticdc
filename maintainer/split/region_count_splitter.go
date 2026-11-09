@@ -73,6 +73,7 @@ func (m *regionCountSplitter) split(
 	regions, err := m.regionCache.LoadRegionsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, skip split span",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Error(err))
@@ -81,6 +82,7 @@ func (m *regionCountSplitter) split(
 
 	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
 		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
@@ -89,6 +91,7 @@ func (m *regionCountSplitter) split(
 	}
 	if spansNum > 0 && len(regions) < spansNum {
 		log.Info("skip split span because region count is less than target spans num",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
@@ -139,6 +142,7 @@ func (m *regionCountSplitter) split(
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
 		zap.Uint32("keyspaceID", span.KeyspaceID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("tableSpan", common.FormatTableSpan(span)),
 		zap.Int("spans", len(spans)),

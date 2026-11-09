@@ -281,7 +281,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	}
 
 	log.Info("changefeed maintainer started",
-		zap.Stringer("changefeedID", cfID),
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
@@ -322,7 +323,8 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 			// add a log for debug an occasional slow bootstrap problem
 			if event.eventType == EventMessage {
 				log.Info("maintainer is too slow",
-					zap.Stringer("changefeedID", m.changefeedID),
+					zap.String("keyspace", m.changefeedID.Keyspace()),
+					zap.String("changefeedID", m.changefeedID.Name()),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
 					zap.String("from", event.message.From.String()),
@@ -332,7 +334,8 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 				)
 			} else {
 				log.Info("maintainer is too slow",
-					zap.Stringer("changefeedID", m.changefeedID),
+					zap.String("keyspace", m.changefeedID.Keyspace()),
+					zap.String("changefeedID", m.changefeedID.Name()),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration))
 			}
@@ -342,7 +345,8 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 
 	if m.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped) {
 		log.Warn("maintainer is stopped, stop handling event",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
 		)
@@ -449,7 +453,8 @@ func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 func (m *Maintainer) initialize() error {
 	start := time.Now()
 	log.Info("start to initialize changefeed maintainer",
-		zap.Stringer("changefeedID", m.changefeedID))
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()))
 
 	failpoint.Inject("NewChangefeedRetryError", func() {
 		failpoint.Return(errors.New("failpoint injected retriable error"))
@@ -466,14 +471,16 @@ func (m *Maintainer) initialize() error {
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Stringer("selfNodeID", m.selfNode.ID),
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Int("nodeCount", len(nodes)))
 
 	_, _, requests, _ := m.bootstrapper.HandleNodesChange(nodes)
 	m.sendMessages(requests)
 
 	log.Info("changefeed maintainer initialized",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.String("info", m.info.String()),
 		zap.Duration("duration", time.Since(start)))
@@ -549,7 +556,8 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch) {
 			log.Warn("drop stale remove maintainer request",
-				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.Stringer("from", msg.From),
 				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 				zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
@@ -564,7 +572,8 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onRedoPersisted(req)
 	default:
 		log.Warn("unknown message type, ignore it",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
 	}
@@ -576,7 +585,8 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 		// If we mark the maintainer as removing here, later bootstrap responses may be dropped,
 		// leaving the maintainer permanently not bootstrapped and the coordinator stuck retrying.
 		log.Info("ignore non-cascade remove request before bootstrap",
-			zap.Stringer("changefeedID", m.changefeedID))
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()))
 		return
 	}
 	m.removing.Store(true)
@@ -593,8 +603,11 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	if closed {
 		m.markRemoved()
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		log.Info("changefeed maintainer closed", zap.Stringer("changefeedID", m.changefeedID),
-			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
+		log.Info("changefeed maintainer closed",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Bool("removed", m.removed.Load()))
 	}
 }
 
@@ -626,7 +639,9 @@ func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMess
 
 func (m *Maintainer) onNodeChanged() {
 	addedNodes, removedNodes, requests, responses := m.bootstrapper.HandleNodesChange(m.nodeManager.GetAliveNodes())
-	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
+	log.Info("maintainer node changed",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Int("addedCount", len(addedNodes)),
 		zap.Int("removedCount", len(removedNodes)),
 		zap.Any("addedNodes", addedNodes),
@@ -655,7 +670,8 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 		case <-ticker.C:
 			if !m.initialized.Load() {
 				log.Warn("can not advance redoTs since not bootstrapped",
-					zap.Stringer("changefeedID", m.changefeedID))
+					zap.String("keyspace", m.changefeedID.Keyspace()),
+					zap.String("changefeedID", m.changefeedID.Name()))
 				break
 			}
 			needUpdate := false
@@ -715,7 +731,8 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 
 		if !m.initialized.Load() {
 			log.Warn("can not advance checkpointTs since not bootstrapped",
-				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			continue
@@ -781,7 +798,9 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		if !ok {
 			updateCheckpointTs = false
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
-				zap.Stringer("changefeedID", m.changefeedID), zap.Any("node", id),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
+				zap.Any("node", id),
 				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			continue
@@ -802,7 +821,8 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	// Only all the heartbeat from dispatcherManager contains no dispatcher span (eg. all dispatchers are in absent state), will cause MaxUint64.
 	if newWatermark.CheckpointTs == math.MaxUint64 {
 		log.Debug("checkpointTs can not be advanced, since global checkpoint is invalid",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
 			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
 			zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
@@ -810,7 +830,8 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	}
 
 	log.Debug("can advance checkpointTs",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 		zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
@@ -839,7 +860,8 @@ func (m *Maintainer) calculateNewRedoCheckpointTs() (*heartbeatpb.Watermark, boo
 		if !ok {
 			updateCheckpointTs = false
 			log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
-				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.Any("node", id))
 			continue
 		}
@@ -855,7 +877,8 @@ func (m *Maintainer) calculateNewRedoCheckpointTs() (*heartbeatpb.Watermark, boo
 
 	if newWatermark.CheckpointTs == math.MaxUint64 {
 		log.Debug("redo checkpointTs can not be advanced, since redo global checkpoint is invalid",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
 			zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
 			zap.Uint64("minCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
@@ -863,7 +886,8 @@ func (m *Maintainer) calculateNewRedoCheckpointTs() (*heartbeatpb.Watermark, boo
 	}
 
 	log.Debug("can advance redo checkpointTs",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 		zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
@@ -908,8 +932,10 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 		err := m.mc.SendCommand(msg)
 		if err != nil {
 			log.Debug("failed to send maintainer request",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Any("msg", msg), zap.Error(err))
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
+				zap.Any("msg", msg),
+				zap.Error(err))
 		}
 	}
 }
@@ -962,7 +988,8 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	}
 	if req.Err != nil {
 		log.Error("dispatcher report an error",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Stringer("sourceNode", msg.From),
 			zap.String("error", req.Err.Message))
 		m.onError(msg.From, req.Err)
@@ -1048,7 +1075,8 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 // onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
 func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
 	log.Info("maintainer received bootstrap response",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Stringer("sourceNodeID", msg.From))
 
 	resp := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
@@ -1058,7 +1086,8 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 	}
 	if resp.Err != nil {
 		log.Warn("maintainer bootstrap failed",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("error", resp.Err.Message))
 		m.onError(msg.From, resp.Err)
 		return
@@ -1076,7 +1105,8 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 
 func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMessage) {
 	log.Info("received maintainer post bootstrap response",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.Any("server", msg.From))
 	resp := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
 	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
@@ -1085,7 +1115,8 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	}
 	if resp.Err != nil {
 		log.Warn("maintainer post bootstrap failed",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("error", resp.Err.Message))
 		m.onError(msg.From, resp.Err)
 		return
@@ -1117,7 +1148,8 @@ func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
 // logDroppedMaintainerResponse records responses rejected by maintainer epoch fencing.
 func (m *Maintainer) logDroppedMaintainerResponse(responseType string, from node.ID, responseEpoch uint64) {
 	log.Warn("drop stale maintainer response",
-		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("responseType", responseType),
 		zap.Stringer("from", from),
 		zap.Uint64("responseMaintainerEpoch", responseEpoch),
@@ -1172,7 +1204,9 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	}
 
 	m.initialized.Store(true)
-	log.Info("changefeed maintainer bootstrapped", zap.Stringer("changefeedID", m.changefeedID))
+	log.Info("changefeed maintainer bootstrapped",
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()))
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
@@ -1201,7 +1235,8 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 		// Close responses only complete an active remove flow. A delayed compat
 		// response from a superseded maintainer can share this changefeed ID.
 		log.Warn("drop unexpected maintainer close response",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Stringer("from", from),
 			zap.Uint64("responseMaintainerEpoch", response.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
@@ -1271,7 +1306,8 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 	if len(msgs) > 0 {
 		m.sendMessages(msgs)
 		log.Info("send maintainer close request to all dispatcher managers",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 			zap.Int("nodeCount", len(msgs)))
 	}
@@ -1282,7 +1318,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 // and coordinator remove this maintainer
 func (m *Maintainer) handleError(err error) {
 	log.Error("an error occurred in maintainer",
-		zap.Stringer("changefeedID", m.changefeedID), zap.Error(err))
+		zap.String("keyspace", m.changefeedID.Keyspace()),
+		zap.String("changefeedID", m.changefeedID.Name()),
+		zap.Error(err))
 	var code string
 	if rfcCode, ok := errors.RFCCode(err); ok {
 		code = string(rfcCode)
@@ -1313,7 +1351,8 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 	cfgBytes, err := json.Marshal(m.info.ToChangefeedConfig())
 	if err != nil {
 		log.Panic("marshal changefeed info failed",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Error(err))
 	}
 	return func(targetNodeID node.ID, targetAddr string) *messaging.TargetMessage {
@@ -1331,7 +1370,8 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
 			log.Info("create table event trigger dispatcher bootstrap message",
-				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("keyspace", m.changefeedID.Keyspace()),
+				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.String("nodeAddr", targetAddr),
 				zap.Any("nodeID", targetNodeID),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
@@ -1345,7 +1385,8 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.String("nodeAddr", targetAddr),
 			zap.Any("nodeID", targetNodeID),
 			zap.Uint64("startTs", m.startCheckpointTs))

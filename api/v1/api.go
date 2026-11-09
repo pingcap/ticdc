@@ -113,7 +113,9 @@ func (o *OpenAPIV1) createChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	log.Info("create changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
+	log.Info("create changefeed api v1",
+		zap.String("keyspace", changefeedConfig.Keyspace),
+		zap.String("changefeedID", changefeedConfig.ID))
 
 	o.v2.CreateChangefeed(c)
 }
@@ -134,7 +136,9 @@ func (o *OpenAPIV1) updateChangefeed(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	c.Request.ContentLength = int64(len(jsonData))
 
-	log.Info("update changefeed api v1", zap.String("changefeedID", changefeedConfig.ID))
+	log.Info("update changefeed api v1",
+		zap.String("keyspace", changefeedConfig.Keyspace),
+		zap.String("changefeedID", changefeedConfig.ID))
 	o.v2.UpdateChangefeed(c)
 }
 

@@ -152,7 +152,8 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 		e.handleError(e.ctx, err)
 	}()
 	log.Info("table trigger redo dispatcher created",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", redoDispatcher.GetId()),
 		zap.Uint64("startTs", redoDispatcher.GetStartTs()),
 	)
@@ -238,7 +239,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 		}
 
 		log.Info("new redo dispatcher created",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", startTsList[idx]),
@@ -246,7 +248,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	}
 	e.metricRedoCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new redo dispatchers",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Int("count", len(dispatcherIds)),
 		zap.Duration("duration", time.Since(start)),
 	)
@@ -286,7 +289,8 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	)
 
 	log.Info("new redo dispatcher created(merge dispatcher)",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
@@ -306,7 +310,8 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
 	log.Debug("delete current working remove operator for redo dispatcher",
-		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.String("dispatcherID", id.String()),
 	)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
@@ -317,7 +322,8 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 		e.metricRedoEventDispatcherCount.Dec()
 	}
 	log.Info("redo dispatcher completely stopped, and delete it from event dispatcher manager",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
 	)
 }

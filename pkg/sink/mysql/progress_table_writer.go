@@ -208,7 +208,7 @@ func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
 			if err := w.removeTableBatch(changefeed, clusterID, tableNameChange.DropName[start:end]); err != nil {
 				log.Error("failed to remove dropped tables from progress table",
 					zap.String("keyspace", w.changefeedID.Keyspace()),
-					zap.Stringer("changefeed", w.changefeedID),
+					zap.String("changefeedID", w.changefeedID.Name()),
 					zap.Error(err))
 				return err
 			}
@@ -219,7 +219,7 @@ func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
 		if err := w.removeDatabase(changefeed, clusterID, tableNameChange.DropDatabaseName); err != nil {
 			log.Error("failed to remove dropped database from progress table",
 				zap.String("keyspace", w.changefeedID.Keyspace()),
-				zap.Stringer("changefeed", w.changefeedID),
+				zap.String("changefeedID", w.changefeedID.Name()),
 				zap.Error(err))
 			return err
 		}

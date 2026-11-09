@@ -97,7 +97,8 @@ func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
 func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
 	if n == m.nodeID {
 		log.Info("node is stopped during stop maintainer, schedule stop command to coordinator node",
-			zap.Stringer("changefeed", m.cfID),
+			zap.String("keyspace", m.cfID.Keyspace()),
+			zap.String("changefeedID", m.cfID.Name()),
 			zap.Stringer("node", n))
 		m.nodeID = m.coordinatorNodeID
 	}
@@ -122,7 +123,8 @@ func (m *StopChangefeedOperator) OnTaskRemoved() {
 
 func (m *StopChangefeedOperator) Start() {
 	log.Info("start remove maintainer operator",
-		zap.Stringer("changefeed", m.cfID))
+		zap.String("keyspace", m.cfID.Keyspace()),
+		zap.String("changefeedID", m.cfID.Name()))
 }
 
 func (m *StopChangefeedOperator) PostFinish() {
@@ -136,7 +138,8 @@ func (m *StopChangefeedOperator) PostFinish() {
 	if m.changefeedRemoved {
 		if err := m.backend.DeleteChangefeed(context.Background(), m.cfID); err != nil {
 			log.Warn("failed to delete changefeed",
-				zap.Stringer("changefeed", m.cfID),
+				zap.String("keyspace", m.cfID.Keyspace()),
+				zap.String("changefeedID", m.cfID.Name()),
 				zap.Error(err))
 		}
 	} else {
@@ -146,12 +149,15 @@ func (m *StopChangefeedOperator) PostFinish() {
 			config.ProgressNone,
 		); err != nil {
 			log.Warn("failed to set changefeed progress",
-				zap.Stringer("changefeed", m.cfID),
+				zap.String("keyspace", m.cfID.Keyspace()),
+				zap.String("changefeedID", m.cfID.Name()),
 				zap.Error(err),
 			)
 		}
 	}
-	log.Info("stop maintainer operator finished", zap.Stringer("changefeed", m.cfID))
+	log.Info("stop maintainer operator finished",
+		zap.String("keyspace", m.cfID.Keyspace()),
+		zap.String("changefeedID", m.cfID.Name()))
 }
 
 func (m *StopChangefeedOperator) String() string {

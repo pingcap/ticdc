@@ -599,39 +599,39 @@ func (info *ChangeFeedInfo) rmDBOnlyFields() {
 func (info *ChangeFeedInfo) FixIncompatible() {
 	creatorVersionGate := version.NewCreatorVersionGate(info.CreatorVersion)
 	if creatorVersionGate.ChangefeedStateFromAdminJob() {
-		log.Info("Start fixing incompatible changefeed state", zap.String("changefeed", info.String()))
+		log.Info("Start fixing incompatible changefeed state", zap.String("changefeedInfo", info.String()))
 		info.fixState()
-		log.Info("Fix incompatibility changefeed state completed", zap.String("changefeed", info.String()))
+		log.Info("Fix incompatibility changefeed state completed", zap.String("changefeedInfo", info.String()))
 	}
 
 	if creatorVersionGate.ChangefeedAcceptUnknownProtocols() {
-		log.Info("Start fixing incompatible changefeed MQ sink protocol", zap.String("changefeed", info.String()))
+		log.Info("Start fixing incompatible changefeed MQ sink protocol", zap.String("changefeedInfo", info.String()))
 		info.fixMQSinkProtocol()
-		log.Info("Fix incompatibility changefeed MQ sink protocol completed", zap.String("changefeed", info.String()))
+		log.Info("Fix incompatibility changefeed MQ sink protocol completed", zap.String("changefeedInfo", info.String()))
 	}
 
 	if creatorVersionGate.ChangefeedAcceptProtocolInMysqlSinURI() {
-		log.Info("Start fixing incompatible changefeed sink uri", zap.String("changefeed", info.String()))
+		log.Info("Start fixing incompatible changefeed sink uri", zap.String("changefeedInfo", info.String()))
 		info.fixMySQLSinkProtocol()
-		log.Info("Fix incompatibility changefeed sink uri completed", zap.String("changefeed", info.String()))
+		log.Info("Fix incompatibility changefeed sink uri completed", zap.String("changefeedInfo", info.String()))
 	}
 
 	if util.GetOrZero(info.Config.MemoryQuota) == uint64(0) {
-		log.Info("Start fixing incompatible memory quota", zap.String("changefeed", info.String()))
+		log.Info("Start fixing incompatible memory quota", zap.String("changefeedInfo", info.String()))
 		info.fixMemoryQuota()
-		log.Info("Fix incompatible memory quota completed", zap.String("changefeed", info.String()))
+		log.Info("Fix incompatible memory quota completed", zap.String("changefeedInfo", info.String()))
 	}
 
 	if info.Config.ChangefeedErrorStuckDuration == nil {
-		log.Info("Start fixing incompatible error stuck duration", zap.String("changefeed", info.String()))
+		log.Info("Start fixing incompatible error stuck duration", zap.String("changefeedInfo", info.String()))
 		info.Config.ChangefeedErrorStuckDuration = GetDefaultReplicaConfig().ChangefeedErrorStuckDuration
-		log.Info("Fix incompatible error stuck duration completed", zap.String("changefeed", info.String()))
+		log.Info("Fix incompatible error stuck duration completed", zap.String("changefeedInfo", info.String()))
 	}
 
-	log.Info("Start fixing incompatible scheduler", zap.String("changefeed", info.String()))
+	log.Info("Start fixing incompatible scheduler", zap.String("changefeedInfo", info.String()))
 	inheritV66 := creatorVersionGate.ChangefeedInheritSchedulerConfigFromV66()
 	info.fixScheduler(inheritV66)
-	log.Info("Fix incompatible scheduler completed", zap.String("changefeed", info.String()))
+	log.Info("Fix incompatible scheduler completed", zap.String("changefeedInfo", info.String()))
 }
 
 // fixState attempts to fix state loss from upgrading the old owner to the new owner.

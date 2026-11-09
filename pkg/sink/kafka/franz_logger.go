@@ -32,7 +32,7 @@ func newClientLogger(changefeedID common.ChangeFeedID) kgo.Logger {
 	logger := log.L().With(
 		zap.String("component", "kafka-client"),
 		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
+		zap.String("changefeedID", changefeedID.Name()),
 	).WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 		return zapcore.NewSamplerWithOptions(core, time.Minute, 5, 100)
 	}))

@@ -759,7 +759,9 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
-	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
+	log.Info("unregister dispatcher done",
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", dispatcherID))
 }
 

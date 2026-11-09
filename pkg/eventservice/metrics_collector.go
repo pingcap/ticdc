@@ -323,7 +323,8 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 		}
 
 		log.Warn("slow dispatcher by checkpointTs",
-			zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+			zap.String("keyspace", dispatcher.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", dispatcher.changefeedStat.changefeedID.Name()),
 			zap.Stringer("dispatcherID", dispatcher.id),
 			zap.Stringer("tableName", dispatcher.startTableInfo.TableName),
 			zap.Int64("tableID", dispatcher.startTableInfo.TableName.TableID),

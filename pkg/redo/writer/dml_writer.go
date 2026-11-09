@@ -350,7 +350,7 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
 				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
+				zap.String("changefeedID", l.cfg.ChangeFeedID().Name()))
 			continue
 		}
 		if err := l.encodeWorkers.AddEvent(ctx, event); err != nil {

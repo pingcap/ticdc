@@ -288,10 +288,13 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
-			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("seq", dml.Seq),
-			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
+			zap.Uint64("lastCommitTs", lastCommitTs),
+			zap.Uint64("lastStartTs", lastStartTs))
 	}
 	if lastCommitTs != 0 {
 		d.updateScanRange(lastCommitTs, lastStartTs)
@@ -314,12 +317,15 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	}
 
 	log.Info("send ddl event to dispatcher",
-		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+		zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
 		zap.Int64("EventTableID", e.GetTableID()),
-		zap.String("ddlQuery", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+		zap.String("ddlQuery", e.Query),
+		zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq),
+		zap.Int64("mode", d.info.GetMode()))
 }
 
 func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
@@ -457,7 +463,8 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
 					log.Info("dispatcher not reset",
-						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+						zap.String("keyspace", dispatcher.changefeedStat.changefeedID.Keyspace()),
+						zap.String("changefeedID", dispatcher.changefeedStat.changefeedID.Name()),
 						zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
@@ -466,7 +473,8 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
 					log.Info("table trigger dispatcher not reset",
-						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+						zap.String("keyspace", dispatcher.changefeedStat.changefeedID.Keyspace()),
+						zap.String("changefeedID", dispatcher.changefeedStat.changefeedID.Name()),
 						zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
@@ -537,7 +545,8 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
 		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
 			log.Debug("scan window capped",
-				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+				zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
 				zap.Uint64("scanMaxTs", scanMaxTs),
@@ -565,7 +574,8 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
 			log.Info("scan window local advance due to pending barrier event",
-				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+				zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("startTs", dataRange.CommitTsStart),
 				zap.Uint64("globalScanMaxTs", scanMaxTs),
@@ -656,7 +666,9 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",
-			zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id))
+			zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
+			zap.Stringer("dispatcherID", task.id))
 		task.lastReadySendTime.Store(now)
 		newInterval := currentInterval * 2
 		if newInterval > maxReadyEventIntervalSeconds {
@@ -685,7 +697,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	remoteID := node.ID(task.info.GetServerID())
 	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
-		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+		zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
 		zap.Stringer("dispatcherID", task.id),
 		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
@@ -714,9 +727,12 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
 		log.Debug("send syncpoint event to dispatcher",
-			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
-			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+			zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+			zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
@@ -757,7 +773,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", task.id),
 			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.String("remote", remoteID.String()))
@@ -804,7 +821,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
 		log.Info("changefeed status is not found, skip scan",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", task.id),
 			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()))
 		return
@@ -814,7 +832,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
 		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeedID", changefeedID.String()), zap.String("remote", remoteID.String()))
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
@@ -827,7 +847,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
 		log.Debug("changefeed available memory quota is not enough, skip scan",
-			zap.String("changefeedID", changefeedID.String()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
@@ -858,10 +879,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			return
 		}
 		log.Error("scan events failed",
-			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
-			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+			zap.String("keyspace", task.changefeedStat.changefeedID.Keyspace()),
+			zap.String("changefeedID", task.changefeedStat.changefeedID.Name()),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+			zap.Any("scanRequest", request),
+			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
+			zap.Error(err))
 		return
 	}
 	if scannedBytes < 0 {
@@ -1094,8 +1119,10 @@ func (c *eventBroker) removeInactiveDispatchers() {
 		d := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if c.isInactiveDispatcher(d) {
 			log.Warn("remove in-active dispatcher",
-				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-				zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+				zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
+				zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
+				zap.Stringer("dispatcherID", d.id),
+				zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
 			c.removeDispatcher(d.info)
 		}
 		return true
@@ -1383,7 +1410,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()))
@@ -1414,9 +1442,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", info.GetStartTs()), zap.String("tableSpan", common.FormatTableSpan(span)))
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
+				zap.Stringer("dispatcherID", id),
+				zap.Int64("tableID", span.GetTableID()),
+				zap.Uint64("startTs", info.GetStartTs()),
+				zap.String("tableSpan", common.FormatTableSpan(span)))
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1453,7 +1484,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", changefeedID),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
 		zap.Int64("mode", info.GetMode()),
 		zap.Int64("tableID", span.GetTableID()),
@@ -1482,7 +1514,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.removeSchemaBlockedDispatcher(stat)
 	if err := c.cleanupLargeTxnState(stat); err != nil {
 		log.Warn("cleanup large txn state failed when removing dispatcher, scheduled retry",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.String("keyspace", dispatcherInfo.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", dispatcherInfo.GetChangefeedID().Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.Error(err))
 	}
@@ -1504,7 +1537,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	if stat.changefeedStat.isEmpty() {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 		)
 		c.removeChangefeedStatus(stat.changefeedStat)
 	}
@@ -1522,8 +1556,11 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	log.Info("remove dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
-		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
+		zap.Stringer("dispatcherID", id),
+		zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("tableSpan", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
 }
@@ -1548,7 +1585,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	if statPtr == nil {
 		// The dispatcher is not registered, ignore it.
 		log.Warn("reset a non-exist dispatcher, ignore it",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.String("keyspace", dispatcherInfo.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", dispatcherInfo.GetChangefeedID().Name()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 			zap.String("tableSpan", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
@@ -1569,7 +1607,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	c.removeSchemaBlockedDispatcher(oldStat)
 	if err := c.cleanupLargeTxnState(oldStat); err != nil {
 		log.Warn("cleanup large txn state failed when resetting dispatcher, scheduled retry",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.String("keyspace", dispatcherInfo.GetChangefeedID().Keyspace()),
+			zap.String("changefeedID", dispatcherInfo.GetChangefeedID().Name()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Error(err))
 	}
@@ -1588,7 +1627,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		tableInfo, err = c.schemaStore.GetTableInfo(c.ctx, keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
@@ -1608,7 +1648,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			break
 		}
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", span.GetTableID()),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
@@ -1626,15 +1667,18 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		c.removeSchemaBlockedDispatcher(oldStat)
 		if err := c.cleanupLargeTxnState(oldStat); err != nil {
 			log.Warn("cleanup large txn state failed when retrying dispatcher reset, scheduled retry",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Error(err))
 		}
 	}
 
 	log.Info("reset dispatcher",
-		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
+		zap.String("keyspace", newStat.changefeedStat.changefeedID.Keyspace()),
+		zap.String("changefeedID", newStat.changefeedStat.changefeedID.Name()),
+		zap.Stringer("dispatcherID", newStat.id),
+		zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
 		zap.String("tableSpan", common.FormatTableSpan(newStat.info.GetTableSpan())),
 		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
@@ -1695,7 +1739,8 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 		changefeedID, info.GetFilterConfig(), c.timezone)
 	if err != nil {
 		log.Panic("create filter failed",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Any("filterConfig", info.GetFilterConfig()),
 			zap.Error(err))
 	}
@@ -1714,7 +1759,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 		default:
 		}
 	}
-	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
+	log.Info("new changefeed status",
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()))
 	if status.scanWindowController != nil {
 		initializeScanWindowMetrics(changefeedID.String())
 	}
@@ -1740,7 +1787,8 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		dispatcher := dispatcherPtr.Load()
 		if checkEpoch && heartbeatEpoch != dispatcher.epoch {
 			fields := []zap.Field{
-				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+				zap.String("keyspace", dispatcher.changefeedStat.changefeedID.Keyspace()),
+				zap.String("changefeedID", dispatcher.changefeedStat.changefeedID.Name()),
 				zap.Stringer("dispatcherID", dispatcher.id),
 				zap.Uint64("heartbeatEpoch", heartbeatEpoch),
 				zap.Uint64("dispatcherEpoch", dispatcher.epoch),

@@ -233,7 +233,8 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				// No task + no operator => the dispatcher is orphaned (e.g. previous maintainer crashed after creating it,
 				// or lost operator state during failover). Remove it to avoid leaks and duplicated outputs.
 				log.Warn("no span found, remove it",
-					zap.String("changefeed", c.changefeedID.Name()),
+					zap.String("keyspace", c.changefeedID.Keyspace()),
+					zap.String("changefeedID", c.changefeedID.Name()),
 					zap.String("from", from.String()),
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
@@ -255,7 +256,8 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		if nodeID != from {
 			// todo: handle the case that the nodeID is mismatch
 			log.Warn("nodeID not match",
-				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("keyspace", c.changefeedID.Keyspace()),
+				zap.String("changefeedID", c.changefeedID.Name()),
 				zap.Any("from", from),
 				zap.Stringer("node", nodeID))
 			continue
@@ -294,7 +296,8 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				}
 				if spanController.MarkSpanAbsentIfCurrent(stm, from) {
 					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-						zap.String("changefeed", c.changefeedID.Name()),
+						zap.String("keyspace", c.changefeedID.Keyspace()),
+						zap.String("changefeedID", c.changefeedID.Name()),
 						zap.String("from", from.String()),
 						zap.String("dispatcherID", dispatcherID.String()),
 						zap.Any("status", status))
@@ -324,7 +327,8 @@ func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
 			// maintainer failover. When the merged span already covers the source range, the source
 			// is obsolete desired state and must be removed instead of being marked absent.
 			log.Info("remove terminal span covered by merged span",
-				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("keyspace", c.changefeedID.Keyspace()),
+				zap.String("changefeedID", c.changefeedID.Name()),
 				zap.String("dispatcherID", stm.ID.String()),
 				zap.String("coveringDispatcherID", candidate.ID.String()),
 				zap.String("span", common.FormatTableSpan(stm.Span)),

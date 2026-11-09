@@ -91,9 +91,12 @@ func (b *Barrier) HandleStatus(from node.ID,
 			zap.Int64("mode", b.mode))
 		return nil
 	}
-	log.Debug("handle block status", zap.String("from", from.String()),
-		zap.String("changefeed", request.ChangefeedID.GetName()),
-		zap.Any("detail", request), zap.Int64("mode", b.mode))
+	log.Debug("handle block status",
+		zap.String("from", from.String()),
+		zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+		zap.String("changefeedID", request.ChangefeedID.GetName()),
+		zap.Any("detail", request),
+		zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
@@ -111,7 +114,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 		task := b.spanController.GetTaskByID(dispatcherID)
 		if task == nil {
 			log.Info("Get block status from unexisted dispatcher, ignore it",
-				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+				zap.String("changefeedID", request.ChangefeedID.GetName()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", status.State.BlockTs),
 				zap.Int64("mode", b.mode))
@@ -120,7 +124,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 		ownerNodeID := task.GetNodeID()
 		if ownerNodeID != from {
 			log.Warn("ignore block status from non-owner dispatcher",
-				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+				zap.String("changefeedID", request.ChangefeedID.GetName()),
 				zap.String("dispatcherID", dispatcherID.String()),
 				zap.String("ownerNodeID", ownerNodeID.String()),
 				zap.String("fromNodeID", from.String()),
@@ -131,7 +136,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
 			if !b.spanController.IsReplicating(task) {
 				log.Info("Get block status from unreplicating dispatcher, ignore it",
-					zap.String("changefeed", request.ChangefeedID.GetName()),
+					zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+					zap.String("changefeedID", request.ChangefeedID.GetName()),
 					zap.String("dispatcher", dispatcherID.String()),
 					zap.Uint64("commitTs", status.State.BlockTs),
 					zap.Int64("mode", b.mode))
@@ -168,7 +174,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 			// should not happen
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
-				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+				zap.String("changefeedID", request.ChangefeedID.GetName()),
 				zap.String("detail", status.String()),
 				zap.Uint64("commitTs", status.State.BlockTs),
 				zap.Int64("mode", b.mode))
@@ -184,7 +191,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 	if invalidStatusCount > 0 {
 		log.Warn("ignore invalid block statuses",
 			zap.String("from", from.String()),
-			zap.String("changefeed", request.ChangefeedID.GetName()),
+			zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
+			zap.String("changefeedID", request.ChangefeedID.GetName()),
 			zap.Int("invalidStatusCount", invalidStatusCount),
 			zap.Int64("mode", b.mode))
 	}
@@ -201,7 +209,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
 			zap.String("from", from.String()),
-			zap.String("changefeed", request.ChangefeedID.String()),
+			zap.String("keyspace", request.ChangefeedID.Keyspace),
+			zap.String("changefeedID", request.ChangefeedID.Name),
 			zap.Int64("mode", b.mode))
 	}
 
@@ -411,7 +420,8 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		log.Debug("No block event found, ignore the event done message",
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.String("dispatcher", dispatcherID.String()),
 			zap.Uint64("commitTs", status.State.BlockTs),
 			zap.Any("state", status.State),
@@ -479,7 +489,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				event.routeAdmissions = routeTableAdmissionsFromPB(blockState.RouteTableAdmissions)
 			}
 			log.Info("the block event is sent by ddl dispatcher",
-				zap.String("changefeed", changefeedID.Name()),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs),
 				zap.Int64("mode", b.mode))
@@ -488,7 +499,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
 			log.Debug("the block event already selected, ignore the block event",
-				zap.String("changefeed", changefeedID.Name()),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs),
 				zap.Int64("mode", b.mode),
@@ -514,7 +526,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			(blockState.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal) {
 			if pending := b.pendingEvents.Len(); pending > 0 {
 				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
-					zap.String("changefeed", changefeedID.Name()),
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.String("dispatcher", dispatcherID.String()),
 					zap.Uint64("commitTs", blockState.BlockTs),
 					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
@@ -627,7 +640,8 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	}
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
-			zap.String("changefeed", be.cfID.Name()),
+			zap.String("keyspace", be.cfID.Keyspace()),
+			zap.String("changefeedID", be.cfID.Name()),
 			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("mode", b.mode))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
@@ -640,7 +654,8 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 		return true
 	}
 	log.Info("event trySchedule",
-		zap.String("changefeed", event.cfID.Name()),
+		zap.String("keyspace", event.cfID.Keyspace()),
+		zap.String("changefeedID", event.cfID.Name()),
 		zap.String("writerDispatcher", event.writerDispatcher.String()),
 		zap.Uint64("EventCommitTs", event.commitTs),
 		zap.Int64("mode", b.mode))
@@ -649,14 +664,16 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	if !ready {
 		if candidate == nil {
 			log.Info("no candidate here, skip",
-				zap.String("changefeed", event.cfID.Name()),
+				zap.String("keyspace", event.cfID.Keyspace()),
+				zap.String("changefeedID", event.cfID.Name()),
 				zap.String("writerDispatcher", event.writerDispatcher.String()),
 				zap.Uint64("EventCommitTs", event.commitTs),
 				zap.Bool("isSyncPoint", event.isSyncPoint),
 				zap.Int64("mode", b.mode))
 		} else {
 			log.Info("event waits for a smaller commitTs before scheduling",
-				zap.String("changefeed", event.cfID.Name()),
+				zap.String("keyspace", event.cfID.Keyspace()),
+				zap.String("changefeedID", event.cfID.Name()),
 				zap.String("writerDispatcher", event.writerDispatcher.String()),
 				zap.Uint64("EventCommitTs", event.commitTs),
 				zap.Bool("isSyncPoint", event.isSyncPoint),

@@ -103,7 +103,8 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 	task.SetNodeID(nodeID)
 	log.Info("add an replicating maintainer",
 		zap.String("nodeID", nodeID.String()),
-		zap.String("changefeed", task.ID.String()))
+		zap.String("keyspace", task.ID.Keyspace()),
+		zap.String("changefeedID", task.ID.Name()))
 
 	db.changefeeds[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
@@ -132,7 +133,9 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	}
 
 	if remove {
-		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
+		log.Info("remove changefeed",
+			zap.String("keyspace", cf.ID.Keyspace()),
+			zap.String("changefeedID", cf.ID.Name()))
 		delete(db.changefeeds, cfID)
 		delete(db.changefeedDisplayNames, cf.ID.DisplayName)
 		delete(db.stopped, cfID)
@@ -147,7 +150,9 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 			)
 		}
 	} else {
-		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
+		log.Info("stop changefeed",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()))
 		db.stopped[cfID] = cf
 	}
 
@@ -215,7 +220,8 @@ func (db *ChangefeedDB) BindChangefeedToNode(old, new node.ID, task *Changefeed)
 	defer db.lock.Unlock()
 
 	log.Info("bind changefeed to node",
-		zap.String("changefeed", task.ID.String()),
+		zap.String("keyspace", task.ID.Keyspace()),
+		zap.String("changefeedID", task.ID.Name()),
 		zap.String("oldNode", old.String()),
 		zap.String("node", new.String()))
 	db.BindReplicaToNodeWithoutLock(old, new, task)
@@ -227,7 +233,8 @@ func (db *ChangefeedDB) MarkMaintainerReplicating(task *Changefeed) {
 	defer db.lock.Unlock()
 
 	log.Info("marking changefeed replicating",
-		zap.String("changefeed", task.ID.String()))
+		zap.String("keyspace", task.ID.Keyspace()),
+		zap.String("changefeedID", task.ID.Name()))
 	db.MarkReplicatingWithoutLock(task)
 	task.StartFinished()
 }
@@ -291,7 +298,8 @@ func (db *ChangefeedDB) MoveToSchedulingQueue(
 		cf.SetIsNew(overwriteCheckpointTs || (info != nil && util.GetOrZero(info.BootstrapPending)))
 		db.AddAbsentWithoutLock(cf)
 		log.Info("move a changefeed to scheduling queue, it will be scheduled later",
-			zap.Stringer("changefeed", id),
+			zap.String("keyspace", id.Keyspace()),
+			zap.String("changefeedID", id.Name()),
 			zap.Uint64("checkpointTs", cf.GetStatus().CheckpointTs),
 			zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
 			zap.Time("nextScheduleTime", cf.backoff.nextRetryTime.Load()),
@@ -309,7 +317,8 @@ func (db *ChangefeedDB) MarkMaintainerAbsent(cf *Changefeed) {
 	defer db.lock.Unlock()
 
 	log.Info("marking changefeed absent",
-		zap.String("changefeed", cf.ID.String()),
+		zap.String("keyspace", cf.ID.Keyspace()),
+		zap.String("changefeedID", cf.ID.Name()),
 		zap.String("node", cf.GetNodeID().String()))
 	db.MarkAbsentWithoutLock(cf)
 }
@@ -382,7 +391,9 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 
 	oldCf := db.stopped[cf.ChangefeedID]
 	if oldCf == nil {
-		log.Warn("changefeed is not stopped, can not be updated", zap.String("changefeed", cf.ChangefeedID.String()))
+		log.Warn("changefeed is not stopped, can not be updated",
+			zap.String("keyspace", cf.ChangefeedID.Keyspace()),
+			zap.String("changefeedID", cf.ChangefeedID.Name()))
 		return
 	}
 	// todo: not create a new changefeed here?

@@ -538,7 +538,8 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
 		zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
@@ -567,7 +568,8 @@ func (d *BasicDispatcher) HandleError(err error) {
 	case d.sharedInfo.errCh <- err:
 	default:
 		log.Error("error channel is full, discard error",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Error(err))
 	}
@@ -697,11 +699,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 
 			log.Info("dispatcher receive ddl event",
+				zap.String("keyspace", d.GetChangefeedID().Keyspace()),
+				zap.String("changefeedID", d.GetChangefeedID().Name()),
 				zap.Stringer("dispatcherID", d.id),
-				zap.String("ddlQuery", ddl.Query),
-				zap.Any("tableSpan", d.GetTableSpan()),
 				zap.Int64("tableID", ddl.GetTableID()),
+				zap.Any("tableSpan", d.GetTableSpan()),
+				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.String("ddlQuery", ddl.Query),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()
 			ddl.AddPostFlushFunc(func() {
@@ -1375,7 +1380,8 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 			d.tableSchemaStore.Clear()
 		}
 		log.Info("dispatcher component has stopped and is ready for cleanup",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Int64("mode", d.mode),
 			zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
@@ -1389,7 +1395,8 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		addTableCheckpointBlockerLen = d.addTableCheckpointBlocker.len()
 	}
 	log.Info("dispatcher is not ready to close",
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
@@ -1403,7 +1410,8 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("mode", d.mode),
 		zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)))
@@ -1411,7 +1419,8 @@ func (d *BasicDispatcher) removeDispatcher() {
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
+			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),

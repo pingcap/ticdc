@@ -311,7 +311,8 @@ func NewDispatcherManager(
 		if ignoreUpdateOnlyColumnsRuleCount > 0 {
 			_, downstreamType := config.ParseSinkURI(manager.config.SinkURI)
 			log.Warn("ignore update only columns is configured but does not take effect for this sink",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.String("sinkType", downstreamType),
 				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
 		}
@@ -418,7 +419,8 @@ func NewDispatcherManager(
 	}()
 
 	log.Info("dispatcher manager initialized",
-		zap.Stringer("changefeedID", changefeedID),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("sinkQuota", manager.sinkQuota),
@@ -497,7 +499,8 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 			FastGenByArgs("table trigger event dispatcher was not created")
 	}
 	log.Info("table trigger event dispatcher created",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", tableTriggerDispatcher.GetId()),
 		zap.Uint64("startTs", tableTriggerDispatcher.GetStartTs()),
 	)
@@ -567,7 +570,8 @@ func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsL
 			return nil, nil, nil, err
 		}
 		log.Info("get table recovery info for dispatchers",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Any("receiveStartTs", startTsList),
 			zap.Any("realStartTs", newStartTsList),
 			zap.Bool("removeDDLTs", removeDDLTs),
@@ -680,7 +684,8 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		}
 
 		log.Info("new dispatcher created",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", newStartTsList[idx]),
@@ -688,7 +693,8 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	}
 	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Int("count", len(dispatcherIds)),
 		zap.Duration("duration", time.Since(start)),
 	)
@@ -703,7 +709,8 @@ func (e *DispatcherManager) handleError(ctx context.Context, err error) {
 		case e.sharedInfo.GetErrCh() <- err:
 		default:
 			log.Error("error channel is full, discard error",
-				zap.Stringer("changefeedID", e.changefeedID),
+				zap.String("keyspace", e.changefeedID.Keyspace()),
+				zap.String("changefeedID", e.changefeedID.Name()),
 				zap.Error(err),
 			)
 		}
@@ -719,7 +726,8 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 		case err := <-e.sharedInfo.GetErrCh():
 			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
-					zap.Stringer("changefeedID", e.changefeedID),
+					zap.String("keyspace", e.changefeedID.Keyspace()),
+					zap.String("changefeedID", e.changefeedID.Name()),
 					zap.Error(err),
 				)
 
@@ -1040,7 +1048,8 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	)
 
 	log.Info("new dispatcher created(merge dispatcher)",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
@@ -1093,7 +1102,8 @@ func (e *DispatcherManager) LocalFence() {
 
 func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
-		zap.Stringer("changefeedID", e.changefeedID))
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 
 	e.stopWritePath(false)
 	e.finishClose()
@@ -1109,7 +1119,8 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 	e.writePathMu.Unlock()
 
 	log.Info("stopping dispatcher manager write path",
-		zap.Stringer("changefeedID", e.changefeedID))
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 
 	if cancelFirst && e.cancel != nil {
 		e.cancel()
@@ -1118,18 +1129,21 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
-			zap.Stringer("changefeedID", e.changefeedID))
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()))
 		if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
 			err := heartbeatCollector.RemoveRedoMessage(e.changefeedID)
 			if err != nil {
 				log.Error("remove redo message failed",
-					zap.Stringer("changefeedID", e.changefeedID),
+					zap.String("keyspace", e.changefeedID.Keyspace()),
+					zap.String("changefeedID", e.changefeedID.Name()),
 					zap.Error(err),
 				)
 			}
 		} else {
 			log.Warn("heartbeat collector is not available when stopping redo write path",
-				zap.Stringer("changefeedID", e.changefeedID),
+				zap.String("keyspace", e.changefeedID.Keyspace()),
+				zap.String("changefeedID", e.changefeedID.Name()),
 			)
 		}
 	}
@@ -1138,19 +1152,22 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
 	}
 	log.Info("closed all event dispatchers",
-		zap.Stringer("changefeedID", e.changefeedID))
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 
 	if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
 		err := heartbeatCollector.RemoveDispatcherManager(e.changefeedID)
 		if err != nil {
 			log.Error("remove dispatcher manager from heartbeat collector failed",
-				zap.Stringer("changefeedID", e.changefeedID),
+				zap.String("keyspace", e.changefeedID.Keyspace()),
+				zap.String("changefeedID", e.changefeedID.Name()),
 				zap.Error(err),
 			)
 		}
 	} else {
 		log.Warn("heartbeat collector is not available when stopping dispatcher manager write path",
-			zap.Stringer("changefeedID", e.changefeedID),
+			zap.String("keyspace", e.changefeedID.Keyspace()),
+			zap.String("changefeedID", e.changefeedID.Name()),
 		)
 	}
 
@@ -1170,7 +1187,9 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		e.sharedInfo.Close()
 	}
 
-	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("shared info closed",
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 
 	if e.IsRedoEnabled() && e.redoSink != nil {
 		e.redoSink.Close()
@@ -1178,7 +1197,9 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 	if e.sink != nil {
 		e.sink.Close()
 	}
-	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("sink closed",
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 }
 
 func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
@@ -1211,7 +1232,8 @@ func (e *DispatcherManager) finishClose() {
 
 	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
-		zap.Stringer("changefeedID", e.changefeedID))
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()))
 }
 
 func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
@@ -1230,7 +1252,8 @@ func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
 
 		if err := e.runRemoveChangefeedCleanup(); err != nil {
 			log.Warn("failed to cleanup removed changefeed",
-				zap.Stringer("changefeedID", e.changefeedID),
+				zap.String("keyspace", e.changefeedID.Keyspace()),
+				zap.String("changefeedID", e.changefeedID.Name()),
 				zap.Error(err))
 			return
 		}
@@ -1267,7 +1290,8 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
 	log.Debug("delete current working remove operator",
-		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.String("dispatcherID", id.String()),
 	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
@@ -1278,7 +1302,8 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 		e.metricEventDispatcherCount.Dec()
 	}
 	log.Info("event dispatcher completely stopped, and delete it from event dispatcher manager",
-		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("keyspace", e.changefeedID.Keyspace()),
+		zap.String("changefeedID", e.changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
 	)
 }

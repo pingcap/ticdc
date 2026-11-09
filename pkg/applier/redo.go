@@ -157,7 +157,8 @@ func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
 				skipDML: skipDMLAsStartTsList[0],
 			}
 			log.Info("calculate real startTs for redo apply",
-				zap.Stringer("changefeedID", ra.rd.GetChangefeedID()),
+				zap.String("keyspace", ra.rd.GetChangefeedID().Keyspace()),
+				zap.String("changefeedID", ra.rd.GetChangefeedID().Name()),
 				zap.Int64("tableID", tableID),
 				zap.Any("realStartTs", newStartTsList[0]),
 				zap.Any("skipDML", skipDMLAsStartTsList[0]),

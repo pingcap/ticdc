@@ -151,7 +151,8 @@ func (m *removeDispatcherOperator) Start() {
 func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
-		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()),
 		zap.Bool("taskRemoved", m.removed.Load()))
 
 	// If the task is removed, the span will be cleaned up by spanController, and we must not run

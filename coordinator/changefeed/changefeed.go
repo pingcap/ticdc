@@ -56,10 +56,14 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	isNew bool,
 ) *Changefeed {
 	if info == nil {
-		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", cfID))
+		log.Panic("changefeed info is nil",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()))
 	}
 	if info.Config == nil {
-		log.Panic("changefeed config is nil", zap.Stringer("changefeedID", cfID))
+		log.Panic("changefeed config is nil",
+			zap.String("keyspace", cfID.Keyspace()),
+			zap.String("changefeedID", cfID.Name()))
 	}
 	sinkType, _ := config.ParseSinkURI(info.SinkURI)
 	res := &Changefeed{
@@ -107,7 +111,9 @@ func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 		return
 	}
 	if info == nil {
-		log.Panic("changefeed info is nil", zap.Stringer("changefeedID", c.ID))
+		log.Panic("changefeed info is nil",
+			zap.String("keyspace", c.ID.Keyspace()),
+			zap.String("changefeedID", c.ID.Name()))
 	}
 	if c.info == nil {
 		c.info = atomic.NewPointer(info)
@@ -193,7 +199,8 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			// Record accepted progress before returning without CheckStatus.
 			c.backoff.checkpointTs = newStatus.CheckpointTs
 			log.Info("Received changefeed status with bootstrapDone",
-				zap.Stringer("changefeed", c.ID),
+				zap.String("keyspace", c.ID.Keyspace()),
+				zap.String("changefeedID", c.ID.Name()),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
 			return true, config.StateNormal, nil
 		}

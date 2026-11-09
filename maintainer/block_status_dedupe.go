@@ -152,7 +152,8 @@ func (m *Maintainer) filterBlockStatusEvent(event *Event) (*Event, bool) {
 
 	if suppressedCount > 0 {
 		log.Debug("suppress duplicate maintainer block statuses",
-			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("keyspace", m.changefeedID.Keyspace()),
+			zap.String("changefeedID", m.changefeedID.Name()),
 			zap.Stringer("from", event.message.From),
 			zap.Int64("mode", req.Mode),
 			zap.Int("kept", len(filteredStatuses)),

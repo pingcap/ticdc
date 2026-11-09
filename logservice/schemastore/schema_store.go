@@ -172,22 +172,22 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	for idx, event := range resolvedEvents {
 		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
 			log.Info("skip ddl job with empty SchemaVersion",
-				zap.Any("type", event.Job.Type),
-				zap.String("job", event.Job.Query),
+				zap.Int64("tableID", event.Job.TableID),
+				zap.Uint64("startTs", event.Job.StartTS),
+				zap.Uint64("commitTs", event.CommitTs),
+				zap.String("ddlQuery", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 			continue
 		}
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
 			log.Info("skip already applied ddl job",
-				zap.Any("type", event.Job.Type),
-				zap.String("job", event.Job.Query),
+				zap.Int64("tableID", event.Job.TableID),
+				zap.Uint64("startTs", event.Job.StartTS),
+				zap.Uint64("commitTs", event.CommitTs),
+				zap.String("ddlQuery", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 			continue
@@ -197,10 +197,10 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.String("schemaName", event.Job.SchemaName),
 			zap.Int64("tableID", event.Job.TableID),
 			zap.String("tableName", event.Job.TableName),
-			zap.Any("type", event.Job.Type),
+			zap.Uint64("startTs", event.Job.StartTS),
+			zap.Uint64("commitTs", event.CommitTs),
 			zap.String("ddlQuery", event.Job.Query),
 			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
-			zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 			zap.Any("storeSchemaVersion", s.schemaVersion),
 			zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 
@@ -225,11 +225,10 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.String("schemaName", event.Job.SchemaName),
 				zap.Int64("tableID", event.Job.TableID),
 				zap.String("tableName", event.Job.TableName),
-				zap.Any("type", event.Job.Type),
+				zap.Uint64("startTs", event.Job.StartTS),
+				zap.Uint64("commitTs", event.CommitTs),
 				zap.String("ddlQuery", event.Job.Query),
 				zap.Int64("jobSchemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
-				zap.Uint64("jobCommitTs", event.CommitTs),
 				zap.Any("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
 				zap.Error(err))

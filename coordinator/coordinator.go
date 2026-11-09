@@ -255,19 +255,23 @@ func (c *coordinator) handleStateChange(
 	defer c.controller.apiLock.Unlock()
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
-		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
+		log.Warn("changefeed not found",
+			zap.String("keyspace", event.changefeedID.Keyspace()),
+			zap.String("changefeedID", event.changefeedID.Name()))
 		return nil
 	}
 	currentInfo := cf.GetInfo()
 	if currentInfo == nil {
 		log.Warn("changefeed info is nil, skip state change",
-			zap.String("changefeed", event.changefeedID.String()),
+			zap.String("keyspace", event.changefeedID.Keyspace()),
+			zap.String("changefeedID", event.changefeedID.Name()),
 			zap.String("state", string(event.state)))
 		return nil
 	}
 	if isUnchangedRuntimeState(currentInfo, event.state, event.err) {
 		log.Debug("skip persisting unchanged changefeed runtime state",
-			zap.String("changefeed", event.changefeedID.String()),
+			zap.String("keyspace", event.changefeedID.Keyspace()),
+			zap.String("changefeedID", event.changefeedID.Name()),
 			zap.String("state", string(event.state)))
 		return nil
 	}
@@ -337,7 +341,8 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 	case <-ctx.Done():
 		log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
 			"there may be a lot of state need to be handled. Try next time",
-			zap.String("changefeed", id.String()),
+			zap.String("keyspace", id.Keyspace()),
+			zap.String("changefeedID", id.Name()),
 			zap.Error(context.Cause(ctx)))
 	case c.changefeedChangeCh <- []*changefeedChange{change}:
 	}
@@ -413,7 +418,8 @@ func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeed
 	// next periodic GC reconcile tick gets a chance to clean it up.
 	if err := c.tryDeleteGlobalGCSafepoint(ctx); err != nil {
 		log.Warn("failed to delete global gc safepoint after removing last changefeed",
-			zap.String("changefeed", id.String()),
+			zap.String("keyspace", id.Keyspace()),
+			zap.String("changefeedID", id.Name()),
 			zap.Error(err))
 	}
 	return checkpointTs, nil

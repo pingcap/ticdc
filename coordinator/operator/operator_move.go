@@ -85,7 +85,8 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		common.MaintainerEpochMatches(status.MaintainerEpoch, m.originMaintainerEpoch) &&
 		status.State != heartbeatpb.ComponentState_Working {
 		log.Info("changefeed removed from origin node",
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("keyspace", m.changefeed.ID.Keyspace()),
+			zap.String("changefeedID", m.changefeed.ID.Name()))
 		m.state = moveMaintainerStateOriginStopped
 	}
 	if m.state == moveMaintainerStateAddTarget &&
@@ -95,7 +96,8 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		status.BootstrapDone {
 		log.Info("changefeed added to dest node",
 			zap.String("dest", m.target.String()),
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("keyspace", m.changefeed.ID.Keyspace()),
+			zap.String("changefeedID", m.changefeed.ID.Name()))
 		m.state = moveMaintainerStateDoneSuccess
 	}
 }
@@ -164,7 +166,8 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 	if n == m.origin {
 		log.Info("origin node is stopped",
 			zap.String("origin", m.origin.String()),
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("keyspace", m.changefeed.ID.Keyspace()),
+			zap.String("changefeedID", m.changefeed.ID.Name()))
 		switch m.state {
 		case moveMaintainerStateRemoveOrigin:
 			m.state = moveMaintainerStateOriginStopped
@@ -184,7 +187,8 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 		log.Info("destination node removed before origin maintainer stopped",
 			zap.String("dest", m.target.String()),
 			zap.String("origin", m.origin.String()),
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("keyspace", m.changefeed.ID.Keyspace()),
+			zap.String("changefeedID", m.changefeed.ID.Name()))
 		// Keep removing the old origin maintainer first. The new owner can only
 		// be added back to origin after the old epoch reports stopped.
 		m.target = m.origin
@@ -196,7 +200,8 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 		log.Info("destination node removed after origin maintainer stopped",
 			zap.String("dest", m.target.String()),
 			zap.String("origin", m.origin.String()),
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("keyspace", m.changefeed.ID.Keyspace()),
+			zap.String("changefeedID", m.changefeed.ID.Name()))
 		if m.originRemoved {
 			m.finishAsAbsentLocked()
 			return
@@ -219,7 +224,8 @@ func (m *MoveMaintainerOperator) enterAddTargetLocked() {
 // finishAsAbsentLocked finishes the move without PostFinish side effects.
 func (m *MoveMaintainerOperator) finishAsAbsentLocked() {
 	log.Info("move maintainer operator aborted, mark changefeed absent",
-		zap.String("changefeed", m.changefeed.ID.String()),
+		zap.String("keyspace", m.changefeed.ID.Keyspace()),
+		zap.String("changefeedID", m.changefeed.ID.Name()),
 		zap.String("origin", m.origin.String()),
 		zap.String("target", m.target.String()))
 	m.db.MarkMaintainerAbsent(m.changefeed)
@@ -284,7 +290,8 @@ func (m *MoveMaintainerOperator) OnTaskRemoved() {
 	defer m.lck.Unlock()
 
 	log.Info("changefeed removed, mark move changefeed operator finished",
-		zap.String("changefeed", m.changefeed.ID.String()))
+		zap.String("keyspace", m.changefeed.ID.Keyspace()),
+		zap.String("changefeedID", m.changefeed.ID.Name()))
 	m.state = moveMaintainerStateDoneNoPostFinish
 }
 
@@ -309,7 +316,8 @@ func (m *MoveMaintainerOperator) PostFinish() {
 	}
 
 	log.Info("move changefeed operator finished",
-		zap.String("changefeed", m.changefeed.ID.String()))
+		zap.String("keyspace", m.changefeed.ID.Keyspace()),
+		zap.String("changefeedID", m.changefeed.ID.Name()))
 	m.db.MarkMaintainerReplicating(m.changefeed)
 }
 

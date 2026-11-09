@@ -98,7 +98,8 @@ func (m *OccupyDispatcherOperator) PostFinish() {
 	log.Info("occupy dispatcher operator finished",
 		zap.Any("removed", m.removed.Load()),
 		zap.Any("finished", m.finished.Load()),
-		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()),
 		zap.String("replicaSet", m.replicaSet.ID.String()))
 }
 

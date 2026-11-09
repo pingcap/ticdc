@@ -179,7 +179,7 @@ func (s *dmlSession) getOrCreateLocked(w *Writer, writeTimeout time.Duration) (*
 		if err != nil {
 			log.Info("failed to query tidb_cdc_active_active_sync_stats baseline",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
-				zap.String("changefeed", w.ChangefeedID.Name()),
+				zap.String("changefeedID", w.ChangefeedID.Name()),
 				zap.Int("writerID", w.id),
 				zap.Error(err))
 			return conn, nil
@@ -226,7 +226,7 @@ func (s *dmlSession) tryQueryActiveActiveSyncStatsLocked(
 	if err != nil {
 		log.Info("failed to query tidb_cdc_active_active_sync_stats",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),
-			zap.String("changefeed", w.ChangefeedID.Name()),
+			zap.String("changefeedID", w.ChangefeedID.Name()),
 			zap.Int("writerID", w.id),
 			zap.Error(err))
 		return

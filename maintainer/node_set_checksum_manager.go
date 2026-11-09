@@ -194,7 +194,8 @@ func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.
 			if exists {
 				if oldNode == node {
 					log.Warn("dispatcher already exists in expected set, ignore it",
-						zap.Stringer("changefeedID", m.changefeedID),
+						zap.String("keyspace", m.changefeedID.Keyspace()),
+						zap.String("changefeedID", m.changefeedID.Name()),
 						zap.String("dispatcherID", id.String()),
 						zap.String("node", node.String()),
 						zap.String("mode", common.StringMode(m.mode)),
@@ -202,7 +203,8 @@ func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.
 					continue
 				}
 				log.Warn("dispatcher exists in another node, override expected node",
-					zap.Stringer("changefeedID", m.changefeedID),
+					zap.String("keyspace", m.changefeedID.Keyspace()),
+					zap.String("changefeedID", m.changefeedID.Name()),
 					zap.String("dispatcherID", id.String()),
 					zap.String("oldNode", oldNode.String()),
 					zap.String("newNode", node.String()),
@@ -421,7 +423,8 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 	}
 
 	log.Warn("node set checksum state not ok for a long time",
-		zap.Stringer("changefeedID", snapshot.changefeed),
+		zap.String("keyspace", snapshot.changefeed.Keyspace()),
+		zap.String("changefeedID", snapshot.changefeed.Name()),
 		zap.String("node", snapshot.node.String()),
 		zap.String("mode", common.StringMode(m.mode)),
 		zap.String("state", snapshot.state.String()),

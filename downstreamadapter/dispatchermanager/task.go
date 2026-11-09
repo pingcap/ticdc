@@ -192,7 +192,8 @@ func shouldAbortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap 
 
 func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T], sinkType common.SinkType, reason string) {
 	log.Info("abort merge",
-		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+		zap.String("changefeedID", t.manager.changefeedID.Name()),
 		zap.String("reason", reason),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
@@ -232,7 +233,8 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {
 	log.Info("do merge",
-		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+		zap.String("changefeedID", t.manager.changefeedID.Name()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
 		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
@@ -302,7 +304,8 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, startTs)
 	log.Info("merge dispatcher commit",
-		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+		zap.String("changefeedID", t.manager.changefeedID.Name()),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
@@ -321,7 +324,8 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		if !ok {
 			log.Warn("dispatcher not found when do merge, skip remove",
 				zap.Stringer("dispatcherID", id),
-				zap.Stringer("changefeedID", t.manager.changefeedID))
+				zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+				zap.String("changefeedID", t.manager.changefeedID.Name()))
 			continue
 		}
 		dispatcher.Remove()
@@ -407,7 +411,8 @@ func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate m
 	if err != nil {
 		log.Error("get table recovery info for merge dispatcher failed",
 			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
-			zap.Stringer("changefeedID", t.manager.changefeedID),
+			zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+			zap.String("changefeedID", t.manager.changefeedID.Name()),
 			zap.Error(err),
 		)
 		t.mergedDispatcher.HandleError(err)
@@ -427,7 +432,8 @@ func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate m
 	}
 
 	log.Info("get table recovery info for merge dispatcher",
-		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+		zap.String("changefeedID", t.manager.changefeedID.Name()),
 		zap.Uint64("mergeStartTsCandidate", candidate.startTs),
 		zap.Any("recoveryStartTs", newStartTsList),
 		zap.Any("recoverySkipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
@@ -465,12 +471,14 @@ func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, p
 	if candidate.allSamePending {
 		if !candidate.pendingIsSyncPoint && candidate.pendingCommitTs == 0 {
 			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
-				zap.Stringer("changefeedID", t.manager.changefeedID),
+				zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+				zap.String("changefeedID", t.manager.changefeedID.Name()),
 				zap.Uint64("minCheckpointTs", minCheckpointTs),
 				zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()))
 		}
 		log.Info("merge dispatcher uses pending block event to calculate start ts",
-			zap.Stringer("changefeedID", t.manager.changefeedID),
+			zap.String("keyspace", t.manager.changefeedID.Keyspace()),
+			zap.String("changefeedID", t.manager.changefeedID.Name()),
 			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
 			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),

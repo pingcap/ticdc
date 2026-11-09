@@ -76,7 +76,7 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 
 	log.Info("kafka sink configuration resolved",
 		zap.String("keyspace", changefeedID.Keyspace()),
-		zap.String("changefeed", changefeedID.Name()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.String("client", KafkaClientFranz),
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),

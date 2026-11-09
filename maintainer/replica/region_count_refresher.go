@@ -57,7 +57,8 @@ func (r *RegionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 	regions, err := r.regionCache.LoadRegionsInKeyRange(backoff, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, just continue",
-			zap.Stringer("changefeedID", r.changefeedID),
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeedID", r.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
@@ -84,7 +85,9 @@ func (r *RegionCountRefresher) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("region count refresher exited", zap.Stringer("changefeedID", r.changefeedID))
+			log.Info("region count refresher exited",
+				zap.String("keyspace", r.changefeedID.Keyspace()),
+				zap.String("changefeedID", r.changefeedID.Name()))
 			return
 		case <-ticker.C:
 			r.queryRegionCount(ctx)
@@ -108,7 +111,8 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 		)
 		if err != nil {
 			log.Warn("load regions failed, just continue",
-				zap.Stringer("changefeedID", r.changefeedID),
+				zap.String("keyspace", r.changefeedID.Keyspace()),
+				zap.String("changefeedID", r.changefeedID.Name()),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
@@ -120,7 +124,9 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 
 	if tableCount > 0 {
 		log.Info("refresh region count for all tables",
-			zap.Stringer("changefeedID", r.changefeedID),
-			zap.Int("tableCount", tableCount), zap.Duration("duration", time.Since(start)))
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeedID", r.changefeedID.Name()),
+			zap.Int("tableCount", tableCount),
+			zap.Duration("duration", time.Since(start)))
 	}
 }

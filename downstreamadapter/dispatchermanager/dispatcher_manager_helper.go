@@ -54,7 +54,8 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 	if needCompleteStatus {
 		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Initializing {
 			log.Debug("dispatcher is initializing",
-				zap.Stringer("changefeedID", dispatcherItem.GetChangefeedID()),
+				zap.String("keyspace", dispatcherItem.GetChangefeedID().Keyspace()),
+				zap.String("changefeedID", dispatcherItem.GetChangefeedID().Name()),
 				zap.Stringer("dispatcherID", id),
 				zap.String("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()),
@@ -114,7 +115,8 @@ func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeF
 ) bool {
 	if len(dispatcherIDs) < 2 {
 		log.Error("merge dispatcher failed, invalid dispatcherIDs",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Any("dispatcherIDs", dispatcherIDs))
 		return false
 	}
@@ -151,13 +153,15 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 		dispatcherItem, ok := dispatcherMap.Get(id)
 		if !ok {
 			log.Error("merge dispatcher failed, the dispatcher is not found",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Any("dispatcherID", id))
 			return nil, 0, 0
 		}
 		if dispatcherItem.GetComponentStatus() != heartbeatpb.ComponentState_Working {
 			log.Error("merge dispatcher failed, the dispatcher is not working",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Any("dispatcherID", id),
 				zap.Int64("mode", dispatcherItem.GetMode()),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()))
@@ -174,7 +178,8 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 			currentTableSpan := dispatcherItem.GetTableSpan()
 			if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
 				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
-					zap.Stringer("changefeedID", changefeedID),
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.Any("dispatcherIDs", dispatcherIDs),
 					zap.Int64("mode", dispatcherItem.GetMode()),
 					zap.Any("prevTableSpan", prevTableSpan),
@@ -226,7 +231,8 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 		func() {
 			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
 			log.Info("merge dispatcher is ready",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
 				zap.Int64("mode", mergedDispatcher.GetMode()),
 				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
@@ -246,7 +252,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 	if ok {
 		if dispatcherItem.GetTryRemoving() {
 			log.Info("dispatcher is already in removing state, skip repeated remove request",
-				zap.Stringer("changefeedID", changefeedID),
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", id))
 			return
 		}
@@ -260,7 +267,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
-					zap.Stringer("changefeedID", changefeedID),
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.Error(err),
 				)
 			}
@@ -271,7 +279,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		dispatcherItem.SetTryRemoving()
 
 		log.Info("submitted async remove task",
-			zap.Stringer("changefeedID", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", id))
 	} else {
 		statusesChan <- dispatcher.TableSpanStatusWithSeq{
@@ -311,7 +320,8 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
-					zap.Stringer("changefeedID", changefeedID),
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeedID", changefeedID.Name()),
 					zap.Error(err),
 				)
 			}

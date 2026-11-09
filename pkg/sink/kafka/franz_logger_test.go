@@ -61,7 +61,7 @@ func TestClientLoggerConfiguration(t *testing.T) {
 	fields := entries[0].ContextMap()
 	require.Equal(t, "kafka-client", fields["component"])
 	require.Equal(t, "test-keyspace", fields["keyspace"])
-	require.Equal(t, "test-changefeed", fields["changefeed"])
+	require.Equal(t, "test-changefeed", fields["changefeedID"])
 	// Client fields are passed through, including long values.
 	require.Equal(t, "127.0.0.1:9092", fields["broker"])
 	require.Equal(t, strings.Repeat("x", 2048), fields["payload"])

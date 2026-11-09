@@ -204,7 +204,8 @@ func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID co
 	if err := c.messageCenter.SendEvent(msg); err != nil {
 		log.Warn("failed to send resolved ts to coordinator",
 			zap.Stringer("target", id),
-			zap.String("changefeed", changefeedID.DisplayName.String()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeedID", changefeedID.Name()),
 			zap.Uint64("resolvedTs", resolvedTs),
 			zap.Error(err))
 	}
@@ -314,7 +315,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 				delete(state.nodeReportPhyTs, from)
 				affectedGIDs[gid] = struct{}{}
 				log.Info("changefeed removed from node",
-					zap.Stringer("changefeedID", state.cfID),
+					zap.String("keyspace", state.cfID.Keyspace()),
+					zap.String("changefeedID", state.cfID.Name()),
 					zap.String("nodeID", string(from)),
 					zap.Uint64("changefeedGIDLow", gid.Low),
 					zap.Uint64("changefeedGIDHigh", gid.High))
@@ -324,7 +326,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 					changefeedResolvedTsLagGauge.DeleteLabelValues(state.cfID.Keyspace(), state.cfID.Name())
 					delete(c.changefeedStates.m, gid)
 					log.Info("changefeed state removed as it has no active nodes",
-						zap.Stringer("changefeedID", state.cfID),
+						zap.String("keyspace", state.cfID.Keyspace()),
+						zap.String("changefeedID", state.cfID.Name()),
 						zap.Uint64("changefeedGIDLow", gid.Low),
 						zap.Uint64("changefeedGIDHigh", gid.High))
 				}
@@ -338,7 +341,8 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 		gid := cfID.ID()
 		if _, ok := c.changefeedStates.m[gid]; !ok {
 			log.Info("new changefeed states added",
-				zap.Stringer("changefeedID", cfID),
+				zap.String("keyspace", cfID.Keyspace()),
+				zap.String("changefeedID", cfID.Name()),
 				zap.Uint64("changefeedGIDLow", gid.Low),
 				zap.Uint64("changefeedGIDHigh", gid.High))
 			// Initialize metrics for the new changefeed.
@@ -398,7 +402,8 @@ func (c *logCoordinator) updateChangefeedMetrics(state *changefeedState) {
 
 	if minResolvedTs == math.MaxUint64 {
 		log.Warn("minResolvedTs is MaxUint64, this should not happen",
-			zap.Stringer("changefeedID", state.cfID))
+			zap.String("keyspace", state.cfID.Keyspace()),
+			zap.String("changefeedID", state.cfID.Name()))
 		return
 	}
 

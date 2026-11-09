@@ -60,7 +60,8 @@ func newBootstrapWorker(
 ) *bootstrapWorker {
 	log.Info("Sending bootstrap event is enabled for simple protocol. "+
 		"Both send-bootstrap-interval-in-sec and send-bootstrap-in-msg-count are > 0.",
-		zap.Stringer("changefeed", changefeedID),
+		zap.String("keyspace", changefeedID.Keyspace()),
+		zap.String("changefeedID", changefeedID.Name()),
 		zap.Int64("sendBootstrapIntervalInSec", sendBootstrapInterval),
 		zap.Int32("sendBootstrapInMsgCount", sendBootstrapInMsgCount))
 	return &bootstrapWorker{
@@ -195,7 +196,8 @@ func (b *bootstrapWorker) gcInactiveTables() {
 			log.Info("A table is removed from the bootstrap worker",
 				zap.Int64("tableID", table.id),
 				zap.String("topic", table.topic),
-				zap.Stringer("changefeed", b.changefeedID))
+				zap.String("keyspace", b.changefeedID.Keyspace()),
+				zap.String("changefeedID", b.changefeedID.Name()))
 			b.activeTables.Delete(key)
 		}
 		return true
