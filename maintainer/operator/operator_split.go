@@ -192,7 +192,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 			if !ret {
 				log.Error("post finish in split dispatcher operator failed, set the span absent",
 					zap.String("id", m.replicaSet.ID.String()),
-					zap.String("spanID", span.ID.String()),
+					zap.String("dispatcherID", span.ID.String()),
 					zap.String("targetNode", m.splitTargetNodes[idx].String()))
 				m.spanController.MarkSpanAbsent(span)
 			}
