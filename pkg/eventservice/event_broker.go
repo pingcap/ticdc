@@ -750,9 +750,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	var interrupted bool
-	var schemaBlocked bool
-	var schemaBlockedUntilTs uint64
+	var (
+		interrupted          bool
+		schemaBlocked        bool
+		schemaBlockedUntilTs uint64
+	)
 	defer func() {
 		c.finishScan(task, interrupted, schemaBlocked, schemaBlockedUntilTs)
 	}()

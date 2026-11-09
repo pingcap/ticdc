@@ -906,8 +906,10 @@ func (g *EventsGroup) PrepareResolve(
 	// batch lazily so polling those groups does not create a full-sized slice.
 	var entries []spilledMessage
 	seenPayloads := make(map[payloadCacheKey]struct{})
-	var plannedBytes int64
-	var lastCommitTs uint64
+	var (
+		plannedBytes int64
+		lastCommitTs uint64
+	)
 	valid := iterator.First()
 	for valid {
 		commitTs, err := decodeEventIndexCommitTs(iterator.Key())

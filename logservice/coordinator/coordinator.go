@@ -488,8 +488,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	sort.Slice(candidateSubs, func(i, j int) bool {
 		return candidateSubs[i].resolvedTs > candidateSubs[j].resolvedTs
 	})
-	var subIDs []uint64
-	var candidateNodes []string
+	var (
+		subIDs         []uint64
+		candidateNodes []string
+	)
 	if len(candidateSubs) > 0 {
 		c.nodes.Lock()
 		for _, candidate := range candidateSubs {

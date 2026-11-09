@@ -142,11 +142,14 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 	dispatcherIDs []common.DispatcherID,
 	dispatcherMap *DispatcherMap[T],
 ) (*heartbeatpb.TableSpan, uint64, int64) {
-	var prevTableSpan *heartbeatpb.TableSpan
-	var startKey []byte
-	var endKey []byte
-	var schemaID int64
-	var fakeStartTs uint64 = math.MaxUint64 // we calculate the fake startTs as the min-checkpointTs of these dispatchers
+	var (
+		prevTableSpan *heartbeatpb.TableSpan
+		startKey      []byte
+		endKey        []byte
+		schemaID      int64
+		// The fake startTs is calculated as the min checkpointTs of these dispatchers.
+		fakeStartTs uint64 = math.MaxUint64
+	)
 
 	for idx, id := range dispatcherIDs {
 		dispatcherItem, ok := dispatcherMap.Get(id)

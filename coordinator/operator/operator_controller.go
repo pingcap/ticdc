@@ -318,9 +318,11 @@ func (oc *Controller) stopChangefeed(
 		}
 	}
 
-	var originNode node.ID
-	var originEpoch uint64
-	var useOriginEpoch bool
+	var (
+		originNode     node.ID
+		originEpoch    uint64
+		useOriginEpoch bool
+	)
 	if !hasMaintainerEpoch {
 		originNode, originEpoch, useOriginEpoch = oc.moveOriginStopTargetLocked(cfID)
 	}

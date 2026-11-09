@@ -505,33 +505,46 @@ func (e *eventStore) RegisterDispatcher(
 
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	eventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
-	if lag >= 10*time.Second {
-		log.Warn("add dispatcher",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("lag", lag))
-	} else {
-		log.Info("add dispatcher",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("startTs", startTs))
-	}
+
+	// The subscription the dispatcher ends up on, decided below.
+	var (
+		subscriptionID uint64
+		checkpointTs   uint64
+		resolvedTs     uint64
+		tableSpan      *heartbeatpb.TableSpan
+	)
 
 	start := time.Now()
 	defer func() {
-		if success {
-			log.Info("add dispatcher done",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", startTs),
-				zap.Bool("enableDataSharing", enableDataSharing),
-				zap.Bool("onlyReuse", onlyReuse),
-				zap.Duration("duration", time.Since(start)))
+		fields := []zap.Field{
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Int64("tableID", dispatcherSpan.GetTableID()),
+			zap.Uint64("startTs", startTs),
+			zap.Duration("lag", lag),
+		}
+		if subscriptionID != 0 {
+			fields = append(fields,
+				zap.Uint64("subscriptionID", subscriptionID),
+				zap.String("subscriptionTableSpan", common.FormatTableSpan(tableSpan)),
+				zap.Uint64("subscriptionCheckpointTs", checkpointTs),
+				zap.Uint64("subscriptionResolvedTs", resolvedTs))
+		}
+		fields = append(fields,
+			zap.Bool("onlyReuse", onlyReuse),
+			zap.Bool("enableDataSharing", enableDataSharing),
+			zap.Duration("duration", time.Since(start)))
+
+		msg := "add dispatcher done"
+		if subscriptionID != 0 {
+			msg = "add dispatcher done by reuse"
+		}
+		if !success {
+			msg = "add dispatcher failed"
+		}
+		if success && lag >= 10*time.Second {
+			log.Warn(msg, fields...)
 		} else {
-			log.Info("add dispatcher failed",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("startTs", startTs),
-				zap.Bool("enableDataSharing", enableDataSharing),
-				zap.Bool("onlyReuse", onlyReuse),
-				zap.Duration("duration", time.Since(start)))
+			log.Info(msg, fields...)
 		}
 	}()
 
@@ -581,12 +594,10 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 						e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 						e.dispatcherMeta.Unlock()
-						log.Info("reuse existing subscription with exact span match",
-							zap.Stringer("dispatcherID", dispatcherID),
-							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
-							zap.Uint64("startTs", startTs),
-							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+						subscriptionID = uint64(subStat.subID)
+						tableSpan = subStat.tableSpan
+						checkpointTs = subStat.checkpointTs.Load()
+						resolvedTs = subStat.resolvedTs.Load()
 						return true
 					}
 
@@ -606,14 +617,10 @@ func (e *eventStore) RegisterDispatcher(
 			stat.subStat = bestMatch
 			e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
-			log.Info("reuse existing subscription with smallest containing span",
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("subscriptionTableSpan", common.FormatTableSpan(bestMatch.tableSpan)),
-				zap.Uint64("startTs", startTs),
-				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
-				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
-				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
+			subscriptionID = uint64(bestMatch.subID)
+			tableSpan = bestMatch.tableSpan
+			checkpointTs = bestMatch.checkpointTs.Load()
+			resolvedTs = bestMatch.resolvedTs.Load()
 		}
 		e.dispatcherMeta.Unlock()
 
@@ -724,11 +731,6 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.config.bdrMode,
 		logpuller.ScanPriorityLow,
 	)
-	log.Info("new subscription created",
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
-		zap.Uint64("startTs", startTs))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -1415,9 +1417,11 @@ func (e *eventStore) writeEvents(
 	insertCount := 0
 	updateCount := 0
 	deleteCount := 0
-	var totalValueBytesBefore int64
-	var totalValueBytesAfter int64
-	var dstBuf []byte
+	var (
+		totalValueBytesBefore int64
+		totalValueBytesAfter  int64
+		dstBuf                []byte
+	)
 	if compressionBuf != nil {
 		dstBuf = *compressionBuf
 	}
@@ -1645,8 +1649,10 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
-			var err error
-			var dst []byte
+			var (
+				err error
+				dst []byte
+			)
 			if iter.decodeBuf != nil {
 				dst = iter.decodeBuf[:0]
 			}
