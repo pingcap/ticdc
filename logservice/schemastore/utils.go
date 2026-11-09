@@ -20,10 +20,71 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
+
+// parseCreateTableQueries splits a TiDB CREATE batch without rewriting its statements.
+// TiDB retains only the first job's SQL mode, so each statement may need different quote modes.
+func parseCreateTableQueries(job *model.Job) ([]ast.StmtNode, error) {
+	p := parser.New()
+	modes := [...]mysql.SQLMode{
+		job.SQLMode,
+		job.SQLMode ^ mysql.ModeANSIQuotes,
+		job.SQLMode ^ mysql.ModeNoBackslashEscapes,
+		job.SQLMode ^ (mysql.ModeANSIQuotes | mysql.ModeNoBackslashEscapes),
+	}
+	var result []ast.StmtNode
+	remaining := strings.TrimSpace(job.Query)
+	for remaining != "" {
+		end := strings.IndexByte(remaining, ';')
+		for {
+			query, expectedCount := remaining, 1
+			if end >= 0 {
+				// A second statement proves the semicolon is a separator, even
+				// when a quoted value or a line comment contains semicolons.
+				query, expectedCount = remaining[:end+1]+" SELECT 1", 2
+			}
+			var stmts []ast.StmtNode
+			var err error
+			for _, mode := range modes {
+				p.SetSQLMode(mode)
+				stmts, _, err = p.Parse(query, job.Charset, job.Collate)
+				if err == nil && (len(stmts) == expectedCount || end < 0 && len(stmts) == 0) {
+					break
+				}
+			}
+			if err == nil && len(stmts) == expectedCount {
+				result = append(result, stmts[0])
+				if end < 0 {
+					return result, nil
+				}
+				remaining = strings.TrimSpace(remaining[end+1:])
+				break
+			}
+			if end < 0 {
+				if err != nil {
+					return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+				}
+				if len(stmts) == 0 {
+					return result, nil
+				}
+				return nil, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack("cannot separate batch CREATE statements")
+			}
+			next := strings.IndexByte(remaining[end+1:], ';')
+			if next < 0 {
+				end = -1
+			} else {
+				end += next + 1
+			}
+		}
+	}
+	return result, nil
+}
 
 // transform ddl query based on sql mode.
 func transformDDLJobQuery(job *model.Job) (string, error) {
