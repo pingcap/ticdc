@@ -66,16 +66,15 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		Mode:         mode,
 	})
-	log.Info("new span replication created",
+	log.Info("span replication created",
 		zap.String("keyspace", cfID.Keyspace()),
 		zap.String("changefeedID", cfID.Name()),
+		zap.String("dispatcherID", id.String()),
 		zap.Int64("tableID", span.TableID),
+		zap.String("tableSpan", common.FormatTableSpan(span)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("id", id.String()),
 		zap.Int64("schemaID", SchemaID),
-		zap.String("groupID", replica.GetGroupName(r.groupID)),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.Int64("groupID", r.groupID))
 	return r
 }
 
@@ -92,18 +91,17 @@ func NewWorkingSpanReplication(
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
-	log.Info("new working span replication created",
+	log.Info("span replication created",
 		zap.String("keyspace", cfID.Keyspace()),
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("dispatcherID", id.String()),
 		zap.Int64("tableID", span.TableID),
+		zap.String("tableSpan", common.FormatTableSpan(span)),
 		zap.Uint64("checkpointTs", status.CheckpointTs),
-		zap.String("nodeID", nodeID.String()),
-		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("groupID", r.groupID),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.String("nodeID", nodeID.String()),
+		zap.String("componentStatus", status.ComponentStatus.String()))
 	return r
 }
 
@@ -161,12 +159,6 @@ func (r *SpanReplication) initGroupID() {
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
-	log.Info("init groupID",
-		zap.String("keyspace", r.ChangefeedID.Keyspace()),
-		zap.String("changefeedID", r.ChangefeedID.Name()),
-		zap.String("tableSpan", common.FormatTableSpan(&span)),
-		zap.Any("groupID", r.groupID),
-		zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
