@@ -844,18 +844,10 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-<<<<<<< HEAD
-	filter         filter.Filter
-	dispatcherStat *dispatcherStat
-	spillDir       string
-=======
 	filter                   filter.Filter
-	filterContext            filter.DMLFilterContext
 	dispatcherStat           *dispatcherStat
 	spillDir                 string
 	cleanupLargeTxnAfterScan bool
-
->>>>>>> 8a99ef1d8 (eventservice: preserve spilled inserts on scan retry (#6668))
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
 	// and startTs are fixed for the current transaction.
