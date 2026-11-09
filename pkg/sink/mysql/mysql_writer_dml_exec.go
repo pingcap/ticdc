@@ -175,7 +175,7 @@ func (w *Writer) sequenceExecute(
 		}
 
 		if execError != nil {
-			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
+			log.Error("ExecContext", zap.Error(util.RedactError(execError)), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if !errors.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
@@ -268,7 +268,7 @@ func (w *Writer) logDMLTxnErr(
 			zap.Int("count", dmls.rowCount),
 			zap.String("dmls", dmls.String()),
 			zap.Int("writerID", w.id),
-			zap.Error(err))
+			zap.Error(util.RedactError(err)))
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
 			log.Error("execute DMLs with error, can not retry",
@@ -279,7 +279,7 @@ func (w *Writer) logDMLTxnErr(
 				zap.Int("count", dmls.rowCount),
 				zap.String("dmls", dmls.String()),
 				zap.Int("writerID", w.id),
-				zap.Error(err))
+				zap.Error(util.RedactError(err)))
 		}
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))

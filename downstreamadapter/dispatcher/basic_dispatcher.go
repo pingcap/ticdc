@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -368,7 +369,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// If NotSync is true, it means the DDL should not be sent to downstream.
 		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
-			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcherID", d.id), zap.String("ddlQuery", ddl.GetDDLQuery()))
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcherID", d.id), zap.String("ddlQuery", util.RedactValue(ddl.GetDDLQuery())))
 			d.PassBlockEventToSink(event)
 			return nil
 		}
@@ -714,7 +715,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
 				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("duration", cost), zap.String("ddlQuery", ddl.Query))
+					zap.Duration("duration", cost), zap.String("ddlQuery", util.RedactValue(ddl.Query)))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:

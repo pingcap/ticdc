@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -35,7 +36,7 @@ import (
 
 func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
-		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
+		log.Info("Dry run DDL", zap.String("sql", util.RedactValue(event.GetDDLQuery())))
 		time.Sleep(w.cfg.DryRunDelay)
 		return nil
 	}
@@ -49,7 +50,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if flag {
-			log.Info("Skip Already Executed DDL", zap.String("sql", event.GetDDLQuery()))
+			log.Info("Skip Already Executed DDL", zap.String("sql", util.RedactValue(event.GetDDLQuery())))
 			return nil
 		}
 	}
@@ -70,21 +71,21 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			log.Warn("failed to restore anonymous index name",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
-				zap.String("ddlQuery", event.Query),
+				zap.String("ddlQuery", util.RedactValue(event.Query)),
 				zap.Error(err))
 		} else if changed {
 			log.Info("restore anonymous index to named index",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
-				zap.String("ddlQuery", event.Query),
-				zap.String("newQuery", newQuery))
+				zap.String("ddlQuery", util.RedactValue(event.Query)),
+				zap.String("newQuery", util.RedactValue(newQuery)))
 			event.Query = newQuery
 		}
 	}
 	// Convert vector type to string type for unsupport database
 	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
-			log.Info("format ddl query", zap.String("newQuery", newQuery), zap.String("ddlQuery", event.Query))
+			log.Info("format ddl query", zap.String("newQuery", util.RedactValue(newQuery)), zap.String("ddlQuery", util.RedactValue(event.Query)))
 			event.Query = newQuery
 		}
 	}
@@ -124,7 +125,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		log.Error("Failed to reset session timestamp before DDL execution",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),
 			zap.String("changefeedID", w.ChangefeedID.Name()),
-			zap.String("ddlQuery", event.GetDDLQuery()),
+			zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())),
 			zap.Error(err))
 		if rbErr := tx.Rollback(); rbErr != nil {
 			log.Error("Failed to rollback",
@@ -149,14 +150,14 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		log.Warn("Skip setting session timestamp due to failpoint",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),
 			zap.String("changefeedID", w.ChangefeedID.Name()),
-			zap.String("ddlQuery", event.GetDDLQuery()))
+			zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())))
 	}
 	if useSessionTimestamp && !skipSetTimestamp {
 		// set the session timestamp to match upstream DDL execution time
 		if err := setSessionTimestamp(ctx, tx, ddlTimestamp); err != nil {
 			log.Error("Fail to set session timestamp for DDL",
 				zap.Float64("timestamp", ddlTimestamp),
-				zap.String("ddlQuery", event.GetDDLQuery()),
+				zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())),
 				zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback",
@@ -171,19 +172,19 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
-		log.Error("Fail to ExecContext", zap.Error(err), zap.String("ddlQuery", query))
+		log.Error("Fail to ExecContext", zap.Error(util.RedactError(err)), zap.String("ddlQuery", util.RedactValue(query)))
 		if useSessionTimestamp {
 			if skipResetAfterDDL {
 				log.Warn("Skip resetting session timestamp after DDL execution failure due to failpoint",
 					zap.String("keyspace", w.ChangefeedID.Keyspace()),
 					zap.String("changefeedID", w.ChangefeedID.Name()),
-					zap.String("ddlQuery", event.GetDDLQuery()))
+					zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())))
 			} else if tsErr := resetSessionTimestamp(ctx, tx); tsErr != nil {
 				log.Warn("Failed to reset session timestamp after DDL execution failure", zap.Error(tsErr))
 			}
 		}
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
+			log.Error("Failed to rollback", zap.String("sql", util.RedactValue(event.GetDDLQuery())), zap.Error(rbErr))
 		}
 		return err
 	}
@@ -194,18 +195,18 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			log.Warn("Skip resetting session timestamp after DDL execution due to failpoint",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
-				zap.String("ddlQuery", event.GetDDLQuery()))
+				zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())))
 		} else if err := resetSessionTimestamp(ctx, tx); err != nil {
 			log.Error("Failed to reset session timestamp after DDL execution", zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
+				log.Error("Failed to rollback", zap.String("sql", util.RedactValue(event.GetDDLQuery())), zap.Error(rbErr))
 			}
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", util.RedactValue(event.GetDDLQuery()))))
 		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", util.RedactValue(event.GetDDLQuery()))))
 	}
 
 	logFields := []zap.Field{
@@ -255,7 +256,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 					zap.Int64("tableID", event.GetTableID()),
 					zap.Uint64("startTs", event.GetStartTs()),
 					zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.String("ddlQuery", event.Query),
+					zap.String("ddlQuery", util.RedactValue(event.Query)),
 					zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
@@ -267,7 +268,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 					zap.Int64("tableID", event.GetTableID()),
 					zap.Uint64("startTs", event.GetStartTs()),
 					zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.String("ddlQuery", event.Query),
+					zap.String("ddlQuery", util.RedactValue(event.Query)),
 					zap.String("ddlCreateTime", ddlCreateTime),
 					zap.String("readTimeout", w.getDDLReadTimeout(event)),
 					zap.Error(err))
@@ -279,9 +280,9 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				zap.Int64("tableID", event.GetTableID()),
 				zap.Uint64("startTs", event.GetStartTs()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.String("ddlQuery", event.Query),
+				zap.String("ddlQuery", util.RedactValue(event.Query)),
 				zap.Error(err))
-			return errors.WrapError(errors.ErrExecDDLFailed, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
+			return errors.WrapError(errors.ErrExecDDLFailed, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", util.RedactValue(event.GetDDLQuery()))))
 		}
 		log.Info("Execute DDL succeeded",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),
@@ -289,7 +290,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			zap.Int64("tableID", event.GetTableID()),
 			zap.Uint64("startTs", event.GetStartTs()),
 			zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.String("ddlQuery", event.GetDDLQuery()))
+			zap.String("ddlQuery", util.RedactValue(event.GetDDLQuery())))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
@@ -335,7 +336,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 				zap.Int64("tableID", ddl.GetTableID()),
 				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
-				zap.String("ddlQuery", ddl.Query),
+				zap.String("ddlQuery", util.RedactValue(ddl.Query)),
 				zap.String("ddlCreateTime", ddlCreateTime))
 		}
 
@@ -351,7 +352,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 				zap.Int64("tableID", ddl.GetTableID()),
 				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
-				zap.String("ddlQuery", ddl.Query),
+				zap.String("ddlQuery", util.RedactValue(ddl.Query)),
 				zap.String("ddlCreateTime", ddlCreateTime))
 			return nil
 		case timodel.JobStateCancelled, timodel.JobStateRollingback, timodel.JobStateRollbackDone, timodel.JobStateCancelling:
@@ -366,7 +367,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 					zap.Int64("tableID", ddl.GetTableID()),
 					zap.Uint64("startTs", ddl.GetStartTs()),
 					zap.Uint64("commitTs", ddl.GetCommitTs()),
-					zap.String("ddlQuery", ddl.Query),
+					zap.String("ddlQuery", util.RedactValue(ddl.Query)),
 					zap.String("ddlCreateTime", ddlCreateTime),
 					zap.Any("ddlState", state))
 				return nil
@@ -378,7 +379,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 				zap.Int64("tableID", ddl.GetTableID()),
 				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
-				zap.String("ddlQuery", ddl.Query),
+				zap.String("ddlQuery", util.RedactValue(ddl.Query)),
 				zap.String("ddlCreateTime", ddlCreateTime),
 				zap.Any("ddlState", state))
 			return errors.ErrDDLStateNotFound.GenWithStackByArgs(state)
@@ -411,7 +412,7 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query, args...)
-	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.String("ddlQuery", query))
+	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.String("ddlQuery", util.RedactValue(query)))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
 	}
@@ -434,7 +435,7 @@ func (w *Writer) doQueryAsyncDDL(query string, args ...any) (bool, error) {
 		zap.String("changefeedID", w.ChangefeedID.Name()),
 		zap.Duration("checkDuration", time.Since(start)),
 		zap.String("runningDDL", runningDDL),
-		zap.String("ddlQuery", query),
+		zap.String("ddlQuery", util.RedactValue(query)),
 		zap.Any("jobID", jobID),
 		zap.String("jobType", jobType),
 		zap.String("schemaState", schemaState),

@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/tikv"
@@ -268,7 +267,7 @@ func (s *subscriptionClient) Subscribe(
 	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+			zap.String("startKey", util.RedactKey(span.StartKey)), zap.String("endKey", util.RedactKey(span.EndKey)))
 	}
 }
 
@@ -385,7 +384,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			zap.String("tableSpan", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
@@ -393,7 +392,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)),
+				zap.String("tableSpan", common.FormatTableSpan(&nextSpan)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -408,7 +407,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)))
+				zap.String("tableSpan", common.FormatTableSpan(&nextSpan)))
 			backoffBeforeLoad = true
 			continue
 		}

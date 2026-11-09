@@ -14,7 +14,6 @@
 package operator
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -55,7 +54,6 @@ type MergeDispatcherOperator struct {
 
 	toMergedReplicaSets []*replica.SpanReplication
 	newReplicaSet       *replica.SpanReplication
-	mergedSpanInfo      string
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -63,14 +61,12 @@ type MergeDispatcherOperator struct {
 	sendThrottler sendThrottler
 }
 
-func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string {
-	var spansInfo strings.Builder
+func formatMergedSpans(toMergedReplicaSets []*replica.SpanReplication) string {
+	var sb strings.Builder
 	for _, replicaSet := range toMergedReplicaSets {
-		span := replicaSet.Span
-		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
+		fmt.Fprintf(&sb, "[%s]", common.FormatTableSpan(replicaSet.Span))
 	}
-	return spansInfo.String()
+	return sb.String()
 }
 
 func buildDispatcherIDs(toMergedReplicaSets []*replica.SpanReplication) []*heartbeatpb.DispatcherID {
@@ -115,7 +111,6 @@ func newMergeDispatcherOperator(
 		dispatcherIDs:       buildDispatcherIDs(toMergedReplicaSets),
 		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
-		mergedSpanInfo:      buildMergedSpanInfo(toMergedReplicaSets),
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       mergedReplicaSet,
 		sendThrottler:       newSendThrottler(),
@@ -280,7 +275,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 }
 
 func (m *MergeDispatcherOperator) String() string {
-	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, mergedSpanInfo: %s", m.id, m.mergedSpanInfo)
+	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, mergedSpanInfo: %s", m.id, formatMergedSpans(m.toMergedReplicaSets))
 }
 
 func (m *MergeDispatcherOperator) Type() string {

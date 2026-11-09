@@ -475,7 +475,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Int64("tableID", e.GetTableID()),
 				zap.Uint64("startTs", e.GetStartTs()),
 				zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("ddlQuery", e.Query))
+				zap.String("ddlQuery", util.RedactValue(e.Query)))
 			continue
 		}
 		codecCommon.SetDDLMessageLogInfo(message, e)

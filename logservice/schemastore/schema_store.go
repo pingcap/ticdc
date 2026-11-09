@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -174,7 +175,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			log.Info("ddl job ignored since schema version is empty",
 				zap.Int64("tableID", event.Job.TableID),
 				zap.Uint64("commitTs", event.CommitTs),
-				zap.String("ddlQuery", event.Job.Query))
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)))
 			continue
 		}
 		if event.Job.BinlogInfo.FinishedTS <= s.finishedDDLTs {
@@ -184,7 +185,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
 				zap.Int64("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
-				zap.String("ddlQuery", event.Job.Query))
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)))
 			continue
 		}
 		handleStart := time.Now()
@@ -209,7 +210,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 				zap.Uint64("startTs", event.Job.StartTS),
 				zap.Uint64("commitTs", event.CommitTs),
 				zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
-				zap.String("ddlQuery", event.Job.Query),
+				zap.String("ddlQuery", util.RedactValue(event.Job.Query)),
 				zap.Duration("duration", time.Since(handleStart)),
 				zap.Int64("storeSchemaVersion", s.schemaVersion),
 				zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs),
@@ -225,7 +226,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 			zap.Uint64("startTs", event.Job.StartTS),
 			zap.Uint64("commitTs", event.CommitTs),
 			zap.Int64("schemaVersion", event.Job.BinlogInfo.SchemaVersion),
-			zap.String("ddlQuery", event.Job.Query),
+			zap.String("ddlQuery", util.RedactValue(event.Job.Query)),
 			zap.Duration("duration", time.Since(handleStart)))
 	}
 
@@ -246,14 +247,14 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Int64("tableID", ddlEvent.Job.TableID),
 		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
-		zap.String("ddlQuery", ddlEvent.Job.Query))
+		zap.String("ddlQuery", util.RedactValue(ddlEvent.Job.Query)))
 
 	serverConfig := config.GetGlobalServerConfig()
 	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
 		if ts == ddlEvent.CommitTs {
 			log.Info("ddl job ignored by commit ts",
 				zap.Uint64("commitTs", ts),
-				zap.String("ddlQuery", ddlEvent.Job.Query))
+				zap.String("ddlQuery", util.RedactValue(ddlEvent.Job.Query)))
 			return
 		}
 	}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -295,7 +296,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 			log.Panic("split queries failed", zap.Error(err))
 		}
 		if len(queries) != len(d.MultipleTableInfos) {
-			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("ddlQuery", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("ddlQuery", util.RedactValue(d.Query)), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
 
 		t := model.ActionCreateTable
@@ -333,11 +334,11 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 func extractRenameTargetExtraFromQuery(query string) (string, string) {
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
-		log.Panic("parse split rename query failed", zap.String("ddlQuery", query), zap.Error(err))
+		log.Panic("parse split rename query failed", zap.String("ddlQuery", util.RedactValue(query)), zap.Error(err))
 	}
 	renameStmt, ok := stmt.(*ast.RenameTableStmt)
 	if !ok || len(renameStmt.TableToTables) == 0 {
-		log.Panic("unexpected split rename query", zap.String("ddlQuery", query), zap.Any("stmt", stmt))
+		log.Panic("unexpected split rename query", zap.String("ddlQuery", util.RedactValue(query)), zap.Any("stmt", stmt))
 	}
 	oldTable := renameStmt.TableToTables[0].OldTable
 	return oldTable.Schema.O, oldTable.Name.O

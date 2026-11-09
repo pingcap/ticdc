@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
@@ -244,7 +245,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Int64("tableID", e.GetTableID()),
 				zap.Uint64("startTs", e.GetStartTs()),
 				zap.Uint64("commitTs", e.GetCommitTs()),
-				zap.String("ddlQuery", e.Query))
+				zap.String("ddlQuery", util.RedactValue(e.Query)))
 			continue
 		}
 		common.SetDDLMessageLogInfo(message, e)

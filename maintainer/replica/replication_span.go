@@ -15,7 +15,6 @@ package replica
 
 import (
 	"bytes"
-	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -24,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -152,9 +152,9 @@ func (r *SpanReplication) initGroupID() {
 			zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("dispatcherID", r.ID.String()),
 			zap.Int64("tableID", span.TableID),
-			zap.String("totalSpan", totalSpan.String()),
-			zap.String("start", hex.EncodeToString(span.StartKey)),
-			zap.String("end", hex.EncodeToString(span.EndKey)))
+			zap.String("totalSpan", common.FormatTableSpan(&totalSpan)),
+			zap.String("start", util.RedactKey(span.StartKey)),
+			zap.String("end", util.RedactKey(span.EndKey)))
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -112,9 +113,9 @@ func (m *regionCountSplitter) split(
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeedID", m.changefeedID.Name()),
 				zap.String("tableSpan", common.FormatTableSpan(span)),
-				zap.Stringer("lastSpan", spans[len(spans)-1]),
-				zap.Any("startKey", startKey),
-				zap.Any("endKey", endKey))
+				zap.String("lastSpan", common.FormatTableSpan(spans[len(spans)-1])),
+				zap.String("startKey", util.RedactKey(startKey)),
+				zap.String("endKey", util.RedactKey(endKey)))
 			return []*heartbeatpb.TableSpan{span}
 		}
 		spans = append(spans, &heartbeatpb.TableSpan{

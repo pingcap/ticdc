@@ -14,7 +14,6 @@
 package spanz
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"unsafe"
@@ -23,16 +22,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"go.uber.org/zap"
 )
-
-// HexKey returns a hex string generated from the key.
-func HexKey(key []byte) string {
-	// TODO(qupeng): improve the function.
-	str := ""
-	for _, c := range key {
-		str += fmt.Sprintf("%02X", c)
-	}
-	return str
-}
 
 // ArrayToSpan converts an array of TableID to an array of Span.
 func ArrayToSpan(in []heartbeatpb.Table) []heartbeatpb.TableSpan {
