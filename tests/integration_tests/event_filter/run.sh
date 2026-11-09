@@ -76,38 +76,52 @@ function test_rewritten_query_filter() {
 
 	mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "SET GLOBAL tidb_enable_fast_create_table = ON;"
 	local pids=()
-	local i kind pid
-	for i in $(seq 1 8); do
-		for kind in ignored kept; do
-			mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -D event_filter \
-				-e "CREATE TABLE sql_batch_${kind}_$i (id INT PRIMARY KEY);" &
-			pids+=("$!")
+	local i kind pid attempt release_at table_num
+	local kept_count=0
+	local batch_query=""
+	for attempt in $(seq 1 5); do
+		pids=()
+		# Establish the sessions before releasing both kinds of CREATE together.
+		release_at=$(($(date +%s) + 3))
+		for i in $(seq 1 8); do
+			table_num=$((kept_count + i))
+			for kind in ignored kept; do
+				mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -D event_filter \
+					-e "DO SLEEP(GREATEST(0, $release_at - UNIX_TIMESTAMP(NOW(6))));
+						CREATE TABLE sql_batch_${kind}_$table_num (id INT PRIMARY KEY);" &
+				pids+=("$!")
+			done
 		done
-	done
-	for pid in "${pids[@]}"; do
-		wait "$pid"
+		for pid in "${pids[@]}"; do
+			wait "$pid"
+		done
+		kept_count=$((kept_count + 8))
+		# Require one actual batch containing both ignored and kept statements.
+		batch_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -N -B --raw -e \
+			"SELECT QUERY FROM information_schema.ddl_jobs
+			 WHERE DB_NAME = 'event_filter' AND JOB_TYPE = 'create tables'
+			 AND QUERY LIKE '%sql_batch_ignored_%' AND QUERY LIKE '%sql_batch_kept_%'
+			 ORDER BY JOB_ID LIMIT 1;")
+		if [ -n "$batch_query" ]; then
+			break
+		fi
+		echo "no mixed CREATE batch observed in round $attempt, retrying"
 	done
 	mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "SET GLOBAL tidb_enable_fast_create_table = OFF;"
-	# Require one actual batch containing both ignored and kept statements.
-	local batch_query
-	batch_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -N -B --raw -e \
-		"SELECT QUERY FROM information_schema.ddl_jobs
-		 WHERE DB_NAME = 'event_filter' AND JOB_TYPE = 'create tables'
-		 AND QUERY LIKE '%sql_batch_ignored_%' AND QUERY LIKE '%sql_batch_kept_%'
-		 ORDER BY JOB_ID LIMIT 1;")
 	if [ -z "$batch_query" ]; then
-		echo "expected a batch CREATE TABLE job containing ignored and kept statements"
+		echo "expected a mixed batch CREATE TABLE job after $attempt synchronized rounds"
 		exit 1
 	fi
 	wait_ignore_sql_ddl 2
 	run_sql "SELECT COUNT(*) AS kept_creates FROM information_schema.tables
 		WHERE table_schema = 'event_filter' AND table_name LIKE 'sql_batch_kept_%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_contains 'kept_creates: 8'
+	check_contains "kept_creates: $kept_count"
 	run_sql "SELECT COUNT(*) AS ignored_creates FROM information_schema.tables
 		WHERE table_schema = 'event_filter' AND table_name LIKE 'sql_batch_ignored_%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_contains 'ignored_creates: 0'
 }
 
+# run starts the replication topology and verifies event filtering for the selected sink.
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
