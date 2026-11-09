@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -493,6 +494,16 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 // It also reports when the applied SchemaStore frontier is the effective range
 // cap, so low-latency mode can retry the dispatcher after that frontier advances.
 func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestResult {
+	failpoint.Inject("DelayCursorRoundsUntil", func(value failpoint.Value) {
+		if testShouldDelayCursorRound(task, value.(string)) {
+			failpoint.Return(scanTaskRequestResult{})
+		}
+	})
+	failpoint.Inject("DelayChangefeedScanUntil", func(value failpoint.Value) {
+		if testShouldDelayChangefeedScan(task, value.(string)) {
+			failpoint.Return(scanTaskRequestResult{})
+		}
+	})
 	// 1. Get the range and resume cursor of the dispatcher.
 	request, needScan := task.getScanRequest()
 	if !needScan {
@@ -753,6 +764,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	failpoint.Inject("DelayTableScanUntil", func(value failpoint.Value) {
+		if testShouldDelayTableScan(task, value.(string)) {
+			time.Sleep(10 * time.Millisecond)
+			failpoint.Return()
+		}
+	})
+
 	requestResult := c.getScanTaskRequestResult(task)
 	if !requestResult.needScan {
 		schemaBlocked = requestResult.schemaBlocked
@@ -760,6 +778,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 	request := requestResult.request
+
+	// A consumer waiting for a syncpoint or redo watermark needs no more DML
+	// scans. Keep ready, handshake and no-data progress above this gate, without
+	// spending scan tokens or reserving shared memory needed by lagging dispatchers.
+	if task.availableMemoryQuota.Load() == 0 {
+		c.sendSignalResolvedTs(task)
+		eventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		return
+	}
 
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.

@@ -185,8 +185,9 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// If the path doesn't exist, it will return ErrorTypeNotExist.
 	RemovePath(path P) error
 
-	// ReleasePath releases all the events of the path.
-	// After this call return, events in the path will be dropped.
+	// Release reclaims pending payloads. EventCollector paths retain recovery
+	// notifications and control events; other algorithms clear the queue.
+	// The request is executed asynchronously by the queue owner.
 	Release(path P)
 
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
@@ -194,6 +195,9 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	SetAreaSettings(area A, settings AreaSettings)
 
 	GetMetrics() Metrics[A, P]
+
+	// CheckMemoryPressure checks stalled collector areas without requiring input.
+	CheckMemoryPressure()
 }
 
 const (
@@ -324,6 +328,11 @@ type Feedback[A Area, P Path, D Dest] struct {
 	Dest D
 
 	FeedbackType FeedbackType
+
+	// Release enqueues reclamation for the original path object, even if its ID
+	// has since been removed and reused. It returns false if the path is gone
+	// or the owner queue is full; later pressure checks retry. Only ReleasePath sets it.
+	Release func() bool
 }
 
 func (f *Feedback[A, P, D]) String() string {

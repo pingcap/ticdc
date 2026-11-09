@@ -36,12 +36,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
+	pauseScan                bool
+	mode                     int64
 	id                       common.DispatcherID
 	tableSpan                *heartbeatpb.TableSpan
 	handle                   func(commonEvent.Event)
@@ -63,7 +66,7 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 }
 
 func (m *mockEventDispatcher) GetMode() int64 {
-	return common.DefaultMode
+	return m.mode
 }
 
 func (m *mockEventDispatcher) GetStartTs() uint64 {
@@ -684,4 +687,46 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 
 	require.Equal(t, totalDML, sumDML)
 	require.Equal(t, 1, maxBatch)
+}
+
+func (m *mockEventDispatcher) ShouldPauseScan() bool { return m.pauseScan }
+
+func TestScanPauseQuotaUsesCurrentState(t *testing.T) {
+	c := &EventCollector{ds: NewEventDynamicStream(false), redoDs: NewEventDynamicStream(true)}
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+	cf := common.NewChangefeedID4Test("default", "syncpoint-quota")
+	c.changefeedMap.Store(cf.ID(), newChangefeedStat(cf))
+	blocked := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
+	lagging := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
+	// Even a synthetic pause reported for a redo target must not stop the
+	// producer of the watermark the ordinary dispatcher is waiting for.
+	redo := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf, mode: common.RedoMode, pauseScan: true}
+	for _, target := range []*mockEventDispatcher{blocked, lagging, redo} {
+		stat := newDispatcherStat(target, c, nil)
+		markSessionReceiving(stat.session, "broker")
+		c.dispatcherMap.Store(target.id, stat)
+		require.NoError(t, c.getDynamicStream(target.mode).AddPath(target.id, stat, dynstream.NewAreaSettingsWithMaxPendingSize(1<<20, dynstream.MemoryControlForEventCollector, "test")))
+	}
+	available := func() commonEvent.AvailableMemory {
+		msgs := c.newCongestionControlMessages()
+		require.Contains(t, msgs, node.ID("broker"))
+		entries := msgs["broker"].GetAvailables()
+		require.Len(t, entries, 1)
+		return entries[0]
+	}
+	before := available()
+	require.Positive(t, before.DispatcherAvailable[blocked.id])
+	require.Positive(t, before.DispatcherAvailable[lagging.id])
+	require.Positive(t, before.DispatcherAvailable[redo.id])
+	blocked.pauseScan = true
+	paused := available()
+	require.Zero(t, paused.DispatcherAvailable[blocked.id])
+	require.Equal(t, before.Available, paused.Available, "pausing a path must not change shared physical quota")
+	require.Equal(t, before.DispatcherAvailable[lagging.id], paused.DispatcherAvailable[lagging.id])
+	require.Equal(t, before.DispatcherAvailable[redo.id], paused.DispatcherAvailable[redo.id])
+	blocked.pauseScan = false
+	after := available()
+	require.Equal(t, before.Available, after.Available)
+	require.Equal(t, before.DispatcherAvailable, after.DispatcherAvailable, "resume must use current quotas without new input")
 }
