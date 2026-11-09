@@ -8,6 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+# wait_ignore_sql_ddl waits for DDL completion and consumer progress past a marker.
 function wait_ignore_sql_ddl() {
 	local marker=$1
 	local target_ts
@@ -19,8 +20,15 @@ function wait_ignore_sql_ddl() {
 	run_sql "INSERT INTO event_filter.sql_query_barrier VALUES ($marker);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 20 "run_sql 'SELECT COUNT(*) AS marker_count FROM event_filter.sql_query_barrier WHERE id = $marker;' \
 		${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains 'marker_count: 1'"
+	if [ "$SINK_TYPE" == "storage" ]; then
+		# A scan is logged before its files are applied. The next scan proves that
+		# all files in the preceding scan, including other tables, were applied.
+		ensure 20 "test \"\$(sed -n '/storage consumer scan done/s/.*checkpointTs=\([0-9]*\).*/\1/p' \
+			'$WORK_DIR/cdc_storage_consumer.log' | tail -n 2 | sed '\$d')\" -gt '$target_ts'"
+	fi
 }
 
+# test_rewritten_query_filter verifies upstream SQL matching when execution SQL is rebuilt.
 function test_rewritten_query_filter() {
 	run_sql_file $CUR/data/prepare_ignore_sql_rewrite.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	wait_ignore_sql_ddl 0
@@ -66,7 +74,7 @@ function test_rewritten_query_filter() {
 	check_contains 'ignored_replacement: 7'
 	check_contains 'kept_replacement: 17'
 
-	run_sql "SET GLOBAL tidb_enable_fast_create_table = ON;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "SET GLOBAL tidb_enable_fast_create_table = ON;"
 	local pids=()
 	local i kind pid
 	for i in $(seq 1 8); do
@@ -79,7 +87,18 @@ function test_rewritten_query_filter() {
 	for pid in "${pids[@]}"; do
 		wait "$pid"
 	done
-	run_sql "SET GLOBAL tidb_enable_fast_create_table = OFF;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "SET GLOBAL tidb_enable_fast_create_table = OFF;"
+	# Require one actual batch containing both ignored and kept statements.
+	local batch_query
+	batch_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -N -B --raw -e \
+		"SELECT QUERY FROM information_schema.ddl_jobs
+		 WHERE DB_NAME = 'event_filter' AND JOB_TYPE = 'create tables'
+		 AND QUERY LIKE '%sql_batch_ignored_%' AND QUERY LIKE '%sql_batch_kept_%'
+		 ORDER BY JOB_ID LIMIT 1;")
+	if [ -z "$batch_query" ]; then
+		echo "expected a batch CREATE TABLE job containing ignored and kept statements"
+		exit 1
+	fi
 	wait_ignore_sql_ddl 2
 	run_sql "SELECT COUNT(*) AS kept_creates FROM information_schema.tables
 		WHERE table_schema = 'event_filter' AND table_name LIKE 'sql_batch_kept_%';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
