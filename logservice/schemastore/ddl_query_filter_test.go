@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -243,6 +244,22 @@ func TestDDLIgnoreSQLForCreateTables(t *testing.T) {
 		{"ANSI quotes", []string{
 			`CREATE TABLE "t" (a INT PRIMARY KEY)`, `CREATE TABLE "t2" (a INT PRIMARY KEY)`,
 		}, `^CREATE TABLE "t2" \(a INT PRIMARY KEY\)$`, mysql.ModeANSIQuotes, []int{0}},
+		{"mixed ANSI quotes and quoted string", []string{
+			`CREATE TABLE "t" (a INT PRIMARY KEY)`, `CREATE TABLE t2 (a INT PRIMARY KEY, s VARCHAR(8) DEFAULT "kept")`,
+		}, `^CREATE TABLE t2 .* DEFAULT "kept"\)$`, mysql.ModeANSIQuotes, []int{0}},
+		{"mixed quoted string and ANSI quotes", []string{
+			`CREATE TABLE t (a INT PRIMARY KEY, s VARCHAR(8) DEFAULT "kept")`, `CREATE TABLE "t2" (a INT PRIMARY KEY)`,
+		}, `^CREATE TABLE "t2" \(a INT PRIMARY KEY\)$`, 0, []int{0}},
+		{"mixed backslash modes", []string{
+			`CREATE TABLE t (a INT PRIMARY KEY, s VARCHAR(20) DEFAULT '\')`,
+			`CREATE TABLE t2 (a INT PRIMARY KEY, s VARCHAR(20) DEFAULT 'it\'s; kept')`,
+		}, "^" + regexp.QuoteMeta(`CREATE TABLE t2 (a INT PRIMARY KEY, s VARCHAR(20) DEFAULT 'it\'s; kept')`) + "$", mysql.ModeNoBackslashEscapes, []int{0}},
+		{"mixed ANSI and no backslash modes", []string{
+			`CREATE TABLE "t" (a INT PRIMARY KEY)`, `CREATE TABLE t2 (a INT PRIMARY KEY, s VARCHAR(8) DEFAULT "\")`,
+		}, "^" + regexp.QuoteMeta(`CREATE TABLE t2 (a INT PRIMARY KEY, s VARCHAR(8) DEFAULT "\")`) + "$", mysql.ModeANSIQuotes, []int{0}},
+		{"semicolon in line comment", []string{
+			"CREATE TABLE t(a INT PRIMARY KEY) -- original; comment\n COMMENT='source'", secondQuery,
+		}, "^" + regexp.QuoteMeta("CREATE TABLE t(a INT PRIMARY KEY) -- original; comment\n COMMENT='source'") + "$", 0, []int{1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			job := buildCreateTablesJobWithQueryForTest(1, []int64{100, 101}, []string{"t", "t2"}, tc.queries, 20)
@@ -287,6 +304,25 @@ func TestDDLIgnoreSQLForCreateTables(t *testing.T) {
 			require.Len(t, event.NeedAddedTables, 2)
 			require.Len(t, event.TableNameChange.AddName, 2)
 		})
+	}
+}
+
+// TestCreateTablesInvalidQueries verifies parse errors and mismatched statement counts are rejected.
+func TestCreateTablesInvalidQueries(t *testing.T) {
+	for _, query := range []string{
+		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY;",
+		"CREATE TABLE t(a INT PRIMARY KEY);",
+	} {
+		job := buildCreateTablesJobForTest(1, []int64{100, 101}, []string{"t", "t2"}, 20)
+		job.Query = query
+		_, err := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+			job:         job,
+			databaseMap: map[int64]*BasicDatabaseInfo{1: {Name: "test"}},
+		})
+		require.Error(t, err)
+		code, ok := cerror.RFCCode(err)
+		require.True(t, ok)
+		require.Equal(t, cerror.ErrTiDBUnexpectedJobMeta.RFCCode(), code)
 	}
 }
 

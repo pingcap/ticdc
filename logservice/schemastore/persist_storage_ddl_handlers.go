@@ -642,13 +642,16 @@ func loadRecoverSchemaTableInfos(p *persistentStorage, job *model.Job, recoverIn
 // =======
 // buildPersistedDDLEventFunc start
 // =======
+// buildPersistedDDLEventCommon captures job metadata and prepares SQL for the DDL handler.
 func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	var query string
 	job := args.job
 	// TODO: for ActionAddFullTextIndex and ActionCreateHybridIndex,
 	// the parser cannot recogonize the query now, so we keep the original query in job.Query.
 	// only in unit test job.Query may be empty
-	if job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex && job.Query != "" {
+	// CREATE batches are normalized per statement by their handler.
+	if job.Query != "" && job.Type != model.ActionCreateTables &&
+		job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex {
 		var err error
 		query, err = transformDDLJobQuery(job)
 		if err != nil {
@@ -1298,22 +1301,27 @@ func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) 
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
 	if args.job.Query != "" {
-		p := parser.New()
-		p.SetSQLMode(args.job.SQLMode)
-		stmts, _, err := p.Parse(args.job.Query, args.job.Charset, args.job.Collate)
+		stmts, err := parseCreateTableQueries(args.job)
 		if err != nil {
-			return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+			return PersistedDDLEvent{}, err
 		}
 		if len(stmts) != len(event.MultipleTableInfos) {
 			return PersistedDDLEvent{}, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack(
 				"batch CREATE query count %d does not match table count %d", len(stmts), len(event.MultipleTableInfos))
 		}
 		event.OriginalQueries = make([]string, 0, len(stmts))
+		queries := make([]string, 0, len(stmts))
 		for _, stmt := range stmts {
 			// TiDB adds separators when it batches independent CREATE jobs.
 			query := strings.TrimSpace(stmt.OriginalText())
 			event.OriginalQueries = append(event.OriginalQueries, strings.TrimSpace(strings.TrimSuffix(query, ";")))
+			query, err = commonEvent.Restore(stmt)
+			if err != nil {
+				return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+			}
+			queries = append(queries, query)
 		}
+		event.Query = strings.Join(queries, ";")
 	}
 	return event, nil
 }
