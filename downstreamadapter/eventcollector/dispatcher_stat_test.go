@@ -2492,3 +2492,5 @@ func TestUpdateTableInfoByDDLStateChange(t *testing.T) {
 		})
 	}
 }
+
+func (m *mockDispatcher) ShouldPauseScan() bool { return false }
