@@ -227,7 +227,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
-	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
+	log.Info("create range checker for block event", zap.Any("commitTs", be.commitTs), zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Int64("mode", be.mode))
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeDB() {
@@ -243,7 +243,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
-	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
+	log.Info("create range checker for block event", zap.Any("commitTs", be.commitTs), zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Int64("mode", be.mode))
 }
 
 func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
@@ -264,8 +264,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		log.Info("use table trigger event as the writer dispatcher",
 			zap.String("keyspace", be.cfID.Keyspace()),
 			zap.String("changefeedID", be.cfID.Name()),
-			zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
 			zap.Uint64("commitTs", be.commitTs),
+			zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
 			zap.Int64("mode", be.mode))
 		dispatcher = be.spanController.GetDDLDispatcherID()
 	default:
@@ -277,8 +277,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 			log.Info("use table trigger event as the writer dispatcher",
 				zap.String("keyspace", be.cfID.Keyspace()),
 				zap.String("changefeedID", be.cfID.Name()),
-				zap.String("dispatcher", selected.String()),
 				zap.Uint64("commitTs", be.commitTs),
+				zap.String("dispatcher", selected.String()),
 				zap.Int64("mode", be.mode))
 		}
 		dispatcher = common.NewDispatcherIDFromPB(selected)
@@ -297,8 +297,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("keyspace", be.cfID.Keyspace()),
 		zap.String("changefeedID", be.cfID.Name()),
-		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
+		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
 		zap.Int64("mode", be.mode))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
@@ -344,9 +344,9 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 	}
 	for _, add := range be.newTables {
 		log.Info("add new table",
-			zap.Uint64("commitTs", be.commitTs),
 			zap.String("keyspace", be.cfID.Keyspace()),
 			zap.String("changefeedID", be.cfID.Name()),
+			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("schema", add.SchemaID),
 			zap.Int64("table", add.TableID),
 			zap.Int64("mode", be.mode))
@@ -743,8 +743,8 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 			log.Warn("writer dispatcher not found",
 				zap.String("keyspace", be.cfID.Keyspace()),
 				zap.String("changefeedID", be.cfID.Name()),
-				zap.String("dispatcher", be.writerDispatcher.String()),
 				zap.Uint64("commitTs", be.commitTs),
+				zap.String("dispatcher", be.writerDispatcher.String()),
 				zap.Bool("isSyncPoint", be.isSyncPoint),
 				zap.Int64("mode", be.mode))
 
@@ -755,9 +755,9 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				log.Panic("influence type should be normal when writer dispatcher not found",
 					zap.String("keyspace", be.cfID.Keyspace()),
 					zap.String("changefeedID", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
 					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
-					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Int64("mode", be.mode))
 			}
@@ -770,9 +770,9 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.String("keyspace", be.cfID.Keyspace()),
 					zap.String("changefeedID", be.cfID.Name()),
 					zap.Int64("tableID", tableID),
+					zap.Uint64("commitTs", be.commitTs),
 					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
-					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Int64("mode", be.mode))
 			}

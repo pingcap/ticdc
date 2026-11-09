@@ -636,8 +636,8 @@ func (p *persistentStorage) doGc(ctx context.Context, gcTs uint64) {
 		// It might happen when all changefeed is removed in the maintainer side,
 		// the gc safe point thus advanced.
 		log.Warn("gc safe point is larger than resolvedTs, ignore it",
-			zap.Uint64("gcTs", gcTs),
-			zap.Uint64("resolvedTs", p.upperBound.ResolvedTs))
+			zap.Uint64("resolvedTs", p.upperBound.ResolvedTs),
+			zap.Uint64("gcTs", gcTs))
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()
@@ -916,9 +916,9 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
 			log.Debug("table already exists. ignore DDL",
+				zap.Int64("tableID", job.TableID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.String("schemaName", job.SchemaName),
-				zap.Int64("tableID", job.TableID),
 				zap.String("tableName", job.TableName),
 				zap.String("DDL", job.Query),
 				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
@@ -929,9 +929,9 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
 			log.Debug("table already exists. ignore DDL",
+				zap.Int64("tableID", job.TableID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.String("schemaName", job.SchemaName),
-				zap.Int64("tableID", job.TableID),
 				zap.String("tableName", job.TableName),
 				zap.String("DDL", job.Query),
 				zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),

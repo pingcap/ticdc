@@ -63,9 +63,9 @@ func newSaramaFactory(ctx context.Context, o *options, changefeedID common.Chang
 		return nil, err
 	}
 	log.Info("kafka sink configuration resolved",
-		zap.String("namespace", changefeedID.Keyspace()),
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeedID", changefeedID.Name()),
+		zap.String("namespace", changefeedID.Keyspace()),
 		zap.String("topic", o.Topic),
 		zap.Int32("partitionNum", o.PartitionNum),
 		zap.Int("maxMessageBytes", o.MaxMessageBytes),

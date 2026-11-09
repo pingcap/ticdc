@@ -228,9 +228,9 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 		p.producers.Remove(topic) // callback func will be called
 		topicName, _ := topic.(string)
 		log.Info("Async client closed in pulsar DML producer",
-			zap.Duration("duration", time.Since(start)),
 			zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeedID", p.changefeedID.Name()),
+			zap.Duration("duration", time.Since(start)),
 			zap.String("topic", topicName))
 	}
 }

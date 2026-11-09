@@ -182,11 +182,11 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 			log.Debug("check event sequence",
 				zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 				zap.String("changefeedID", d.target.GetChangefeedID().Name()),
+				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("receivedSeq", event.GetSeq()),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()))
 		}
 
 		lastEventSeq := state.lastEventSeq.Load()
@@ -204,13 +204,13 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 				zap.String("changefeedID", d.target.GetChangefeedID().Name()),
+				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("lastEventSeq", lastEventSeq),
 				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
-				zap.Uint64("expectedSeq", expectedSeq),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+				zap.Uint64("expectedSeq", expectedSeq))
 			return false
 		}
 	case commonEvent.TypeBatchDMLEvent:
@@ -219,10 +219,10 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 				log.Debug("check batch DML event sequence",
 					zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 					zap.String("changefeedID", d.target.GetChangefeedID().Name()),
+					zap.Uint64("commitTs", e.CommitTs),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.Uint64("receivedSeq", e.Seq),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-					zap.Uint64("commitTs", e.CommitTs))
+					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()))
 			}
 
 			expectedSeq := state.lastEventSeq.Add(1)
@@ -230,13 +230,13 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 					zap.String("changefeedID", d.target.GetChangefeedID().Name()),
+					zap.Uint64("commitTs", e.CommitTs),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 					zap.Uint64("receivedSeq", e.Seq),
-					zap.Uint64("expectedSeq", expectedSeq),
-					zap.Uint64("commitTs", e.CommitTs))
+					zap.Uint64("expectedSeq", expectedSeq))
 				return false
 			}
 		}
@@ -507,10 +507,10 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 		log.Error("table state change was delivered to the wrong dispatcher",
 			zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 			zap.String("changefeedID", d.target.GetChangefeedID().Name()),
+			zap.Uint64("commitTs", ddl.FinishedTs),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Int64("expectedPhysicalTableID", tableSpan.TableID),
-			zap.Int64("actualPhysicalTableID", change.PhysicalTableID),
-			zap.Uint64("commitTs", ddl.FinishedTs))
+			zap.Int64("actualPhysicalTableID", change.PhysicalTableID))
 		return
 	}
 	if change.Kind != commonEvent.TableStateUpdated {
@@ -590,8 +590,8 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 		zap.String("changefeedID", d.target.GetChangefeedID().Name()),
-		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
 	d.session.resetCurrentEventService()

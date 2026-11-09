@@ -235,9 +235,9 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				log.Warn("no span found, remove it",
 					zap.String("keyspace", c.changefeedID.Keyspace()),
 					zap.String("changefeedID", c.changefeedID.Name()),
+					zap.String("dispatcherID", dispatcherID.String()),
 					zap.String("from", from.String()),
-					zap.Any("status", status),
-					zap.String("dispatcherID", dispatcherID.String()))
+					zap.Any("status", status))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
 				msg := replica.NewRemoveDispatcherMessage(
 					from,
@@ -298,8 +298,8 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
 						zap.String("keyspace", c.changefeedID.Keyspace()),
 						zap.String("changefeedID", c.changefeedID.Name()),
-						zap.String("from", from.String()),
 						zap.String("dispatcherID", dispatcherID.String()),
+						zap.String("from", from.String()),
 						zap.Any("status", status))
 				}
 			}

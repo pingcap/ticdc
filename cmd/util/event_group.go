@@ -961,8 +961,8 @@ func (g *EventsGroup) PrepareResolve(
 	}
 	if g.outOfOrder {
 		log.Warn("DML events were appended out of order; restore from ordered spill index",
-			zap.Int32("partition", g.Partition),
 			zap.Int64("tableID", g.tableID),
+			zap.Int32("partition", g.Partition),
 			zap.Uint64("resolveTs", g.resolvedTs),
 			zap.Int("resolved", len(entries)))
 		g.outOfOrder = false

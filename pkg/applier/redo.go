@@ -309,7 +309,7 @@ func (ra *RedoApplier) applyDDL(
 		}
 		if tableDDLTs.ts >= int64(ddl.DDL.CommitTs) {
 			log.Warn("ignore DDL which commit ts is less than current ts",
-				zap.Uint64("commitTs", ddl.DDL.CommitTs), zap.Int64("startTs", tableDDLTs.ts),
+				zap.Int64("startTs", tableDDLTs.ts), zap.Uint64("commitTs", ddl.DDL.CommitTs),
 				zap.String("ddl", ddl.DDL.Query))
 			// Ignore the previous dml events, because the drop ddl has replicated the downstream
 			// DML + Drop Table: If the drop table ddl is ignored and the previous dmls should be replicated the downstream in the past.

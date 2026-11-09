@@ -1124,8 +1124,8 @@ func loadAllPhysicalTablesAtTs(
 	for tableID, tableInfo := range tableMap {
 		if _, ok := databaseMap[tableInfo.SchemaID]; !ok {
 			log.Panic("database not found",
-				zap.Int64("schemaID", tableInfo.SchemaID),
 				zap.Int64("tableID", tableID),
+				zap.Int64("schemaID", tableInfo.SchemaID),
 				zap.String("tableName", tableInfo.Name),
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}

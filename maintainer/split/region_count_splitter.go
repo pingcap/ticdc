@@ -141,10 +141,10 @@ func (m *regionCountSplitter) split(
 	spans[0].StartKey = span.StartKey
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
-		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeedID", m.changefeedID.Name()),
 		zap.String("tableSpan", common.FormatTableSpan(span)),
+		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),

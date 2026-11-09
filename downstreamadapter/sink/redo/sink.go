@@ -160,12 +160,12 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		log.Info("redo sink send DDL event",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
-			zap.String("query", e.GetDDLQuery()),
+			zap.Int64("tableID", e.GetTableID()),
 			zap.Uint64("startTs", event.GetStartTs()),
 			zap.Uint64("commitTs", event.GetCommitTs()),
+			zap.String("query", e.GetDDLQuery()),
 			zap.String("schema", e.GetSchemaName()),
-			zap.String("table", e.GetTableName()),
-			zap.Int64("tableID", e.GetTableID()))
+			zap.String("table", e.GetTableName()))
 	}
 	return nil
 }

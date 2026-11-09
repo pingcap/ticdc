@@ -320,10 +320,10 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.String("keyspace", d.changefeedStat.changefeedID.Keyspace()),
 		zap.String("changefeedID", d.changefeedStat.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
+		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("ddlQuery", e.Query),
-		zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq),
 		zap.Int64("mode", d.info.GetMode()))
 }
@@ -1409,12 +1409,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			c.metricsCollector.metricDispatcherCount.Inc()
 		}
 		log.Info("table trigger dispatcher register dispatcher",
-			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeedID", changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()))
+			zap.Uint64("startTs", info.GetStartTs()),
+			zap.Uint64("clusterID", c.tidbClusterID))
 		return nil
 	}
 
@@ -1446,8 +1446,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 				zap.String("changefeedID", changefeedID.Name()),
 				zap.Stringer("dispatcherID", id),
 				zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", info.GetStartTs()),
-				zap.String("tableSpan", common.FormatTableSpan(span)))
+				zap.String("tableSpan", common.FormatTableSpan(span)),
+				zap.Uint64("startTs", info.GetStartTs()))
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1483,14 +1483,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.metricsCollector.metricDispatcherCount.Inc()
 	}
 	log.Info("register dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.String("keyspace", changefeedID.Keyspace()),
 		zap.String("changefeedID", changefeedID.Name()),
 		zap.Stringer("dispatcherID", id),
-		zap.Int64("mode", info.GetMode()),
 		zap.Int64("tableID", span.GetTableID()),
 		zap.String("tableSpan", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.Int64("mode", info.GetMode()),
 		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
 	return nil

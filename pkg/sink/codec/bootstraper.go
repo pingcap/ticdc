@@ -194,10 +194,10 @@ func (b *bootstrapWorker) gcInactiveTables() {
 		table := value.(*tableStatistic)
 		if table.isInactive(b.maxInactiveDuration) {
 			log.Info("A table is removed from the bootstrap worker",
-				zap.Int64("tableID", table.id),
-				zap.String("topic", table.topic),
 				zap.String("keyspace", b.changefeedID.Keyspace()),
-				zap.String("changefeedID", b.changefeedID.Name()))
+				zap.String("changefeedID", b.changefeedID.Name()),
+				zap.Int64("tableID", table.id),
+				zap.String("topic", table.topic))
 			b.activeTables.Delete(key)
 		}
 		return true

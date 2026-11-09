@@ -213,8 +213,8 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 		log.Info("handle bootstrap response",
 			zap.String("keyspace", c.changefeedID.Keyspace()),
 			zap.String("changefeedID", c.changefeedID.Name()),
-			zap.Stringer("nodeID", node),
 			zap.Uint64("checkpointTs", resp.CheckpointTs),
+			zap.Stringer("nodeID", node),
 			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
@@ -1068,17 +1068,17 @@ func validateBootstrapOperatorRequest(
 ) (common.DispatcherID, bool) {
 	if req == nil || req.Config == nil || req.Config.DispatcherID == nil {
 		log.Warn("bootstrap operator config is nil, skip restoring it",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
-			zap.String("changefeedID", resp.ChangefeedID.Name))
+			zap.String("changefeedID", resp.ChangefeedID.Name),
+			zap.String("nodeID", nodeID.String()))
 		return common.DispatcherID{}, false
 	}
 	dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
 	if dispatcherID.IsZero() {
 		log.Warn("bootstrap operator has invalid dispatcher id, skip restoring it",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
-			zap.String("changefeedID", resp.ChangefeedID.Name))
+			zap.String("changefeedID", resp.ChangefeedID.Name),
+			zap.String("nodeID", nodeID.String()))
 		return common.DispatcherID{}, false
 	}
 	if req.Config.Mode != mode {
@@ -1114,10 +1114,10 @@ func normalizeBootstrapOperatorSpanAndSchemaID(
 	}
 	if span == nil {
 		log.Warn("bootstrap operator missing span, skip restoring it",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
 			zap.String("changefeedID", resp.ChangefeedID.Name),
 			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("nodeID", nodeID.String()),
 			zap.String("operatorType", req.OperatorType.String()),
 			zap.String("scheduleAction", req.ScheduleAction.String()))
 		return nil, 0, false
@@ -1222,12 +1222,12 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 		// The table is absent from both the snapshot and confirmed post-snapshot
 		// additions. Restoring this stale create would recreate a dropped table.
 		log.Warn("bootstrap create operator references table missing from schema snapshot, skip restoring it",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
 			zap.String("changefeedID", resp.ChangefeedID.Name),
 			zap.String("dispatcherID", dispatcherID.String()),
-			zap.String("operatorType", req.OperatorType.String()),
-			zap.Int64("tableID", span.TableID))
+			zap.Int64("tableID", span.TableID),
+			zap.String("nodeID", nodeID.String()),
+			zap.String("operatorType", req.OperatorType.String()))
 		return nil
 	}
 
@@ -1235,18 +1235,18 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 	// the dispatcher (or maintainer already bound the span), treat it as done.
 	if spanInfo != nil {
 		log.Debug("dispatcher already exists, skip restoring add operator",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
 			zap.String("changefeedID", resp.ChangefeedID.Name),
-			zap.String("dispatcherID", dispatcherID.String()))
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("nodeID", nodeID.String()))
 		return nil
 	}
 	if replicaSet != nil && replicaSet.IsScheduled() {
 		log.Debug("dispatcher already scheduled, skip restoring add operator",
-			zap.String("nodeID", nodeID.String()),
 			zap.String("keyspace", resp.ChangefeedID.Keyspace),
 			zap.String("changefeedID", resp.ChangefeedID.Name),
-			zap.String("dispatcherID", dispatcherID.String()))
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("nodeID", nodeID.String()))
 		return nil
 	}
 	if replicaSet == nil {
@@ -1282,10 +1282,10 @@ func (c *Controller) restoreCurrentWorkingRemoveAction(
 	if replicaSet == nil {
 		if spanInfo == nil {
 			log.Warn("bootstrap remove operator missing span info, skip restoring it",
-				zap.String("nodeID", nodeID.String()),
 				zap.String("keyspace", resp.ChangefeedID.Keyspace),
 				zap.String("changefeedID", resp.ChangefeedID.Name),
 				zap.String("dispatcherID", dispatcherID.String()),
+				zap.String("nodeID", nodeID.String()),
 				zap.String("operatorType", req.OperatorType.String()))
 			return nil
 		}
@@ -1464,18 +1464,18 @@ func (c *Controller) restoreCurrentMergeOperators(
 			}
 			if len(mergeReq.DispatcherIDs) < 2 {
 				log.Warn("merge operator has insufficient dispatcher IDs",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
-					zap.String("changefeedID", resp.ChangefeedID.Name))
+					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()))
 				continue
 			}
 
 			tableSplitMap, ok := tableSplitMapForMode(mergeReq.Mode, tableSplitMaps)
 			if !ok {
 				log.Warn("skip restoring merge operator due to unavailable mode",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.Int64("mode", mergeReq.Mode))
 				continue
 			}
@@ -1483,9 +1483,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 			operatorController := c.getOperatorController(mergeReq.Mode)
 			if spanController == nil || operatorController == nil {
 				log.Warn("skip restoring merge operator due to uninitialized controller",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.Int64("mode", mergeReq.Mode))
 				continue
 			}
@@ -1493,9 +1493,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 			mergedDispatcherID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID)
 			if mergedDispatcherID.IsZero() {
 				log.Warn("skip restoring merge operator due to invalid merged dispatcher ID",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.Int64("mode", mergeReq.Mode))
 				continue
 			}
@@ -1535,11 +1535,11 @@ func (c *Controller) restoreCurrentMergeOperators(
 					splitable, tableExists := tableSplitMap[spanInfo.Span.TableID]
 					if !tableExists {
 						log.Warn("skip restoring merge operator because source table is missing from schema snapshot",
-							zap.String("nodeID", nodeID.String()),
 							zap.String("keyspace", resp.ChangefeedID.Keyspace),
 							zap.String("changefeedID", resp.ChangefeedID.Name),
-							zap.String("dispatcher", dispatcherID.String()),
 							zap.Int64("tableID", spanInfo.Span.TableID),
+							zap.String("nodeID", nodeID.String()),
+							zap.String("dispatcher", dispatcherID.String()),
 							zap.Int64("mode", mergeReq.Mode))
 						skipMerge = true
 						break
@@ -1553,11 +1553,11 @@ func (c *Controller) restoreCurrentMergeOperators(
 					break
 				} else if _, tableExists := tableSplitMap[replicaSet.Span.TableID]; !tableExists {
 					log.Warn("skip restoring merge operator because source table is missing from schema snapshot",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
-						zap.String("dispatcher", dispatcherID.String()),
 						zap.Int64("tableID", replicaSet.Span.TableID),
+						zap.String("nodeID", nodeID.String()),
+						zap.String("dispatcher", dispatcherID.String()),
 						zap.Int64("mode", mergeReq.Mode))
 					skipMerge = true
 					break
@@ -1574,9 +1574,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 			if mergedSpanInfo != nil {
 				if mergedSpanInfo.Span == nil {
 					log.Warn("skip restoring merge operator because merged span is missing",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
+						zap.String("nodeID", nodeID.String()),
 						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Int64("mode", mergeReq.Mode))
 					cleanupCreatedSourceReplicaSets()
@@ -1584,11 +1584,11 @@ func (c *Controller) restoreCurrentMergeOperators(
 				}
 				if _, tableExists := tableSplitMap[mergedSpanInfo.Span.TableID]; !tableExists {
 					log.Warn("skip restoring merge operator because merged table is missing from schema snapshot",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
-						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Int64("tableID", mergedSpanInfo.Span.TableID),
+						zap.String("nodeID", nodeID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Int64("mode", mergeReq.Mode))
 					cleanupCreatedSourceReplicaSets()
 					continue
@@ -1597,11 +1597,11 @@ func (c *Controller) restoreCurrentMergeOperators(
 			if mergedReplicaSet != nil && mergedReplicaSet.Span != nil {
 				if _, tableExists := tableSplitMap[mergedReplicaSet.Span.TableID]; !tableExists {
 					log.Warn("skip restoring merge operator because merged table is missing from schema snapshot",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
-						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Int64("tableID", mergedReplicaSet.Span.TableID),
+						zap.String("nodeID", nodeID.String()),
+						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Int64("mode", mergeReq.Mode))
 					cleanupCreatedSourceReplicaSets()
 					continue
@@ -1614,9 +1614,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 				// represents a later concrete action for the same dispatcher. Treat the merge record
 				// as stale instead of failing the entire bootstrap.
 				log.Warn("skip restoring stale merge operator due to conflicting bootstrap operator",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", conflictingDispatcherID.String()),
 					zap.String("operatorType", conflictingOperatorType),
 					zap.String("mergedDispatcher", mergedDispatcherID.String()),
@@ -1645,18 +1645,18 @@ func (c *Controller) restoreCurrentMergeOperators(
 					spanController.MarkSpanReplicating(mergedReplicaSet)
 				}
 				log.Info("merge already finished during bootstrap",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()))
 				continue
 			}
 
 			if !sourceComplete || len(sourceReplicaSets) < 2 {
 				log.Warn("skip restoring merge operator due to missing source dispatchers",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()))
 				if mergedSpanInfo != nil &&
 					isCommittedMergeTargetState(mergedSpanInfo.ComponentStatus) {
@@ -1676,9 +1676,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 						spanController.RemoveReplicatingSpan(replicaSet)
 					}
 					log.Info("continue merge from existing merged dispatcher after source loss",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
+						zap.String("nodeID", nodeID.String()),
 						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Any("status", mergedSpanInfo.ComponentStatus))
 					continue
@@ -1691,9 +1691,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 					c.addBootstrapCleanupOperator(mergedReplicaSet)
 					targetStatus, _ := bootstrapMergeTargetStatus(mergedSpanInfo, mergedReplicaSet)
 					log.Info("abort incomplete merge from uncommitted merged dispatcher",
-						zap.String("nodeID", nodeID.String()),
 						zap.String("keyspace", resp.ChangefeedID.Keyspace),
 						zap.String("changefeedID", resp.ChangefeedID.Name),
+						zap.String("nodeID", nodeID.String()),
 						zap.String("dispatcher", mergedDispatcherID.String()),
 						zap.Any("status", targetStatus))
 					continue
@@ -1718,9 +1718,9 @@ func (c *Controller) restoreCurrentMergeOperators(
 					mergedSpan, schemaID, checkpointTs, ok := buildMergedSpanFromReplicas(sourceReplicaSets)
 					if !ok {
 						log.Warn("skip restoring merge operator due to invalid merge spans",
-							zap.String("nodeID", nodeID.String()),
 							zap.String("keyspace", resp.ChangefeedID.Keyspace),
 							zap.String("changefeedID", resp.ChangefeedID.Name),
+							zap.String("nodeID", nodeID.String()),
 							zap.String("dispatcher", mergedDispatcherID.String()))
 						cleanupCreatedSourceReplicaSets()
 						continue
@@ -1747,18 +1747,18 @@ func (c *Controller) restoreCurrentMergeOperators(
 
 			if mergedReplicaSet == nil {
 				log.Warn("merge replica set not found when restoring merge",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()))
 				continue
 			}
 
 			if operatorController.AddRestoredMergeOperator(sourceReplicaSets, mergedReplicaSet) == nil {
 				log.Warn("skip stale merge operator that cannot be restored",
-					zap.String("nodeID", nodeID.String()),
 					zap.String("keyspace", resp.ChangefeedID.Keyspace),
 					zap.String("changefeedID", resp.ChangefeedID.Name),
+					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()),
 					zap.Any("mergedReplicaSet", mergedReplicaSet),
 					zap.Any("toMergedReplicaSets", sourceReplicaSets))

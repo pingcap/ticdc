@@ -245,8 +245,8 @@ func (l *RangeLock) UnlockRange(
 
 	l.unlockedRanges.set(startKey, endKey, newResolvedTs)
 	log.Debug("unlocked range",
-		zap.Uint64("lockID", l.id), zap.Uint64("regionID", entry.regionID),
-		zap.Uint64("resolvedTs", newResolvedTs),
+		zap.Uint64("regionID", entry.regionID), zap.Uint64("resolvedTs", newResolvedTs),
+		zap.Uint64("lockID", l.id),
 		zap.String("startKey", hex.EncodeToString(startKey)),
 		zap.String("endKey", hex.EncodeToString(endKey)))
 	return
@@ -486,10 +486,10 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",
-			zap.Uint64("lockID", l.id),
 			zap.Uint64("regionID", regionID),
-			zap.Uint64("version", regionVersion),
 			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Uint64("lockID", l.id),
+			zap.Uint64("version", regionVersion),
 			zap.String("startKey", hex.EncodeToString(startKey)),
 			zap.String("endKey", hex.EncodeToString(endKey)))
 
@@ -522,7 +522,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		currentRangeStartKey := startKey
 
 		log.Info("try lock range staled",
-			zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+			zap.Uint64("regionID", regionID), zap.Uint64("lockID", l.id),
 			zap.String("startKey", hex.EncodeToString(startKey)),
 			zap.String("endKey", hex.EncodeToString(endKey)),
 			zap.Strings("allOverlapping", overlapStr)) // DEBUG
@@ -560,7 +560,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 	}
 
 	log.Info("lock range blocked",
-		zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+		zap.Uint64("regionID", regionID), zap.Uint64("lockID", l.id),
 		zap.String("startKey", hex.EncodeToString(startKey)),
 		zap.String("endKey", hex.EncodeToString(endKey)),
 		zap.Strings("blockedBy", overlapStr)) // DEBUG

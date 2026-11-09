@@ -248,21 +248,21 @@ func (pc *pdAPIClient) scanRegions(
 		resp, err := pc.httpClient.Get(ctx, u.String())
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.String("tableSpan", common.FormatTableSpan(&span)))
+				zap.String("tableSpan", common.FormatTableSpan(&span)), zap.String("endpoint", endpoint))
 			return nil, errors.Trace(err)
 		}
 		defer resp.Body.Close()
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.String("tableSpan", common.FormatTableSpan(&span)))
+				zap.String("tableSpan", common.FormatTableSpan(&span)), zap.String("endpoint", endpoint))
 			return nil, errors.Trace(err)
 		}
 		regions := &RegionsInfo{}
 		err = json.Unmarshal(data, regions)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.String("tableSpan", common.FormatTableSpan(&span)))
+				zap.String("tableSpan", common.FormatTableSpan(&span)), zap.String("endpoint", endpoint))
 			return nil, errors.Trace(err)
 		}
 		return regions.Regions, nil
@@ -288,16 +288,16 @@ func (pc *pdAPIClient) scanRegions(
 			if r[0].StartKey != startKeyHex {
 				r[0].StartKey = strings.ToUpper(hex.EncodeToString(startKey))
 				log.Info("start key mismatch, adjust start key",
+					zap.Uint64("regionID", r[0].ID),
 					zap.String("startKey", startKeyHex),
-					zap.String("regionStartKey", r[0].StartKey),
-					zap.Uint64("regionID", r[0].ID))
+					zap.String("regionStartKey", r[0].StartKey))
 			}
 			regions = append(regions, r...)
 			key, err := hex.DecodeString(regions[len(regions)-1].EndKey)
 			if err != nil {
 				log.Info("fail to decode region end key",
-					zap.String("endKey", regions[len(regions)-1].EndKey),
-					zap.Uint64("regionID", r[len(regions)-1].ID))
+					zap.Uint64("regionID", r[len(regions)-1].ID),
+					zap.String("endKey", regions[len(regions)-1].EndKey))
 				return nil, errors.Trace(err)
 			}
 			startKey = key
@@ -309,9 +309,9 @@ func (pc *pdAPIClient) scanRegions(
 	if regions[len(regions)-1].EndKey != string(span.EndKey) {
 		regions[len(regions)-1].EndKey = strings.ToUpper(hex.EncodeToString(span.EndKey))
 		log.Info("end key mismatch, adjust end key",
+			zap.Uint64("regionID", regions[len(regions)-1].ID),
 			zap.String("endKey", strings.ToUpper(hex.EncodeToString(span.EndKey))),
-			zap.String("regionEndKey", regions[len(regions)-1].EndKey),
-			zap.Uint64("regionID", regions[len(regions)-1].ID))
+			zap.String("regionEndKey", regions[len(regions)-1].EndKey))
 	}
 
 	return regions, nil

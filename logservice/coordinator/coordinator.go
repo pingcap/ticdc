@@ -504,9 +504,9 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		c.nodes.Unlock()
 	}
 	log.Info("log coordinator get candidate nodes",
+		zap.Uint64("startTs", startTs),
 		zap.String("requestNodeID", requestNodeID.String()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", startTs),
 		zap.Strings("candidateNodes", candidateNodes),
 		zap.Uint64s("subscriptionIDs", subIDs))
 

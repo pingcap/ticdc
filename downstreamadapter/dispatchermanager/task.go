@@ -323,9 +323,9 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		dispatcher, ok := dispatcherMap.Get(id)
 		if !ok {
 			log.Warn("dispatcher not found when do merge, skip remove",
-				zap.Stringer("dispatcherID", id),
 				zap.String("keyspace", t.manager.changefeedID.Keyspace()),
-				zap.String("changefeedID", t.manager.changefeedID.Name()))
+				zap.String("changefeedID", t.manager.changefeedID.Name()),
+				zap.Stringer("dispatcherID", id))
 			continue
 		}
 		dispatcher.Remove()

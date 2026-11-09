@@ -88,8 +88,8 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	}
 
 	log.Info("changefeed instance created",
-		zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
+		zap.String("id", cfID.String()),
 		zap.String("state", string(info.State)),
 		zap.String("info", info.String()))
 	return res

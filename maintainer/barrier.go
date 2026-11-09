@@ -92,9 +92,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 		return nil
 	}
 	log.Debug("handle block status",
-		zap.String("from", from.String()),
 		zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 		zap.String("changefeedID", request.ChangefeedID.GetName()),
+		zap.String("from", from.String()),
 		zap.Any("detail", request),
 		zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
@@ -116,8 +116,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 			log.Info("Get block status from unexisted dispatcher, ignore it",
 				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 				zap.String("changefeedID", request.ChangefeedID.GetName()),
-				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.String("dispatcher", dispatcherID.String()),
 				zap.Int64("mode", b.mode))
 			continue
 		}
@@ -127,9 +127,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 				zap.String("changefeedID", request.ChangefeedID.GetName()),
 				zap.String("dispatcherID", dispatcherID.String()),
+				zap.Uint64("commitTs", status.State.BlockTs),
 				zap.String("ownerNodeID", ownerNodeID.String()),
 				zap.String("fromNodeID", from.String()),
-				zap.Uint64("commitTs", status.State.BlockTs),
 				zap.Int64("mode", b.mode))
 			continue
 		}
@@ -138,8 +138,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 				log.Info("Get block status from unreplicating dispatcher, ignore it",
 					zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 					zap.String("changefeedID", request.ChangefeedID.GetName()),
-					zap.String("dispatcher", dispatcherID.String()),
 					zap.Uint64("commitTs", status.State.BlockTs),
+					zap.String("dispatcher", dispatcherID.String()),
 					zap.Int64("mode", b.mode))
 				// A newly added dispatcher may report its first WAITING barrier before the add
 				// operator moves it from scheduling to replicating. We still cannot admit that
@@ -173,11 +173,11 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if event == nil {
 			// should not happen
 			log.Error("handle block status failed, event is nil",
-				zap.String("from", from.String()),
 				zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 				zap.String("changefeedID", request.ChangefeedID.GetName()),
-				zap.String("detail", status.String()),
 				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.String("from", from.String()),
+				zap.String("detail", status.String()),
 				zap.Int64("mode", b.mode))
 			continue
 		}
@@ -190,9 +190,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 	}
 	if invalidStatusCount > 0 {
 		log.Warn("ignore invalid block statuses",
-			zap.String("from", from.String()),
 			zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
 			zap.String("changefeedID", request.ChangefeedID.GetName()),
+			zap.String("from", from.String()),
 			zap.Int("invalidStatusCount", invalidStatusCount),
 			zap.Int64("mode", b.mode))
 	}
@@ -208,9 +208,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 	dispatcherStatus = append(dispatcherStatus, actions[from]...)
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
-			zap.String("from", from.String()),
 			zap.String("keyspace", request.ChangefeedID.Keyspace),
 			zap.String("changefeedID", request.ChangefeedID.Name),
+			zap.String("from", from.String()),
 			zap.Int64("mode", b.mode))
 	}
 
@@ -491,8 +491,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			log.Info("the block event is sent by ddl dispatcher",
 				zap.String("keyspace", changefeedID.Keyspace()),
 				zap.String("changefeedID", changefeedID.Name()),
-				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs),
+				zap.String("dispatcher", dispatcherID.String()),
 				zap.Int64("mode", b.mode))
 			event.tableTriggerDispatcherRelated = true
 		}
@@ -528,8 +528,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
 					zap.String("keyspace", changefeedID.Keyspace()),
 					zap.String("changefeedID", changefeedID.Name()),
-					zap.String("dispatcher", dispatcherID.String()),
 					zap.Uint64("commitTs", blockState.BlockTs),
+					zap.String("dispatcher", dispatcherID.String()),
 					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
 					zap.Int("pendingScheduleEvents", pending),
 					zap.Int64("mode", b.mode))

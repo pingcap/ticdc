@@ -87,9 +87,9 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	if currentLiveness == liveness.CaptureStopping {
 		changefeedID := common.NewChangefeedIDFromPB(req.Id)
 		log.Info("reject add maintainer request because node is stopping",
-			zap.Stringer("nodeID", m.nodeInfo.ID),
 			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeedID", changefeedID.Name()))
+			zap.String("changefeedID", changefeedID.Name()),
+			zap.Stringer("nodeID", m.nodeInfo.ID))
 		return nil
 	}
 

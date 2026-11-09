@@ -470,9 +470,9 @@ func (m *Maintainer) initialize() error {
 	// register all nodes to bootstrapper
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
-		zap.Stringer("selfNodeID", m.selfNode.ID),
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeedID", m.changefeedID.Name()),
+		zap.Stringer("selfNodeID", m.selfNode.ID),
 		zap.Int("nodeCount", len(nodes)))
 
 	_, _, requests, _ := m.bootstrapper.HandleNodesChange(nodes)
@@ -800,9 +800,9 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeedID", m.changefeedID.Name()),
-				zap.Any("node", id),
 				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+				zap.Any("node", id))
 			continue
 		}
 		// Apply heartbeat constraint - can only make checkpointTs smaller (safer)
@@ -1387,9 +1387,9 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeedID", m.changefeedID.Name()),
+			zap.Uint64("startTs", m.startCheckpointTs),
 			zap.String("nodeAddr", targetAddr),
-			zap.Any("nodeID", targetNodeID),
-			zap.Uint64("startTs", m.startCheckpointTs))
+			zap.Any("nodeID", targetNodeID))
 
 		return messaging.NewSingleTargetMessage(targetNodeID, messaging.DispatcherManagerManagerTopic, msg)
 	}

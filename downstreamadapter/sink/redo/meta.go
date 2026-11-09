@@ -173,17 +173,17 @@ func (m *RedoMeta) Run(ctx context.Context) error {
 func (m *RedoMeta) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if ok := m.metaResolvedTs.checkAndSetUnflushed(resolvedTs); !ok {
 		log.Warn("update redo meta with a regressed resolved ts, ignore",
-			zap.Uint64("currResolvedTs", m.metaResolvedTs.getFlushed()),
-			zap.Uint64("recvResolvedTs", resolvedTs),
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeedID", m.changeFeedID.Name()))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.Uint64("currResolvedTs", m.metaResolvedTs.getFlushed()),
+			zap.Uint64("recvResolvedTs", resolvedTs))
 	}
 	if ok := m.metaCheckpointTs.checkAndSetUnflushed(checkpointTs); !ok {
 		log.Warn("update redo meta with a regressed checkpoint ts, ignore",
-			zap.Uint64("currCheckpointTs", m.metaCheckpointTs.getFlushed()),
-			zap.Uint64("recvCheckpointTs", checkpointTs),
 			zap.String("keyspace", m.changeFeedID.Keyspace()),
-			zap.String("changefeedID", m.changeFeedID.Name()))
+			zap.String("changefeedID", m.changeFeedID.Name()),
+			zap.Uint64("currCheckpointTs", m.metaCheckpointTs.getFlushed()),
+			zap.Uint64("recvCheckpointTs", checkpointTs))
 	}
 }
 
@@ -552,9 +552,9 @@ func (m *RedoMeta) bgGC(egCtx context.Context) error {
 			}
 			preCkpt = ckpt
 			log.Debug("redo meta GC is triggered",
-				zap.Uint64("checkpointTs", ckpt),
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
-				zap.String("changefeedID", m.changeFeedID.Name()))
+				zap.String("changefeedID", m.changeFeedID.Name()),
+				zap.Uint64("checkpointTs", ckpt))
 			err := util.RemoveFilesIf(egCtx, m.extStorage, func(path string) bool {
 				return m.shouldRemoved(path, ckpt)
 			}, nil)

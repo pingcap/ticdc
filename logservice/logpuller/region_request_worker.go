@@ -305,9 +305,9 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_Entries_:
 				if eventData == nil {
 					log.Warn("region request worker receives a region event with nil entries, ignore it",
-						zap.Uint64("workerID", s.workerID),
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Uint64("regionID", regionID))
+						zap.Uint64("regionID", regionID),
+						zap.Uint64("workerID", s.workerID))
 					continue
 				}
 				regionEvent.entries = eventData
@@ -316,9 +316,9 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				continue
 			case *cdcpb.Event_Error:
 				log.Debug("region request worker receives a region error",
-					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
+					zap.Uint64("workerID", s.workerID),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
@@ -334,14 +334,14 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_Error:
 				// it is normal to receive region error after deregister a subscription
 				log.Debug("region request worker receives an error for a stale region, ignore it",
-					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId))
+					zap.Uint64("regionID", event.RegionId),
+					zap.Uint64("workerID", s.workerID))
 			default:
 				log.Warn("region request worker receives a region event for an untracked region",
-					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId))
+					zap.Uint64("regionID", event.RegionId),
+					zap.Uint64("workerID", s.workerID))
 			}
 		}
 	}
@@ -354,8 +354,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
-			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+			zap.Uint64("workerID", s.workerID),
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
@@ -388,10 +388,10 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			continue
 		}
 		log.Warn("region request worker receives a resolved ts event for an untracked region",
-			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", uint64(subscriptionID)),
 			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts),
+			zap.Uint64("workerID", s.workerID))
 	}
 	flush()
 }
@@ -441,9 +441,9 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 	region := req.regionInfo
 	subID := region.subscribedSpan.subID
 	log.Debug("region request worker sends region request",
-		zap.Uint64("workerID", s.workerID),
 		zap.Uint64("subscriptionID", uint64(subID)),
 		zap.Uint64("regionID", region.verID.GetID()),
+		zap.Uint64("workerID", s.workerID),
 		zap.String("addr", s.storeAddr),
 		zap.Bool("bdrMode", region.filterLoop))
 
@@ -465,9 +465,9 @@ func (s *regionRequestWorker) sendRegionRequest(conn *ConnAndClient, req *region
 		state.abortScanIfNeeded()
 		state.matcher.clear()
 		log.Warn("duplicate active region request ignored",
-			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Uint64("regionID", region.verID.GetID()))
+			zap.Uint64("regionID", region.verID.GetID()),
+			zap.Uint64("workerID", s.workerID))
 		return nil
 	}
 	if err := s.sendChangeDataRequest(conn, createRegionRequest(s.upstream.clusterID, region)); err != nil {

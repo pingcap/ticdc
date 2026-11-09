@@ -587,10 +587,10 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.Unlock()
 						log.Info("reuse existing subscription with exact span match",
 							zap.Stringer("dispatcherID", dispatcherID),
-							zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
-							zap.Uint64("startTs", startTs),
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
+							zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("startTs", startTs),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 						return true
 					}
@@ -613,12 +613,12 @@ func (e *eventStore) RegisterDispatcher(
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 			log.Info("reuse existing subscription with smallest containing span",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
-				zap.Uint64("startTs", startTs),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
+				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.String("subscriptionTableSpan", common.FormatTableSpan(bestMatch.tableSpan)),
-				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
+				zap.Uint64("startTs", startTs),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
+				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
 		}
 		e.dispatcherMeta.Unlock()
@@ -732,9 +732,9 @@ func (e *eventStore) RegisterDispatcher(
 	)
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("startTs", startTs),
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
+		zap.Uint64("startTs", startTs))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -1199,8 +1199,8 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 	for _, sub := range obsoleteSubs {
 		log.Info("clean obsolete subscription",
 			zap.Uint64("subscriptionID", uint64(sub.subID)),
-			zap.Int("dbIndex", sub.dbIndex),
 			zap.Int64("tableID", sub.span.TableID),
+			zap.Int("dbIndex", sub.dbIndex),
 			zap.Time("idleAt", sub.idleAt))
 		e.subClient.Unsubscribe(sub.subID)
 		db := e.dbs[sub.dbIndex]
@@ -1333,12 +1333,12 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						log.Warn("resolved ts lag is too large for initialized subscription",
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
+							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
-							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
@@ -1446,10 +1446,10 @@ func (e *eventStore) writeEvents(
 			}
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
-					zap.Uint64("commitTs", kv.CRTs),
-					zap.Uint64("resolvedTs", event.currentResolvedTs),
 					zap.Uint64("subscriptionID", uint64(event.subID)),
-					zap.Int64("tableID", event.tableID))
+					zap.Int64("tableID", event.tableID),
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", event.currentResolvedTs))
 				continue
 			}
 
@@ -1683,9 +1683,9 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Bool("isInsert", rawKV.IsInsert()),
 			zap.Bool("isDelete", rawKV.IsDelete()),
 			zap.Bool("isUpdate", rawKV.IsUpdate()))

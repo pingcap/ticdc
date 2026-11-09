@@ -750,8 +750,8 @@ func (c *Controller) handleSingleMaintainerStatus(
 			log.Info("advance checkpoint from stopping maintainer",
 				zap.String("keyspace", cfID.Keyspace()),
 				zap.String("changefeedID", cfID.Name()),
-				zap.Stringer("nodeID", from),
 				zap.Uint64("checkpointTs", status.CheckpointTs),
+				zap.Stringer("nodeID", from),
 				zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch),
 				zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
 			return newChangefeedChange(cf, cf.GetInfo().State, ChangeTs, nil)
@@ -961,8 +961,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			log.Info("stop changefeed when bootstrapping",
 				zap.String("keyspace", cfID.Keyspace()),
 				zap.String("changefeedID", cfID.Name()),
-				zap.Int("progress", int(cfMeta.Status.Progress)),
-				zap.Uint64("checkpointTs", cfMeta.Status.CheckpointTs))
+				zap.Uint64("checkpointTs", cfMeta.Status.CheckpointTs),
+				zap.Int("progress", int(cfMeta.Status.Progress)))
 		default:
 			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, false)
 		}

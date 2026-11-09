@@ -95,9 +95,9 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("changefeed added to dest node",
-			zap.String("dest", m.target.String()),
 			zap.String("keyspace", m.changefeed.ID.Keyspace()),
-			zap.String("changefeedID", m.changefeed.ID.Name()))
+			zap.String("changefeedID", m.changefeed.ID.Name()),
+			zap.String("dest", m.target.String()))
 		m.state = moveMaintainerStateDoneSuccess
 	}
 }
@@ -165,9 +165,9 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 	}
 	if n == m.origin {
 		log.Info("origin node is stopped",
-			zap.String("origin", m.origin.String()),
 			zap.String("keyspace", m.changefeed.ID.Keyspace()),
-			zap.String("changefeedID", m.changefeed.ID.Name()))
+			zap.String("changefeedID", m.changefeed.ID.Name()),
+			zap.String("origin", m.origin.String()))
 		switch m.state {
 		case moveMaintainerStateRemoveOrigin:
 			m.state = moveMaintainerStateOriginStopped
@@ -185,10 +185,10 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 			return
 		}
 		log.Info("destination node removed before origin maintainer stopped",
-			zap.String("dest", m.target.String()),
-			zap.String("origin", m.origin.String()),
 			zap.String("keyspace", m.changefeed.ID.Keyspace()),
-			zap.String("changefeedID", m.changefeed.ID.Name()))
+			zap.String("changefeedID", m.changefeed.ID.Name()),
+			zap.String("dest", m.target.String()),
+			zap.String("origin", m.origin.String()))
 		// Keep removing the old origin maintainer first. The new owner can only
 		// be added back to origin after the old epoch reports stopped.
 		m.target = m.origin
@@ -198,10 +198,10 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 			return
 		}
 		log.Info("destination node removed after origin maintainer stopped",
-			zap.String("dest", m.target.String()),
-			zap.String("origin", m.origin.String()),
 			zap.String("keyspace", m.changefeed.ID.Keyspace()),
-			zap.String("changefeedID", m.changefeed.ID.Name()))
+			zap.String("changefeedID", m.changefeed.ID.Name()),
+			zap.String("dest", m.target.String()),
+			zap.String("origin", m.origin.String()))
 		if m.originRemoved {
 			m.finishAsAbsentLocked()
 			return

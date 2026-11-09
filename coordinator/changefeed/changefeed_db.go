@@ -102,9 +102,9 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 
 	task.SetNodeID(nodeID)
 	log.Info("add an replicating maintainer",
-		zap.String("nodeID", nodeID.String()),
 		zap.String("keyspace", task.ID.Keyspace()),
-		zap.String("changefeedID", task.ID.Name()))
+		zap.String("changefeedID", task.ID.Name()),
+		zap.String("nodeID", nodeID.String()))
 
 	db.changefeeds[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID

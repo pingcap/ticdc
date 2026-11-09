@@ -265,7 +265,7 @@ func buildActiveActiveUpsertSQL(
 	}
 	if len(commitTs) != len(rows) {
 		log.Panic("mismatched commitTs and rows length",
-			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
+			zap.Int("commitTs", len(commitTs)), zap.Int("rows", len(rows)))
 	}
 
 	columns := tableInfo.GetColumns()

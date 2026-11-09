@@ -211,8 +211,8 @@ func (m *MergeDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 	if from == m.originNode && status.ComponentStatus == heartbeatpb.ComponentState_Working {
 		m.checkpointTs = status.CheckpointTs
 		log.Info("new merged replica set created",
-			zap.Uint64("checkpointTs", m.checkpointTs),
-			zap.String("dispatcherID", m.id.String()))
+			zap.String("dispatcherID", m.id.String()),
+			zap.Uint64("checkpointTs", m.checkpointTs))
 		m.finished.Store(true)
 	}
 }

@@ -110,8 +110,8 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 
 	if ts >= v.deleteVersion {
 		log.Warn("table info deleted",
-			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
+			zap.Any("ts", ts),
 			zap.Any("deleteVersion", v.deleteVersion),
 			zap.Any("infos", v.infos))
 		return nil, &TableDeletedError{}
@@ -122,8 +122,8 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 	})
 	if target == 0 {
 		log.Error("no version found",
-			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
+			zap.Any("ts", ts),
 			zap.Any("deleteVersion", v.deleteVersion),
 			zap.Any("infos", v.infos))
 		return nil, errors.New("no version found")

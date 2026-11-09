@@ -253,9 +253,9 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 	defer m.lck.Unlock()
 
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
-		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("keyspace", m.replicaSet.ChangefeedID.Keyspace()),
-		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()))
+		zap.String("changefeedID", m.replicaSet.ChangefeedID.Name()),
+		zap.String("replicaSet", m.replicaSet.ID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.state = moveStateDoneNoPostFinish
 }

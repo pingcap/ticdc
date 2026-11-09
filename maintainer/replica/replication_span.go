@@ -69,11 +69,11 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	log.Info("new span replication created",
 		zap.String("keyspace", cfID.Keyspace()),
 		zap.String("changefeedID", cfID.Name()),
+		zap.Int64("tableID", span.TableID),
+		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("id", id.String()),
 		zap.Int64("schemaID", SchemaID),
-		zap.Int64("tableID", span.TableID),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
-		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -96,11 +96,11 @@ func NewWorkingSpanReplication(
 		zap.String("keyspace", cfID.Keyspace()),
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("dispatcherID", id.String()),
-		zap.String("nodeID", nodeID.String()),
+		zap.Int64("tableID", span.TableID),
 		zap.Uint64("checkpointTs", status.CheckpointTs),
+		zap.String("nodeID", nodeID.String()),
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
-		zap.Int64("tableID", span.TableID),
 		zap.Int64("groupID", r.groupID),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
@@ -164,8 +164,8 @@ func (r *SpanReplication) initGroupID() {
 	log.Info("init groupID",
 		zap.String("keyspace", r.ChangefeedID.Keyspace()),
 		zap.String("changefeedID", r.ChangefeedID.Name()),
-		zap.Any("groupID", r.groupID),
 		zap.String("tableSpan", common.FormatTableSpan(&span)),
+		zap.Any("groupID", r.groupID),
 		zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 

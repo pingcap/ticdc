@@ -332,10 +332,10 @@ func (oc *Controller) stopChangefeed(
 	}
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
-			zap.String("role", oc.role),
-			zap.Bool("removed", removed),
 			zap.String("keyspace", cfID.Keyspace()),
-			zap.String("changefeedID", cfID.Name()))
+			zap.String("changefeedID", cfID.Name()),
+			zap.String("role", oc.role),
+			zap.Bool("removed", removed))
 		scheduledNode = oc.selfNode.ID
 	}
 
@@ -373,9 +373,9 @@ func (oc *Controller) pushStopChangefeedOperator(
 		if ok {
 			if oldStop.changefeedRemoved {
 				log.Info("changefeed is in removing progress, skip the stop operator",
-					zap.String("role", oc.role),
 					zap.String("keyspace", cfID.Keyspace()),
-					zap.String("changefeedID", cfID.Name()))
+					zap.String("changefeedID", cfID.Name()),
+					zap.String("role", oc.role))
 				return oldStop
 			}
 			if !remove {
@@ -387,9 +387,9 @@ func (oc *Controller) pushStopChangefeedOperator(
 			}
 		}
 		log.Info("changefeed is stopped, replace the old one",
-			zap.String("role", oc.role),
 			zap.String("keyspace", cfID.Keyspace()),
 			zap.String("changefeedID", cfID.Name()),
+			zap.String("role", oc.role),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
