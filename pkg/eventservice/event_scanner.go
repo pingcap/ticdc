@@ -133,15 +133,24 @@ func (s *eventScanner) scan(
 		scanner: s,
 		session: sess,
 	}
+	if err := dispatcherStat.recoverOriginalScan(); err != nil {
+		return 0, nil, scanProgress{}, false, err
+	}
 
 	handled, interrupted, err := strategy.resumePending(scanCtx)
 	if handled {
 		return sess.eventBytes, sess.events, sess.progress, interrupted, err
 	}
 
+	// An unfinished transaction can still have an unprocessed DDL at the
+	// cursor commit-ts, whether resuming from a row or transaction boundary.
+	ddlRange := dataRange
+	if request.Cursor.TxnStartTs != 0 && ddlRange.CommitTsStart > 0 {
+		ddlRange.CommitTsStart--
+	}
 	// Fetch DDL events
 	start := time.Now()
-	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
+	events, err := s.fetchDDLEvents(dispatcherStat, ddlRange)
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}
@@ -156,6 +165,17 @@ func (s *eventScanner) scan(
 		s.mode)
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
+	checkpoint, err := dispatcherStat.snapshotOriginalScan()
+	if err != nil {
+		return 0, nil, scanProgress{}, false, err
+	}
+	rollback := func(scanErr error) {
+		if err := dispatcherStat.rollbackOriginalScan(checkpoint); err != nil {
+			log.Warn("rollback large transaction original scan failed",
+				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
+				zap.Error(err), zap.NamedError("scanError", scanErr))
+		}
+	}
 
 	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), request)
 	if err != nil {
@@ -164,9 +184,15 @@ func (s *eventScanner) scan(
 	if iter == nil {
 		interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{})
 		if err != nil || interrupted {
+			if err != nil {
+				rollback(err)
+			}
 			return 0, sess.events, sess.progress, interrupted, err
 		}
 		err = finalizeScan(scanCtx.merger, scanCtx.processor, sess, dataRange.CommitTsEnd)
+		if err != nil {
+			rollback(err)
+		}
 		return 0, sess.events, sess.progress, false, err
 	}
 
@@ -179,12 +205,24 @@ func (s *eventScanner) scan(
 				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
 				zap.Error(closeErr))
 		}
-		_ = dispatcherStat.cleanupLargeTxnState()
+		rollback(scanErr)
 		return sess.eventBytes, sess.events, sess.progress, interrupted, scanErr
 	}
 	if closeErr != nil {
-		_ = dispatcherStat.cleanupLargeTxnState()
+		rollback(closeErr)
 		return 0, nil, scanProgress{}, false, closeErr
+	}
+	if scanCtx.processor.cleanupLargeTxnAfterScan {
+		state := dispatcherStat.getLargeTxnState()
+		if state != nil {
+			state.mu.Lock()
+			state.cleanupPending = true
+			state.mu.Unlock()
+			if err := dispatcherStat.cleanupLargeTxnState(); err != nil {
+				log.Warn("cleanup completed large transaction spill failed",
+					zap.Stringer("dispatcherID", dispatcherStat.info.GetID()), zap.Error(err))
+			}
+		}
 	}
 	return sess.eventBytes, sess.events, sess.progress, interrupted, nil
 }
@@ -806,9 +844,10 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-	filter         filter.Filter
-	dispatcherStat *dispatcherStat
-	spillDir       string
+	filter                   filter.Filter
+	dispatcherStat           *dispatcherStat
+	spillDir                 string
+	cleanupLargeTxnAfterScan bool
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
 	// and startTs are fixed for the current transaction.
