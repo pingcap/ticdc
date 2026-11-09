@@ -784,7 +784,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// spending scan tokens or reserving shared memory needed by lagging dispatchers.
 	if task.availableMemoryQuota.Load() == 0 {
 		c.sendSignalResolvedTs(task)
-		eventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 

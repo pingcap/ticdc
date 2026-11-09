@@ -31,11 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
->>>>>>> d26cabf65 (eventcollector: prevent syncpoint and redo memory starvation (#6549))
 	"github.com/stretchr/testify/require"
 )
 
