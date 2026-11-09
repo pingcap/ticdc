@@ -8,12 +8,12 @@ ALTER TABLE sql_alter_rename_restored RENAME TO sql_alter_rename_restored_done;
 RENAME TABLE sql_view_rename_raw TO sql_view_rename_raw_done;
 RENAME TABLE sql_view_rename_restored TO sql_view_rename_restored_done;
 
--- Multi-table renames and drops match each rebuilt, fully qualified statement.
+-- Multi-table renames and drops match the upstream query with per-table matchers.
 RENAME TABLE sql_multi_ignored TO sql_multi_ignored_done, sql_multi_kept TO sql_multi_kept_done;
 DROP TABLE sql_drop_ignored, sql_drop_kept;
 DROP VIEW sql_drop_view_ignored, sql_drop_view_kept;
 
--- EXCHANGE PARTITION matches the rebuilt SQL, including WITHOUT VALIDATION.
+-- EXCHANGE PARTITION matches the upstream SQL, including WITHOUT VALIDATION.
 ALTER TABLE sql_exchange_ignored EXCHANGE PARTITION p0 WITH TABLE sql_exchange_ignored_normal WITHOUT VALIDATION;
 ALTER TABLE sql_exchange_kept EXCHANGE PARTITION p0 WITH TABLE sql_exchange_kept_normal WITHOUT VALIDATION;
 

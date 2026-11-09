@@ -69,9 +69,12 @@ type PersistedDDLEvent struct {
 	// DDL job query for ignore-sql matching before normalization.
 	Query         string `msg:"query"`
 	OriginalQuery string `msg:"original_query"`
-	SchemaVersion int64  `msg:"schema_version"`
-	FinishedTs    uint64 `msg:"finished_ts"`
-	StartTs       uint64 `msg:"start_ts"`
+	// OriginalQueries holds the upstream CREATE statements without batch separators,
+	// in MultipleTableInfos order. Older records fall back to the job query.
+	OriginalQueries []string `msg:"original_queries"`
+	SchemaVersion   int64    `msg:"schema_version"`
+	FinishedTs      uint64   `msg:"finished_ts"`
+	StartTs         uint64   `msg:"start_ts"`
 
 	DBInfo *model.DBInfo `msg:"-"`
 	// it is from upstream job.TableInfo
@@ -106,14 +109,8 @@ type PersistedDDLEvent struct {
 	TableLostReplicationKey bool `msg:"table_lost_replication_key"`
 }
 
+// queryForFilter returns the upstream DDL query, falling back for older persisted events.
 func (e *PersistedDDLEvent) queryForFilter() string {
-	// The old architecture also rebuilds these queries before filtering.
-	// Multi-table handlers filter each rebuilt statement separately.
-	switch model.ActionType(e.Type) {
-	case model.ActionDropTable, model.ActionDropView, model.ActionExchangeTablePartition,
-		model.ActionRenameTables, model.ActionCreateTables:
-		return e.Query
-	}
 	if e.OriginalQuery != "" {
 		return e.OriginalQuery
 	}

@@ -81,26 +81,26 @@ ignore-sql = ['^RENAME TABLE sql_view_rename_raw TO sql_view_rename_raw_done$']
 matcher = ["event_filter.sql_view_rename_restored"]
 ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_view_rename_restored` TO `event_filter`\.`sql_view_rename_restored_done`$']
 
-# These special DDLs use rebuilt SQL before ignore-sql matching.
+# Multi-table DDLs match the upstream query with per-table matchers.
 [[filter.event-filters]]
-matcher = ["event_filter.sql_multi_*"]
-ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_multi_ignored` TO `event_filter`\.`sql_multi_ignored_done`$']
+matcher = ["event_filter.sql_multi_ignored"]
+ignore-sql = ['^RENAME TABLE sql_multi_ignored TO sql_multi_ignored_done, sql_multi_kept TO sql_multi_kept_done$']
 
 [[filter.event-filters]]
-matcher = ["event_filter.sql_drop_ignored", "event_filter.sql_drop_kept"]
-ignore-sql = ['^DROP TABLE `event_filter`\.`sql_drop_ignored`$']
+matcher = ["event_filter.sql_drop_ignored"]
+ignore-sql = ['^DROP TABLE sql_drop_ignored, sql_drop_kept$']
 
 [[filter.event-filters]]
-matcher = ["event_filter.sql_drop_view_*"]
-ignore-sql = ['^DROP VIEW `event_filter`\.`sql_drop_view_ignored`$']
+matcher = ["event_filter.sql_drop_view_ignored"]
+ignore-sql = ['^DROP VIEW sql_drop_view_ignored, sql_drop_view_kept$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_exchange_ignored"]
-ignore-sql = ['^ALTER TABLE `event_filter`\.`sql_exchange_ignored` .* WITHOUT VALIDATION$']
+ignore-sql = ['^ALTER TABLE sql_exchange_ignored EXCHANGE PARTITION p0 WITH TABLE sql_exchange_ignored_normal WITHOUT VALIDATION$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_exchange_kept"]
-ignore-sql = ['^ALTER TABLE sql_exchange_kept EXCHANGE PARTITION p0 WITH TABLE sql_exchange_kept_normal WITHOUT VALIDATION$']
+ignore-sql = ['^ALTER TABLE `event_filter`\.`sql_exchange_kept` .* WITHOUT VALIDATION$']
 
 # CREATE LIKE and CREATE VIEW use the original SQL before qualifying references.
 [[filter.event-filters]]
@@ -127,7 +127,11 @@ ignore-sql = ['^CREATE OR REPLACE VIEW filter\.sql_view_replace_ignored AS SELEC
 matcher = ["filter.sql_view_replace_kept"]
 ignore-sql = ['^CREATE OR REPLACE.*VIEW `filter`\.`sql_view_replace_kept`']
 
-# Fast CREATE TABLE can batch concurrent jobs; filter each statement separately.
+# Fast CREATE TABLE matches each upstream statement independently when batched.
 [[filter.event-filters]]
 matcher = ["event_filter.sql_batch_*"]
-ignore-sql = ['^CREATE TABLE `?sql_batch_ignored_[0-9]+`? ']
+ignore-sql = ['^CREATE TABLE sql_batch_ignored_[0-9]+ \(id INT PRIMARY KEY\)$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_batch_kept_*"]
+ignore-sql = ['CREATE TABLE `sql_batch_kept_[0-9]+`']
