@@ -242,7 +242,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			zap.String("keyspace", e.changefeedID.Keyspace()),
 			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", startTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", scheduleSkipDMLAsStartTsList[idx]))
 	}
@@ -291,8 +290,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	log.Info("new redo dispatcher created(merge dispatcher)",
 		zap.String("keyspace", e.changefeedID.Keyspace()),
 		zap.String("changefeedID", e.changefeedID.Name()),
-		zap.Stringer("dispatcherID", mergedDispatcherID),
-		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+		zap.Stringer("dispatcherID", mergedDispatcherID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {

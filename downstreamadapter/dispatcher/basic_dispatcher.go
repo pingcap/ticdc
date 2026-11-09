@@ -541,7 +541,6 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
 		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
-		zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),
 	)
@@ -703,7 +702,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.String("changefeedID", d.GetChangefeedID().Name()),
 				zap.Stringer("dispatcherID", d.id),
 				zap.Int64("tableID", ddl.GetTableID()),
-				zap.Any("tableSpan", d.GetTableSpan()),
 				zap.Uint64("startTs", ddl.GetStartTs()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.String("ddlQuery", ddl.Query),
@@ -1192,7 +1190,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				if schemaIDChange.OldSchemaID != d.schemaID {
 					log.Error("Wrong Schema ID",
 						zap.Stringer("dispatcherID", d.id),
-						zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 						zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
 						zap.Int64("actualSchemaID", d.schemaID))
 					return
@@ -1384,7 +1381,6 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
 			zap.Int64("mode", d.mode),
-			zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
 		)
@@ -1413,7 +1409,6 @@ func (d *BasicDispatcher) removeDispatcher() {
 		zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
 		zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 		zap.Stringer("dispatcherID", d.id),
-		zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 		zap.Int64("mode", d.mode))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
@@ -1422,7 +1417,6 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.String("keyspace", d.sharedInfo.changefeedID.Keyspace()),
 			zap.String("changefeedID", d.sharedInfo.changefeedID.Name()),
 			zap.Stringer("dispatcherID", d.id),
-			zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
 			zap.Error(err))

@@ -976,8 +976,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			log.Info("split span checker: node id is empty, please check the node id",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeedID", s.changefeedID.Name()),
-				zap.String("dispatcherID", status.ID.String()),
-				zap.String("span", common.FormatTableSpan(status.Span)))
+				zap.String("dispatcherID", status.ID.String()))
 			continue
 		}
 

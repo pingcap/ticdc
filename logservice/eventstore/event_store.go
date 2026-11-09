@@ -508,13 +508,11 @@ func (e *eventStore) RegisterDispatcher(
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs))
 	}
 
@@ -523,7 +521,6 @@ func (e *eventStore) RegisterDispatcher(
 		if success {
 			log.Info("register dispatcher success",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -531,7 +528,6 @@ func (e *eventStore) RegisterDispatcher(
 		} else {
 			log.Info("register dispatcher failed",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -588,7 +584,6 @@ func (e *eventStore) RegisterDispatcher(
 						log.Info("reuse existing subscription with exact span match",
 							zap.Stringer("dispatcherID", dispatcherID),
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.String("subscriptionTableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("startTs", startTs),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
@@ -614,7 +609,6 @@ func (e *eventStore) RegisterDispatcher(
 			log.Info("reuse existing subscription with smallest containing span",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("tableSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.String("subscriptionTableSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
@@ -1248,13 +1242,13 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 
 type slowSubscriptionLogEntry struct {
 	SubID              uint64  `json:"subID"`
+	TableID            int64   `json:"tableID"`
 	ResolvedLagSeconds float64 `json:"resolvedLagSeconds"`
 	ResolvedTs         uint64  `json:"resolvedTs"`
 	CheckpointTs       uint64  `json:"checkpointTs"`
 	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
 	LastAdvanceTime    string  `json:"lastAdvanceTime"`
 	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
-	TableSpan          string  `json:"tableSpan"`
 	heapIndex          int     `json:"-"`
 }
 
@@ -1274,8 +1268,8 @@ func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) boo
 }
 
 type uninitializedSubscriptionLogEntry struct {
-	SubID     uint64 `json:"subID"`
-	TableSpan string `json:"tableSpan"`
+	SubID   uint64 `json:"subID"`
+	TableID int64  `json:"tableID"`
 }
 
 func (e *eventStore) collectAndReportStoreMetrics() {
@@ -1333,7 +1327,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						log.Warn("resolved ts lag is too large for initialized subscription",
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
-							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
@@ -1350,7 +1343,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
 						LastAdvanceTime:    lastAdvanceTime.String(),
 						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
+						TableID:            subStat.tableSpan.TableID,
 					}
 					slowestInitialized.AddOrUpdate(entry)
 					if slowestInitialized.Len() > logEntryLimit {
@@ -1361,8 +1354,8 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 				uninitializedStatCount++
 				if len(uninitializedSamples) < logEntryLimit {
 					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
-						SubID:     uint64(subStat.subID),
-						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+						SubID:   uint64(subStat.subID),
+						TableID: subStat.tableSpan.TableID,
 					})
 				}
 			}

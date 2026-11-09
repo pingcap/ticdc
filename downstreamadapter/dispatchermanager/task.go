@@ -308,7 +308,6 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.String("changefeedID", t.manager.changefeedID.Name()),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
-		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
 		zap.Uint64("startTs", startTs),
 	)
 
