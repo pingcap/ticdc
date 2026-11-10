@@ -142,8 +142,6 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		}
 	}
 
-	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
-
 	if !s.enableTableAcrossNodes {
 		return
 	}

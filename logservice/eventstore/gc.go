@@ -258,10 +258,6 @@ func (d *gcManager) run(ctx context.Context) error {
 				if duration > windowMaxBatchDuration {
 					windowMaxBatchDuration = duration
 				}
-				log.Debug("gc manager deleted ranges",
-					zap.Int("batchRangeCount", len(ranges)),
-					zap.Duration("duration", duration))
-
 				if time.Since(lastInfoLog) >= deleteInfoLogInterval {
 					logDeleteRangeStats(time.Now())
 				}

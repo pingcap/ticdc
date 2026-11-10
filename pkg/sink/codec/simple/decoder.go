@@ -202,7 +202,6 @@ func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo
 
 	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 
-	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
 }
 

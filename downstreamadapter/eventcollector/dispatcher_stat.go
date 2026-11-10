@@ -165,27 +165,21 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
+			zap.Stringer("eventServiceID", event.From),
+			zap.Uint64("eventEpoch", event.GetEpoch()),
+			zap.Uint64("dispatcherEpoch", state.epoch),
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+			zap.Uint64("receivedSeq", event.GetSeq()),
+			zap.Uint64("commitTs", event.GetCommitTs()))
 		return false
 	}
 
-	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		if debugEnabled {
-			log.Debug("check event sequence",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Uint64("receivedSeq", event.GetSeq()),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-				zap.Uint64("commitTs", event.GetCommitTs()))
-		}
-
 		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
 
@@ -201,6 +195,9 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("eventServiceID", event.From),
+				zap.Uint64("eventEpoch", event.GetEpoch()),
+				zap.Uint64("dispatcherEpoch", state.epoch),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("lastEventSeq", lastEventSeq),
 				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
@@ -211,22 +208,16 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			if debugEnabled {
-				log.Debug("check batch DML event sequence",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Uint64("receivedSeq", e.Seq),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-					zap.Uint64("commitTs", e.CommitTs))
-			}
-
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("eventServiceID", event.From),
+					zap.Uint64("eventEpoch", e.Epoch),
+					zap.Uint64("dispatcherEpoch", state.epoch),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+					zap.Uint64("lastEventSeq", expectedSeq-1),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 					zap.Uint64("receivedSeq", e.Seq),
 					zap.Uint64("expectedSeq", expectedSeq),

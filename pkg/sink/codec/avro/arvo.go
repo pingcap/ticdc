@@ -567,7 +567,6 @@ func (a *BatchEncoder) columns2AvroData(
 		}
 	}
 
-	log.Debug("rowToAvroData", zap.String("data", util.RedactAny(ret)))
 	return ret, nil
 }
 
