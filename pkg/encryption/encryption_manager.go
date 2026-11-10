@@ -71,6 +71,19 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	}
 
 	if len(dataKey) == 0 {
+		enabled, err := m.metaManager.IsEncryptionEnabled(ctx, keyspaceID)
+		if err != nil {
+			if allowDegrade {
+				log.Warn("failed to check encryption status, degrade to plaintext",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Error(err))
+				return EncodeUnencryptedData(data), nil
+			}
+			return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		}
+		if !enabled {
+			return EncodeUnencryptedData(data), nil
+		}
 		if allowDegrade {
 			log.Warn("current data key is unavailable, degrade to plaintext",
 				zap.Uint32("keyspaceID", keyspaceID))

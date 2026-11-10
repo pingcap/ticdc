@@ -24,15 +24,17 @@ import (
 )
 
 type mockMetaManager struct {
-	currentKey    []byte
-	currentKeyID  string
-	version       byte
-	currentKeyErr error
-	dataKeys      map[string][]byte
+	currentKey          []byte
+	currentKeyID        string
+	version             byte
+	currentKeyErr       error
+	encryptionDisabled  bool
+	encryptionStatusErr error
+	dataKeys            map[string][]byte
 }
 
-func (m *mockMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool {
-	return true
+func (m *mockMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) (bool, error) {
+	return !m.encryptionDisabled, m.encryptionStatusErr
 }
 
 func (m *mockMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
@@ -125,6 +127,29 @@ func TestEncryptDataMissingKeyFailsClosed(t *testing.T) {
 	defer restore()
 
 	manager := NewEncryptionManager(&mockMetaManager{})
+	_, err := manager.EncryptData(context.Background(), 1, []byte("payload"))
+	require.Error(t, err)
+	require.True(t, cerrors.ErrEncryptionFailed.Equal(err))
+}
+
+func TestEncryptDataWhenEncryptionIsDisabled(t *testing.T) {
+	restore := setAllowDegradeOnError(t, false)
+	defer restore()
+
+	input := []byte("payload")
+	manager := NewEncryptionManager(&mockMetaManager{encryptionDisabled: true})
+	output, err := manager.EncryptData(context.Background(), 1, input)
+	require.NoError(t, err)
+	require.Equal(t, EncodeUnencryptedData(input), output)
+}
+
+func TestEncryptDataEncryptionStatusErrorFailsClosed(t *testing.T) {
+	restore := setAllowDegradeOnError(t, false)
+	defer restore()
+
+	manager := NewEncryptionManager(&mockMetaManager{
+		encryptionStatusErr: cerrors.ErrEncryptionFailed.GenWithStackByArgs("boom"),
+	})
 	_, err := manager.EncryptData(context.Background(), 1, []byte("payload"))
 	require.Error(t, err)
 	require.True(t, cerrors.ErrEncryptionFailed.Equal(err))

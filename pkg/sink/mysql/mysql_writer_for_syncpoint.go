@@ -64,13 +64,21 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	commitTs := event.GetCommitTs()
 
 	// insert ts map
-	query := fmt.Sprintf("insert ignore into %s.%s (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES (%s, %s, %s, %s)",
-		filter.TiCDCSystemSchema,
-		filter.SyncPointTable,
-		quoteSQLStringLiteral(config.GetGlobalServerConfig().ClusterID),
-		quoteSQLStringLiteral(w.ChangefeedID.String()),
-		strconv.FormatUint(commitTs, 10),
-		secondaryTs)
+	var builder strings.Builder
+	builder.WriteString("insert ignore into ")
+	builder.WriteString(filter.TiCDCSystemSchema)
+	builder.WriteString(".")
+	builder.WriteString(filter.SyncPointTable)
+	builder.WriteString(" (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES (")
+	builder.WriteString(quoteSQLStringLiteral(config.GetGlobalServerConfig().ClusterID))
+	builder.WriteString(", ")
+	builder.WriteString(quoteSQLStringLiteral(w.ChangefeedID.String()))
+	builder.WriteString(", ")
+	builder.WriteString(strconv.FormatUint(commitTs, 10))
+	builder.WriteString(", ")
+	builder.WriteString(secondaryTs)
+	builder.WriteString(")")
+	query := builder.String()
 
 	_, err = tx.Exec(query)
 	if err != nil {
@@ -103,7 +111,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 
 	// clean stale ts map in downstream
 	if time.Since(w.lastCleanSyncPointTime) >= w.cfg.SyncPointRetention {
-		var builder strings.Builder
+		builder.Reset()
 		builder.WriteString("DELETE IGNORE FROM ")
 		builder.WriteString(filter.TiCDCSystemSchema)
 		builder.WriteString(".")

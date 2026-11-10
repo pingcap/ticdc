@@ -62,8 +62,8 @@ type spyEncryptionManager struct {
 
 type unencryptedMetaManager struct{}
 
-func (m *unencryptedMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool {
-	return false
+func (m *unencryptedMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) (bool, error) {
+	return false, nil
 }
 
 func (m *unencryptedMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
