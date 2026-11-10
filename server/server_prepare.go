@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -57,8 +56,8 @@ func (c *server) prepare(ctx context.Context) (err error) {
 		ctx, c.pdEndpoints, conf.Security.PDSecurityOption(),
 		// the default `timeout` is 3s, maybe too small if the pd is busy,
 		// set to 10s to avoid frequent timeout.
-		pdopt.WithCustomTimeoutOption(10*time.Second),
-		pdopt.WithGRPCDialOptions(
+		pd.WithCustomTimeoutOption(10*time.Second),
+		pd.WithGRPCDialOptions(
 			grpcTLSOption,
 			grpc.WithBlock(),
 			grpc.WithConnectParams(grpc.ConnectParams{
@@ -71,7 +70,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
-		pdopt.WithForwardingOption(config.EnablePDForwarding))
+		pd.WithForwardingOption(config.EnablePDForwarding))
 	if err != nil {
 		return errors.Trace(err)
 	}

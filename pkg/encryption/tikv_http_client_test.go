@@ -25,7 +25,6 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
 )
 
 type mockTiKVMetaPDClient struct {
@@ -33,7 +32,7 @@ type mockTiKVMetaPDClient struct {
 	stores []*metapb.Store
 }
 
-func (m *mockTiKVMetaPDClient) GetAllStores(ctx context.Context, opts ...pdopt.GetStoreOption) ([]*metapb.Store, error) {
+func (m *mockTiKVMetaPDClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
 	return m.stores, nil
 }
 
