@@ -882,7 +882,7 @@ func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, erro
 }
 
 func (m *mockEtcdClient) GetOwnerRevision(_ context.Context, captureID config.CaptureID) (int64, error) {
-	if string(captureID) != m.ownerID {
+	if captureID != m.ownerID {
 		return 0, fmt.Errorf("capture %s is not the owner", captureID)
 	}
 	return 1, nil

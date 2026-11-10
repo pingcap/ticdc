@@ -531,8 +531,8 @@ func validateIncomingPeer(ctx context.Context, targetAddr string) error {
 }
 
 func stripIPv6Zone(host string) string {
-	if i := strings.LastIndexByte(host, '%'); i >= 0 {
-		return host[:i]
+	if address, _, ok := strings.CutLast(host, "%"); ok {
+		return address
 	}
 	return host
 }
