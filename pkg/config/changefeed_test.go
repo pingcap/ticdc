@@ -293,6 +293,21 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	require.Equal(t, original, after)
 }
 
+func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
+	storage := "azblob://container/prefix?account-name=account&endpoint=" +
+		"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel"
+	cfg := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &storage}}
+	original, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	output := cfg.String()
+	require.NotContains(t, output, "nested-sas-secret-sentinel")
+	require.Contains(t, output, "endpoint=xxxxxx")
+	after, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 // TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency sets a custom concurrency
 // and removes unused fields, retaining it only for sinks with encoders or blackhole.
 func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {

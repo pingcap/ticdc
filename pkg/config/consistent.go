@@ -158,5 +158,6 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig
 func (c *ConsistentConfig) MaskSensitiveData() {
-	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(util.GetOrZero(c.Storage)))
+	storage := objstore.RedactURL(util.GetOrZero(c.Storage))
+	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(storage))
 }
