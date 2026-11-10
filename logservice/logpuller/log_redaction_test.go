@@ -37,15 +37,15 @@ func TestFormatUnlockedRanges(t *testing.T) {
 	}
 
 	restore := withRedactMode(t, "OFF")
-	require.Equal(t, []string{"tableID: 1, startKey: 7480, endKey: 7481, resolvedTs: 100"}, formatUnlockedRanges(ranges))
+	require.Equal(t, []string{"tableID: 1, startKey: 7480, endKey: 7481, keyspaceID: 0, resolvedTs: 100"}, formatUnlockedRanges(ranges))
 	restore()
 
 	restore = withRedactMode(t, "ON")
-	require.Equal(t, []string{"tableID: 1, startKey: ?, endKey: ?, resolvedTs: 100"}, formatUnlockedRanges(ranges))
+	require.Equal(t, []string{"tableID: 1, startKey: ?, endKey: ?, keyspaceID: 0, resolvedTs: 100"}, formatUnlockedRanges(ranges))
 	restore()
 
 	defer withRedactMode(t, "MARKER")()
-	require.Equal(t, []string{"tableID: 1, startKey: ‹7480›, endKey: ‹7481›, resolvedTs: 100"},
+	require.Equal(t, []string{"tableID: 1, startKey: ‹7480›, endKey: ‹7481›, keyspaceID: 0, resolvedTs: 100"},
 		formatUnlockedRanges(ranges))
 	require.Empty(t, formatUnlockedRanges(nil))
 }
