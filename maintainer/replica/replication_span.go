@@ -152,9 +152,6 @@ func (r *SpanReplication) initGroupID() {
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
-	log.Info("init groupID",
-		zap.Stringer("changefeedID", r.ChangefeedID), zap.Any("groupID", r.groupID),
-		zap.Any("span", common.FormatTableSpan(&span)), zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
