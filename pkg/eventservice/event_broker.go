@@ -1346,6 +1346,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		// Release the old store registrations before replacing their ID mappings,
 		// then let the new dispatcher follow the normal Ready/RESET handshake.
 		c.removeDispatcher(existing.Load().info)
+		// Removing the last dispatcher also removes its changefeedStatus. Reacquire
+		// it so the replacement is stored in changefeedMap before registration.
+		status, err = c.tryGetOrSetChangefeedStatus(info)
+		if err != nil {
+			return err
+		}
 	}
 
 	dispatcher := newDispatcherStat(info, uint64(len(c.scanTaskQueues)), uint64(len(c.messageCh)), nil, status)

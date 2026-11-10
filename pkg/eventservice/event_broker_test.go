@@ -1351,6 +1351,26 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestDuplicateRegisterRestoresChangefeedStatus(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	original, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	replacement, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "replacement changefeedStatus should be stored")
+	require.NotSame(t, original, replacement)
+	require.False(t, replacement.(*changefeedStatus).isEmpty())
+
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.Same(t, replacement, dispatcher.changefeedStat)
+}
+
 func TestRemoveDispatcherCleansUpSharedFilter(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
