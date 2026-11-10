@@ -14,10 +14,12 @@
 package replica
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
@@ -37,6 +39,13 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	absent      *iMap[T, R]
 
 	checker GroupChecker[T, R]
+}
+
+func replicationIDField(key string, id fmt.Stringer) zap.Field {
+	if _, ok := id.(common.DispatcherID); ok {
+		key = "dispatcherID"
+	}
+	return zap.Stringer(key, id)
 }
 
 func newReplicationGroup[T ReplicationID, R Replication[T]](
@@ -66,7 +75,7 @@ func (g *replicationGroup[T, R]) MarkReplicaAbsent(replica R) {
 	log.Info("scheduler: marking replica absent",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replicaID", replica.GetID().String()),
+		replicationIDField("replicaID", replica.GetID()),
 		zap.String("node", replica.GetNodeID().String()))
 
 	id := replica.GetID()
@@ -84,7 +93,7 @@ func (g *replicationGroup[T, R]) MarkReplicaScheduling(replica R) {
 	log.Info("scheduler: marking replica scheduling",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replica", replica.GetID().String()))
+		replicationIDField("replica", replica.GetID()))
 
 	g.absent.Delete(replica.GetID())
 	g.replicating.Delete(replica.GetID())
@@ -99,7 +108,7 @@ func (g *replicationGroup[T, R]) AddReplicatingReplica(replica R) {
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
 		zap.String("nodeID", nodeID.String()),
-		zap.String("replica", replica.GetID().String()))
+		replicationIDField("replica", replica.GetID()))
 	g.replicating.Set(replica.GetID(), replica)
 	g.updateNodeMap("", nodeID, replica)
 	g.checker.AddReplica(replica)
@@ -111,7 +120,7 @@ func (g *replicationGroup[T, R]) MarkReplicaReplicating(replica R) {
 	log.Info("scheduler: marking replica replicating",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replica", replica.GetID().String()))
+		replicationIDField("replica", replica.GetID()))
 
 	g.absent.Delete(replica.GetID())
 	g.scheduling.Delete(replica.GetID())
@@ -123,7 +132,7 @@ func (g *replicationGroup[T, R]) AddSchedulingReplica(replica R, targetNodeID no
 	log.Info("scheduler: add scheduling replica",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replica", replica.GetID().String()))
+		replicationIDField("replica", replica.GetID()))
 	replica.SetNodeID(targetNodeID)
 	g.absent.Delete(replica.GetID())
 	g.replicating.Delete(replica.GetID())
@@ -137,7 +146,7 @@ func (g *replicationGroup[T, R]) BindReplicaToNode(old, new node.ID, replica R) 
 	log.Info("scheduler: bind replica to node",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replica", replica.GetID().String()),
+		replicationIDField("replica", replica.GetID()),
 		zap.String("oldNode", old.String()),
 		zap.String("node", new.String()))
 
@@ -182,7 +191,7 @@ func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
 	log.Info("scheduler: remove replica",
 		zap.String("schedulerID", g.id),
 		zap.String("group", g.groupName),
-		zap.String("replica", replica.GetID().String()))
+		replicationIDField("replica", replica.GetID()))
 	g.absent.Delete(replica.GetID())
 	g.replicating.Delete(replica.GetID())
 	g.scheduling.Delete(replica.GetID())

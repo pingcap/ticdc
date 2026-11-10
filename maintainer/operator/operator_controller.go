@@ -405,7 +405,7 @@ func (oc *Controller) pollQueueingOperator() (
 		if shouldWarn {
 			log.Warn("operator is still in running queue",
 				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.String("operator", opID.String()),
+				zap.String("dispatcherID", opID.String()),
 				zap.String("operator", op.String()),
 				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
 		}
@@ -449,7 +449,7 @@ func (oc *Controller) finalizeOperator(
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operatorID", opID.String()),
+		zap.String("dispatcherID", opID.String()),
 		zap.String("operator", op.String()))
 }
 
@@ -491,7 +491,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("replicaSet", old.OP.ID().String()),
+			zap.String("dispatcherID", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
@@ -597,7 +597,7 @@ func (oc *Controller) addMergeOccupyOperators(
 		log.Error("failed to add occupy dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Int64("group", replicaSet.GetGroupID()),
-			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.Stringer("dispatcherID", replicaSet.ID),
 			zap.String("operator", occupyOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil, false

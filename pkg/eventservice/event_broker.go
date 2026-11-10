@@ -796,7 +796,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		log.Debug("scan rate limit exceeded",
-			zap.Stringer("dispatcher", task.id),
+			zap.Stringer("dispatcherID", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
 		return
@@ -839,7 +839,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcherID", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", sl.maxDMLBytes))
 		c.sendSignalResolvedTs(task)
 		eventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
@@ -861,7 +861,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.String("span", common.FormatTableSpan(request.Range.Span)),
 			zap.Uint64("commitTsStart", request.Range.CommitTsStart),
 			zap.Uint64("commitTsEnd", request.Range.CommitTsEnd),
 			zap.Uint64("cursorTxnStartTs", request.Cursor.TxnStartTs),
@@ -877,7 +876,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
+		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcherID", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
 		scannedBytes = int64(c.scanLimitInBytes)
 	}
 	task.lastScanBytes.Store(scannedBytes)
@@ -1391,7 +1390,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()))
 		return nil
 	}
@@ -1422,7 +1420,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
+				zap.Uint64("startTs", info.GetStartTs()))
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1441,7 +1439,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", info.GetStartTs()),
 			zap.Error(err),
 		)
 		// Mark removed to avoid processing notifications before unregister completes.
@@ -1463,7 +1461,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Stringer("dispatcherID", id),
 		zap.Int64("mode", info.GetMode()),
 		zap.Int64("tableID", span.GetTableID()),
-		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
 		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
@@ -1530,7 +1527,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
 }
 
@@ -1557,7 +1553,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
@@ -1598,7 +1593,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return err
 		}
@@ -1617,7 +1611,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", span.GetTableID()),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
 			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 			zap.Uint64("oldEpoch", oldStat.epoch),
@@ -1641,7 +1634,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
 		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),

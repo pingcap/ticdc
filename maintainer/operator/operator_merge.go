@@ -227,7 +227,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 // OnTaskRemoved is called when the task is removed by ddl
 func (m *MergeDispatcherOperator) OnTaskRemoved() {
-	log.Info("task removed", zap.String("replicaSet", m.newReplicaSet.ID.String()))
+	log.Info("task removed", zap.String("dispatcherID", m.newReplicaSet.ID.String()))
 	m.abortedByDDL.Store(true)
 	m.aborted.Store(true)
 	m.finished.Store(true)
@@ -255,7 +255,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 			}
 		}
 		m.spanController.RemoveReplicatingSpan(m.newReplicaSet)
-		log.Info("merge dispatcher operator finished due to removed", zap.String("id", m.id.String()))
+		log.Info("merge dispatcher operator finished due to removed", zap.String("dispatcherID", m.id.String()))
 		return
 	}
 
@@ -264,7 +264,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	}
 
 	m.spanController.MarkSpanReplicating(m.newReplicaSet)
-	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
+	log.Info("merge dispatcher operator finished", zap.String("dispatcherID", m.id.String()))
 }
 
 func (m *MergeDispatcherOperator) String() string {

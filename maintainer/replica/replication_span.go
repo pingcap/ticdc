@@ -67,7 +67,7 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	})
 	log.Info("new span replication created",
 		zap.Stringer("changefeedID", cfID),
-		zap.String("id", id.String()),
+		zap.Stringer("dispatcherID", id),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),

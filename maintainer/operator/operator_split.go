@@ -102,7 +102,7 @@ func (m *SplitDispatcherOperator) OnNodeRemove(n node.ID) {
 
 	if n == m.originNode {
 		log.Info("origin node is removed",
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.finished.Store(true)
 		m.removed.Store(true)
 	}
@@ -131,7 +131,7 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 		}
 		log.Info("replica set removed from origin node",
 			zap.Uint64("checkpointTs", m.checkpointTs),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 		m.finished.Store(true)
 	}
@@ -149,7 +149,7 @@ func (m *SplitDispatcherOperator) OnTaskRemoved() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("task removed", zap.String("replicaSet", m.replicaSet.ID.String()))
+	log.Info("task removed", zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.finished.Store(true)
 	m.removed.Store(true)
 }
@@ -158,7 +158,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("split dispatcher operator begin post finish", zap.String("id", m.replicaSet.ID.String()))
+	log.Info("split dispatcher operator begin post finish", zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 	if m.removed.Load() {
 		m.spanController.MarkSpanAbsent(m.replicaSet)
@@ -180,15 +180,15 @@ func (m *SplitDispatcherOperator) PostFinish() {
 			ret := m.postFinish(span, m.splitTargetNodes[idx])
 			if !ret {
 				log.Error("post finish in split dispatcher operator failed, set the span absent",
-					zap.String("id", m.replicaSet.ID.String()),
-					zap.String("span", span.ID.String()),
+					zap.String("sourceDispatcherID", m.replicaSet.ID.String()),
+					zap.String("dispatcherID", span.ID.String()),
 					zap.String("targetNode", m.splitTargetNodes[idx].String()))
 				m.spanController.MarkSpanAbsent(span)
 			}
 		}
 	} else if m.postFinish != nil && !replicasInScheduling {
 		log.Warn("skip post finish because split target nodes are not aligned with actual split result",
-			zap.String("id", m.replicaSet.ID.String()),
+			zap.String("dispatcherID", m.replicaSet.ID.String()),
 			zap.Int("targetNodeCount", len(m.splitTargetNodes)),
 			zap.Int("newReplicaCount", len(newReplicaSets)),
 			zap.Int("splitSpanCount", len(m.splitSpans)))
