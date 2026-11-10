@@ -232,7 +232,8 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	defer metrics.ResetOwnerChangefeedMetrics()
+	defer changefeed.ResetOwnerChangefeedMetrics()
+	defer changefeedErrorInfoGauge.Reset()
 
 	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
 	// label value when a changefeed's sink-uri is updated.
@@ -268,12 +269,12 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 
 				downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
 				if oldType, ok := changefeedDownstreamTypeCache[displayName]; ok && oldType != downstreamType {
-					metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
+					changefeed.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
 				}
 				changefeedDownstreamTypeCache[displayName] = downstreamType
-				metrics.ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, name, downstreamType).Set(1)
+				changefeed.ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, name, downstreamType).Set(1)
 
-				metrics.ChangefeedStatusGauge.WithLabelValues(
+				changefeed.ChangefeedStatusGauge.WithLabelValues(
 					keyspace,
 					name,
 					metrics.FormatKeyspaceID(info.KeyspaceID),
@@ -300,11 +301,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				}
 				// If there was an old metric, delete it, as the state has changed.
 				if exists {
-					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+					changefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
 				}
 				if hasError {
 					// An error exists (either new or changed). Set the new metric and update cache.
-					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					changefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
 					errorMetricLabels[cf.ID] = newLabels
 				} else {
 					// The error has disappeared, remove from cache.
@@ -317,7 +318,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				if _, ok := changefeedDownstreamTypes[displayName]; ok {
 					continue
 				}
-				metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
+				changefeed.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
 					displayName.Keyspace,
 					displayName.Name,
 					downstreamType,
@@ -328,7 +329,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				if _, ok := currentChangefeeds[changefeedID]; ok {
 					continue
 				}
-				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				changefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
 				delete(errorMetricLabels, changefeedID)
 			}
 		}
@@ -344,16 +345,22 @@ func updateChangefeedCheckpointMetrics(
 	pdTime time.Time,
 ) bool {
 	switch state {
+<<<<<<< HEAD
 	case config.StateStopped, config.StateFinished, config.StateRemoved:
 		metrics.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
 		return false
+=======
+	case config.StateFailed, config.StateStopped, config.StateFinished, config.StateRemoved:
+		changefeed.DeleteChangefeedCheckpointMetrics(keyspace, name, keyspaceID)
+		return
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663))
 	}
 
 	pdPhysicalTime := oracle.GetPhysical(pdTime)
 	phyCkpTs := oracle.ExtractPhysical(checkpointTs)
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
-	metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
-	metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+	changefeed.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
+	changefeed.ChangefeedCheckpointTsLagGauge.WithLabelValues(
 		keyspace,
 		name,
 		metrics.FormatKeyspaceID(keyspaceID),

@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package dynstream
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	DynamicStreamMemoryUsage = prometheus.NewGaugeVec(
@@ -28,20 +30,23 @@ var (
 			Subsystem: "dynamic_stream",
 			Name:      "event_chan_size",
 		}, []string{"module"})
+
 	DynamicStreamPendingQueueLen = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "pending_queue_len",
 		}, []string{"module"})
-	DynamicStreamAddPathNum = prometheus.NewGaugeVec(
+
+	dynamicStreamAddPathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "add_path_num",
 			Help:      "The number of add path command",
 		}, []string{"module"})
-	DynamicStreamRemovePathNum = prometheus.NewGaugeVec(
+
+	dynamicStreamRemovePathNum = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -49,7 +54,7 @@ var (
 			Help:      "The number of remove path command",
 		}, []string{"module"})
 
-	DynamicStreamBatchCount = prometheus.NewHistogramVec(
+	dynamicStreamBatchCount = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -57,7 +62,8 @@ var (
 			Help:      "The number of events in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
 		}, []string{"module", "area"})
-	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
+
+	dynamicStreamBatchBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -65,7 +71,8 @@ var (
 			Help:      "The total bytes in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
 		}, []string{"module", "area"})
-	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
+
+	dynamicStreamBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
@@ -75,13 +82,18 @@ var (
 		}, []string{"module", "area"})
 )
 
+<<<<<<< HEAD:pkg/metrics/dynamic_stream.go
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamMemoryUsage)
+=======
+// RegisterMetrics registers the metrics owned by this package.
+func RegisterMetrics(registry *prometheus.Registry) {
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663)):utils/dynstream/metrics.go
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)
-	registry.MustRegister(DynamicStreamAddPathNum)
-	registry.MustRegister(DynamicStreamRemovePathNum)
-	registry.MustRegister(DynamicStreamBatchCount)
-	registry.MustRegister(DynamicStreamBatchBytes)
-	registry.MustRegister(DynamicStreamBatchDuration)
+	registry.MustRegister(dynamicStreamAddPathNum)
+	registry.MustRegister(dynamicStreamRemovePathNum)
+	registry.MustRegister(dynamicStreamBatchCount)
+	registry.MustRegister(dynamicStreamBatchBytes)
+	registry.MustRegister(dynamicStreamBatchDuration)
 }

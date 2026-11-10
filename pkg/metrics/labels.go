@@ -14,6 +14,7 @@
 package metrics
 
 import (
+<<<<<<< HEAD:pkg/metrics/init.go
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
@@ -48,10 +49,22 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDDLMetrics(registry)
 }
 
+=======
+	"strconv"
+
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+)
+
+>>>>>>> af8dc9454 (metrics: register component collectors during server startup (#6663)):pkg/metrics/labels.go
 // GetKeyspaceLabel returns the keyspace label name used by TiCDC metrics.
 func GetKeyspaceLabel() string {
 	if kerneltype.IsNextGen() {
 		return "keyspace_name"
 	}
 	return "namespace"
+}
+
+// FormatKeyspaceID formats a keyspace ID as a metric label value.
+func FormatKeyspaceID(keyspaceID uint32) string {
+	return strconv.FormatUint(uint64(keyspaceID), 10)
 }
