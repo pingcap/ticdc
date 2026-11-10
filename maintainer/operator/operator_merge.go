@@ -14,7 +14,6 @@
 package operator
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -67,8 +66,7 @@ func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string 
 	var spansInfo strings.Builder
 	for _, replicaSet := range toMergedReplicaSets {
 		span := replicaSet.Span
-		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
+		fmt.Fprintf(&spansInfo, "[%s]", common.FormatTableSpan(span))
 	}
 	return spansInfo.String()
 }

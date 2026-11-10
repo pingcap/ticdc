@@ -14,7 +14,6 @@
 package operator
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -80,8 +79,7 @@ func NewSplitDispatcherOperator(
 ) *SplitDispatcherOperator {
 	var spansInfo strings.Builder
 	for _, span := range splitSpans {
-		fmt.Fprintf(&spansInfo, "[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
+		fmt.Fprintf(&spansInfo, "[%s]", common.FormatTableSpan(span))
 	}
 	op := &SplitDispatcherOperator{
 		replicaSet:       replicaSet,

@@ -177,8 +177,8 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Any("dispatcherIDs", dispatcherIDs),
 					zap.Int64("mode", dispatcherItem.GetMode()),
-					zap.Any("prevTableSpan", prevTableSpan),
-					zap.Any("currentTableSpan", currentTableSpan),
+					zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)),
+					zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)),
 				)
 				return nil, 0, 0
 			}
