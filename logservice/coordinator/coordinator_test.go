@@ -53,6 +53,16 @@ func TestGetCandidateNodes(t *testing.T) {
 	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
 	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
 	startTs := uint64(100)
+	request1 := &logservicepb.ReusableEventServiceRequest{
+		ID:      common.NewDispatcherID().ToPB(),
+		Span:    &span1,
+		StartTs: startTs,
+	}
+	request2 := &logservicepb.ReusableEventServiceRequest{
+		ID:      common.NewDispatcherID().ToPB(),
+		Span:    &span2,
+		StartTs: startTs,
+	}
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -135,19 +145,19 @@ func TestGetCandidateNodes(t *testing.T) {
 
 	// check get candidates
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID1})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span2, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request2, target: nodeID1})
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span2, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request2, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
@@ -167,7 +177,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
@@ -193,14 +203,14 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 
 	// remove node1 and check again
 	delete(coordinator.nodes.m, nodeID1)
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
+		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 }
@@ -232,7 +242,14 @@ func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
 		},
 	})
 
-	nodes := coordinator.getCandidateNodes(nodeID1, &span, startTs)
+	nodes := coordinator.getCandidateNodes(requestAndTarget{
+		req: &logservicepb.ReusableEventServiceRequest{
+			ID:      common.NewDispatcherID().ToPB(),
+			Span:    &span,
+			StartTs: startTs,
+		},
+		target: nodeID1,
+	})
 	require.Empty(t, nodes, "resolvedTs equal to checkpointTs should not be reused")
 }
 

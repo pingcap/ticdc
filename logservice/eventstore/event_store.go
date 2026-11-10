@@ -470,13 +470,11 @@ func (e *eventStore) RegisterDispatcher(
 	if lag >= 10*time.Second {
 		log.Warn("register dispatcher with large startTs lag",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("lag", lag))
 	} else {
 		log.Info("register dispatcher",
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 			zap.Uint64("startTs", startTs))
 	}
 
@@ -485,7 +483,6 @@ func (e *eventStore) RegisterDispatcher(
 		if success {
 			log.Info("register dispatcher success",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -493,7 +490,6 @@ func (e *eventStore) RegisterDispatcher(
 		} else {
 			log.Info("register dispatcher failed",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
@@ -540,10 +536,8 @@ func (e *eventStore) RegisterDispatcher(
 						e.dispatcherMeta.Unlock()
 						log.Info("reuse existing subscription with exact span match",
 							zap.Stringer("dispatcherID", dispatcherID),
-							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 							zap.Uint64("startTs", startTs),
 							zap.Uint64("subscriptionID", uint64(subStat.subID)),
-							zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
 						return true
 					}
@@ -566,10 +560,8 @@ func (e *eventStore) RegisterDispatcher(
 			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
 			log.Info("reuse existing subscription with smallest containing span",
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
@@ -671,8 +663,7 @@ func (e *eventStore) RegisterDispatcher(
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.Uint64("subscriptionID", uint64(subStat.subID)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -958,6 +949,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	return &eventStoreIter{
+		dispatcherID:  dispatcherID,
 		tableSpan:     stat.tableSpan,
 		needCheckSpan: needCheckSpan,
 		innerIter:     iter,
@@ -1183,7 +1175,6 @@ type slowSubscriptionLogEntry struct {
 	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
 	LastAdvanceTime    string  `json:"lastAdvanceTime"`
 	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
-	TableSpan          string  `json:"tableSpan"`
 	heapIndex          int     `json:"-"`
 }
 
@@ -1203,8 +1194,7 @@ func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) boo
 }
 
 type uninitializedSubscriptionLogEntry struct {
-	SubID     uint64 `json:"subID"`
-	TableSpan string `json:"tableSpan"`
+	SubID uint64 `json:"subID"`
 }
 
 func (e *eventStore) collectAndReportStoreMetrics() {
@@ -1266,7 +1256,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
@@ -1279,7 +1268,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
 						LastAdvanceTime:    lastAdvanceTime.String(),
 						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
 					}
 					slowestInitialized.AddOrUpdate(entry)
 					if slowestInitialized.Len() > logEntryLimit {
@@ -1290,8 +1278,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 				uninitializedStatCount++
 				if len(uninitializedSamples) < logEntryLimit {
 					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
-						SubID:     uint64(subStat.subID),
-						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+						SubID: uint64(subStat.subID),
 					})
 				}
 			}
@@ -1473,7 +1460,8 @@ func (e *eventStore) writeEvents(
 }
 
 type eventStoreIter struct {
-	tableSpan *heartbeatpb.TableSpan
+	dispatcherID common.DispatcherID
+	tableSpan    *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
@@ -1531,7 +1519,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
-			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+			zap.Stringer("dispatcherID", iter.dispatcherID),
 			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),

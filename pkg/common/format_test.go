@@ -15,6 +15,7 @@ package common
 import (
 	"testing"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
 )
@@ -166,35 +167,43 @@ func TestFormatInfluencedDispatchers(t *testing.T) {
 }
 
 func TestFormatTableSpan(t *testing.T) {
-	t.Parallel()
+	original := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(original) })
+	span := &heartbeatpb.TableSpan{
+		TableID:    42,
+		StartKey:   []byte{0x74, 0x80, 0xab},
+		EndKey:     []byte{0x74, 0x80, 0xcd},
+		KeyspaceID: 1,
+	}
 
 	testCases := []struct {
-		name          string
-		input         *heartbeatpb.TableSpan
-		isEmptyString bool
+		mode          string
+		expected      string
+		expectedEmpty string
 	}{
 		{
-			name:          "nil span",
-			input:         nil,
-			isEmptyString: true,
+			mode:          errors.RedactLogEnable,
+			expected:      "tableID: 42, startKey: ?, endKey: ?, keyspaceID: 1",
+			expectedEmpty: "tableID: 0, startKey: ?, endKey: ?, keyspaceID: 0",
 		},
 		{
-			name: "normal span",
-			input: &heartbeatpb.TableSpan{
-				TableID:  1,
-				StartKey: []byte("start"),
-				EndKey:   []byte("end"),
-			},
-			isEmptyString: false,
+			mode:          errors.RedactLogDisable,
+			expected:      "tableID: 42, startKey: 7480AB, endKey: 7480CD, keyspaceID: 1",
+			expectedEmpty: "tableID: 0, startKey: , endKey: , keyspaceID: 0",
+		},
+		{
+			mode:          errors.RedactLogMarker,
+			expected:      "tableID: 42, startKey: ‹7480AB›, endKey: ‹7480CD›, keyspaceID: 1",
+			expectedEmpty: "tableID: 0, startKey: ‹›, endKey: ‹›, keyspaceID: 0",
 		},
 	}
 
 	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			result := FormatTableSpan(tc.input)
-			require.Equal(t, tc.isEmptyString, result == "")
+		t.Run(tc.mode, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tc.mode)
+			require.Equal(t, tc.expected, FormatTableSpan(span))
+			require.Equal(t, tc.expectedEmpty, FormatTableSpan(&heartbeatpb.TableSpan{}))
+			require.Empty(t, FormatTableSpan(nil))
 		})
 	}
 }

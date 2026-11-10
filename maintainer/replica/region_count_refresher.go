@@ -59,7 +59,6 @@ func (r *RegionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 		log.Warn("load regions failed, just continue",
 			zap.Stringer("changefeedID", r.changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
 	}
 	r.counts.Store(id, len(regions))
@@ -110,7 +109,6 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 			log.Warn("load regions failed, just continue",
 				zap.Stringer("changefeedID", r.changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return true
 		}

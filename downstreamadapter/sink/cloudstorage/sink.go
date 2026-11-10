@@ -193,7 +193,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		log.Warn("ignore dml event because sink is not normal",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.String("dispatcher", event.GetDispatcherID().String()))
+			zap.String("dispatcherID", event.GetDispatcherID().String()))
 		return
 	}
 	s.dmlWriters.addDMLEvent(event)
@@ -282,7 +282,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		zap.String("changefeed", s.changefeedID.Name()),
 		zap.String("schema", event.GetTargetSchemaName()),
 		zap.String("table", event.GetTargetTableName()),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.String("dispatcherID", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
 		zap.Stringer("ddlType", event.GetDDLType()))

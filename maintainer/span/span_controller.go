@@ -474,7 +474,7 @@ func (c *Controller) ReplaceReplicaSet(
 		if _, ok := c.allTasks[old.ID]; !ok {
 			log.Panic("old replica set not found",
 				zap.String("changefeed", c.changefeedID.Name()),
-				zap.String("span", old.ID.String()))
+				zap.String("dispatcherID", old.ID.String()))
 		}
 		oldCheckpointTs := old.GetStatus().GetCheckpointTs()
 		if checkpointTs > oldCheckpointTs {
