@@ -383,7 +383,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+			zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
@@ -391,7 +392,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)),
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -406,7 +408,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)))
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 			backoffBeforeLoad = true
 			continue
 		}
