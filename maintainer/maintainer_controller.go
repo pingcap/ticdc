@@ -264,6 +264,39 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	}
 }
 
+<<<<<<< HEAD
+=======
+func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
+	spanController *span.Controller,
+	stm *replica.SpanReplication,
+) bool {
+	if stm == nil || stm.Span == nil {
+		return false
+	}
+	for _, candidate := range spanController.GetTasksByTableID(stm.Span.TableID) {
+		if candidate == nil || candidate == stm || candidate.ID == stm.ID || candidate.Span == nil {
+			continue
+		}
+		if candidate.GetMode() != stm.GetMode() || !spanController.IsReplicating(candidate) {
+			continue
+		}
+		if bytes.Compare(candidate.Span.StartKey, stm.Span.StartKey) <= 0 &&
+			bytes.Compare(candidate.Span.EndKey, stm.Span.EndKey) >= 0 {
+			// A successful merge can leave old source dispatchers reporting terminal statuses after
+			// maintainer failover. When the merged span already covers the source range, the source
+			// is obsolete desired state and must be removed instead of being marked absent.
+			log.Info("remove terminal span covered by merged span",
+				zap.String("changefeed", c.changefeedID.Name()),
+				zap.String("dispatcherID", stm.ID.String()),
+				zap.String("coveringDispatcherID", candidate.ID.String()))
+			spanController.RemoveReplicatingSpan(stm)
+			return true
+		}
+	}
+	return false
+}
+
+>>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
