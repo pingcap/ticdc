@@ -424,7 +424,7 @@ func TestPendingRegistrationRecoversAfterExpiry(t *testing.T) {
 		response.Append(commonEvent.NewDispatcherState(target.id, commonEvent.DSStateRemoved))
 		message := messaging.NewSingleTargetMessage(c.serverId, messaging.EventCollectorTopic, response)
 		message.From = server
-		c.handleDispatcherHeartbeatResponse(message)
+		c.handleDispatcherHeartbeatResponse(message.From, response)
 		requireDispatcherRequests(t, readDispatcherRequests(t, c, 1), dispatcherRequestRecord{to: server, action: eventpb.ActionType_ACTION_TYPE_REGISTER})
 	}
 	stat.remove()
@@ -433,21 +433,15 @@ func TestPendingRegistrationRecoversAfterExpiry(t *testing.T) {
 	require.Empty(t, c.groupHeartbeat())
 }
 
-func TestHandleDispatcherHeartbeatResponseRejectsMultiplePayloads(t *testing.T) {
-	c := &EventCollector{}
+func TestMessageCenterHandlerRejectsInvalidHeartbeatResponsePayloads(t *testing.T) {
+	c := newTestEventCollector("local")
 	response := commonEvent.NewDispatcherHeartbeatResponse()
 	msg := messaging.NewSingleTargetMessage("local", messaging.EventCollectorTopic, response)
 	msg.Message = append(msg.Message, response)
-	require.NotPanics(t, func() {
-		c.handleDispatcherHeartbeatResponse(msg)
-	})
-	require.NotPanics(t, func() {
-		c.handleDispatcherHeartbeatResponse(nil)
-	})
+	require.NoError(t, c.MessageCenterHandler(context.Background(), msg))
+	require.NoError(t, c.MessageCenterHandler(context.Background(), nil))
 	msg.Message = []messaging.IOTypeT{&commonEvent.DispatcherHeartbeat{}}
-	require.NotPanics(t, func() {
-		c.handleDispatcherHeartbeatResponse(msg)
-	})
+	require.NoError(t, c.MessageCenterHandler(context.Background(), msg))
 }
 
 func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
