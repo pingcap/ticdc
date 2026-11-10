@@ -700,6 +700,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			Id:           cfID.ToPB(),
 			Config:       data,
 			CheckpointTs: 10,
+			KeyspaceId:   keyspaceID,
 		}))
 
 	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
