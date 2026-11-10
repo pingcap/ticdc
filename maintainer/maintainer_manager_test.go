@@ -691,6 +691,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
+		KeyspaceID:   keyspaceID,
 	}
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)

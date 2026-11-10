@@ -1057,7 +1057,8 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 			return errors.ErrDecodeFailed.FastGenByArgs("DML row key length exceeds the payload size")
 		}
 		rowKeyEnd := offset + int(rowKeyLen)
-		t.RowKeys[i] = append([]byte(nil), data[offset:rowKeyEnd]...)
+		t.RowKeys[i] = make([]byte, int(rowKeyLen))
+		copy(t.RowKeys[i], data[offset:rowKeyEnd])
 		offset = rowKeyEnd
 	}
 	// Older V1 payloads end after RowKeys and have no checksum metadata.
