@@ -18,8 +18,20 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRestoreEscapesBackslashesInStringLiterals(t *testing.T) {
+	t.Parallel()
+
+	stmt, err := parser.New().ParseOneStmt(
+		`CREATE TABLE t (a VARCHAR(20) COMMENT 'trailing\\')`, "", "")
+	require.NoError(t, err)
+	restored, err := Restore(stmt)
+	require.NoError(t, err)
+	require.Contains(t, restored, `COMMENT 'trailing\\\\'`)
+}
 
 func TestIsSplitable(t *testing.T) {
 	helper := NewEventTestHelper(t)

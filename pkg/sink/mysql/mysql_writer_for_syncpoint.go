@@ -64,11 +64,11 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	commitTs := event.GetCommitTs()
 
 	// insert ts map
-	query := fmt.Sprintf("insert ignore into %s.%s (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('%s', '%s', %s, %s)",
+	query := fmt.Sprintf("insert ignore into %s.%s (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES (%s, %s, %s, %s)",
 		filter.TiCDCSystemSchema,
 		filter.SyncPointTable,
-		config.GetGlobalServerConfig().ClusterID,
-		w.ChangefeedID.String(),
+		quoteSQLStringLiteral(config.GetGlobalServerConfig().ClusterID),
+		quoteSQLStringLiteral(w.ChangefeedID.String()),
 		strconv.FormatUint(commitTs, 10),
 		secondaryTs)
 
@@ -108,11 +108,11 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		builder.WriteString(filter.TiCDCSystemSchema)
 		builder.WriteString(".")
 		builder.WriteString(filter.SyncPointTable)
-		builder.WriteString(" WHERE ticdc_cluster_id = '")
-		builder.WriteString(config.GetGlobalServerConfig().ClusterID)
-		builder.WriteString("' and changefeed = '")
-		builder.WriteString(w.ChangefeedID.String())
-		builder.WriteString("' and created_at < (NOW() - INTERVAL ")
+		builder.WriteString(" WHERE ticdc_cluster_id = ")
+		builder.WriteString(quoteSQLStringLiteral(config.GetGlobalServerConfig().ClusterID))
+		builder.WriteString(" and changefeed = ")
+		builder.WriteString(quoteSQLStringLiteral(w.ChangefeedID.String()))
+		builder.WriteString(" and created_at < (NOW() - INTERVAL ")
 		fmt.Fprintf(&builder, "%.2f", w.cfg.SyncPointRetention.Seconds())
 		builder.WriteString(" SECOND)")
 		query := builder.String()

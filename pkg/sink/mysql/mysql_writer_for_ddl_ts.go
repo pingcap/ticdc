@@ -286,13 +286,13 @@ func buildInsertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs,
 		if idx > 0 {
 			builder.WriteString(", ")
 		}
-		builder.WriteString("('")
-		builder.WriteString(ticdcClusterID)
-		builder.WriteString("', '")
-		builder.WriteString(changefeedID)
-		builder.WriteString("', '")
-		builder.WriteString(ddlTs)
-		builder.WriteString("', ")
+		builder.WriteString("(")
+		builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+		builder.WriteString(", ")
+		builder.WriteString(quoteSQLStringLiteral(changefeedID))
+		builder.WriteString(", ")
+		builder.WriteString(quoteSQLStringLiteral(ddlTs))
+		builder.WriteString(", ")
 		builder.WriteString(strconv.FormatInt(tableId, 10))
 		builder.WriteString(", ")
 		builder.WriteString(finished)
@@ -322,11 +322,11 @@ func dropItemQueries(dropTableIds []int64, ticdcClusterID string, changefeedID s
 			if idx > 0 {
 				builder.WriteString(", ")
 			}
-			builder.WriteString("('")
-			builder.WriteString(ticdcClusterID)
-			builder.WriteString("', '")
-			builder.WriteString(changefeedID)
-			builder.WriteString("', ")
+			builder.WriteString("(")
+			builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+			builder.WriteString(", ")
+			builder.WriteString(quoteSQLStringLiteral(changefeedID))
+			builder.WriteString(", ")
 			builder.WriteString(strconv.FormatInt(tableId, 10))
 			builder.WriteString(")")
 		}
@@ -497,11 +497,11 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 	builder.WriteString(" WHERE (ticdc_cluster_id, changefeed, table_id) IN (")
 
 	for idx, tableID := range tableIDs {
-		builder.WriteString("('")
-		builder.WriteString(ticdcClusterID)
-		builder.WriteString("', '")
-		builder.WriteString(changefeedID)
-		builder.WriteString("', ")
+		builder.WriteString("(")
+		builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+		builder.WriteString(", ")
+		builder.WriteString(quoteSQLStringLiteral(changefeedID))
+		builder.WriteString(", ")
 		builder.WriteString(strconv.FormatInt(tableID, 10))
 		builder.WriteString(")")
 		if idx < len(tableIDs)-1 {
@@ -512,11 +512,11 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 		builder.WriteString(", ")
 	}
 	// Always query the syncpoint meta row. It may or may not exist.
-	builder.WriteString("('")
-	builder.WriteString(ticdcClusterID)
-	builder.WriteString("', '")
-	builder.WriteString(changefeedID)
-	builder.WriteString("', ")
+	builder.WriteString("(")
+	builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+	builder.WriteString(", ")
+	builder.WriteString(quoteSQLStringLiteral(changefeedID))
+	builder.WriteString(", ")
 	builder.WriteString(strconv.FormatInt(syncPointMetaTableID, 10))
 	builder.WriteString(")")
 	builder.WriteString(")")
@@ -543,11 +543,11 @@ func (w *Writer) RemoveDDLTsItem() error {
 	builder.WriteString(filter.DDLTsTable)
 	builder.WriteString(" WHERE (ticdc_cluster_id, changefeed) IN (")
 
-	builder.WriteString("('")
-	builder.WriteString(ticdcClusterID)
-	builder.WriteString("', '")
-	builder.WriteString(changefeedID)
-	builder.WriteString("')")
+	builder.WriteString("(")
+	builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+	builder.WriteString(", ")
+	builder.WriteString(quoteSQLStringLiteral(changefeedID))
+	builder.WriteString(")")
 	builder.WriteString(")")
 	query := builder.String()
 
@@ -662,11 +662,11 @@ func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 	builder.WriteString(filter.DDLTsTable)
 	builder.WriteString(" WHERE (ticdc_cluster_id, changefeed, table_id, ddl_ts, finished) IN (")
 
-	builder.WriteString("('")
-	builder.WriteString(ticdcClusterID)
-	builder.WriteString("', '")
-	builder.WriteString(changefeedID)
-	builder.WriteString("', ")
+	builder.WriteString("(")
+	builder.WriteString(quoteSQLStringLiteral(ticdcClusterID))
+	builder.WriteString(", ")
+	builder.WriteString(quoteSQLStringLiteral(changefeedID))
+	builder.WriteString(", ")
 	builder.WriteString(strconv.FormatInt(tableID, 10))
 	builder.WriteString(", ")
 	builder.WriteString(strconv.FormatUint(ddlTs, 10))
@@ -688,6 +688,12 @@ func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func quoteSQLStringLiteral(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `'`, `''`)
+	return "'" + value + "'"
 }
 
 func (w *Writer) createTable(dbName string, tableName string, createTableQuery string) error {

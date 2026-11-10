@@ -15,16 +15,20 @@ package encryption
 
 import (
 	"context"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	plog "github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client/opt"
@@ -36,6 +40,36 @@ import (
 type mockTiKVMetaPDClient struct {
 	pd.Client
 	stores []*metapb.Store
+}
+
+func credentialForTLSServer(t *testing.T, srv *httptest.Server) *security.Credential {
+	t.Helper()
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	require.NoError(t, os.WriteFile(caPath, ca, 0o600))
+	return &security.Credential{CAPath: caPath}
+}
+
+func TestNewTiKVEncryptionHTTPClientRequiresTLS(t *testing.T) {
+	_, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{}, nil, false)
+	require.Error(t, err)
+	require.True(t, cerrors.ErrEncryptionFailed.Equal(err))
+
+	client, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{}, nil, true)
+	require.NoError(t, err)
+	require.Equal(t, "http", client.(*tikvEncryptionHTTPClient).httpScheme)
+}
+
+func TestTiKVEncryptionHTTPClientRejectsUntrustedStatusURL(t *testing.T) {
+	t.Parallel()
+
+	client := &tikvEncryptionHTTPClient{httpScheme: "https"}
+	_, err := client.buildStatusURL("http://tikv.example.com:20180", 1)
+	require.Error(t, err)
+
+	statusURL, err := client.buildStatusURL("tikv.example.com:20180", 42)
+	require.NoError(t, err)
+	require.Equal(t, "https://tikv.example.com:20180/encryption/get-meta?keyspace_id=42", statusURL)
 }
 
 func (m *mockTiKVMetaPDClient) GetAllStores(ctx context.Context, opts ...pdopt.GetStoreOption) ([]*metapb.Store, error) {
@@ -57,7 +91,7 @@ func TestTiKVEncryptionHTTPClientResponseBodyLogging(t *testing.T) {
 			restore := plog.ReplaceGlobals(zap.New(core), nil)
 			defer restore()
 
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.statusCode)
 				_, _ = w.Write([]byte(tc.body))
 			}))
@@ -67,7 +101,7 @@ func TestTiKVEncryptionHTTPClientResponseBodyLogging(t *testing.T) {
 			require.NoError(t, err)
 			client, err := NewTiKVEncryptionHTTPClient(&mockTiKVMetaPDClient{stores: []*metapb.Store{
 				{Id: 1, StatusAddress: srvURL.Host},
-			}}, nil)
+			}}, credentialForTLSServer(t, srv), false)
 			require.NoError(t, err)
 
 			_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
@@ -128,7 +162,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 		_, _ = w.Write(payload)
 	})
 
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewTLSServer(handler)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -141,7 +175,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 		},
 	}
 
-	client, err := NewTiKVEncryptionHTTPClient(pdCli, nil)
+	client, err := NewTiKVEncryptionHTTPClient(pdCli, credentialForTLSServer(t, srv), false)
 	require.NoError(t, err)
 
 	meta, err := client.GetKeyspaceEncryptionMeta(context.Background(), keyspaceID)
@@ -201,7 +235,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMetaFromProtobuf(t *testin
 		w.Header().Set("Content-Type", "application/protobuf")
 		_, _ = w.Write(payload)
 	})
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewTLSServer(handler)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -213,7 +247,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMetaFromProtobuf(t *testin
 		},
 	}
 
-	client, err := NewTiKVEncryptionHTTPClient(pdCli, nil)
+	client, err := NewTiKVEncryptionHTTPClient(pdCli, credentialForTLSServer(t, srv), false)
 	require.NoError(t, err)
 
 	meta, err := client.GetKeyspaceEncryptionMeta(context.Background(), keyspaceID)
@@ -232,7 +266,7 @@ func TestTiKVEncryptionHTTPClientNotFoundReturnsErrEncryptionMetaNotFound(t *tes
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("not found"))
 	})
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewTLSServer(handler)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -245,7 +279,7 @@ func TestTiKVEncryptionHTTPClientNotFoundReturnsErrEncryptionMetaNotFound(t *tes
 		},
 	}
 
-	client, err := NewTiKVEncryptionHTTPClient(pdCli, nil)
+	client, err := NewTiKVEncryptionHTTPClient(pdCli, credentialForTLSServer(t, srv), false)
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
@@ -280,7 +314,7 @@ func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 		w.Header().Set("Content-Type", "application/protobuf")
 		_, _ = w.Write(payload)
 	})
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewTLSServer(handler)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -291,7 +325,7 @@ func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 		},
 	}
 
-	client, err := NewTiKVEncryptionHTTPClient(pdCli, nil)
+	client, err := NewTiKVEncryptionHTTPClient(pdCli, credentialForTLSServer(t, srv), false)
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
@@ -326,7 +360,7 @@ func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) 
 		w.Header().Set("Content-Type", "application/protobuf")
 		_, _ = w.Write(payload)
 	})
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewTLSServer(handler)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -337,7 +371,7 @@ func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) 
 		},
 	}
 
-	client, err := NewTiKVEncryptionHTTPClient(pdCli, nil)
+	client, err := NewTiKVEncryptionHTTPClient(pdCli, credentialForTLSServer(t, srv), false)
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)

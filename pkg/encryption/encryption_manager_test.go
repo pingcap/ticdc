@@ -67,6 +67,11 @@ func setAllowDegradeOnError(t *testing.T, allow bool) func() {
 	}
 }
 
+func TestEncryptionDefaultFailsClosed(t *testing.T) {
+	t.Parallel()
+	require.False(t, config.NewDefaultEncryptionConfig().AllowDegradeOnError)
+}
+
 func TestEncryptDataAllowDegradeOnError(t *testing.T) {
 	restore := setAllowDegradeOnError(t, true)
 	defer restore()
@@ -98,8 +103,8 @@ func TestEncryptDataDisallowDegradeOnError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestEncryptDataDisabledSkipsEncryption(t *testing.T) {
-	restore := setAllowDegradeOnError(t, false)
+func TestEncryptDataMissingKeyAllowsExplicitDegrade(t *testing.T) {
+	restore := setAllowDegradeOnError(t, true)
 	defer restore()
 
 	meta := &mockMetaManager{}
@@ -113,6 +118,16 @@ func TestEncryptDataDisabledSkipsEncryption(t *testing.T) {
 	decrypted, err := manager.DecryptData(context.Background(), 1, output)
 	require.NoError(t, err)
 	require.Equal(t, input, decrypted)
+}
+
+func TestEncryptDataMissingKeyFailsClosed(t *testing.T) {
+	restore := setAllowDegradeOnError(t, false)
+	defer restore()
+
+	manager := NewEncryptionManager(&mockMetaManager{})
+	_, err := manager.EncryptData(context.Background(), 1, []byte("payload"))
+	require.Error(t, err)
+	require.True(t, cerrors.ErrEncryptionFailed.Equal(err))
 }
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
