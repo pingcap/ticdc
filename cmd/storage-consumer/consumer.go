@@ -804,7 +804,7 @@ func (c *consumer) handleNewFiles(
 					zap.Uint64("tableVersion", key.TableVersion),
 					zap.Int64("partition", key.PartitionNum),
 					zap.String("date", key.Date),
-					zap.String("dispatcher", indexKey.DispatcherID),
+					zap.String("dispatcherID", indexKey.DispatcherID),
 					zap.Bool("enableTableAcrossNodes", indexKey.EnableTableAcrossNodes),
 					zap.Uint64("fileIndex", i),
 					zap.String("path", filePath))

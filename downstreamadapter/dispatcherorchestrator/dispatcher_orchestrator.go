@@ -488,7 +488,7 @@ func validateBootstrapNoTableTriggerDispatcher(
 	log.Error("table trigger dispatcher present during nil trigger bootstrap",
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " present during nil trigger bootstrap")
 }
@@ -507,7 +507,7 @@ func validateBootstrapTableTriggerDispatcherID(
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
 }
@@ -585,7 +585,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
-			zap.String("actualDispatcherID", actualDispatcherID.String()))
+			zap.String("dispatcherID", actualDispatcherID.String()))
 
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")

@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -247,7 +248,7 @@ func (c originTsChecker) shouldDropRow(row *commonEvent.RowChange, commitTs uint
 		zap.Uint64("commitTs", commitTs),
 		zap.Int64("tableID", c.tableID),
 		zap.Uint8("rowType", uint8(row.RowType)),
-		zap.Binary("rowKey", row.RowKey),
+		zap.String("rowKey", util.RedactKey(row.RowKey)),
 		zap.Int("rowLen", row.Row.Len()))
 	return true
 }

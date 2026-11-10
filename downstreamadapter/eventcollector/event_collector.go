@@ -257,7 +257,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	readyCallback func(),
 ) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcher", target.GetId()))
+	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done",
 			zap.Stringer("changefeedID", changefeedID),
