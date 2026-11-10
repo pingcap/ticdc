@@ -286,7 +286,8 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 
 	log.Info("new redo dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", mergedDispatcherID))
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {

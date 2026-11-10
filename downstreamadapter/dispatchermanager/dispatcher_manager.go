@@ -682,6 +682,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		log.Info("new dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
+			zap.Int64("tableID", tableSpans[idx].TableID),
 			zap.Int64("startTs", newStartTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
@@ -1040,7 +1041,8 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 
 	log.Info("new dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", mergedDispatcherID))
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
