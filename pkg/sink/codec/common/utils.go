@@ -330,6 +330,7 @@ func NewRoutedDDLEvent4Test() *commonEvent.DDLEvent {
 		tableInfo,
 		nil,
 		nil,
+		nil,
 	)
 }
 

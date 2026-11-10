@@ -710,6 +710,7 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 		partitionedTableInfo,
 		[]*common.TableInfo{partitionedTableInfo, exchangeTableInfo},
 		nil,
+		nil,
 	)
 
 	err = cloudStorageSink.WriteBlockEvent(routedEvent)

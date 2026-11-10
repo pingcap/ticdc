@@ -568,6 +568,7 @@ func NewRoutedDDLEvent(
 	tableInfo *common.TableInfo,
 	multipleTableInfos []*common.TableInfo,
 	blockedTableNames []SchemaTableName,
+	targetTableNameChange *TableNameChange,
 ) *DDLEvent {
 	if d == nil {
 		return nil
@@ -592,10 +593,12 @@ func NewRoutedDDLEvent(
 		FinishedTs:            d.FinishedTs,
 		Seq:                   d.Seq,
 		Epoch:                 d.Epoch,
-		// MultipleTableInfos and BlockedTableNames carry table names used by downstream
-		// execution paths, so the routed versions must be passed in explicitly.
+		// MultipleTableInfos, BlockedTableNames and TableNameChange carry table
+		// names used by downstream execution paths, so the routed versions must
+		// be passed in explicitly.
 		MultipleTableInfos: multipleTableInfos,
 		BlockedTableNames:  blockedTableNames,
+		TableNameChange:    targetTableNameChange,
 		// The following fields do not participate in table route name rewriting,
 		// so the routed event keeps the original values from the source event.
 		// TableStateChange carries no name; its TableInfo is DDLEvent.TableInfo,
@@ -605,7 +608,6 @@ func NewRoutedDDLEvent(
 		NeedDroppedTables: d.NeedDroppedTables,
 		NeedAddedTables:   d.NeedAddedTables,
 		UpdatedSchemas:    d.UpdatedSchemas,
-		TableNameChange:   d.TableNameChange,
 		TiDBOnly:          d.TiDBOnly,
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
@@ -652,4 +654,34 @@ type TableNameChange struct {
 	AddName          []SchemaTableName
 	DropName         []SchemaTableName
 	DropDatabaseName string
+	// DropTargetName carries routed DropName, should be kept align with DropName.
+	// It is set by router and consumed by the sink in the same process, so not
+	// serialized. When [a,b,c] and b routed to x, DropTargetName will be [a,x,c].
+	// If routing is not applied, it will be nil.
+	DropTargetName []SchemaTableName `json:"-"`
+}
+
+// GetDropTargetSchemaName returns the schema name of dropped table after routing.
+// If routing is not applied (DropTargetName is nil), or the routed schema name
+// is empty, it falls back to the original schema name.
+func (c *TableNameChange) GetDropTargetSchemaName(i int) string {
+	if i < len(c.DropTargetName) && c.DropTargetName[i].SchemaName != "" {
+		return c.DropTargetName[i].SchemaName
+	}
+	return c.DropName[i].SchemaName
+}
+
+// GetDropTargetTableName returns the table name of dropped table after routing.
+// If routing is not applied (DropTargetName is nil), or the routed table name
+// is empty, it falls back to the original table name.
+func (c *TableNameChange) GetDropTargetTableName(i int) string {
+	if i < len(c.DropTargetName) && c.DropTargetName[i].TableName != "" {
+		return c.DropTargetName[i].TableName
+	}
+	return c.DropName[i].TableName
+}
+
+// Routed returns true if the DropName has been routed.
+func (c *TableNameChange) Routed() bool {
+	return c != nil && c.DropTargetName != nil
 }
