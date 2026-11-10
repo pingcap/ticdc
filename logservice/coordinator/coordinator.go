@@ -500,7 +500,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	}
 	log.Info("log coordinator get candidate nodes",
 		zap.String("requestNodeID", requestNodeID.String()),
-		zap.String("span", common.FormatTableSpan(span)),
+		zap.Int64("tableID", span.TableID),
 		zap.Uint64("startTs", startTs),
 		zap.Strings("candidateNodes", candidateNodes),
 		zap.Uint64s("subscriptionIDs", subIDs))

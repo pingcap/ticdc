@@ -73,24 +73,27 @@ func (m *regionCountSplitter) split(
 	regions, err := m.regionCache.LoadRegionsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, skip split span",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
 	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
 		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("regionThreshold", m.regionThreshold))
 		return []*heartbeatpb.TableSpan{span}
 	}
 	if spansNum > 0 && len(regions) < spansNum {
 		log.Info("skip split span because region count is less than target spans num",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
@@ -114,9 +117,7 @@ func (m *regionCountSplitter) split(
 			log.Warn("schedulerv3: list region out of order detected",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
-				zap.String("span", common.FormatTableSpan(span)),
-				zap.String("lastSpan", common.FormatTableSpan(spans[len(spans)-1])),
-				zap.String("newSpan", common.FormatTableSpan(newSpan)))
+				zap.Int64("tableID", span.TableID))
 			return []*heartbeatpb.TableSpan{span}
 		}
 		spans = append(spans, newSpan)
@@ -137,9 +138,9 @@ func (m *regionCountSplitter) split(
 	spans[0].StartKey = span.StartKey
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
-		zap.Uint32("keyspaceID", span.KeyspaceID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("span", common.FormatTableSpan(span)),
+		zap.Int64("tableID", span.TableID),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),

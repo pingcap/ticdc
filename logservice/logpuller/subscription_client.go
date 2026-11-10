@@ -266,8 +266,7 @@ func (s *subscriptionClient) Subscribe(
 		priority:       rt.baseScanPriority,
 	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("span", common.FormatTableSpan(&span)))
+			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs))
 	}
 }
 

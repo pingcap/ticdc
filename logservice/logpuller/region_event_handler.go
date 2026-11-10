@@ -312,8 +312,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID),
-				zap.String("span", common.FormatTableSpan(&span.span)))
+				zap.Uint64("requestID", state.requestID))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}

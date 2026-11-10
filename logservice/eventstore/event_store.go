@@ -1018,6 +1018,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
+		dispatcherID:      dispatcherID,
 		tableSpan:         stat.tableSpan,
 		needCheckSpan:     needCheckSpan,
 		innerIter:         iter,
@@ -1586,7 +1587,8 @@ func encodeDeferredEventKey(
 }
 
 type eventStoreIter struct {
-	tableSpan *heartbeatpb.TableSpan
+	dispatcherID common.DispatcherID
+	tableSpan    *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool
@@ -1666,7 +1668,7 @@ func (iter *eventStoreIter) NextWithScanPosition() (*common.RawKVEntry, ScanPosi
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
-			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+			zap.Stringer("dispatcherID", iter.dispatcherID),
 			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
