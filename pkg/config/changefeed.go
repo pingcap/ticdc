@@ -240,6 +240,9 @@ func (cfg *ChangefeedConfig) String() string {
 	if cloned.SinkConfig != nil {
 		cloned.SinkConfig.MaskSensitiveData()
 	}
+	if cloned.Consistent != nil {
+		cloned.Consistent.MaskSensitiveData()
+	}
 	res, err := json.Marshal(cloned)
 	if err != nil {
 		log.Error("failed to marshal changefeed config", zap.Error(err))

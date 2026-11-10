@@ -262,6 +262,7 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 	changefeedConfig := &ChangefeedConfig{
 		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
 		SinkConfig: cfg.Sink,
+		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
 	}
 	original, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
@@ -271,10 +272,12 @@ func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
 		"sink-password-sentinel",
 		"uri-secret-sentinel",
 		"plain-password-sentinel",
+		"redo-secret-sentinel",
 	} {
 		require.NotContains(t, output, secret)
 	}
 	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	require.Contains(t, output, "secret-access-key=xxxxx")
 	after, err := json.Marshal(changefeedConfig)
 	require.NoError(t, err)
 	require.Equal(t, original, after)

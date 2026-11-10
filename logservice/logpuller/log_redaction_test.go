@@ -33,19 +33,19 @@ func withRedactMode(t *testing.T, mode string) func() {
 
 func TestFormatUnlockedRanges(t *testing.T) {
 	ranges := []regionlock.UnLockRangeStatistic{
-		{Span: heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0x74, 0x80}, EndKey: []byte{0x74, 0x81}}, ResolvedTs: 100},
+		{Span: heartbeatpb.TableSpan{StartKey: []byte{0x74, 0x80}, EndKey: []byte{0x74, 0x81}}, ResolvedTs: 100},
 	}
 
 	restore := withRedactMode(t, "OFF")
-	require.Equal(t, []string{"tableID: 1, startKey: 7480, endKey: 7481, resolvedTs: 100"}, formatUnlockedRanges(ranges))
+	require.Equal(t, []string{"tableID: 1, startKey: 7480, endKey: 7481, resolvedTs: 100"}, formatUnlockedRanges(ranges, 1))
 	restore()
 
 	restore = withRedactMode(t, "ON")
-	require.Equal(t, []string{"tableID: 1, startKey: ?, endKey: ?, resolvedTs: 100"}, formatUnlockedRanges(ranges))
+	require.Equal(t, []string{"tableID: 1, startKey: ?, endKey: ?, resolvedTs: 100"}, formatUnlockedRanges(ranges, 1))
 	restore()
 
 	defer withRedactMode(t, "MARKER")()
 	require.Equal(t, []string{"tableID: 1, startKey: ‹7480›, endKey: ‹7481›, resolvedTs: 100"},
-		formatUnlockedRanges(ranges))
-	require.Empty(t, formatUnlockedRanges(nil))
+		formatUnlockedRanges(ranges, 1))
+	require.Empty(t, formatUnlockedRanges(nil, 1))
 }
