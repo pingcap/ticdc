@@ -852,8 +852,6 @@ func (c *Controller) removeUnexpectedBootstrapOverlaps(
 					zap.Int64("tableID", tableID),
 					zap.String("keptDispatcherID", existing.ID.String()),
 					zap.String("dispatcherID", candidate.ID.String()),
-					zap.String("keptSpan", common.FormatTableSpan(existing.Span)),
-					zap.String("removedSpan", common.FormatTableSpan(candidate.Span)),
 					zap.Int64("mode", mode))
 				c.addBootstrapCleanupOperator(candidate)
 				rejected = true

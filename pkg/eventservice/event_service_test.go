@@ -619,7 +619,7 @@ func (m *mockEventStore) GetIterator(
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		log.Panic("span not found", zap.Any("span", span), zap.Stringer("dispatcherID", dispatcherID))
+		log.Panic("span not found", zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	spanStats := v.(*mockSpanStats)

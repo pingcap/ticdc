@@ -569,7 +569,9 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	for idx := 1; idx < len(affectedSpans); idx++ {
 		currentTableSpan := affectedSpans[idx]
 		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
-			log.Info("affectedReplicaSets is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			log.Info("affectedReplicaSets is not consecutive, skip merge",
+				zap.Stringer("previousDispatcherID", affectedReplicaSets[idx-1].ID),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 		prevTableSpan = currentTableSpan

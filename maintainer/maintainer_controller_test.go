@@ -712,7 +712,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			controller.spanController.UpdateStatus(spanReplica, status)
 		}
 
-		log.Info("spanReplica", zap.Any("j", j), zap.Any("dispatcherID", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+		log.Info("spanReplica", zap.Any("j", j), zap.Any("dispatcherID", spanReplica.ID))
 	}
 
 	// first keep the system is balanced
@@ -790,8 +790,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID8 = spanTmp1
 	}
 
-	log.Info("spanReplica7", zap.Any("dispatcherID", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	log.Info("spanReplica8", zap.Any("dispatcherID", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	log.Info("spanReplica7", zap.Any("dispatcherID", spanReplica7.ID))
+	log.Info("spanReplica8", zap.Any("dispatcherID", spanReplica8.ID))
 	trafficForSpanReplica7 := 50
 	trafficForSpanReplica8 := 150
 
@@ -883,8 +883,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID9 = spanID2
 	}
 
-	log.Info("spanReplica9", zap.Any("dispatcherID", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	log.Info("spanReplica10", zap.Any("dispatcherID", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	log.Info("spanReplica9", zap.Any("dispatcherID", spanReplica9.ID))
+	log.Info("spanReplica10", zap.Any("dispatcherID", spanReplica10.ID))
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -941,7 +941,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanReplicaID9)
 	spanReplicaID11 := typeCount["merge"][0].ID()
 	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
-	log.Info("spanReplica11", zap.Any("dispatcherID", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
+	log.Info("spanReplica11", zap.Any("dispatcherID", spanReplica11.ID))
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())

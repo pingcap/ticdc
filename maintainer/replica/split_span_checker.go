@@ -822,9 +822,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			// just panic for debug
 			log.Panic("unexpected error: span is not continuous",
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("prev.Span", common.FormatTableSpan(prev.Span)),
 				zap.Any("previousDispatcherID", prev.ID),
-				zap.Any("cur.Span", common.FormatTableSpan(cur.Span)),
 				zap.Any("dispatcherID", cur.ID),
 			)
 		}
