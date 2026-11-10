@@ -165,3 +165,5 @@ func TestRegionEventSinkRemovePathReleasesQueuedEventMemory(t *testing.T) {
 		return getMemoryQuotaTestState(quota).used == 0
 	}, time.Second, 10*time.Millisecond)
 }
+
+func (s *mockRegionEventSinkStream) CheckMemoryPressure() {}
