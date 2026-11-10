@@ -464,7 +464,8 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			zap.Any("changefeedID", s.changefeedID),
 			zap.Any("groupID", s.groupID),
 			zap.Int("moveCount", len(result)),
-			zap.Any("moves", result))
+			zap.Stringer("minTrafficNodeID", minTrafficNodeID),
+			zap.Stringer("maxTrafficNodeID", maxTrafficNodeID))
 		return results
 	}
 
@@ -795,7 +796,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		log.Info("chooseMergedSpans merge spans",
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", s.groupID),
-			zap.Any("mergeSpans", mergeSpans),
+			zap.Int("mergeSpanCount", len(mergeSpans)),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
 		results = append(results, SplitSpanCheckResult{
@@ -1177,8 +1178,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			log.Panic("unexpected error: diffTraffic is less than 0",
 				zap.Float64("diffTraffic", diffTraffic),
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("moveSpans", moveSpans),
-				zap.Any("taskMap", taskMap),
+				zap.Int("moveSpanCount", len(moveSpans)),
+				zap.Int("nodeCount", len(taskMap)),
 			)
 		}
 		// we can only find next possible in sortedSpans[:idx]
@@ -1194,7 +1195,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		log.Info("checkBalanceTraffic move spans",
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", s.groupID),
-			zap.Any("moveSpans", moveSpans),
+			zap.Int("moveSpanCount", len(moveSpans)),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 		)
 		results = append(results, SplitSpanCheckResult{

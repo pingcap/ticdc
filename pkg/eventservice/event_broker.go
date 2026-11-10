@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -860,7 +861,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.String("span", common.FormatTableSpan(request.Range.Span)),
+			zap.Uint64("commitTsStart", request.Range.CommitTsStart),
+			zap.Uint64("commitTsEnd", request.Range.CommitTsEnd),
+			zap.Uint64("cursorTxnStartTs", request.Cursor.TxnStartTs),
+			zap.String("cursorPosition", util.RedactKey(request.Cursor.Position)),
+			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}

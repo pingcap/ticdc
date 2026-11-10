@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/util"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
 	"go.uber.org/zap"
@@ -288,15 +289,15 @@ func (pc *pdAPIClient) scanRegions(
 			if r[0].StartKey != startKeyHex {
 				r[0].StartKey = strings.ToUpper(hex.EncodeToString(startKey))
 				log.Info("start key mismatch, adjust start key",
-					zap.String("startKey", startKeyHex),
-					zap.String("regionStartKey", r[0].StartKey),
+					zap.String("startKey", util.RedactValue(startKeyHex)),
+					zap.String("regionStartKey", util.RedactValue(r[0].StartKey)),
 					zap.Uint64("regionID", r[0].ID))
 			}
 			regions = append(regions, r...)
 			key, err := hex.DecodeString(regions[len(regions)-1].EndKey)
 			if err != nil {
 				log.Info("fail to decode region end key",
-					zap.String("endKey", regions[len(regions)-1].EndKey),
+					zap.String("endKey", util.RedactValue(regions[len(regions)-1].EndKey)),
 					zap.Uint64("regionID", r[len(regions)-1].ID))
 				return nil, errors.Trace(err)
 			}
@@ -309,8 +310,8 @@ func (pc *pdAPIClient) scanRegions(
 	if regions[len(regions)-1].EndKey != string(span.EndKey) {
 		regions[len(regions)-1].EndKey = strings.ToUpper(hex.EncodeToString(span.EndKey))
 		log.Info("end key mismatch, adjust end key",
-			zap.String("endKey", strings.ToUpper(hex.EncodeToString(span.EndKey))),
-			zap.String("regionEndKey", regions[len(regions)-1].EndKey),
+			zap.String("endKey", util.RedactKey(span.EndKey)),
+			zap.String("regionEndKey", util.RedactValue(regions[len(regions)-1].EndKey)),
 			zap.Uint64("regionID", regions[len(regions)-1].ID))
 	}
 

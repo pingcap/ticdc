@@ -1332,7 +1332,6 @@ func (c *Controller) handleCurrentWorkingAdd(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1384,7 +1383,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1412,7 +1410,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1719,8 +1716,7 @@ func (c *Controller) restoreCurrentMergeOperators(
 					zap.String("nodeID", nodeID.String()),
 					zap.String("changefeed", resp.ChangefeedID.String()),
 					zap.String("dispatcher", mergedDispatcherID.String()),
-					zap.Any("mergedReplicaSet", mergedReplicaSet),
-					zap.Any("toMergedReplicaSets", sourceReplicaSets))
+					zap.Int("sourceReplicaSetCount", len(sourceReplicaSets)))
 				c.reconcileUnrestorableBootstrapMerge(
 					mergedReplicaSet,
 					mergedSpanInfo,

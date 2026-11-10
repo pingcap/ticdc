@@ -15,7 +15,6 @@ package operator
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -54,21 +53,11 @@ type MergeDispatcherOperator struct {
 
 	toMergedReplicaSets []*replica.SpanReplication
 	newReplicaSet       *replica.SpanReplication
-	mergedSpanInfo      string
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
 	sendThrottler sendThrottler
-}
-
-func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string {
-	var spansInfo strings.Builder
-	for _, replicaSet := range toMergedReplicaSets {
-		span := replicaSet.Span
-		fmt.Fprintf(&spansInfo, "[%s]", common.FormatTableSpan(span))
-	}
-	return spansInfo.String()
 }
 
 func buildDispatcherIDs(toMergedReplicaSets []*replica.SpanReplication) []*heartbeatpb.DispatcherID {
@@ -113,7 +102,6 @@ func newMergeDispatcherOperator(
 		dispatcherIDs:       buildDispatcherIDs(toMergedReplicaSets),
 		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
-		mergedSpanInfo:      buildMergedSpanInfo(toMergedReplicaSets),
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       mergedReplicaSet,
 		sendThrottler:       newSendThrottler(),
@@ -186,7 +174,9 @@ func (m *MergeDispatcherOperator) Start() {
 func (m *MergeDispatcherOperator) OnNodeRemove(n node.ID) {
 	if n == m.originNode {
 		log.Info("origin node is removed",
-			zap.Any("toMergedReplicaSets", m.toMergedReplicaSets))
+			zap.Stringer("dispatcherID", m.id),
+			zap.Stringer("nodeID", n),
+			zap.Int("sourceReplicaSetCount", len(m.toMergedReplicaSets)))
 
 		m.aborted.Store(true)
 		m.finished.Store(true)
@@ -278,7 +268,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 }
 
 func (m *MergeDispatcherOperator) String() string {
-	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, mergedSpanInfo: %s", m.id, m.mergedSpanInfo)
+	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, sourceReplicaSetCount: %d", m.id, len(m.toMergedReplicaSets))
 }
 
 func (m *MergeDispatcherOperator) Type() string {

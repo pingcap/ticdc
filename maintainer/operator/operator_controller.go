@@ -555,7 +555,7 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	if len(affectedReplicaSets) < 2 {
 		log.Info("affectedReplicaSets is less than 2, skip merge",
-			zap.Any("affectedReplicaSets", affectedReplicaSets))
+			zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)))
 		return false
 	}
 
@@ -574,7 +574,9 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 		}
 		prevTableSpan = currentTableSpan
 		if affectedReplicaSets[idx].GetNodeID() != nodeID {
-			log.Info("affectedReplicaSets is not in the same node, skip merge", zap.Any("affectedReplicaSets", affectedReplicaSets))
+			log.Info("affectedReplicaSets is not in the same node, skip merge",
+				zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 	}
@@ -631,7 +633,7 @@ func (oc *Controller) AddMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
@@ -673,7 +675,7 @@ func (oc *Controller) AddRestoredMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator when restoring merge",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil
