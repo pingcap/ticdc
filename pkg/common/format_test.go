@@ -15,8 +15,8 @@ package common
 import (
 	"testing"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
