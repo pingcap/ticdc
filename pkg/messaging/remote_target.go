@@ -640,6 +640,14 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			}
 			targetMsg.Message = append(targetMsg.Message, msg)
 		}
+		if len(targetMsg.Message) == 0 {
+			log.Warn("drop message without a valid payload",
+				zap.Stringer("localID", s.messageCenterID),
+				zap.Stringer("remoteID", s.targetId),
+				zap.String("topic", message.Topic),
+				zap.String("type", mt.String()))
+			continue
+		}
 
 		ch <- targetMsg
 	}

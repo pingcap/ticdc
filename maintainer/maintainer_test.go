@@ -699,6 +699,31 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	})
 }
 
+func TestMaintainerIgnoresRedoMessagesWhenRedoIsDisabled(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+	m.initialized.Store(true)
+
+	require.NotPanics(t, func() {
+		m.onBlockStateRequest(&messaging.TargetMessage{
+			From: selfNodeID,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{
+				ChangefeedID: m.changefeedID.ToPB(),
+				Mode:         common.RedoMode,
+			}},
+		})
+	})
+
+	require.NotPanics(t, func() {
+		m.controller.handleStatus(selfNodeID, []*heartbeatpb.TableSpanStatus{{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+			Mode:            common.RedoMode,
+		}}, true)
+	})
+}
+
 func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 	m.initialized.Store(true)

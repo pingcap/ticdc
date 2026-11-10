@@ -520,12 +520,10 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
-	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
-	}
-
-	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+func (c *EventCollector) handleDispatcherHeartbeatResponse(
+	from node.ID,
+	response *event.DispatcherHeartbeatResponse,
+) {
 	for _, ds := range response.DispatcherStates {
 		// This means that the dispatcher is removed in the event service we have to reset it.
 		if ds.State == event.DSStateRemoved {
@@ -534,13 +532,17 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
+			stat.session.retryCurrentRegistrationIfRemovedFrom(from)
 		}
 	}
 }
 
 // MessageCenterHandler is the handler for the events message from EventService.
 func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
+	if targetMessage == nil {
+		log.Warn("ignore nil event collector message")
+		return nil
+	}
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 
@@ -559,16 +561,30 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		}
 		return nil
 	}
+	if targetMessage.Type == messaging.TypeDispatcherHeartbeatResponse {
+		payloadCount := len(targetMessage.Message)
+		if payloadCount != 1 {
+			log.Warn("ignore dispatcher heartbeat response with invalid payload count",
+				zap.Stringer("from", targetMessage.From),
+				zap.String("type", targetMessage.Type.String()),
+				zap.Int("payloadCount", payloadCount))
+			return nil
+		}
+		response, ok := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+		if !ok || response == nil {
+			log.Warn("ignore invalid dispatcher heartbeat response payload",
+				zap.Stringer("from", targetMessage.From),
+				zap.String("type", targetMessage.Type.String()))
+			return nil
+		}
+		c.handleDispatcherHeartbeatResponse(targetMessage.From, response)
+		return nil
+	}
 
 	for _, msg := range targetMessage.Message {
-		switch msg.(type) {
-		case *event.DispatcherHeartbeatResponse:
-			c.handleDispatcherHeartbeatResponse(targetMessage)
-		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
-		}
+		log.Warn("unknown message type, ignore it",
+			zap.String("type", targetMessage.Type.String()),
+			zap.Any("msg", msg))
 	}
 	return nil
 }

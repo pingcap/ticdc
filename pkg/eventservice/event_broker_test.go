@@ -85,6 +85,24 @@ func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
 	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
 }
 
+func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.filterConfig = nil
+	status, err := broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
+
+	info.filterConfig = &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+		Rules: []string{"["},
+	}}
+	status, err = broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
+}
+
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	t.Helper()
 	task, ok := broker.scanTaskQueues[workerIndex].pop()
@@ -1332,6 +1350,26 @@ func TestCURDDispatcher(t *testing.T) {
 	// Check changefeedStatus after removing the only dispatcher
 	_, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
+}
+
+func TestDuplicateRegisterRestoresChangefeedStatus(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	original, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	replacement, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "replacement changefeedStatus should be stored")
+	require.NotSame(t, original, replacement)
+	require.False(t, replacement.(*changefeedStatus).isEmpty())
+
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.Same(t, replacement, dispatcher.changefeedStat)
 }
 
 func TestRemoveDispatcherCleansUpSharedFilter(t *testing.T) {
