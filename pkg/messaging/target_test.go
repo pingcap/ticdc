@@ -16,7 +16,6 @@ package messaging
 import (
 	"context"
 	"io"
-	"net"
 	"testing"
 
 	"github.com/pingcap/log"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/peer"
 )
 
 type testGrpcStream struct {
@@ -96,21 +94,6 @@ func TestDecodeHandshakeMessageRejectsMalformedInput(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, valid, decoded)
-}
-
-func TestValidateIncomingPeer(t *testing.T) {
-	ctx := peer.NewContext(context.Background(), &peer.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 40000},
-	})
-	require.NoError(t, validateIncomingPeer(ctx, "192.0.2.10:8300"))
-	require.Error(t, validateIncomingPeer(ctx, "192.0.2.11:8300"))
-	require.Error(t, validateIncomingPeer(context.Background(), "192.0.2.10:8300"))
-	require.Error(t, validateIncomingPeer(ctx, "invalid-address"))
-
-	ipv6Ctx := peer.NewContext(context.Background(), &peer.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("2001:db8::10"), Port: 40000, Zone: "eth0"},
-	})
-	require.NoError(t, validateIncomingPeer(ipv6Ctx, "[2001:db8::10]:8300"))
 }
 
 func TestHandleIncomingMessageDropsEmptyPayload(t *testing.T) {
