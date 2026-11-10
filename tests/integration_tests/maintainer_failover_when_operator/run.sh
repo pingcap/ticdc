@@ -235,7 +235,7 @@ function get_merge_dispatcher_created_log_count() {
 	local table_id=$2
 	local pattern='new (redo )?dispatcher created\(merge dispatcher\)'
 
-	grep -Ehs "${pattern}.*tableID[^0-9]*${table_id}([^0-9]|$)" "$work_dir"/cdc*.log 2>/dev/null | wc -l
+	grep -Ehs "${pattern}.*\\[tableID=${table_id}\\]" "$work_dir"/cdc*.log 2>/dev/null | wc -l
 }
 
 function wait_for_new_merge_dispatcher_created_in_logs() {

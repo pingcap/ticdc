@@ -116,7 +116,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	d.cacheEvents.Lock()
 	defer d.cacheEvents.Unlock()
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher has removed", zap.Any("id", d.id))
+		log.Warn("dispatcher has removed", zap.Any("dispatcherID", d.id))
 		return
 	}
 	// Here we have to create a new event slice, because dispatcherEvents will be cleaned up in dynamic stream
@@ -128,7 +128,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	select {
 	case d.cacheEvents.events <- cacheEvents:
 		log.Debug("cache events",
-			zap.Stringer("dispatcher", d.id),
+			zap.Stringer("dispatcherID", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),
 			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].GetType()),
@@ -136,7 +136,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
 		)
 	default:
-		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
+		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcherID", d.id), zap.Int("len", len(d.cacheEvents.events)))
 	}
 }
 
