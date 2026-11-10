@@ -609,7 +609,6 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Uint64("startTs", startTs),
 				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
 				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
 				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
 				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
@@ -726,8 +725,7 @@ func (e *eventStore) RegisterDispatcher(
 	log.Info("new subscription created",
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)))
+		zap.Uint64("subscriptionID", uint64(subStat.subID)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -1245,7 +1243,6 @@ type slowSubscriptionLogEntry struct {
 	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
 	LastAdvanceTime    string  `json:"lastAdvanceTime"`
 	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
-	TableSpan          string  `json:"tableSpan"`
 	heapIndex          int     `json:"-"`
 }
 
@@ -1265,8 +1262,7 @@ func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) boo
 }
 
 type uninitializedSubscriptionLogEntry struct {
-	SubID     uint64 `json:"subID"`
-	TableSpan string `json:"tableSpan"`
+	SubID uint64 `json:"subID"`
 }
 
 func (e *eventStore) collectAndReportStoreMetrics() {
@@ -1328,7 +1324,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
@@ -1341,7 +1336,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
 						LastAdvanceTime:    lastAdvanceTime.String(),
 						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
 					}
 					slowestInitialized.AddOrUpdate(entry)
 					if slowestInitialized.Len() > logEntryLimit {
@@ -1352,8 +1346,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 				uninitializedStatCount++
 				if len(uninitializedSamples) < logEntryLimit {
 					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
-						SubID:     uint64(subStat.subID),
-						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+						SubID: uint64(subStat.subID),
 					})
 				}
 			}
