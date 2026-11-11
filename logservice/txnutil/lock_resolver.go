@@ -16,6 +16,7 @@ package txnutil
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/util"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -92,10 +94,15 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			if len(locks) > 5 {
 				locks = locks[:5]
 			}
+			sampleLocks := make([]string, 0, len(locks))
+			for _, lock := range locks {
+				sampleLocks = append(sampleLocks, fmt.Sprintf("key: %s, primary: %s, txnID: %d, ttl: %d",
+					util.RedactKey(lock.Key), util.RedactKey(lock.Primary), lock.TxnID, lock.TTL))
+			}
 			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),
 				zap.Int("lockCount", len(totalLocks)),
-				zap.Any("sampleLocks", locks),
+				zap.Strings("sampleLocks", sampleLocks),
 				zap.Uint64("maxVersion", maxVersion),
 				zap.Duration("duration", cost),
 				zap.Error(err))

@@ -115,8 +115,8 @@ EOF
 	move_table_with_retry "127.0.0.1:8301" $table_1_id "$CHANGEFEED_ID" 10
 
 	# The moved dispatcher must start from (ddl_ts - 1) and enable skipDMLAsStartTs.
-	ensure 60 "grep \"new dispatcher created\" $WORK_DIR/cdc1.log | grep -q \"tableID: ${table_1_id}\""
-	dispatcher_line=$(grep "new dispatcher created" $WORK_DIR/cdc1.log | grep "tableID: ${table_1_id}" | tail -n 1)
+	ensure 60 "grep \"new dispatcher created\" $WORK_DIR/cdc1.log | grep -Fq \"[tableID=${table_1_id}]\""
+	dispatcher_line=$(grep "new dispatcher created" $WORK_DIR/cdc1.log | grep -F "[tableID=${table_1_id}]" | tail -n 1)
 	dispatcher_start_ts=$(echo "$dispatcher_line" | grep -oE 'startTs[^0-9]*[0-9]+' | tail -n 1 | grep -oE '[0-9]+' || true)
 	dispatcher_skip_dml=$(echo "$dispatcher_line" | grep -oE 'skipDMLAsStartTs[^a-zA-Z]*(true|false)' | tail -n 1 | grep -oE '(true|false)' | tail -n 1 || true)
 

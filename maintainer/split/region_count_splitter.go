@@ -73,24 +73,27 @@ func (m *regionCountSplitter) split(
 	regions, err := m.regionCache.LoadRegionsInKeyRange(bo, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, skip split span",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
 	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
 		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("regionThreshold", m.regionThreshold))
 		return []*heartbeatpb.TableSpan{span}
 	}
 	if spansNum > 0 && len(regions) < spansNum {
 		log.Info("skip split span because region count is less than target spans num",
+			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
+			zap.Int64("tableID", span.TableID),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
@@ -103,24 +106,21 @@ func (m *regionCountSplitter) split(
 	for {
 		startKey := regions[start].StartKey()
 		endKey := regions[end-1].EndKey()
+		newSpan := &heartbeatpb.TableSpan{
+			TableID:    span.TableID,
+			StartKey:   startKey,
+			EndKey:     endKey,
+			KeyspaceID: m.keyspaceID,
+		}
 		if len(spans) > 0 &&
 			bytes.Compare(spans[len(spans)-1].EndKey, startKey) > 0 {
 			log.Warn("schedulerv3: list region out of order detected",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
-				zap.String("span", common.FormatTableSpan(span)),
-				zap.Stringer("lastSpan", spans[len(spans)-1]),
-				zap.Any("startKey", startKey),
-				zap.Any("endKey", endKey))
+				zap.Int64("tableID", span.TableID))
 			return []*heartbeatpb.TableSpan{span}
 		}
-		spans = append(spans, &heartbeatpb.TableSpan{
-			TableID:    span.TableID,
-			StartKey:   startKey,
-			EndKey:     endKey,
-			KeyspaceID: m.keyspaceID,
-		},
-		)
+		spans = append(spans, newSpan)
 
 		if end == len(regions) {
 			break
@@ -138,9 +138,9 @@ func (m *regionCountSplitter) split(
 	spans[0].StartKey = span.StartKey
 	spans[len(spans)-1].EndKey = span.EndKey
 	log.Info("split span by region count",
-		zap.Uint32("keyspaceID", span.KeyspaceID),
+		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("span", common.FormatTableSpan(span)),
+		zap.Int64("tableID", span.TableID),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),

@@ -47,7 +47,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.GetId()))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("dispatcherID", task.dispatcher.GetId()))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
@@ -548,7 +548,7 @@ func addToStatusDynamicStream(d Dispatcher) {
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed",
 			zap.Stringer("changefeedID", d.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.GetId()),
+			zap.Stringer("dispatcherID", d.GetId()),
 			zap.Error(err))
 	}
 }

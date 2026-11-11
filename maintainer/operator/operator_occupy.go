@@ -99,7 +99,7 @@ func (m *OccupyDispatcherOperator) PostFinish() {
 		zap.Any("removed", m.removed.Load()),
 		zap.Any("finished", m.finished.Load()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-		zap.String("replicaSet", m.replicaSet.ID.String()))
+		zap.String("dispatcherID", m.replicaSet.ID.String()))
 }
 
 func (m *OccupyDispatcherOperator) String() string {

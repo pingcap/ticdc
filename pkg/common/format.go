@@ -14,12 +14,12 @@
 package common
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -100,8 +100,8 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
 		s.TableID,
-		hex.EncodeToString(s.StartKey),
-		hex.EncodeToString(s.EndKey),
+		util.RedactKey(s.StartKey),
+		util.RedactKey(s.EndKey),
 		s.KeyspaceID))
 	return sb.String()
 }
