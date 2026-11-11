@@ -234,8 +234,13 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	if err != nil {
 		return nil, err
 	}
+	tableNameChange, err := r.applyToTableNameChange(ddl.TableNameChange)
+	if err != nil {
+		return nil, err
+	}
 	metadataRouted := binding.routed() || extraBinding.routed() ||
-		tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
+		tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil ||
+		tableNameChange.Routed()
 	if !queryRouted && !metadataRouted {
 		return ddl, nil
 	}
@@ -257,6 +262,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		tableInfo,
 		multipleTableInfos,
 		blockedTableNames,
+		tableNameChange,
 	), nil
 }
 
@@ -425,6 +431,42 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 		}
 	}
 	return result, nil
+}
+
+// applyToTableNameChange returns the nameChange unless DropName entries are routed.
+// It builds a copy of TableNameChange with DropTargetName has same length to
+// DropName and aligned to it.
+func (r Router) applyToTableNameChange(
+	nameChange *commonEvent.TableNameChange,
+) (*commonEvent.TableNameChange, error) {
+	if nameChange == nil || len(nameChange.DropName) == 0 {
+		return nameChange, nil
+	}
+
+	dropTargetName := make([]commonEvent.SchemaTableName, len(nameChange.DropName))
+	routed := false
+	for i, dropName := range nameChange.DropName {
+		binding, err := r.Route(dropName.SchemaName, dropName.TableName)
+		if err != nil {
+			return nameChange, err
+		}
+		dropTargetName[i] = commonEvent.SchemaTableName{
+			SchemaName: binding.Target.Schema,
+			TableName:  binding.Target.Table,
+		}
+		if binding.routed() {
+			routed = true
+		}
+	}
+	if !routed {
+		return nameChange, nil
+	}
+	return &commonEvent.TableNameChange{
+		AddName:          nameChange.AddName,
+		DropName:         nameChange.DropName,
+		DropDatabaseName: nameChange.DropDatabaseName,
+		DropTargetName:   dropTargetName,
+	}, nil
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.

@@ -198,3 +198,90 @@ func TestFlushDDLEventPreservesRenameTables(t *testing.T) {
 	require.NoError(t, writer.FlushDDLEvent(event))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestExecDDLRebuildsRenameTablesAtomic verifies that a RenameTables event
+// is executed as one atomic statement, so a downstream crash cannot leave
+// a partially renamed state.
+func TestExecDDLRebuildsRenameTablesAtomic(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = false
+
+	event := &commonEvent.DDLEvent{
+		Type:       byte(model.ActionRenameTables),
+		SchemaName: "test",
+		Query:      "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;",
+	}
+	event.MultipleTableInfos = append(event.MultipleTableInfos, &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t2", TableID: 1},
+	}, &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t4", TableID: 1},
+	})
+
+	event.TableNameChange = &commonEvent.TableNameChange{
+		DropName: []commonEvent.SchemaTableName{
+			{SchemaName: "test", TableName: "t1"},
+			{SchemaName: "test", TableName: "t3"},
+		},
+	}
+
+	atomicQuery := "RENAME TABLE `test`.`t1` TO `test`.`t2`, `test`.`t3` TO `test`.`t4`"
+	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+	// The executed statement must be the single atomic multi-target RENAME,
+	// not the per-table statements joined with ';'.
+	mock.ExpectExec(atomicQuery).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	// The event.Query stay untouched.
+	require.Equal(t, event.Query, "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;")
+}
+
+// TestExecDDLRebuildsRenameTablesWithTrailingDropNames verifies that trailing
+// DropName entries (for example not-sync renames kept for table lifecycle
+// tracking) do not disable the atomic rebuild: the statement is built from
+// the prefix aligned with MultipleTableInfos.
+func TestExecDDLRebuildsRenameTablesWithTrailingDropNames(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableDDLTs = false
+
+	event := &commonEvent.DDLEvent{
+		Type:       byte(model.ActionRenameTables),
+		SchemaName: "test",
+		Query:      "RENAME TABLE `test`.`t1` TO `test`.`t2`;RENAME TABLE `test`.`t3` TO `test`.`t4`;",
+	}
+	event.MultipleTableInfos = append(event.MultipleTableInfos, &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t2", TableID: 1},
+	}, &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t4", TableID: 2},
+	})
+
+	event.TableNameChange = &commonEvent.TableNameChange{
+		// t5 is a not-sync rename whose old name is kept after the
+		// aligned emitted entries.
+		DropName: []commonEvent.SchemaTableName{
+			{SchemaName: "test", TableName: "t1"},
+			{SchemaName: "test", TableName: "t3"},
+			{SchemaName: "test", TableName: "t5"},
+		},
+	}
+
+	atomicQuery := "RENAME TABLE `test`.`t1` TO `test`.`t2`, `test`.`t3` TO `test`.`t4`"
+	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").
+		WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(atomicQuery).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	require.NoError(t, writer.FlushDDLEvent(event))
+	require.NoError(t, mock.ExpectationsWereMet())
+}

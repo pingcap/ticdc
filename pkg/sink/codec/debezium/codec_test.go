@@ -114,6 +114,7 @@ func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 		sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table"),
 		nil,
 		nil,
+		nil,
 	)
 
 	keyBuf := bytes.NewBuffer(nil)

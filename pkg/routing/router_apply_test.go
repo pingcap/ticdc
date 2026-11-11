@@ -327,6 +327,11 @@ func TestApplyToDDLEvent(t *testing.T) {
 					SchemaName: "old_db",
 					TableName:  "orders",
 				}, routed.TableNameChange.DropName[0])
+				require.Equal(t, event.SchemaTableName{
+					SchemaName: "old_target_db",
+					TableName:  "orders_old",
+				}, routed.TableNameChange.DropTargetName[0])
+				require.Equal(t, len(routed.TableNameChange.DropName), len(routed.TableNameChange.DropTargetName))
 				require.Contains(t, routed.Query, "`old_target_db`.`orders_old`")
 				require.Contains(t, routed.Query, "`new_target_db`.`orders_archive_new`")
 				require.Equal(t, "new_db", original.SchemaName)
