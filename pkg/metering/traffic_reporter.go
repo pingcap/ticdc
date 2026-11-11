@@ -16,41 +16,27 @@ package metering
 
 import (
 	"context"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/pingcap/log"
 	"github.com/pingcap/metering_sdk/common"
 	"github.com/pingcap/metering_sdk/config"
 	"github.com/pingcap/metering_sdk/storage"
-	"github.com/pingcap/metering_sdk/writer"
 	meteringwriter "github.com/pingcap/metering_sdk/writer/metering"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/metering/traffic"
 	"go.uber.org/zap"
 )
 
 const (
-	reportInterval = time.Minute
-	writeTimeout   = 30 * time.Second
-	writeAttempts  = 6
+	reportCategory = "ticdc"
+	writeTimeout   = 10 * time.Second
+	writeAttempts  = 3
 )
 
-// Batch is one caller-defined metering batch. The reporter adds only SDK batch
-// metadata; it does not interpret or aggregate the records.
-type Batch struct {
-	// Category is the SDK category and must be a single path component.
-	Category string
-	// Timestamp selects the SDK minute directory. It is truncated to the minute.
-	Timestamp time.Time
-	// Records are serialized as provided. The caller must not mutate them until
-	// Report returns.
-	Records []map[string]any
-}
-
-// Reporter uploads caller-provided batches synchronously. It owns no collection
+// Reporter uploads caller-provided changefeed records synchronously. It owns no collection
 // loop or pending queue. The caller retains responsibility for durable state and
 // scheduling, including recovery after an unsuccessful Report.
 type Reporter struct {
@@ -75,60 +61,81 @@ func NewReporter(c *config.MeteringConfig) (*Reporter, error) {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	return &Reporter{
-		// SDK defaults disable pagination and refuse overwrites.
-		inner: meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig(), c),
+		inner: meteringwriter.NewMeteringWriterFromConfig(provider, config.DefaultConfig().WithOverwriteExisting(true), c),
 	}, nil
 }
 
-// Report uploads one batch synchronously. Retries within this call preserve
-// batch identity and contents. Separate calls create separate objects, even with
-// identical inputs. A nil error means the SDK reported a successful upload.
-//
-// A non-nil error means success was not confirmed; it is not proof that nothing
-// was written. If an upload response is lost, a retry can find the object and
-// return writer.ErrFileExists, which does not compare the existing contents.
-// Callers must treat such errors as indeterminate and reconcile from their own
-// durable state. Success does not acknowledge producer state.
-//
-// The caller's context bounds the whole call, including retries and backoff.
-// Concurrent calls are serialized. After Close, Report returns
-// errors.ErrMeteringReporterClosed.
-func (r *Reporter) Report(ctx context.Context, batch Batch) error {
+// Report groups changefeed records by keyspace and uploads one object per keyspace.
+// It stops at the first error.
+// Calls are serialized; callers must not mutate records until Report returns.
+// Retries preserve the path and contents. Same-minute reports overwrite existing objects.
+func (r *Reporter) Report(ctx context.Context, records []traffic.ChangefeedMetering) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return errors.ErrMeteringReporterClosed.GenWithStackByArgs()
 	}
-	if len(batch.Records) == 0 {
+	if len(records) == 0 {
 		return nil
-	}
-	if !validPathComponent(batch.Category) {
-		return errors.ErrMeteringInvalidBatch.GenWithStackByArgs(
-			"category must be a single path component")
-	}
-	ts := batch.Timestamp.Truncate(reportInterval).Unix()
-	if ts <= 0 {
-		return errors.ErrMeteringInvalidBatch.GenWithStackByArgs("timestamp must be positive")
 	}
 	if err := ctx.Err(); err != nil {
 		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
-	data := &common.MeteringData{
-		SelfID:    "ticdc" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-		Timestamp: ts,
-		Category:  batch.Category,
-		Data:      batch.Records,
+	var keyspaces []traffic.KeyspaceMetering
+	keyspaceIndex := make(map[uint32]int)
+	for _, record := range records {
+		name := record.ChangefeedID.Keyspace()
+		if name == "" {
+			return errors.ErrMeteringInvalidBatch.GenWithStackByArgs("keyspace name must not be empty")
+		}
+		index, ok := keyspaceIndex[record.KeyspaceID]
+		if !ok {
+			index = len(keyspaces)
+			keyspaceIndex[record.KeyspaceID] = index
+			keyspaces = append(keyspaces, traffic.KeyspaceMetering{KeyspaceID: record.KeyspaceID, KeyspaceName: name})
+		}
+		keyspaces[index].Changefeeds = append(keyspaces[index].Changefeeds, record)
 	}
-	err := retry.Do(ctx, func() error {
+	ts := time.Now().Truncate(time.Minute).Unix()
+	for _, record := range keyspaces {
+		data := &common.MeteringData{
+			SelfID:    strconv.FormatUint(uint64(record.KeyspaceID), 10),
+			Timestamp: ts,
+			Category:  reportCategory,
+			Data: []map[string]any{{
+				"keyspace_name": record.KeyspaceName,
+				"changefeeds":   record.Changefeeds,
+			}},
+		}
+		if err := r.write(ctx, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Reporter) write(ctx context.Context, data *common.MeteringData) error {
+	var err error
+	for attempt := range writeAttempts {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return errors.WrapError(errors.ErrExternalStorageAPI, ctx.Err())
+			case <-timer.C:
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.WrapError(errors.ErrExternalStorageAPI, err)
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-		defer cancel()
-		return r.inner.Write(attemptCtx, data)
-	}, retry.WithMaxTries(writeAttempts),
-		retry.WithBackoffBaseDelay(1000), retry.WithBackoffMaxDelay(10000),
-		retry.WithIsRetryableErr(func(err error) bool {
-			// Existence alone cannot prove that this payload was uploaded.
-			return !errors.Is(err, writer.ErrFileExists)
-		}))
+		err = r.inner.Write(attemptCtx, data)
+		cancel()
+		if err == nil {
+			break
+		}
+	}
 	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 

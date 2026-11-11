@@ -21,6 +21,7 @@ import (
 )
 
 type ChangefeedMetering struct {
+	KeyspaceID     uint32              `json:"-"`
 	ChangefeedID   common.ChangeFeedID `json:"changefeed_id"`
 	EffectiveBytes uint64              `json:"effective_bytes"`
 }
@@ -40,6 +41,7 @@ func (m ChangefeedMetering) MarshalJSON() ([]byte, error) {
 }
 
 type KeyspaceMetering struct {
+	KeyspaceID   uint32               `json:"-"`
 	KeyspaceName string               `json:"keyspace_name"`
 	Changefeeds  []ChangefeedMetering `json:"changefeeds"`
 }

@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metering"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 )
@@ -113,11 +112,7 @@ func TestMeteringCoordinatorTerm(t *testing.T) {
 				require.NotNil(t, c.trafficReporter)
 				_, err := os.Stat(dir)
 				require.NoError(t, err)
-				require.ErrorContains(t, c.trafficReporter.Report(context.Background(), metering.Batch{
-					Category:  "ticdc",
-					Timestamp: time.Now(),
-					Records:   []map[string]any{{"changefeed_gid": "gid1", "traffic_bytes": 1}},
-				}), "closed")
+				require.ErrorContains(t, c.trafficReporter.Report(t.Context(), nil), "closed")
 			}
 		})
 	}

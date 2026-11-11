@@ -30,10 +30,11 @@ func TestKeyspaceMeteringJSON(t *testing.T) {
 	recreated := first
 	recreated.Id = common.NewGIDWithValue(12, 3)
 	data := KeyspaceMetering{
+		KeyspaceID:   12345,
 		KeyspaceName: "tenant-a",
 		Changefeeds: []ChangefeedMetering{
-			{ChangefeedID: first, EffectiveBytes: 1024},
-			{ChangefeedID: recreated, EffectiveBytes: 0},
+			{KeyspaceID: 12345, ChangefeedID: first, EffectiveBytes: 1024},
+			{KeyspaceID: 12345, ChangefeedID: recreated, EffectiveBytes: 0},
 		},
 	}
 	encoded, err := json.Marshal(&data)
