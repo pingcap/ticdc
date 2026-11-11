@@ -326,7 +326,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		case cdcpb.Event_COMMITTED:
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
-				log.Fatal("commit ts must be greater than resolved ts",
+				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("requestID", state.requestID),
@@ -363,7 +363,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			// NOTE: state.getLastResolvedTs() will never less than startTs.
 			resolvedTs := state.getLastResolvedTs()
 			if entry.CommitTs <= resolvedTs {
-				log.Fatal("commit ts must be greater than resolved ts",
+				log.Panic("commit ts must be greater than resolved ts",
 					zap.Int64("tableID", span.span.TableID),
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("requestID", state.requestID),
