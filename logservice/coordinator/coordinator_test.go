@@ -19,11 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
->>>>>>> 5432bd174 (logcoordinator: ignore reports from removed nodes (#6731))
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
