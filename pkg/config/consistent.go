@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -163,13 +164,22 @@ func (c *ConsistentConfig) MaskSensitiveData() {
 	parsed, err := url.Parse(redactedStorage)
 	if err == nil {
 		query := parsed.Query()
-		for _, endpoint := range query["endpoint"] {
-			if storage.RedactURL(endpoint) != endpoint {
-				query.Set("endpoint", "xxxxxx")
-				parsed.RawQuery = query.Encode()
-				redactedStorage = parsed.String()
-				break
+		maskedEndpoint := false
+		for key, endpoints := range query {
+			if !strings.EqualFold(key, "endpoint") {
+				continue
 			}
+			for _, endpoint := range endpoints {
+				if storage.RedactURL(endpoint) != endpoint {
+					query.Set(key, "xxxxxx")
+					maskedEndpoint = true
+					break
+				}
+			}
+		}
+		if maskedEndpoint {
+			parsed.RawQuery = query.Encode()
+			redactedStorage = parsed.String()
 		}
 	}
 	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(redactedStorage))

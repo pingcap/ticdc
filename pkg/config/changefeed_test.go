@@ -300,6 +300,19 @@ func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 	plainStorage := "azblob://container/prefix?endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F"
 	plainConfig := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &plainStorage}}
 	require.Contains(t, plainConfig.String(), "endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F")
+
+	upperStorage := "s3://bucket/prefix?region=us-east-1&ENDPOINT=" +
+		"https%3A%2F%2Fuser%3Auppercase-endpoint-secret-sentinel%40storage.example"
+	upperConfig := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &upperStorage}}
+	upperOriginal, err := json.Marshal(upperConfig)
+	require.NoError(t, err)
+	upperOutput := upperConfig.String()
+	require.NotContains(t, upperOutput, "uppercase-endpoint-secret-sentinel")
+	require.Contains(t, upperOutput, "ENDPOINT=xxxxxx")
+	require.Contains(t, upperOutput, "region=us-east-1")
+	upperAfter, err := json.Marshal(upperConfig)
+	require.NoError(t, err)
+	require.Equal(t, upperOriginal, upperAfter)
 }
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
