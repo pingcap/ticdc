@@ -393,6 +393,12 @@ require (
 // copy from TiDB
 replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 
+// Keep the shared-lock protocol required by the materialized-view branch.
+replace github.com/pingcap/kvproto => github.com/pingcap/kvproto v0.0.0-20260608025309-50b863799195
+
 replace github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 
 replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
+
+// etcd 3.5 uses interceptors removed in otelgrpc v0.60.0.
+replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.59.0
