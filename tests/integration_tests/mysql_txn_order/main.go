@@ -45,12 +45,12 @@ func run(ctx context.Context, upDSN, downDSN string) error {
 	if err != nil {
 		return err
 	}
-	defer up.Close()
+	defer func() { _ = up.Close() }()
 	down, err := sql.Open("mysql", downDSN)
 	if err != nil {
 		return err
 	}
-	defer down.Close()
+	defer func() { _ = down.Close() }()
 	return verifyOrder(ctx, up, down)
 }
 
@@ -102,7 +102,7 @@ func verifyOrder(ctx context.Context, up, down *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Rollback()
+	defer func() { _ = lock.Rollback() }()
 	var id int
 	if err := lock.QueryRowContext(ctx, "SELECT id FROM t WHERE id=1 FOR UPDATE").Scan(&id); err != nil {
 		return err
@@ -184,7 +184,7 @@ func verifyOrder(ctx context.Context, up, down *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	seq := 1
 	for rows.Next() {
 		var id, value int

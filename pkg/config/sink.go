@@ -765,11 +765,11 @@ type MySQLConfig struct {
 }
 
 // GetTxnOrderTables returns ordering rules only for MySQL-compatible sinks.
-func (c *SinkConfig) GetTxnOrderTables(scheme string) []string {
-	if c == nil || c.MySQLConfig == nil || !IsMySQLCompatibleScheme(scheme) {
+func (s *SinkConfig) GetTxnOrderTables(scheme string) []string {
+	if s == nil || s.MySQLConfig == nil || !IsMySQLCompatibleScheme(scheme) {
 		return nil
 	}
-	return c.MySQLConfig.TxnOrderTables
+	return s.MySQLConfig.TxnOrderTables
 }
 
 // ParseTxnOrderTables parses ordering rules. A nil filter disables ordering.

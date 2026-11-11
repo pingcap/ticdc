@@ -67,7 +67,7 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 
 			const hotCount = 2100 // Exceed the conflict detector's 1024-entry worker cache.
 			flushed := make(chan struct{}, hotCount+2)
-			for i := 0; i < hotCount+2; i++ {
+			for i := range hotCount + 2 {
 				template := hot
 				if i == hotCount {
 					template = cold
@@ -96,7 +96,7 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 			go func() { done <- sink.Run(ctx) }()
 			timeout := time.NewTimer(30 * time.Second)
 			defer timeout.Stop()
-			for i := 0; i < hotCount+2; i++ {
+			for range hotCount + 2 {
 				select {
 				case <-flushed:
 				case err := <-done:
