@@ -502,8 +502,11 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		}, nil
 	}
 
-	debugEnabled := log.GetLevel() <= zapcore.DebugLevel
 	var overlapStr []string
+	for _, r := range overlappedRangeLocks {
+		overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
+			r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey)))
+	}
 
 	// Check if the current acuqiring range is stale,
 	// which means there's already a locked range with a equal or greater version.
@@ -512,12 +515,6 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		if rangeLock.regionVersion >= regionVersion {
 			isStale = true
 			break
-		}
-	}
-	if debugEnabled || isStale {
-		for _, r := range overlappedRangeLocks {
-			overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
-				r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey)))
 		}
 	}
 	// If the range is stale, we should return the overlapping ranges to the caller,
@@ -564,13 +561,11 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		r.waiterSignalChs = append(r.waiterSignalChs, ch)
 	}
 
-	if debugEnabled {
-		log.Debug("lock range blocked",
-			zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
-			zap.String("startKey", hex.EncodeToString(startKey)),
-			zap.String("endKey", hex.EncodeToString(endKey)),
-			zap.Strings("blockedBy", overlapStr))
-	}
+	log.Info("lock range blocked",
+		zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+		zap.String("startKey", hex.EncodeToString(startKey)),
+		zap.String("endKey", hex.EncodeToString(endKey)),
+		zap.Strings("blockedBy", overlapStr))
 
 	return LockRangeResult{
 		Status: LockRangeStatusWait,

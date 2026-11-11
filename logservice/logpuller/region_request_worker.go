@@ -223,10 +223,20 @@ func (s *regionRequestWorker) checkStoreVersion(ctx context.Context) error {
 	return &storeStreamErr{}
 }
 
-func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) error {
+func (s *regionRequestWorker) runStream(ctx context.Context, firstReq *regionReq) (err error) {
 	if err := s.checkStoreVersion(ctx); err != nil {
 		return err
 	}
+
+	log.Info("region request worker going to create grpc stream",
+		zap.Uint64("workerID", s.workerID),
+		zap.String("addr", s.storeAddr))
+	defer func() {
+		log.Info("region request worker exits",
+			zap.Uint64("workerID", s.workerID),
+			zap.String("addr", s.storeAddr),
+			zap.Error(err))
+	}()
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
@@ -344,6 +354,10 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
 				// It is normal to receive a region error after deregistering a subscription.
+				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
 			default:
 				untrackedCount++
 				if len(sampleRegionIDs) < logRegionIDSampleSize {
