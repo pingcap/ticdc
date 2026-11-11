@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/applier"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -33,6 +35,8 @@ import (
 type applyRedoOptions struct {
 	options
 	sinkURI              string
+	configFile           string
+	cfg                  *config.ReplicaConfig
 	enableProfiling      bool
 	memoryLimitInGiBytes int64
 	logLevel             string
@@ -47,6 +51,7 @@ func newapplyRedoOptions() *applyRedoOptions {
 // flags related to template printing to it.
 func (o *applyRedoOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.sinkURI, "sink-uri", "", "target database sink-uri")
+	cmd.Flags().StringVar(&o.configFile, "config", "", "changefeed configuration file for sink settings")
 	// the possible error returned from MarkFlagRequired is `no such flag`
 	cmd.MarkFlagRequired("sink-uri") //nolint:errcheck
 	cmd.Flags().BoolVar(&o.enableProfiling, "enable-profiling", true, "enable pprof profiling")
@@ -59,7 +64,7 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 	// parse sinkURI as a URI
 	sinkURI, err := url.Parse(o.sinkURI)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return cerror.WrapError(cerror.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(o.sinkURI))
 	}
 	rawQuery := sinkURI.Query()
 	// set safe-mode to true if not set
@@ -67,6 +72,18 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 		rawQuery.Set("safe-mode", "true")
 		sinkURI.RawQuery = rawQuery.Encode()
 		o.sinkURI = sinkURI.String()
+	}
+	o.cfg = config.GetDefaultReplicaConfig()
+	if o.configFile != "" {
+		fileConfig := config.GetDefaultReplicaConfig()
+		if err := cmdutil.StrictDecodeFile(o.configFile, "cdc redo apply", fileConfig); err != nil {
+			return err
+		}
+		o.cfg.Sink = fileConfig.Sink
+		o.cfg.CaseSensitive = fileConfig.CaseSensitive
+		if err := o.cfg.ValidateAndAdjust(sinkURI); err != nil {
+			return err
+		}
 	}
 
 	totalMemory, err := util.GetMemoryLimit()
@@ -106,9 +123,11 @@ func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 	}
 
 	cfg := &applier.RedoApplierConfig{
-		Storage: o.storage,
-		SinkURI: o.sinkURI,
-		Dir:     o.dir,
+		Storage:       o.storage,
+		SinkURI:       o.sinkURI,
+		Dir:           o.dir,
+		SinkConfig:    o.cfg.Sink,
+		CaseSensitive: util.GetOrZero(o.cfg.CaseSensitive),
 	}
 	ap := applier.NewRedoApplier(cfg)
 	err = ap.Apply(ctx)

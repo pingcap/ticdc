@@ -25,6 +25,7 @@ message FilterConfig {
     bool caseSensitive = 1;
 	bool forceReplicate = 2;
     InnerFilterConfig filterConfig = 3;
+    repeated string txn_order_tables = 4;
 }
 
 

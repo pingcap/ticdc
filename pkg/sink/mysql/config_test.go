@@ -408,6 +408,21 @@ func TestApplyAsyncDDLTimeout(t *testing.T) {
 	}
 }
 
+func TestApplyTxnOrderTables(t *testing.T) {
+	uri, err := url.Parse("mysql://127.0.0.1:3306/")
+	require.NoError(t, err)
+	changefeedConfig := &config.ChangefeedConfig{
+		TimeZone: "UTC", CaseSensitive: true,
+		SinkConfig: &config.SinkConfig{MySQLConfig: &config.MySQLConfig{TxnOrderTables: []string{"APP.orders"}}},
+	}
+	cfg := New()
+	require.NoError(t, cfg.Apply(uri, common.NewChangefeedID4Test("test", "ordered"), changefeedConfig))
+	require.True(t, cfg.TxnOrderFilter.MatchTable("APP", "orders"))
+	require.False(t, cfg.TxnOrderFilter.MatchTable("app", "orders"))
+	changefeedConfig.SinkConfig.MySQLConfig.TxnOrderTables = []string{"invalid"}
+	require.ErrorContains(t, New().Apply(uri, common.NewChangefeedID4Test("test", "invalid"), changefeedConfig), "txn-order-tables")
+}
+
 func TestDefaultWorkerCountByDownstream(t *testing.T) {
 	t.Parallel()
 

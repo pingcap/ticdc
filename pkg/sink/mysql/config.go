@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
 
@@ -98,8 +99,9 @@ const (
 )
 
 type Config struct {
-	sinkURI     *url.URL
-	WorkerCount int
+	TxnOrderFilter tfilter.Filter `json:"-"`
+	sinkURI        *url.URL
+	WorkerCount    int
 	// workerCountSpecified indicates whether WorkerCount is explicitly set by user via sink URI or changefeed config.
 	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
 	workerCountSpecified   bool
@@ -247,6 +249,10 @@ func (c *Config) Apply(
 
 	if cfg != nil {
 		c.mergeConfig(cfg)
+		c.TxnOrderFilter, err = config.ParseTxnOrderTables(cfg.SinkConfig.GetTxnOrderTables(scheme), cfg.CaseSensitive)
+		if err != nil {
+			return err
+		}
 	}
 
 	query := sinkURI.Query()

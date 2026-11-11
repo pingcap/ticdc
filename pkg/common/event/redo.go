@@ -55,6 +55,15 @@ type RedoDDLEvent struct {
 	Type             byte               `msg:"type"`
 	TableName        common.TableName   `msg:"table-name"`
 	TableSchemaStore *TableSchemaStore  `msg:"table-schema-store"`
+	// Tables retains the source identity and partition state of every affected table.
+	// A nil slice identifies older logs without this metadata.
+	Tables []RedoTableName `msg:"tables,omitempty"`
+}
+
+// RedoTableName preserves both names without changing the canonical replay target.
+type RedoTableName struct {
+	Source common.TableName `msg:"source"`
+	Target common.TableName `msg:"target"`
 }
 
 // DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
@@ -65,6 +74,8 @@ type DMLEventInRedoLog struct {
 	// Table contains the table name and table ID.
 	// NOTICE: We store the physical table ID here, not the logical table ID.
 	Table *common.TableName `msg:"table"`
+	// SourceTable is absent in older logs, which only retained the replay target.
+	SourceTable *common.TableName `msg:"source-table,omitempty"`
 
 	Columns    []*RedoColumn `msg:"columns"`
 	PreColumns []*RedoColumn `msg:"pre-columns"`
@@ -159,6 +170,10 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		TableID:     r.PhysicalTableID,
 		IsPartition: r.TableInfo.TableName.IsPartition,
 	}
+	row.SourceTable = &common.TableName{
+		Schema: r.TableInfo.GetSchemaName(), Table: r.TableInfo.GetTableName(),
+		TableID: r.PhysicalTableID, IsPartition: r.TableInfo.IsPartitionTable(),
+	}
 	row.IndexColumns = getIndexColumns(r.TableInfo)
 
 	columnCount := len(r.TableInfo.GetColumns())
@@ -249,6 +264,24 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 	}
 	redoDDL.TableName.Schema = d.GetTargetSchemaName()
 	redoDDL.TableName.Table = d.GetTargetTableName()
+	appendTable := func(info *common.TableInfo) {
+		if info == nil {
+			return
+		}
+		source := info.TableName
+		source.TargetSchema, source.TargetTable = "", ""
+		redoDDL.Tables = append(redoDDL.Tables, RedoTableName{
+			Source: source,
+			Target: common.TableName{
+				Schema: info.GetTargetSchemaName(), Table: info.GetTargetTableName(),
+				TableID: source.TableID, IsPartition: source.IsPartition,
+			},
+		})
+	}
+	appendTable(d.TableInfo)
+	for _, info := range d.MultipleTableInfos {
+		appendTable(info)
+	}
 
 	return &RedoLog{
 		RedoDDL: redoDDL,

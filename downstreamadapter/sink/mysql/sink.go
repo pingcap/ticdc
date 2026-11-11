@@ -227,7 +227,7 @@ func newMySQLSinkWithDBs(
 				Size:          1024,
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
-			changefeedID),
+			changefeedID, cfg.TxnOrderFilter),
 		isNormal:                       atomic.NewBool(true),
 		cfg:                            cfg,
 		maxTxnRows:                     cfg.MaxTxnRow,
@@ -317,7 +317,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
+				previousTable := txnEvents[i-1].TableInfo
+				ordered := s.cfg.TxnOrderFilter != nil && s.cfg.TxnOrderFilter.MatchTable(previousTable.GetSchemaName(), previousTable.GetTableName())
+				if ordered || rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}
@@ -374,6 +376,20 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 
 func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
+}
+
+// IsTablePartitioned checks the current downstream schema before replaying legacy DDLs.
+func (s *Sink) IsTablePartitioned(ctx context.Context, schema, table string) (bool, error) {
+	const query = "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
+	var partitioned bool
+	if err := s.controlDB.QueryRowContext(ctx, query, schema, table).Scan(&partitioned); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		// Downstream errors can contain arbitrary server text, including credentials.
+		return false, errors.ErrMySQLQueryError.GenWithStack("partition metadata query failed (%T)", err)
+	}
+	return partitioned, nil
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

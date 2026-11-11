@@ -395,6 +395,7 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 		Sink: &SinkConfig{
 			MySQLConfig: &MySQLConfig{
 				AsyncDDLTimeout: util.AddressOf("45m"),
+				TxnOrderTables:  []string{"app.orders", "app.ledger_*"},
 			},
 		},
 	}
@@ -402,10 +403,12 @@ func TestReplicaConfigConversionMySQLAsyncDDLTimeout(t *testing.T) {
 	internalCfg := apiCfg.ToInternalReplicaConfig()
 	require.NotNil(t, internalCfg.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(internalCfg.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, internalCfg.Sink.MySQLConfig.TxnOrderTables)
 
 	apiCfgBack := ToAPIReplicaConfig(internalCfg)
 	require.NotNil(t, apiCfgBack.Sink.MySQLConfig)
 	require.Equal(t, "45m", util.GetOrZero(apiCfgBack.Sink.MySQLConfig.AsyncDDLTimeout))
+	require.Equal(t, apiCfg.Sink.MySQLConfig.TxnOrderTables, apiCfgBack.Sink.MySQLConfig.TxnOrderTables)
 }
 
 func TestReplicaConfigCodecConfigConversion(t *testing.T) {

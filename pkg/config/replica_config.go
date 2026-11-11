@@ -315,6 +315,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return err
 		}
 	}
+	txnOrderFilter, err := ParseTxnOrderTables(c.Sink.GetTxnOrderTables(GetScheme(sinkURI)), util.GetOrZero(c.CaseSensitive))
+	if err != nil {
+		return err
+	}
 
 	if c.Consistent != nil {
 		err := c.Consistent.validateAndAdjust(enableRedoIOCheck)
@@ -356,6 +360,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		if err != nil {
 			return err
 		}
+	}
+	if txnOrderFilter != nil {
+		// A table must have one dispatcher to preserve its transaction order.
+		c.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
 	}
 
 	if c.Integrity != nil {
