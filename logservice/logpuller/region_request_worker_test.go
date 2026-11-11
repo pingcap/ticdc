@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -32,6 +33,9 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -426,7 +430,7 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 	}
 }
 
-func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
+func TestWaitForFirstRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	admission := newTestRegionAdmissionController(1, 1)
 	worker := &regionRequestWorker{
 		admission:    admission,
@@ -439,12 +443,20 @@ func TestWaitForRegionRequestDrainsIdleControlQueue(t *testing.T) {
 	}
 	resultCh := make(chan waitResult, 1)
 	go func() {
-		req, err := worker.waitForRegionRequest(t.Context())
+		req, err := worker.waitForFirstRegionRequest(t.Context())
 		resultCh <- waitResult{req: req, err: err}
 	}()
 
 	for subID := SubscriptionID(1); subID <= 100; subID++ {
 		worker.controlQueue.push(deregisterRequest{subID: subID})
+	}
+	require.Eventually(t, func() bool {
+		return worker.controlQueue.len() == 0
+	}, time.Second, time.Millisecond)
+	select {
+	case <-resultCh:
+		t.Fatal("worker returned before receiving a region request")
+	default:
 	}
 
 	region := prepareRegionForAdmission(createTestRegionInfo(1, 1), 1)
@@ -482,6 +494,76 @@ func TestDispatchResolvedTsEventBatchSplitForLargeRegions(t *testing.T) {
 	require.Equal(t, 1024, ds.pushed[0].statesCount)
 	require.Equal(t, 1024, ds.pushed[1].statesCount)
 	require.Equal(t, 2, ds.pushed[2].statesCount)
+}
+
+func requireRegionIDSample(t *testing.T, regionIDs []uint64, value any) {
+	t.Helper()
+	sample, ok := value.([]any)
+	require.True(t, ok)
+	require.Len(t, sample, min(len(regionIDs), logRegionIDSampleSize))
+	for i, regionID := range regionIDs[:len(sample)] {
+		require.Equal(t, regionID, sample[i])
+	}
+}
+
+func TestDispatchUntrackedEventsLogsSummary(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.WarnLevel)
+	restore := log.ReplaceGlobals(zap.New(core), nil)
+	t.Cleanup(restore)
+
+	worker := &regionRequestWorker{
+		workerID: 1,
+		tracker:  newRegionTracker(),
+	}
+	events := make([]*cdcpb.Event, 10)
+	regionIDs := make([]uint64, 10)
+	for i := range events {
+		regionID := uint64(i + 1)
+		regionIDs[i] = regionID
+		events[i] = &cdcpb.Event{
+			RegionId:  regionID,
+			RequestId: regionID + 100,
+			Event:     &cdcpb.Event_Entries_{Entries: &cdcpb.Event_Entries{}},
+		}
+	}
+
+	worker.dispatchRegionChangeEvents(events)
+	entries := observedLogs.FilterMessage(
+		"region request worker receives events for untracked regions").All()
+	require.Len(t, entries, 1)
+	require.EqualValues(t, 10, entries[0].ContextMap()["untrackedRegionCount"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
+
+	observedLogs.TakeAll()
+	worker.dispatchResolvedTsEvent(&cdcpb.ResolvedTs{
+		RequestId: 1,
+		Ts:        100,
+		Regions:   regionIDs,
+	})
+	entries = observedLogs.FilterMessage(
+		"region request worker receives resolved ts for untracked regions").All()
+	require.Len(t, entries, 1)
+	require.EqualValues(t, 10, entries[0].ContextMap()["untrackedRegionCount"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
+}
+
+func TestDispatchZeroResolvedTsLogsBoundedRegionSample(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.WarnLevel)
+	restore := log.ReplaceGlobals(zap.New(core), nil)
+	t.Cleanup(restore)
+
+	regionIDs := []uint64{1, 2, 3, 4, 5}
+	worker := &regionRequestWorker{workerID: 1}
+	worker.dispatchResolvedTsEvent(&cdcpb.ResolvedTs{
+		RequestId: 1,
+		Regions:   regionIDs,
+	})
+
+	entries := observedLogs.FilterMessage(
+		"region request worker receives a resolved ts event with zero value, ignore it").All()
+	require.Len(t, entries, 1)
+	require.EqualValues(t, len(regionIDs), entries[0].ContextMap()["regionCount"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
 }
 
 func BenchmarkDispatchResolvedTsEventSingleRegionLegacy(b *testing.B) {
@@ -784,11 +866,30 @@ func TestReceiveAndDispatchChangeEventsEOFIsRetriable(t *testing.T) {
 				Conn:   &grpc.ClientConn{},
 			}
 
-			err := worker.receiveAndDispatchChangeEvents(conn)
+			err := worker.receiveAndDispatchChangeEvents(t.Context(), conn)
 			var streamErr *storeStreamErr
 			require.ErrorAs(t, err, &streamErr)
 		})
 	}
+}
+
+func TestReceiveAndDispatchChangeEventsDoesNotLogAfterCancellation(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.WarnLevel)
+	restore := log.ReplaceGlobals(zap.New(core), nil)
+	t.Cleanup(restore)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	worker := &regionRequestWorker{storeAddr: "store-1"}
+	conn := &ConnAndClient{
+		Client: &mockEventFeedV2Client{recvErr: context.Canceled},
+		Conn:   &grpc.ClientConn{},
+	}
+
+	err := worker.receiveAndDispatchChangeEvents(ctx, conn)
+	require.Error(t, err)
+	require.Zero(t, observedLogs.FilterMessage(
+		"region request worker receive from grpc stream failed").Len())
 }
 
 func (m *recordingRegionEventDynamicStream) CheckMemoryPressure() {}
