@@ -81,7 +81,7 @@ func run(_ *cobra.Command, _ []string) {
 
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Panic("invalid upstream-uri", zap.Error(err))
+		log.Panic("invalid upstream-uri", zap.Error(util.MaskSensitiveDataInURLError(err)))
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if !config.IsPulsarScheme(scheme) {
