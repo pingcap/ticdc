@@ -988,7 +988,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	}
 
 	return &eventStoreIter{
-<<<<<<< HEAD
+		dispatcherID:  dispatcherID,
 		tableSpan:     stat.tableSpan,
 		needCheckSpan: needCheckSpan,
 		innerIter:     iter,
@@ -999,21 +999,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 		rowCount:      0,
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
-=======
-		dispatcherID:      dispatcherID,
-		tableSpan:         stat.tableSpan,
-		needCheckSpan:     needCheckSpan,
-		innerIter:         iter,
-		prevStartTs:       0,
-		prevCommitTs:      0,
-		startTs:           dataRange.CommitTsStart,
-		endTs:             dataRange.CommitTsEnd,
-		rowCount:          0,
-		decoder:           decoder,
-		decoderPool:       e.decoderPool,
-		encryptionManager: e.encryptionManager,
-		keyspaceID:        stat.keyspaceID,
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 	}, nil
 }
 

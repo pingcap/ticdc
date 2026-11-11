@@ -245,11 +245,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			log.Debug("update traffic score",
 				zap.String("changefeed", s.changefeedID.String()),
 				zap.Int64("group", s.groupID),
-<<<<<<< HEAD
-				zap.String("span", status.SpanReplication.ID.String()),
-=======
 				zap.String("dispatcherID", status.ID.String()),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 				zap.Any("trafficScore", status.trafficScore),
 				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
 			)
@@ -983,11 +979,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
 					zap.Int64("group", s.groupID),
-<<<<<<< HEAD
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
-=======
 					zap.String("dispatcherID", status.ID.String()),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -1011,11 +1003,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-<<<<<<< HEAD
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
-=======
 					zap.String("dispatcherID", status.ID.String()),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1226,11 +1214,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	log.Info("checkBalanceTraffic split span",
 		zap.Stringer("changefeed", s.changefeedID),
-<<<<<<< HEAD
-		zap.String("splitSpan", span.SpanReplication.ID.String()),
-=======
 		zap.String("dispatcherID", span.ID.String()),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)

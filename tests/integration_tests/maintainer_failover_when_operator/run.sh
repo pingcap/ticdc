@@ -224,35 +224,6 @@ function wait_for_add_operator_inflight_in_logs() {
 	return 1
 }
 
-<<<<<<< HEAD
-=======
-function get_merge_dispatcher_created_log_count() {
-	local work_dir=$1
-	local table_id=$2
-	local pattern='new (redo )?dispatcher created\(merge dispatcher\)'
-
-	grep -Ehs "${pattern}.*\\[tableID=${table_id}\\]" "$work_dir"/cdc*.log 2>/dev/null | wc -l
-}
-
-function wait_for_new_merge_dispatcher_created_in_logs() {
-	local work_dir=$1
-	local table_id=$2
-	local initial_count=$3
-	local retry=$4
-
-	for ((i = 0; i < retry; i++)); do
-		local current_count
-		current_count=$(get_merge_dispatcher_created_log_count "$work_dir" "$table_id")
-		if [ "$current_count" -gt "$initial_count" ]; then
-			return 0
-		fi
-		sleep 2
-	done
-	echo "new merge dispatcher for table $table_id not observed in logs" >&2
-	return 1
-}
-
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 function wait_for_restored_merge_operator_in_logs() {
 	local work_dir=$1
 	local retry=$2

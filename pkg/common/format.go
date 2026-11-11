@@ -100,15 +100,9 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
 		s.TableID,
-<<<<<<< HEAD
-		hex.EncodeToString(s.StartKey),
-		hex.EncodeToString(s.EndKey),
-		s.KeyspaceID))
-=======
 		util.RedactKey(s.StartKey),
 		util.RedactKey(s.EndKey),
-		s.KeyspaceID)
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
+		s.KeyspaceID))
 	return sb.String()
 }
 

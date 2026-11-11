@@ -212,57 +212,6 @@ func TestGetCandidateNodes(t *testing.T) {
 		nodes := coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3})
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
-<<<<<<< HEAD
-=======
-	// STOPPING brokers keep reusable subscriptions in the event store, but
-	// must no longer be offered as reuse candidates, even after report expiry.
-	coordinator.updateEventBrokerState(nodeID2, &logservicepb.EventBrokerDispatcherCount{RegistrationsStopped: true})
-	state := coordinator.eventBrokerStates.m[nodeID2]
-	state.receivedAt = time.Now().Add(-eventBrokerReportTTL)
-	coordinator.eventBrokerStates.m[nodeID2] = state
-	require.Empty(t, coordinator.getCandidateNodes(requestAndTarget{req: request1, target: nodeID3}))
-}
-
-func TestGetCandidateNodesIgnoreDifferentKeyspace(t *testing.T) {
-	coordinator := newLogCoordinatorForTest()
-
-	requestNodeID := node.ID("request-node")
-	candidateNodeID := node.ID("candidate-node")
-	coordinator.nodes.m[requestNodeID] = &node.Info{ID: requestNodeID}
-	coordinator.nodes.m[candidateNodeID] = &node.Info{ID: candidateNodeID}
-
-	// Different keyspaces normally produce different encoded keys. Keep the key range identical here
-	// to verify that candidate selection explicitly isolates subscriptions by KeyspaceID.
-	requestedSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
-	requestedSpan.KeyspaceID = 1
-	otherKeyspaceSpan := requestedSpan
-	otherKeyspaceSpan.KeyspaceID = 2
-
-	coordinator.updateEventStoreState(candidateNodeID, &logservicepb.EventStoreState{
-		TableStates: map[int64]*logservicepb.TableState{
-			requestedSpan.TableID: {
-				Subscriptions: []*logservicepb.SubscriptionState{
-					{
-						SubID:        1,
-						Span:         &otherKeyspaceSpan,
-						CheckpointTs: 100,
-						ResolvedTs:   200,
-					},
-				},
-			},
-		},
-	})
-
-	nodes := coordinator.getCandidateNodes(requestAndTarget{
-		req: &logservicepb.ReusableEventServiceRequest{
-			ID:      common.NewDispatcherID().ToPB(),
-			Span:    &requestedSpan,
-			StartTs: 100,
-		},
-		target: requestNodeID,
-	})
-	require.Empty(t, nodes)
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 }
 
 func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {

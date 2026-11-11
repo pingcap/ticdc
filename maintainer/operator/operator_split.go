@@ -75,14 +75,6 @@ func NewSplitDispatcherOperator(
 	maintainerEpoch uint64,
 	postFinish func(span *replica.SpanReplication, node node.ID) bool,
 ) *SplitDispatcherOperator {
-<<<<<<< HEAD
-	var spansInfo strings.Builder
-	for _, span := range splitSpans {
-		spansInfo.WriteString(fmt.Sprintf("[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey)))
-	}
-=======
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 	op := &SplitDispatcherOperator{
 		replicaSet:       replicaSet,
 		originNode:       replicaSet.GetNodeID(),

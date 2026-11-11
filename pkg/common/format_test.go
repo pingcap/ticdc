@@ -199,19 +199,11 @@ func TestFormatTableSpan(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-<<<<<<< HEAD
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			result := FormatTableSpan(tc.input)
-			require.Equal(t, tc.isEmptyString, result == "")
-=======
 		t.Run(tc.mode, func(t *testing.T) {
 			errors.RedactLogEnabled.Store(tc.mode)
 			require.Equal(t, tc.expected, FormatTableSpan(span))
 			require.Equal(t, tc.expectedEmpty, FormatTableSpan(&heartbeatpb.TableSpan{}))
 			require.Empty(t, FormatTableSpan(nil))
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 		})
 	}
 }

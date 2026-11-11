@@ -466,13 +466,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
-<<<<<<< HEAD
-				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
-=======
 				zap.Stringer("dispatcherID", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
 				zap.Any("event", dispatcherEvent.Event))
 		}
 
@@ -554,13 +549,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcherID", d.id),
 				zap.String("query", ddl.Query),
-<<<<<<< HEAD
-				zap.Any("tableSpan", d.GetTableSpan()),
 				zap.Int64("oldTableID", d.tableSpan.GetTableID()),
 				zap.Int64("currentTableID", ddl.GetTableID()),
-=======
-				zap.Int64("table", ddl.GetTableID()),
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()
