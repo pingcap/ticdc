@@ -34,9 +34,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -53,37 +55,99 @@ func (noopScheduler) Name() string {
 	return pkgscheduler.BasicScheduler
 }
 
-func TestUpdateChangefeedCheckpointMetricsDeletesFinishedLabels(t *testing.T) {
-	metrics.ResetOwnerChangefeedMetrics()
-	t.Cleanup(metrics.ResetOwnerChangefeedMetrics)
+func TestCollectMetricsResetsChangefeedErrorInfo(t *testing.T) {
+	changefeedErrorInfoGauge.Reset()
+	t.Cleanup(changefeedErrorInfoGauge.Reset)
+
+	registry := prometheus.NewPedanticRegistry()
+	RegisterMetrics(registry)
+	changefeed.RegisterMetrics(registry)
+	changefeedErrorInfoGauge.WithLabelValues(
+		common.DefaultKeyspaceName, "test-error-metrics", "failed", "1000", "CDC:ErrTest", "test",
+	).Set(1)
+	count, err := testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	controller := &Controller{}
+	require.ErrorIs(t, controller.collectMetrics(ctx), context.Canceled)
+
+	count, err = testutil.GatherAndCount(registry, "ticdc_owner_changefeed_error_info")
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
+
+func TestUpdateChangefeedCheckpointMetricsDeletesInactiveLabels(t *testing.T) {
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
 
 	keyspace := common.DefaultKeyspaceName
-	name := "finished-metrics"
 	keyspaceID := uint32(123)
 	pdTime := time.UnixMilli(2000)
 	checkpointTs := oracle.ComposeTS(1000, 0)
 
-	require.True(t, updateChangefeedCheckpointMetrics(
-		keyspace,
-		name,
-		keyspaceID,
-		config.StateNormal,
-		checkpointTs,
-		pdTime,
-	))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 1, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
-
-	require.False(t, updateChangefeedCheckpointMetrics(
-		keyspace,
-		name,
-		keyspaceID,
+	for _, state := range []config.FeedState{
+		config.StateFailed,
+		config.StateStopped,
 		config.StateFinished,
-		checkpointTs,
-		pdTime,
+		config.StateRemoved,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			changefeed.ResetOwnerChangefeedMetrics()
+			name := string(state) + "-metrics"
+
+			updateChangefeedCheckpointMetrics(
+				keyspace,
+				name,
+				keyspaceID,
+				config.StateNormal,
+				checkpointTs,
+				pdTime,
+			)
+			require.Equal(t, 1, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 1, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsLagGauge))
+
+			updateChangefeedCheckpointMetrics(
+				keyspace,
+				name,
+				keyspaceID,
+				state,
+				checkpointTs,
+				pdTime,
+			)
+			require.Equal(t, 0, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsGauge))
+			require.Equal(t, 0, testutil.CollectAndCount(changefeed.ChangefeedCheckpointTsLagGauge))
+		})
+	}
+}
+
+func TestUpdateAllChangefeedCheckpointMetrics(t *testing.T) {
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
+
+	cfID := common.NewChangeFeedIDWithName("bootstrap-metrics", common.DefaultKeyspaceName)
+	checkpointTs := oracle.ComposeTS(1000, 0)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, checkpointTs, false)
+	changefeedDB := changefeed.NewChangefeedDB(1)
+	changefeedDB.AddAbsentChangefeed(cf)
+	controller := &Controller{changefeedDB: changefeedDB}
+
+	controller.updateAllChangefeedCheckpointMetrics(time.UnixMilli(2000))
+
+	require.Equal(t, float64(1000), testutil.ToFloat64(
+		changefeed.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Keyspace(), cfID.Name()),
 	))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsGauge))
-	require.Equal(t, 0, testutil.CollectAndCount(metrics.ChangefeedCheckpointTsLagGauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(
+		changefeed.ChangefeedCheckpointTsLagGauge.WithLabelValues(
+			cfID.Keyspace(), cfID.Name(), metrics.FormatKeyspaceID(common.DefaultKeyspaceID),
+		),
+	))
 }
 
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
@@ -344,6 +408,16 @@ func TestMaintainerHeartbeatAdmissionDropsStaleMaintainerEpoch(t *testing.T) {
 	require.Nil(t, controller.handleSingleMaintainerStatus(owner, stale, cfID))
 	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
 
+	staleTerminal := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    300,
+		State:           heartbeatpb.ComponentState_Stopped,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
+	}
+	require.Nil(t, controller.handleSingleMaintainerStatus(owner, staleTerminal, cfID))
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
 	current := &heartbeatpb.MaintainerStatus{
 		ChangefeedID:    cfID.ToPB(),
 		CheckpointTs:    200,
@@ -353,6 +427,66 @@ func TestMaintainerHeartbeatAdmissionDropsStaleMaintainerEpoch(t *testing.T) {
 	}
 	require.NotNil(t, controller.handleSingleMaintainerStatus(owner, current, cfID))
 	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+}
+
+func TestMaintainerMovePreservesOriginFinalCheckpoint(t *testing.T) {
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	origin := node.ID("origin")
+	target := node.ID("target")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+		Epoch:        1,
+	}, 100, false)
+	db.AddReplicatingMaintainer(cf, origin)
+
+	opController := operator.NewOperatorController(
+		&node.Info{ID: node.ID("coordinator")},
+		db,
+		nil,
+		nil,
+		10,
+	)
+	moveOp := operator.NewMoveMaintainerOperator(db, cf, origin, target)
+	require.True(t, opController.AddOperator(moveOp))
+
+	// A move persists the next owner epoch before the old owner reports its
+	// final checkpoint.
+	info, err := cf.GetInfo().Clone()
+	require.NoError(t, err)
+	info.Epoch = 2
+	cf.SetInfo(info)
+
+	controller := &Controller{
+		changefeedDB:       db,
+		operatorController: opController,
+	}
+	finalStatus := &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		CheckpointTs:    200,
+		State:           heartbeatpb.ComponentState_Stopped,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
+	}
+	change := controller.handleSingleMaintainerStatus(origin, finalStatus, cfID)
+	require.NotNil(t, change)
+	require.Equal(t, ChangeTs, change.changeType)
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+
+	addMessage := moveOp.Schedule()
+	require.NotNil(t, addMessage)
+	addRequest := addMessage.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(200), addRequest.CheckpointTs)
+	require.Equal(t, uint64(2), addRequest.MaintainerEpoch)
 }
 
 func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
@@ -385,6 +519,9 @@ func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
 }
 
 func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T) {
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
+
 	testCases := []struct {
 		name          string
 		progress      config.Progress
@@ -450,6 +587,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 				initialized:  atomic.NewBool(false),
 				backend:      backend,
 				changefeedDB: db,
+				pdClock:      pdutil.NewClockWithValue4Test(time.UnixMilli(2000)),
 				operatorController: operator.NewOperatorController(
 					self,
 					db,
@@ -504,6 +642,9 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 }
 
 func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *testing.T) {
+	changefeed.ResetOwnerChangefeedMetrics()
+	t.Cleanup(changefeed.ResetOwnerChangefeedMetrics)
+
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	mc := messaging.NewMockMessageCenter()
@@ -538,6 +679,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 		initialized:  atomic.NewBool(false),
 		backend:      backend,
 		changefeedDB: db,
+		pdClock:      pdutil.NewClockWithValue4Test(time.UnixMilli(2000)),
 		operatorController: operator.NewOperatorController(
 			self,
 			db,
@@ -788,6 +930,11 @@ func expectResumeChangefeed(
 }
 
 func TestPauseChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -824,7 +971,8 @@ func TestPauseChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	backend.EXPECT().PauseChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
@@ -964,6 +1112,11 @@ func TestGetChangefeedReturnedInfoMutationDoesNotRaceWithStoredInfo(t *testing.T
 }
 
 func TestRemoveChangefeed(t *testing.T) {
+	// The operator finishes in milliseconds, do not wait a second for it.
+	defer func(original time.Duration) {
+		stopChangefeedWaitInterval = original
+	}(stopChangefeedWaitInterval)
+	stopChangefeedWaitInterval = 10 * time.Millisecond
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -995,7 +1148,8 @@ func TestRemoveChangefeed(t *testing.T) {
 			if op != nil {
 				op.OnTaskRemoved()
 			}
-			time.Sleep(time.Second)
+			// Finish the operator as soon as it shows up instead of once a second.
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
@@ -1011,6 +1165,41 @@ func TestRemoveChangefeed(t *testing.T) {
 	cp, err := controller.RemoveChangefeed(context.Background(), cfID)
 	require.Nil(t, err)
 	require.Equal(t, uint64(1), cp)
+}
+
+func TestUpdateChangefeedCheckpointTsSkipsStoppedAndRemovedChangefeeds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{backend: backend, changefeedDB: changefeedDB}
+
+	runningID := common.NewChangeFeedIDWithName("running", common.DefaultKeyspaceName)
+	stoppedID := common.NewChangeFeedIDWithName("stopped", common.DefaultKeyspaceName)
+	removedID := common.NewChangeFeedIDWithName("removed", common.DefaultKeyspaceName)
+	running := changefeed.NewChangefeed(runningID, &config.ChangeFeedInfo{
+		ChangefeedID: runningID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+	}, 1, true)
+	stopped := changefeed.NewChangefeed(stoppedID, &config.ChangeFeedInfo{
+		ChangefeedID: stoppedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(running)
+	changefeedDB.AddStoppedChangefeed(stopped)
+
+	checkpointTs := map[common.ChangeFeedID]uint64{
+		runningID: 100,
+		stoppedID: 200,
+		removedID: 300,
+	}
+	backend.EXPECT().UpdateChangefeedCheckpointTs(gomock.Any(), map[common.ChangeFeedID]uint64{
+		runningID: 100,
+	}).Return(nil)
+
+	require.NoError(t, controller.updateChangefeedCheckpointTs(context.Background(), checkpointTs))
+	require.Equal(t, map[common.ChangeFeedID]uint64{runningID: 100}, checkpointTs)
 }
 
 func TestListChangefeed(t *testing.T) {

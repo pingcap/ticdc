@@ -16,6 +16,8 @@ package simple
 import (
 	"encoding/base64"
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"time"
 
@@ -217,6 +219,12 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 		}
 	}
 
+	// The consumer calculates checksums in schema order, which must follow column IDs.
+	// TableInfo is shared with the row chunks, so sort a copy of its column slice.
+	colInfos = slices.Clone(colInfos)
+	sort.Slice(colInfos, func(i, j int) bool {
+		return colInfos[i].ID < colInfos[j].ID
+	})
 	columns := make([]*columnSchema, 0, len(colInfos))
 	for _, col := range colInfos {
 		colSchema := newColumnSchema(col)
@@ -250,7 +258,11 @@ type message struct {
 	// SQL is only for the DDL event.
 	SQL      string `json:"sql,omitempty"`
 	CommitTs uint64 `json:"commitTs"`
-	BuildTs  int64  `json:"buildTs"`
+	// StartTs is the transaction start TSO. Present on DML messages only when
+	// simple-include-start-ts is enabled. omitempty keeps the pre-feature format
+	// when the field is unset (zero).
+	StartTs uint64 `json:"startTs,omitempty"`
+	BuildTs int64  `json:"buildTs"`
 	// SchemaVersion is for the DML event.
 	SchemaVersion uint64 `json:"schemaVersion,omitempty"`
 
@@ -331,6 +343,9 @@ func (a *jsonMarshaller) newDMLMessage(
 		SchemaVersion:      event.TableInfo.GetUpdateTS(),
 		HandleKeyOnly:      onlyHandleKey,
 		ClaimCheckLocation: claimCheckFileName,
+	}
+	if a.config.SimpleIncludeStartTs {
+		m.StartTs = event.StartTs
 	}
 	if event.IsInsert() {
 		m.Type = DMLTypeInsert

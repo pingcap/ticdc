@@ -14,7 +14,6 @@
 package changefeed
 
 import (
-	"net/url"
 	"sync"
 
 	"github.com/pingcap/failpoint"
@@ -25,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -34,7 +34,7 @@ type Changefeed struct {
 	ID       common.ChangeFeedID
 	info     *atomic.Pointer[config.ChangeFeedInfo]
 	sinkType common.SinkType
-	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
+	isNew    atomic.Bool // fresh initialization or resume with overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -61,18 +61,13 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	if info.Config == nil {
 		log.Panic("changefeed config is nil", zap.Stringer("changefeedID", cfID))
 	}
-	uri, err := url.Parse(info.SinkURI)
-	if err != nil {
-		log.Panic("unable to parse sink-uri",
-			zap.String("url", info.SinkURI), zap.Error(err))
-	}
+	sinkType, _ := config.ParseSinkURI(info.SinkURI)
 	res := &Changefeed{
 		ID:                       cfID,
 		info:                     atomic.NewPointer(info),
 		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
 		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
-		sinkType:                 getSinkType(uri.Scheme),
-		isNew:                    isNew,
+		sinkType:                 sinkType,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -82,6 +77,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 			}),
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
+	res.isNew.Store(isNew || util.GetOrZero(info.BootstrapPending))
 	// Must set retrying to true when the changefeed is in warning state.
 	if info.State == config.StateWarning {
 		res.backoff.retrying.Store(true)
@@ -161,12 +157,31 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns false if the status is not changed
 // It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
+	if newStatus == nil {
+		return false, config.StateNormal, nil
+	}
+
 	old := c.status.Load()
 	failpoint.Inject("CoordinatorDontUpdateChangefeedCheckpoint", func() {
 		newStatus.CheckpointTs = old.CheckpointTs
 	})
 
-	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
+	if newStatus.CheckpointTs < old.CheckpointTs {
+		if len(newStatus.Err) == 0 {
+			return false, config.StateNormal, nil
+		}
+		statusWithMonotonicCheckpoint := *newStatus
+		statusWithMonotonicCheckpoint.CheckpointTs = old.CheckpointTs
+		newStatus = &statusWithMonotonicCheckpoint
+	}
+
+	if newStatus.CheckpointTs >= old.CheckpointTs {
+		// Bootstrap completion survives maintainer replacement until an explicit resume.
+		if old.BootstrapDone && !newStatus.BootstrapDone {
+			statusWithBootstrapDone := *newStatus
+			statusWithBootstrapDone.BootstrapDone = true
+			newStatus = &statusWithBootstrapDone
+		}
 		c.status.Store(newStatus)
 
 		changed, state, err := c.backoff.checkFailedStatus(newStatus)
@@ -174,7 +189,9 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			return changed, state, err
 		}
 
-		if old.BootstrapDone != newStatus.BootstrapDone {
+		if !old.BootstrapDone && newStatus.BootstrapDone {
+			// Record accepted progress before returning without CheckStatus.
+			c.backoff.checkpointTs = newStatus.CheckpointTs
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
@@ -221,13 +238,31 @@ func (c *Changefeed) NeedCheckpointTsMessage() bool {
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
-	c.isNew = isNew
+	c.isNew.Store(isNew)
 }
 
 // GetStatus returns the changefeed status.
 // Note: the returned status is a pointer, so it's not safe to modify it!
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
+}
+
+// AdvanceCheckpointTs advances only the checkpoint in the in-memory status.
+// It is used during maintainer handoff, where the stopping owner can report a
+// newer committed checkpoint after the next owner epoch has been persisted.
+func (c *Changefeed) AdvanceCheckpointTs(checkpointTs uint64) bool {
+	for {
+		status := c.status.Load()
+		if status == nil || checkpointTs <= status.CheckpointTs {
+			return false
+		}
+
+		updated := *status
+		updated.CheckpointTs = checkpointTs
+		if c.status.CompareAndSwap(status, &updated) {
+			return true
+		}
+	}
 }
 
 // GetStatusForResume returns a deep copy of the changefeed status without errors.
@@ -284,7 +319,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Id:              c.ID.ToPB(),
 			CheckpointTs:    checkpointTs,
 			Config:          []byte(configData),
-			IsNewChangefeed: c.isNew,
+			IsNewChangefeed: c.isNew.Load(),
 			KeyspaceId:      info.KeyspaceID,
 			MaintainerEpoch: info.Epoch,
 		})
@@ -319,18 +354,4 @@ func RemoveMaintainerMessage(
 			KeyspaceId:      keyspaceID,
 			MaintainerEpoch: maintainerEpoch,
 		})
-}
-
-// getSinkType returns the sink type of the url.
-func getSinkType(scheme string) common.SinkType {
-	if config.IsMySQLCompatibleScheme(scheme) {
-		return common.MysqlSinkType
-	}
-	if config.IsMQScheme(scheme) {
-		return common.KafkaSinkType
-	}
-	if config.IsStorageScheme(scheme) {
-		return common.CloudStorageSinkType
-	}
-	return common.BlackHoleSinkType
 }

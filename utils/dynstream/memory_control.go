@@ -89,22 +89,28 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 
 // var testCounter atomic.Int64
 
-// appendEvent try to append an event to the path's pending queue.
-// It returns true if the event is appended successfully.
+// appendEvent adds an event to the path's pending queue or merges it into the
+// last periodic signal. accepted reports whether the event was accepted, while
+// appended reports whether the pending queue grew by one event.
 // This method is called by streams' handleLoop concurrently, but it is thread safe.
 // We use atomic operations to update the totalPendingSize and the path's pendingSize.
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
-) bool {
+) (accepted bool, appended bool) {
 	// The removed flag can flip between handleLoop's removed check and appendEvent call.
 	// Guard here to avoid accounting events for a removed path.
 	if path.removed.Load() {
-		return false
+		return false, false
 	}
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
+	appendToPendingQueue := func() {
+		path.pendingQueue.PushBack(event)
+		path.updatePendingSize(int64(event.eventSize))
+		as.totalPendingSize.Add(int64(event.eventSize))
+	}
 
 	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
 		if failpointAPITestLogged.CompareAndSwap(false, true) {
@@ -119,7 +125,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			// If the last event is a periodic signal, we only need to keep the latest one.
 			// And we don't need to add a new signal.
 			*back = event
-			return true
+			return true, false
 		}
 	}
 
@@ -133,10 +139,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		if event.eventType.Droppable {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
+				event.eventSize += handler.GetSize(dropEvent.(T)) - handler.GetSize(event.event)
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
-				return true
+				appendToPendingQueue()
+				return true, true
 			}
 		}
 	}
@@ -145,20 +152,17 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		if as.settings.Load().algorithm == MemoryControlForEventCollector {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
+				event.eventSize += handler.GetSize(dropEvent.(T)) - handler.GetSize(event.event)
 				event.eventType = handler.GetType(dropEvent.(T))
 				event.event = dropEvent.(T)
-				path.pendingQueue.PushBack(event)
-				failpoint.Return(true)
+				appendToPendingQueue()
+				failpoint.Return(true, true)
 			}
 		}
 	})
 
-	// Add the event to the pending queue.
-	path.pendingQueue.PushBack(event)
-	// Update the pending size.
-	path.updatePendingSize(int64(event.eventSize))
-	as.totalPendingSize.Add(int64(event.eventSize))
-	return true
+	appendToPendingQueue()
+	return true, true
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
@@ -177,10 +181,11 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
-	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 1*time.Second {
+	now := time.Now()
+	lastRequest := as.lastReleaseMemoryTime.Load().(time.Time)
+	if now.Sub(lastRequest) < time.Second || !as.lastReleaseMemoryTime.CompareAndSwap(lastRequest, now) {
 		return
 	}
-	as.lastReleaseMemoryTime.Store(time.Now())
 
 	paths := make([]*pathInfo[A, P, T, D, H], 0, as.pathCount.Load())
 	as.pathMap.Range(func(k, v interface{}) bool {
@@ -197,13 +202,11 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	releasedSize := int64(0)
 	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
 
-	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
-
 	for _, path := range paths {
 		// Only release path that is blocking and has pending size larger than the threshold.
 		if releasedSize >= sizeToRelease ||
 			path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
-			!path.blocking.Load() {
+			!path.blocking.Load() || path.removed.Load() || path.reclaimed.Load() {
 			continue
 		}
 
@@ -211,16 +214,30 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		releasedPaths = append(releasedPaths, path)
 	}
 
+	requestedBytes := int64(0)
 	for _, path := range releasedPaths {
-		log.Debug("release path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("releasedSize", path.pendingSize.Load()))
-		as.feedbackChan <- Feedback[A, P, D]{
+		select {
+		case as.feedbackChan <- Feedback[A, P, D]{
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
 			FeedbackType: ReleasePath,
+			Release: func() bool {
+				return !path.removed.Load() && path.stream.tryAddEvent(eventWrap[A, P, T, D, H]{release: true, pathInfo: path})
+			},
+		}:
+			requestedBytes += path.pendingSize.Load()
+		default:
+			// A full feedback queue must not block a stream or the periodic
+			// quota publisher. The next check retries against current state.
 		}
 	}
-	as.lastSizeDecreaseTime.Store(time.Now())
+	if requestedBytes > 0 {
+		log.Info("request memory reclamation",
+			zap.Any("area", as.area),
+			zap.Int64("requestedBytes", requestedBytes),
+			zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
+	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
@@ -338,18 +355,44 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 }
 
 // This method is called after the path is removed.
+// The owning stream reconciles the path's pending memory when it clears the
+// pending queue. Do not deduct it here, because RemovePath can race with the
+// stream popping an event and cause the same memory to be deducted twice.
+// Keep the area until the owner has cleared the last removed path's queue.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	pendingSize := path.pendingSize.Swap(0)
-	area.decPendingSize(path, pendingSize)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	area.pathMap.Delete(path.path)
 	area.pathCount.Add(-1)
-	if area.pathCount.Load() == 0 {
+}
+
+func (m *memControl[A, P, T, D, H]) removeAreaIfUnused(area *areaMemStat[A, P, T, D, H]) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if area.pathCount.Load() == 0 && area.totalPendingSize.Load() == 0 && m.areaStatMap[area.area] == area {
 		delete(m.areaStatMap, area.area)
+	}
+}
+
+// checkMemoryPressure does not require recent input: paused scans and merged
+// periodic signals must not prevent a stalled area from reclaiming memory.
+func (m *memControl[A, P, T, D, H]) checkMemoryPressure() {
+	m.mutex.Lock()
+	areas := make([]*areaMemStat[A, P, T, D, H], 0, len(m.areaStatMap))
+	for _, area := range m.areaStatMap {
+		areas = append(areas, area)
+	}
+	m.mutex.Unlock()
+
+	for _, area := range areas {
+		if area.settings.Load().algorithm == MemoryControlForEventCollector &&
+			area.memoryUsageRatio() > defaultReleaseMemoryRatio &&
+			time.Since(area.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration {
+			area.releaseMemory()
+		}
 	}
 }
 

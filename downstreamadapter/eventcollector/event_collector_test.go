@@ -16,10 +16,12 @@ package eventcollector
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -27,16 +29,22 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/messaging/mock"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
+	pauseScan                bool
+	mode                     int64
 	id                       common.DispatcherID
 	tableSpan                *heartbeatpb.TableSpan
 	handle                   func(commonEvent.Event)
@@ -58,7 +66,7 @@ func (m *mockEventDispatcher) GetId() common.DispatcherID {
 }
 
 func (m *mockEventDispatcher) GetMode() int64 {
-	return common.DefaultMode
+	return m.mode
 }
 
 func (m *mockEventDispatcher) GetStartTs() uint64 {
@@ -73,6 +81,10 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockEventDispatcher) IsLowLatencyMode() bool {
+	return false
+}
+
 func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
 	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
 }
@@ -83,10 +95,6 @@ func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 
 func (m *mockEventDispatcher) GetRouter() routing.Router {
 	return routing.Router{}
-}
-
-func (m *mockEventDispatcher) GetTimezone() string {
-	return "system"
 }
 
 func (m *mockEventDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
@@ -184,7 +192,7 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
@@ -308,11 +316,20 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	localHeartbeat := grouped[serverInfo.ID]
 	require.NotNil(t, localHeartbeat)
 	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, localHeartbeat.Version)
-	require.Len(t, localHeartbeat.DispatcherProgresses, 1)
+	require.Len(t, localHeartbeat.DispatcherProgresses, 2)
+	var localProgress commonEvent.DispatcherProgress
+	for _, progress := range localHeartbeat.DispatcherProgresses {
+		if progress.DispatcherID == remoteDispatcher.id {
+			require.Zero(t, progress.Epoch)
+			require.Zero(t, progress.CheckpointTs)
+		} else {
+			localProgress = progress
+		}
+	}
 	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), localHeartbeat.DispatcherProgresses[0].Version)
-	require.Equal(t, localDispatcher.id, localHeartbeat.DispatcherProgresses[0].DispatcherID)
-	require.Equal(t, uint64(150), localHeartbeat.DispatcherProgresses[0].CheckpointTs)
-	require.Equal(t, uint64(3), localHeartbeat.DispatcherProgresses[0].Epoch)
+	require.Equal(t, localDispatcher.id, localProgress.DispatcherID)
+	require.Equal(t, uint64(150), localProgress.CheckpointTs)
+	require.Equal(t, uint64(3), localProgress.Epoch)
 
 	remoteHeartbeat := grouped[remoteID]
 	require.NotNil(t, remoteHeartbeat)
@@ -322,6 +339,112 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgresses[0].DispatcherID)
 	require.Equal(t, uint64(210), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(5), remoteHeartbeat.DispatcherProgresses[0].Epoch)
+}
+
+func TestRemovedConsumerStopsRegistrationRetriesAndHeartbeats(t *testing.T) {
+	for name, registerSucceeds := range map[string]bool{"lost remove": true, "reordered register retry": false} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			mc := mock.NewMockMessageCenter(gomock.NewController(t))
+			c := &EventCollector{serverId: "local", mc: mc, dispatcherMessageChan: chann.NewAutoDrainChann[DispatcherMessage]()}
+			target := &mockEventDispatcher{
+				id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1},
+				changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+			}
+			stat := newDispatcherStat(target, c, nil)
+			c.dispatcherMap.Store(target.id, stat)
+			remote := node.ID("remote")
+			registerSent := make(chan struct{})
+			resumeRegister := make(chan struct{})
+			release := sync.OnceFunc(func() { close(resumeRegister) })
+			removeAttempts := make(chan struct{}, commonMsgRetryQuota)
+			registerAttempts := 0
+			remoteRegistered := false
+			mc.EXPECT().SendCommand(gomock.Any()).DoAndReturn(func(msg *messaging.TargetMessage) error {
+				if msg.Type == messaging.TypeDispatcherHeartbeat {
+					cancel()
+					return nil
+				}
+				request := msg.Message[0].(*messaging.DispatcherRequest)
+				if request.GetActionType() == eventpb.ActionType_ACTION_TYPE_REGISTER {
+					registerAttempts++
+					if registerAttempts == 1 {
+						remoteRegistered = registerSucceeds
+						close(registerSent)
+						if !registerSucceeds {
+							<-resumeRegister
+						}
+					}
+					if registerSucceeds {
+						return nil
+					}
+				} else if msg.To != remote {
+					return nil
+				} else {
+					removeAttempts <- struct{}{}
+				}
+				return errors.AppError{Type: errors.ErrorTypeConnectionNotFound}
+			}).AnyTimes()
+			var wg sync.WaitGroup
+			t.Cleanup(func() { release(); cancel(); wg.Wait(); c.dispatcherMessageChan.CloseAndDrain() })
+			stat.startRemoteProbing([]string{remote.String()})
+			wg.Go(func() { _ = c.sendDispatcherRequests(ctx) })
+			<-registerSent
+			require.Equal(t, registerSucceeds, remoteRegistered)
+			pending := c.groupHeartbeat()[remote]
+			require.NotNil(t, pending)
+			require.Zero(t, pending.DispatcherProgresses[0].Epoch)
+			// Registration can succeed remotely without READY/RESET ever reaching
+			// this consumer. Removing it terminates renewal even if REMOVE is lost.
+			stat.remove()
+			c.dispatcherMap.Delete(target.id)
+			release()
+			for range commonMsgRetryQuota {
+				<-removeAttempts
+			}
+			require.Empty(t, c.groupHeartbeat())
+			c.enqueueMessageForSend(messaging.NewSingleTargetMessage(remote, messaging.EventServiceTopic, commonEvent.NewDispatcherHeartbeat()))
+			wg.Wait()
+			require.Equal(t, 1, registerAttempts)
+		})
+	}
+}
+
+func TestPendingRegistrationRecoversAfterExpiry(t *testing.T) {
+	c := &EventCollector{serverId: "local", dispatcherMessageChan: chann.NewAutoDrainChann[DispatcherMessage]()}
+	defer c.dispatcherMessageChan.CloseAndDrain()
+	target := &mockEventDispatcher{
+		id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	stat := newDispatcherStat(target, c, nil)
+	c.dispatcherMap.Store(target.id, stat)
+	stat.session.startLocalRegistration()
+	stat.startRemoteProbing([]string{"remote"})
+	readDispatcherRequests(t, c, 2)
+	for _, server := range []node.ID{"local", "remote"} {
+		response := commonEvent.NewDispatcherHeartbeatResponse()
+		response.Append(commonEvent.NewDispatcherState(target.id, commonEvent.DSStateRemoved))
+		message := messaging.NewSingleTargetMessage(c.serverId, messaging.EventCollectorTopic, response)
+		message.From = server
+		c.handleDispatcherHeartbeatResponse(message.From, response)
+		requireDispatcherRequests(t, readDispatcherRequests(t, c, 1), dispatcherRequestRecord{to: server, action: eventpb.ActionType_ACTION_TYPE_REGISTER})
+	}
+	stat.remove()
+	readDispatcherRequests(t, c, 2)
+	require.False(t, stat.session.retryCurrentRegistrationIfRemovedFrom("remote"))
+	require.Empty(t, c.groupHeartbeat())
+}
+
+func TestMessageCenterHandlerRejectsInvalidHeartbeatResponsePayloads(t *testing.T) {
+	c := newTestEventCollector("local")
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	msg := messaging.NewSingleTargetMessage("local", messaging.EventCollectorTopic, response)
+	msg.Message = append(msg.Message, response)
+	require.NoError(t, c.MessageCenterHandler(context.Background(), msg))
+	require.NoError(t, c.MessageCenterHandler(context.Background(), nil))
+	msg.Message = []messaging.IOTypeT{&commonEvent.DispatcherHeartbeat{}}
+	require.NoError(t, c.MessageCenterHandler(context.Background(), msg))
 }
 
 func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
@@ -441,7 +564,7 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
@@ -530,7 +653,7 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
 	from := localServerID
-	readyEvent := commonEvent.NewReadyEvent(did)
+	readyEvent := commonEvent.NewReadyEvent(did, 0)
 	c.ds.Push(did, dispatcher.NewDispatcherEvent(&from, &readyEvent))
 
 	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
@@ -575,4 +698,46 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 
 	require.Equal(t, totalDML, sumDML)
 	require.Equal(t, 1, maxBatch)
+}
+
+func (m *mockEventDispatcher) ShouldPauseScan() bool { return m.pauseScan }
+
+func TestScanPauseQuotaUsesCurrentState(t *testing.T) {
+	c := &EventCollector{ds: NewEventDynamicStream(false), redoDs: NewEventDynamicStream(true)}
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+	cf := common.NewChangefeedID4Test("default", "syncpoint-quota")
+	c.changefeedMap.Store(cf.ID(), newChangefeedStat(cf))
+	blocked := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
+	lagging := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf}
+	// Even a synthetic pause reported for a redo target must not stop the
+	// producer of the watermark the ordinary dispatcher is waiting for.
+	redo := &mockEventDispatcher{id: common.NewDispatcherID(), changefeedID: cf, mode: common.RedoMode, pauseScan: true}
+	for _, target := range []*mockEventDispatcher{blocked, lagging, redo} {
+		stat := newDispatcherStat(target, c, nil)
+		markSessionReceiving(stat.session, "broker")
+		c.dispatcherMap.Store(target.id, stat)
+		require.NoError(t, c.getDynamicStream(target.mode).AddPath(target.id, stat, dynstream.NewAreaSettingsWithMaxPendingSize(1<<20, dynstream.MemoryControlForEventCollector, "test")))
+	}
+	available := func() commonEvent.AvailableMemory {
+		msgs := c.newCongestionControlMessages()
+		require.Contains(t, msgs, node.ID("broker"))
+		entries := msgs["broker"].GetAvailables()
+		require.Len(t, entries, 1)
+		return entries[0]
+	}
+	before := available()
+	require.Positive(t, before.DispatcherAvailable[blocked.id])
+	require.Positive(t, before.DispatcherAvailable[lagging.id])
+	require.Positive(t, before.DispatcherAvailable[redo.id])
+	blocked.pauseScan = true
+	paused := available()
+	require.Zero(t, paused.DispatcherAvailable[blocked.id])
+	require.Equal(t, before.Available, paused.Available, "pausing a path must not change shared physical quota")
+	require.Equal(t, before.DispatcherAvailable[lagging.id], paused.DispatcherAvailable[lagging.id])
+	require.Equal(t, before.DispatcherAvailable[redo.id], paused.DispatcherAvailable[redo.id])
+	blocked.pauseScan = false
+	after := available()
+	require.Equal(t, before.Available, after.Available)
+	require.Equal(t, before.DispatcherAvailable, after.DispatcherAvailable, "resume must use current quotas without new input")
 }

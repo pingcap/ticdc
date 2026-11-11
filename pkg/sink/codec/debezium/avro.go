@@ -166,9 +166,10 @@ func (d *BatchEncoder) encodeAvroPayload(
 	}
 
 	subject := debeziumAvroSubject(topic, subjectSuffix, message.Schema.Name)
-	avroCodec, header, err := d.schemaM.GetCachedOrRegister(
+	avroCodec, header, err := d.codecCache.GetOrRegister(
 		ctx,
 		subject,
+		message.Schema.Name,
 		schemaVersion,
 		func() (string, error) {
 			converter := newDebeziumAvroSchemaConverter()
@@ -454,7 +455,7 @@ func (c *dbzCodec) buildDebeziumConnectSourceSchema(
 ) (*debeziumConnectSchema, error) {
 	buf := &bytes.Buffer{}
 	writer := util.BorrowJSONWriter(buf)
-	c.writeSourceSchema(writer, schemaName)
+	c.writeSourceSchema(writer, schemaName, false)
 	util.ReturnJSONWriter(writer)
 
 	return decodeDebeziumConnectSchema(buf.Bytes())

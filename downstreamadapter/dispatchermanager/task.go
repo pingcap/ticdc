@@ -28,6 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultHeartbeatInterval     = 200 * time.Millisecond
+	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
+	defaultHeartbeatInitialDelay = time.Second
+)
+
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
@@ -42,7 +48,7 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 		manager:    manager,
 		statusTick: 0,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(time.Second*1))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(heartbeatInitialDelay(manager)))
 	return t
 }
 
@@ -50,14 +56,27 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := time.Millisecond * 200
-	// 10s / 200ms = 50
+	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
-	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
+	needCompleteStatus := t.statusTick%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
+}
+
+func heartbeatInterval(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return lowLatencyHeartbeatInterval
+	}
+	return defaultHeartbeatInterval
+}
+
+func heartbeatInitialDelay(manager *DispatcherManager) time.Duration {
+	if manager.config.IsLowLatencyMode() {
+		return 0
+	}
+	return defaultHeartbeatInitialDelay
 }
 
 func (t *HeartBeatTask) Cancel() {
@@ -177,7 +196,7 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 		zap.String("reason", reason),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 
 	// Stop retrying and cleanup best-effort.
@@ -216,7 +235,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 	sinkType := getSinkType(t.mergedDispatcher, t.manager)
 
@@ -265,7 +284,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
 			zap.Int64("mode", t.mergedDispatcher.GetMode()),
-			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -286,7 +305,6 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
-		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
 		zap.Uint64("startTs", startTs),
 	)
 
@@ -448,11 +466,11 @@ func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, p
 			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Uint64("minCheckpointTs", minCheckpointTs),
-				zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()))
+				zap.Any("dispatcherID", t.mergedDispatcher.GetId()))
 		}
 		log.Info("merge dispatcher uses pending block event to calculate start ts",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
-			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
 			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
 			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),
 			zap.Uint64("startTs", candidate.startTs),

@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"container/list"
 	"context"
 	"sync"
 
@@ -39,6 +40,12 @@ type blockStatusQueueEntry struct {
 	doneKey *blockStatusKey
 }
 
+type retryBlockStatus struct {
+	status   *heartbeatpb.TableSpanBlockStatus
+	canceled <-chan struct{}
+	element  *list.Element
+}
+
 // BlockStatusBuffer keeps block statuses ordered while coalescing identical
 // pending WAITING and DONE statuses in dispatcher-local memory.
 //
@@ -48,8 +55,15 @@ type blockStatusQueueEntry struct {
 type BlockStatusBuffer struct {
 	queue chan blockStatusQueueEntry
 
-	mu      sync.Mutex
-	pending map[blockStatusKey]struct{}
+	mu            sync.Mutex
+	pending       map[blockStatusKey]struct{}
+	retries       *list.List
+	retryByStatus map[*heartbeatpb.TableSpanBlockStatus]*retryBlockStatus
+	retryWake     chan struct{}
+	retryStop     chan struct{}
+	retryDone     chan struct{}
+	retrySending  bool
+	closed        bool
 }
 
 // NewBlockStatusBuffer creates a bounded local mailbox for dispatcher block
@@ -59,8 +73,12 @@ func NewBlockStatusBuffer(size int) *BlockStatusBuffer {
 		size = 1
 	}
 	return &BlockStatusBuffer{
-		queue:   make(chan blockStatusQueueEntry, size),
-		pending: make(map[blockStatusKey]struct{}),
+		queue:         make(chan blockStatusQueueEntry, size),
+		pending:       make(map[blockStatusKey]struct{}),
+		retries:       list.New(),
+		retryByStatus: make(map[*heartbeatpb.TableSpanBlockStatus]*retryBlockStatus),
+		retryWake:     make(chan struct{}, 1),
+		retryStop:     make(chan struct{}),
 	}
 }
 
@@ -84,6 +102,142 @@ func (b *BlockStatusBuffer) OfferStatus(status *heartbeatpb.TableSpanBlockStatus
 		return
 	}
 	b.queue <- blockStatusQueueEntry{status: status}
+}
+
+// offerRetryStatus queues a full-buffer retry for one dedicated sender instead
+// of blocking a shared pool worker. The sender joins the original channel's
+// send queue, so new status producers cannot repeatedly overtake the retry.
+func (b *BlockStatusBuffer) offerRetryStatus(status *heartbeatpb.TableSpanBlockStatus, canceled <-chan struct{}) bool {
+	if status == nil {
+		return true
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	select {
+	case <-canceled:
+		return false
+	default:
+	}
+	if b.closed {
+		return false
+	}
+	if _, ok := b.retryByStatus[status]; ok {
+		return false
+	}
+
+	if isWaitingBlockStatus(status) {
+		key := newBlockStatusKey(status)
+		if _, ok := b.pending[key]; ok {
+			return true
+		}
+	}
+
+	if !b.retrySending && b.retries.Len() == 0 {
+		select {
+		case b.queue <- blockStatusQueueEntry{status: status}:
+			if isWaitingBlockStatus(status) {
+				b.pending[newBlockStatusKey(status)] = struct{}{}
+			}
+			return true
+		default:
+		}
+	}
+
+	if isWaitingBlockStatus(status) {
+		b.pending[newBlockStatusKey(status)] = struct{}{}
+	}
+	retry := &retryBlockStatus{status: status, canceled: canceled}
+	retry.element = b.retries.PushBack(retry)
+	b.retryByStatus[status] = retry
+	if b.retryDone == nil {
+		b.retryDone = make(chan struct{})
+		go b.sendRetries()
+	}
+	select {
+	case b.retryWake <- struct{}{}:
+	default:
+	}
+	return false
+}
+
+func (b *BlockStatusBuffer) sendRetries() {
+	defer close(b.retryDone)
+	for {
+		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			return
+		}
+		front := b.retries.Front()
+		if front == nil {
+			b.mu.Unlock()
+			select {
+			case <-b.retryWake:
+			case <-b.retryStop:
+				return
+			}
+			continue
+		}
+		retry := front.Value.(*retryBlockStatus)
+		b.retries.Remove(front)
+		retry.element = nil
+		b.retrySending = true
+		b.mu.Unlock()
+
+		sent := false
+		select {
+		case <-retry.canceled:
+		case <-b.retryStop:
+			return
+		default:
+			select {
+			case b.queue <- blockStatusQueueEntry{status: retry.status}:
+				sent = true
+			case <-retry.canceled:
+			case <-b.retryStop:
+				return
+			}
+		}
+
+		b.mu.Lock()
+		delete(b.retryByStatus, retry.status)
+		b.retrySending = false
+		if !sent && isWaitingBlockStatus(retry.status) {
+			delete(b.pending, newBlockStatusKey(retry.status))
+		}
+		b.mu.Unlock()
+	}
+}
+
+func (b *BlockStatusBuffer) cancelRetryStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	retry := b.retryByStatus[status]
+	if retry == nil || retry.element == nil {
+		return
+	}
+	b.retries.Remove(retry.element)
+	delete(b.retryByStatus, status)
+	if isWaitingBlockStatus(status) {
+		delete(b.pending, newBlockStatusKey(status))
+	}
+}
+
+// Close stops the dedicated retry sender when its dispatcher manager closes.
+func (b *BlockStatusBuffer) Close() {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	close(b.retryStop)
+	done := b.retryDone
+	b.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // OfferDone enqueues a DONE status via the dedicated minimal-key path. Duplicate

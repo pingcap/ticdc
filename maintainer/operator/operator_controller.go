@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -53,7 +52,8 @@ type Controller struct {
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
 
-	// admissionMu serializes removing-mode quiesce with normal operator side effects.
+	// admissionMu serializes removing-mode quiesce and remove-operator replacement
+	// with normal operator side effects.
 	// A normal operator must hold the read side from its final allow check through
 	// Start or Schedule/SendCommand so it cannot cross the handoff boundary after
 	// QuiesceExcept has made the controller quiescing.
@@ -259,7 +259,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
+	return oc.pushOperatorWithAdmission(op, false)
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -405,7 +405,7 @@ func (oc *Controller) pollQueueingOperator() (
 		if shouldWarn {
 			log.Warn("operator is still in running queue",
 				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.String("operator", opID.String()),
+				zap.String("dispatcherID", opID.String()),
 				zap.String("operator", op.String()),
 				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
 		}
@@ -444,29 +444,37 @@ func (oc *Controller) finalizeOperator(
 	delete(oc.lastWarnTime, opID)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-	metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+	operatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operatorID", opID.String()),
+		zap.String("dispatcherID", opID.String()),
 		zap.String("operator", op.String()))
 }
 
-func (oc *Controller) cancelOperator(opID common.DispatcherID) {
+func (oc *Controller) cancelOperator(
+	expected operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) {
+	// Serialize rollback with remove-operator replacement. Otherwise a stale rollback
+	// could resolve the dispatcher ID after the replacement and cancel the new operator.
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
+	opID := expected.ID()
 	oc.mu.RLock()
 	item, ok := oc.operators[opID]
 	oc.mu.RUnlock()
-	if !ok {
+	if !ok || item.OP != expected {
 		return
 	}
-	item.OP.OnTaskRemoved()
+	expected.OnTaskRemoved()
 	oc.finalizeOperator(item, opID)
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
 
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
@@ -483,40 +491,37 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("replicaSet", old.OP.ID().String()),
+			zap.String("dispatcherID", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.pushOperatorWithAdmission(op)
+	oc.pushOperatorWithAdmission(op, true)
 }
 
-// pushOperator add an operator to the controller queue.
-func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.admissionMu.RLock()
-	defer oc.admissionMu.RUnlock()
+func (oc *Controller) pushOperatorWithAdmission(
+	op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	replaceExisting bool,
+) bool {
+	withTime := operator.NewOperatorWithTime(op, time.Now())
+	opID := op.ID()
 
-	if !oc.isOperatorAllowed(op.ID()) {
-		log.Info("skip operator while controller is quiescing",
+	oc.mu.Lock()
+	if old, ok := oc.operators[opID]; ok && !replaceExisting {
+		oc.mu.Unlock()
+		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("dispatcherID", op.ID().String()),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
-	return oc.pushOperatorWithAdmission(op)
-}
-
-func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.operators[opID] = withTime
+	oc.mu.Unlock()
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
-	withTime := operator.NewOperatorWithTime(op, time.Now())
-
-	oc.mu.Lock()
-	oc.operators[op.ID()] = withTime
-	oc.mu.Unlock()
 
 	op.Start()
 	// Check affected nodes after Start to avoid operators being forced into terminal states
@@ -529,8 +534,8 @@ func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.Disp
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
-	metrics.TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	operatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	totalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 	return true
 }
 
@@ -550,7 +555,7 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	if len(affectedReplicaSets) < 2 {
 		log.Info("affectedReplicaSets is less than 2, skip merge",
-			zap.Any("affectedReplicaSets", affectedReplicaSets))
+			zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)))
 		return false
 	}
 
@@ -564,12 +569,16 @@ func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
 	for idx := 1; idx < len(affectedSpans); idx++ {
 		currentTableSpan := affectedSpans[idx]
 		if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
-			log.Info("affectedReplicaSets is not consecutive, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			log.Info("affectedReplicaSets is not consecutive, skip merge",
+				zap.Stringer("previousDispatcherID", affectedReplicaSets[idx-1].ID),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 		prevTableSpan = currentTableSpan
 		if affectedReplicaSets[idx].GetNodeID() != nodeID {
-			log.Info("affectedReplicaSets is not in the same node, skip merge", zap.Any("affectedReplicaSets", affectedReplicaSets))
+			log.Info("affectedReplicaSets is not in the same node, skip merge",
+				zap.Int("affectedReplicaSetCount", len(affectedReplicaSets)),
+				zap.Stringer("dispatcherID", affectedReplicaSets[idx].ID))
 			return false
 		}
 	}
@@ -590,7 +599,7 @@ func (oc *Controller) addMergeOccupyOperators(
 		log.Error("failed to add occupy dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Int64("group", replicaSet.GetGroupID()),
-			zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+			zap.Stringer("dispatcherID", replicaSet.ID),
 			zap.String("operator", occupyOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil, false
@@ -602,7 +611,7 @@ func (oc *Controller) cancelMergeOccupyOperators(
 	operators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) {
 	for _, op := range operators {
-		oc.cancelOperator(op.ID())
+		oc.cancelOperator(op)
 	}
 }
 
@@ -626,7 +635,7 @@ func (oc *Controller) AddMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
@@ -668,7 +677,7 @@ func (oc *Controller) AddRestoredMergeOperator(
 	if !ret {
 		log.Error("failed to add merge dispatcher operator when restoring merge",
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.Int("mergeSpanCount", len(affectedReplicaSets)),
 			zap.String("operator", mergeOperator.String()))
 		oc.cancelMergeOccupyOperators(operators)
 		return nil
@@ -697,9 +706,9 @@ func (oc *Controller) Close() {
 	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
 
 	for _, opType := range opTypes {
-		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		totalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		operatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
 	}
 }
 

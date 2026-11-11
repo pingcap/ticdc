@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -55,7 +54,15 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 		case <-ctx.Done():
 			log.Info("router: close, since context done")
 			return
-		case msg := <-out:
+		case msg, ok := <-out:
+			if !ok {
+				log.Info("router: close, since message channel is closed")
+				return
+			}
+			if msg == nil || len(msg.Message) == 0 {
+				log.Warn("router: drop message without payload")
+				continue
+			}
 			r.mu.RLock()
 			handler, ok := r.handlers[msg.Topic]
 			r.mu.RUnlock()
@@ -78,7 +85,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				}
 
 				// Always increment metrics counter for slow message handling
-				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
+				messagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
 			}
 			if err != nil {
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))

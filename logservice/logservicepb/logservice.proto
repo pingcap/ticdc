@@ -43,3 +43,19 @@ message ReusableEventServiceResponse {
     heartbeatpb.DispatcherID ID = 1;
     repeated string Nodes = 2;
 }
+
+// A capture-wide snapshot, including ordinary and table trigger dispatchers.
+message EventBrokerDispatcherCount {
+    uint32 DispatcherCount = 1;
+    bool RegistrationsStopped = 2;
+}
+
+message EventBrokerDispatcherCountRequest {
+    string TargetNodeId = 1;
+}
+
+message EventBrokerDispatcherCountResponse {
+    string TargetNodeId = 1;
+    // Missing when no fresh report for the requested capture is available.
+    EventBrokerDispatcherCount Report = 2;
+}

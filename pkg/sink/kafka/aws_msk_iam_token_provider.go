@@ -18,19 +18,19 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/aws/aws-msk-iam-sasl-signer-go/signer"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/security"
 )
 
 type awsMSKIAMTokenProvider struct {
 	ctx    context.Context
-	config security.AWSMSKIAM
+	config config.AWSMSKIAMConfig
 }
 
 var _ sarama.AccessTokenProvider = (*awsMSKIAMTokenProvider)(nil)
 
 func newAWSMSKIAMTokenProvider(
-	ctx context.Context, config security.AWSMSKIAM,
+	ctx context.Context, config config.AWSMSKIAMConfig,
 ) sarama.AccessTokenProvider {
 	return &awsMSKIAMTokenProvider{ctx: ctx, config: config}
 }

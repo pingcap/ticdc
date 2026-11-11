@@ -57,8 +57,9 @@ func newPulsarSinkComponent(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (component, config.Protocol, error) {
-	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewCreatorFactory)
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, pulsar.NewCreatorFactory)
 }
 
 func newPulsarSinkComponentForTest(
@@ -66,14 +67,16 @@ func newPulsarSinkComponentForTest(
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 ) (component, config.Protocol, error) {
-	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewMockCreatorFactory)
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, caseSensitive, pulsar.NewMockCreatorFactory)
 }
 
 func newPulsarSinkComponentWithFactory(ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	caseSensitive bool,
 	factoryCreator pulsar.FactoryCreator,
 ) (pulsarComponent component, protocol config.Protocol, err error) {
 	defer func() {
@@ -112,12 +115,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	}
 
 	// pulsar only support canal-json, so we don't need to check the protocol
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, caseSensitive, topic, true, false)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.columnSelector, err = columnselector.New(sinkConfig)
+	pulsarComponent.columnSelector, err = columnselector.New(sinkConfig, caseSensitive)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
@@ -130,12 +133,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, nil, changefeedID)
+	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(sinkConfig, encoderConfig, nil, nil, changefeedID)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig, nil)
+	pulsarComponent.encoder, err = codec.NewEventEncoder(encoderConfig, nil, nil)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"golang.org/x/net/http/httpproxy"
@@ -33,9 +34,15 @@ import (
 // StrictDecodeFile decodes the toml file strictly. If any item in confFile file is not mapped
 // into the Config struct, issue an error and stop the server from starting.
 func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems ...string) error {
+	_, err := StrictDecodeFileWithMeta(path, component, cfg, ignoreCheckItems...)
+	return err
+}
+
+// StrictDecodeFileWithMeta also returns which TOML fields were explicitly supplied.
+func StrictDecodeFileWithMeta(path, component string, cfg any, ignoreCheckItems ...string) (toml.MetaData, error) {
 	metaData, err := toml.DecodeFile(path, cfg)
 	if err != nil {
-		return errors.Trace(err)
+		return metaData, errors.Trace(err)
 	}
 
 	// check if item is a ignoreCheckItem
@@ -67,7 +74,7 @@ func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems 
 				component, path, b.String())
 		}
 	}
-	return errors.Trace(err)
+	return metaData, errors.Trace(err)
 }
 
 // LogHTTPProxies logs HTTP proxy relative environment variables.
@@ -82,15 +89,22 @@ func findProxyFields() []zap.Field {
 	proxyCfg := httpproxy.FromEnvironment()
 	fields := make([]zap.Field, 0, 3)
 	if proxyCfg.HTTPProxy != "" {
-		fields = append(fields, zap.String("http_proxy", proxyCfg.HTTPProxy))
+		fields = append(fields, zap.String("http_proxy", maskProxyForLog(proxyCfg.HTTPProxy)))
 	}
 	if proxyCfg.HTTPSProxy != "" {
-		fields = append(fields, zap.String("https_proxy", proxyCfg.HTTPSProxy))
+		fields = append(fields, zap.String("https_proxy", maskProxyForLog(proxyCfg.HTTPSProxy)))
 	}
 	if proxyCfg.NoProxy != "" {
 		fields = append(fields, zap.String("no_proxy", proxyCfg.NoProxy))
 	}
 	return fields
+}
+
+func maskProxyForLog(proxy string) string {
+	if !strings.Contains(proxy, "://") {
+		proxy = "http://" + proxy
+	}
+	return pkgutil.MaskSensitiveDataInURIForError(proxy)
 }
 
 // shutdownNotify is a callback to notify caller that TiCDC is about to shutdown.

@@ -18,10 +18,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/writelease"
 	"github.com/pingcap/tidb/pkg/objstore"
 	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
 	"github.com/stretchr/testify/require"
@@ -107,4 +109,36 @@ func TestClaimCheckConcurrentWrites(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, fileName, string(data))
 	}
+}
+
+func TestClaimCheckWriteGateBlocksObjectPublication(t *testing.T) {
+	ctx := t.Context()
+	storage := objstore.NewMemStorage()
+	changefeedID := common.NewChangeFeedIDWithName("test", "default")
+	claimCheck := &ClaimCheck{
+		storage:                   storage,
+		rawValue:                  true,
+		changefeedID:              changefeedID,
+		metricSendMessageDuration: claimCheckSendMessageDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricSendMessageCount:    claimCheckSendMessageCount.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+	}
+	t.Cleanup(claimCheck.Close)
+	gate := writelease.NewGate()
+	claimCheck.SetWriteGate(gate)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- claimCheck.WriteMessage(ctx, nil, []byte("large-message"), "message.json")
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	exists, err := storage.FileExists(ctx, "message.json")
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
+	require.NoError(t, <-done)
+	exists, err = storage.FileExists(ctx, "message.json")
+	require.NoError(t, err)
+	require.True(t, exists)
 }

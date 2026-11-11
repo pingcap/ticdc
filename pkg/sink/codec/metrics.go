@@ -14,7 +14,6 @@
 package codec
 
 import (
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -26,8 +25,8 @@ var (
 			Name:      "encoder_group_input_chan_size",
 			Help:      "The size of input channel of encoder group",
 		}, []string{"namespace", "changefeed", "index"})
-	// EncoderGroupOutputChanSizeGauge tracks the size of output channel of encoder group
-	EncoderGroupOutputChanSizeGauge = prometheus.NewGaugeVec(
+	// encoderGroupOutputChanSizeGauge tracks the size of output channel of encoder group
+	encoderGroupOutputChanSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
@@ -36,9 +35,8 @@ var (
 		}, []string{"namespace", "changefeed"})
 )
 
-// InitMetrics registers all metrics in this file
-func InitMetrics(registry *prometheus.Registry) {
+// RegisterMetrics registers all metrics in this file
+func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(encoderGroupInputChanSizeGauge)
-	registry.MustRegister(EncoderGroupOutputChanSizeGauge)
-	common.InitMetrics(registry)
+	registry.MustRegister(encoderGroupOutputChanSizeGauge)
 }

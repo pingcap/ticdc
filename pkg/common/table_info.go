@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -298,6 +299,11 @@ func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
+// HasClusteredPrimaryKey reports whether record keys are derived from the primary key.
+func (ti *TableInfo) HasClusteredPrimaryKey() bool {
+	return ti.columnSchema.PKIsHandle || ti.columnSchema.IsCommonHandle
+}
+
 func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
@@ -502,6 +508,28 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return ti.HasPKOrNotNullUK
 }
 
+// SetHandleKeyFlags records how the primary key is stored as the row handle,
+// mirroring TiDB's table info: a single integer primary key column is the row
+// handle (PKIsHandle), any other primary key is a common handle. Callers that
+// locate a row by the handle key - the MySQL sink's WHERE clause for example -
+// read the key from these flags, so a composite primary key must not be reported
+// as PKIsHandle: doing so makes them fall back to a single column of the table.
+func SetHandleKeyFlags(tableInfo *model.TableInfo) {
+	primary := tables.FindPrimaryIndex(tableInfo)
+	if primary == nil {
+		return
+	}
+
+	if len(primary.Columns) == 1 {
+		column := model.FindColumnInfo(tableInfo.Columns, primary.Columns[0].Name.L)
+		if column != nil && mysql.IsIntegerType(column.GetType()) {
+			tableInfo.PKIsHandle = true
+			return
+		}
+	}
+	tableInfo.IsCommonHandle = true
+}
+
 func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	// If the table has primary key, it is eligible.
 	// the PKIsHandle can not handle all primary key cases, for example:
@@ -549,6 +577,26 @@ func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	}
 
 	return false
+}
+
+// IsSplitable returns whether a table with the given primary key storage and indexes
+// is eligible for split in all sinks.
+// A clustered primary key keeps changes to the same logical row in the same
+// record span. Nonclustered primary keys and other unique keys do not.
+func IsSplitable(hasClusteredPrimaryKey bool, indices []*model.IndexInfo) bool {
+	if !hasClusteredPrimaryKey {
+		return false
+	}
+
+	for _, index := range indices {
+		if index.Primary {
+			continue
+		}
+		if index.Unique {
+			return false
+		}
+	}
+	return true
 }
 
 // GetIndex return the corresponding index by the given name.
@@ -650,7 +698,12 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 // GetOrderedHandleKeyColumnIDs returns the ordered handle-key column IDs.
 // It prefers the primary key columns (PKIndex) when available; otherwise,
 // it falls back to the not-null unique key selected during schema init.
+// A table info without column schema, such as a placeholder for a DML decoded
+// before its DDL, has no handle key.
 func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.HandleKeyIDList
 }
 

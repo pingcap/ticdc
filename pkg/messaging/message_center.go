@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -387,8 +386,8 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
-	commandChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("command")
-	eventChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("event")
+	commandChLen := messagingReceiveChannelLength.WithLabelValues("command")
+	eventChLen := messagingReceiveChannelLength.WithLabelValues("event")
 	for {
 		select {
 		case <-ticker.C:
@@ -429,16 +428,8 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		return err
 	}
 
-	if msg.Type != int32(TypeMessageHandShake) {
-		log.Panic("Received unexpected message type, should be handshake",
-			zap.Stringer("localID", s.messageCenter.id),
-			zap.String("localAddr", s.messageCenter.addr),
-			zap.String("remoteID", msg.From),
-			zap.Int32("type", msg.Type))
-	}
-
-	handshake := &HandshakeMessage{}
-	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
+	handshake, err := decodeHandshakeMessage(msg)
+	if err != nil {
 		log.Warn("failed to unmarshal handshake message", zap.Error(err))
 		return err
 	}
@@ -487,6 +478,36 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		zap.String("remoteAddr", target.targetAddr))
 
 	return target.handleIncomingStream(stream, handshake)
+}
+
+func decodeHandshakeMessage(msg *proto.Message) (*HandshakeMessage, error) {
+	if msg == nil {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: "handshake message is nil",
+		}
+	}
+	if msg.Type != int32(TypeMessageHandShake) {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: fmt.Sprintf("unexpected handshake message type %d", msg.Type),
+		}
+	}
+	if len(msg.Payload) != 1 {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: fmt.Sprintf("handshake must contain exactly one payload, got %d", len(msg.Payload)),
+		}
+	}
+
+	handshake := &HandshakeMessage{}
+	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
+		return nil, errors.AppError{
+			Type:   errors.ErrorTypeInvalidMessage,
+			Reason: err.Error(),
+		}
+	}
+	return handshake, nil
 }
 
 type HandshakeMessage struct {

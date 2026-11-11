@@ -48,14 +48,14 @@ func (p *scanPriorityPolicy) observeSpanResolved(resolvedTs uint64) bool {
 // resolve returns the effective priority after combining inherited, span, and
 // region progress. A high priority decision is never downgraded.
 func (p *scanPriorityPolicy) resolve(
-	inherited TaskType,
+	inherited ScanPriorityLevel,
 	regionResolvedTs uint64,
 	currentTime time.Time,
-) TaskType {
-	if inherited == TaskHighPrior || p.everCaughtUp.Load() || p.isTsClose(regionResolvedTs, currentTime) {
-		return TaskHighPrior
+) ScanPriorityLevel {
+	if isHighScanPriority(inherited) || p.everCaughtUp.Load() || p.isTsClose(regionResolvedTs, currentTime) {
+		return ScanPriorityHigh
 	}
-	return TaskLowPrior
+	return ScanPriorityLow
 }
 
 func (p *scanPriorityPolicy) isTsClose(ts uint64, currentTime time.Time) bool {

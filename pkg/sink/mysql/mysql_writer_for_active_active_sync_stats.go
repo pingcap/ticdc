@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -74,7 +73,7 @@ func NewActiveActiveSyncStatsCollector(changefeedID common.ChangeFeedID) *Active
 	return &ActiveActiveSyncStatsCollector{
 		keyspace:                 keyspace,
 		changefeed:               changefeed,
-		conflictSkipRows:         metrics.ActiveActiveConflictSkipRowsCounter.WithLabelValues(keyspace, changefeed),
+		conflictSkipRows:         activeActiveConflictSkipRowsCounter.WithLabelValues(keyspace, changefeed),
 		lastConflictSkipRowsByID: make(map[uint64]uint64),
 	}
 }
@@ -120,7 +119,7 @@ func (c *ActiveActiveSyncStatsCollector) ForgetConn(connID uint64) {
 // Close releases metric series held by this collector.
 func (c *ActiveActiveSyncStatsCollector) Close() {
 	// Reset the series on sink rebuild.
-	metrics.ActiveActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
+	activeActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
 }
 
 // queryActiveActiveSyncStats queries CONNECTION_ID() and the session variable

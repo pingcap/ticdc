@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -34,7 +33,7 @@ import (
 type SharedInfo struct {
 	// Basic configuration
 	changefeedID         common.ChangeFeedID
-	timezone             string
+	lowLatencyMode       bool
 	bdrMode              bool
 	enableActiveActive   bool
 	outputRawChangeEvent bool
@@ -87,7 +86,7 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
-	timezone string,
+	lowLatencyMode bool,
 	bdrMode bool,
 	enableActiveActive bool,
 	outputRawChangeEvent bool,
@@ -105,7 +104,7 @@ func NewSharedInfo(
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
 		changefeedID:             changefeedID,
-		timezone:                 timezone,
+		lowLatencyMode:           lowLatencyMode,
 		bdrMode:                  bdrMode,
 		enableActiveActive:       enableActiveActive,
 		outputRawChangeEvent:     outputRawChangeEvent,
@@ -120,7 +119,7 @@ func NewSharedInfo(
 		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:            newBlockEventExecutor(),
 		errCh:                    errCh,
-		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricHandleDDLHis:       handleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -145,6 +144,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) IsLowLatencyMode() bool {
+	return d.sharedInfo.lowLatencyMode
 }
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
@@ -187,10 +190,6 @@ func (d *BasicDispatcher) EnableActiveActive() bool {
 	return d.sharedInfo.EnableActiveActive()
 }
 
-func (d *BasicDispatcher) GetTimezone() string {
-	return d.sharedInfo.timezone
-}
-
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
 }
@@ -212,7 +211,7 @@ func (d *BasicDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 }
 
 func (d *BasicDispatcher) GetStartTs() uint64 {
-	return d.startTs
+	return atomic.LoadUint64(&d.startTs)
 }
 
 func (d *BasicDispatcher) SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs bool) {
@@ -250,6 +249,14 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 // constructed once and then reused by resend tasks.
 func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
 	d.sharedInfo.OfferBlockStatus(status)
+}
+
+func (d *BasicDispatcher) offerRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus, canceled <-chan struct{}) bool {
+	return d.sharedInfo.blockStatusBuffer.offerRetryStatus(status, canceled)
+}
+
+func (d *BasicDispatcher) cancelRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	d.sharedInfo.blockStatusBuffer.cancelRetryStatus(status)
 }
 
 // offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
@@ -345,7 +352,8 @@ func (s *SharedInfo) Close() {
 	if s.blockExecutor != nil {
 		s.blockExecutor.Close()
 	}
+	s.blockStatusBuffer.Close()
 	keyspace := s.changefeedID.Keyspace()
 	changefeedID := s.changefeedID.Name()
-	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
+	handleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }

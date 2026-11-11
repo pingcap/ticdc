@@ -15,7 +15,6 @@ package replica
 
 import (
 	"bytes"
-	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -68,13 +67,12 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	})
 	log.Info("new span replication created",
 		zap.Stringer("changefeedID", cfID),
-		zap.String("id", id.String()),
+		zap.Stringer("dispatcherID", id),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.String("span", common.FormatTableSpan(span)))
 	return r
 }
 
@@ -100,8 +98,7 @@ func NewWorkingSpanReplication(
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
 		zap.Int64("groupID", r.groupID),
-		zap.String("start", hex.EncodeToString(span.StartKey)),
-		zap.String("end", hex.EncodeToString(span.EndKey)))
+		zap.String("span", common.FormatTableSpan(span)))
 	return r
 }
 
@@ -149,16 +146,12 @@ func (r *SpanReplication) initGroupID() {
 		log.Warn("invalid span range",
 			zap.Stringer("changefeedID", r.ChangefeedID),
 			zap.String("dispatcherID", r.ID.String()), zap.Int64("tableID", span.TableID),
-			zap.String("totalSpan", totalSpan.String()),
-			zap.String("start", hex.EncodeToString(span.StartKey)),
-			zap.String("end", hex.EncodeToString(span.EndKey)))
+			zap.String("totalSpan", common.FormatTableSpan(&totalSpan)),
+			zap.String("span", common.FormatTableSpan(&span)))
 	}
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
-	log.Info("init groupID",
-		zap.Stringer("changefeedID", r.ChangefeedID), zap.Any("groupID", r.groupID),
-		zap.Any("span", common.FormatTableSpan(&span)), zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
@@ -185,6 +178,22 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) b
 	}
 	r.status.Store(newStatus)
 	return newStatus.CheckpointTs != oldStatus.CheckpointTs
+}
+
+// UpdateRemovedStatus stores the terminal status reported by the dispatcher
+// being removed, even when its checkpointTs is behind the stored one. The
+// barrier forwards the stored checkpointTs to blockTs-1 when a dispatcher
+// reports a block event, so a dispatcher closed while blocked reports a lower
+// checkpointTs. UpdateStatus would drop that status and leave the span
+// Working forever. The stored checkpointTs never moves backwards.
+func (r *SpanReplication) UpdateRemovedStatus(newStatus *heartbeatpb.TableSpanStatus) {
+	oldStatus := r.status.Load()
+	if newStatus.CheckpointTs < oldStatus.CheckpointTs {
+		status := *newStatus
+		status.CheckpointTs = oldStatus.CheckpointTs
+		newStatus = &status
+	}
+	r.status.Store(newStatus)
 }
 
 // ShouldRun always returns true.

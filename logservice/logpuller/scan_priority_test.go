@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -37,45 +36,45 @@ func TestScanPriorityPolicyResolve(t *testing.T) {
 
 	for _, tc := range []struct {
 		name             string
-		inherited        TaskType
+		inherited        ScanPriorityLevel
 		regionResolvedTs uint64
-		expected         TaskType
+		expected         ScanPriorityLevel
 	}{
 		{
 			name:             "zero resolved ts",
-			inherited:        TaskLowPrior,
+			inherited:        ScanPriorityLow,
 			regionResolvedTs: 0,
-			expected:         TaskLowPrior,
+			expected:         ScanPriorityLow,
 		},
 		{
 			name:             "recent region",
-			inherited:        TaskLowPrior,
+			inherited:        ScanPriorityLow,
 			regionResolvedTs: oracle.GoTimeToTS(currentTime.Add(-29 * time.Minute)),
-			expected:         TaskHighPrior,
+			expected:         ScanPriorityHigh,
 		},
 		{
 			name:             "threshold boundary",
-			inherited:        TaskLowPrior,
+			inherited:        ScanPriorityLow,
 			regionResolvedTs: oracle.GoTimeToTS(currentTime.Add(-30 * time.Minute)),
-			expected:         TaskHighPrior,
+			expected:         ScanPriorityHigh,
 		},
 		{
 			name:             "old region",
-			inherited:        TaskLowPrior,
+			inherited:        ScanPriorityLow,
 			regionResolvedTs: oracle.GoTimeToTS(currentTime.Add(-31 * time.Minute)),
-			expected:         TaskLowPrior,
+			expected:         ScanPriorityLow,
 		},
 		{
 			name:             "future region",
-			inherited:        TaskLowPrior,
+			inherited:        ScanPriorityLow,
 			regionResolvedTs: oracle.GoTimeToTS(currentTime.Add(time.Minute)),
-			expected:         TaskHighPrior,
+			expected:         ScanPriorityHigh,
 		},
 		{
 			name:             "inherited high",
-			inherited:        TaskHighPrior,
+			inherited:        ScanPriorityHigh,
 			regionResolvedTs: oracle.GoTimeToTS(currentTime.Add(-time.Hour)),
-			expected:         TaskHighPrior,
+			expected:         ScanPriorityHigh,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,8 +92,8 @@ func TestScanPriorityPolicyRemainsHighAfterCatchUp(t *testing.T) {
 	require.False(t, policy.observeSpanResolved(oracle.GoTimeToTS(currentTime.Add(-31*time.Minute))))
 	require.True(t, policy.observeSpanResolved(oracle.GoTimeToTS(currentTime.Add(-time.Minute))))
 	require.False(t, policy.observeSpanResolved(oracle.GoTimeToTS(currentTime)))
-	require.Equal(t, TaskHighPrior, policy.resolve(
-		TaskLowPrior,
+	require.Equal(t, ScanPriorityHigh, policy.resolve(
+		ScanPriorityLow,
 		oracle.GoTimeToTS(currentTime.Add(-time.Hour)),
 		currentTime,
 	))
@@ -106,8 +105,10 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	pdClock.(*pdutil.Clock4Test).SetTS(currentTs)
 	client := &subscriptionClient{
-		pdClock:         pdClock,
-		regionTaskQueue: priorityqueue.New[PriorityTask](),
+		upstream: &upstreamHandle{pdClock: pdClock},
+		regionScheduler: &regionRequestScheduler{
+			taskQueue: priorityqueue.New[*regionPriorityTask](),
+		},
 	}
 
 	startTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
@@ -125,11 +126,11 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	}
 	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
 
-	client.scheduleRegionRequest(context.Background(), region, TaskLowPrior)
-	firstTask := popRegionPriorityTask(t, client.regionTaskQueue)
-	require.Equal(t, TaskLowPrior, firstTask.taskType)
+	client.scheduleRegionRequest(context.Background(), region)
+	firstTask := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
+	require.Equal(t, ScanPriorityLow, firstTask.priority())
 
-	firstRegion := firstTask.GetRegionInfo()
+	firstRegion := firstTask.regionInfo
 	firstRegion.lockedRangeState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime.Add(-time.Minute)))
 	span.rangeLock.UnlockRange(
 		firstRegion.span.StartKey,
@@ -139,21 +140,55 @@ func TestScanPriorityUsesRestoredRegionProgress(t *testing.T) {
 	)
 
 	retryRegion := newRegionInfo(tikv.NewRegionVerID(1, 1, 2), rawSpan, nil, span, false)
-	client.scheduleRegionRequest(context.Background(), retryRegion, TaskLowPrior)
-	retryTask := popRegionPriorityTask(t, client.regionTaskQueue)
-	require.Equal(t, TaskHighPrior, retryTask.taskType)
-	require.Equal(t, cdcpb.ScanPriority_SCAN_PRIORITY_HIGH, retryTask.GetRegionInfo().scanPriority)
+	client.scheduleRegionRequest(context.Background(), retryRegion)
+	retryTask := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
+	require.Equal(t, ScanPriorityHigh, retryTask.priority())
+	require.Equal(t, ScanPriorityHigh, retryTask.regionInfo.scanPriority)
 	require.False(t, span.priorityPolicy.everCaughtUp.Load())
+}
+
+func TestSubscriptionBaseScanPriorityIsNeverDowngraded(t *testing.T) {
+	currentTime := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	pdClock := pdutil.NewClock4Test()
+	pdClock.(*pdutil.Clock4Test).SetTS(oracle.GoTimeToTS(currentTime))
+	client := &subscriptionClient{
+		upstream: &upstreamHandle{pdClock: pdClock},
+		regionScheduler: &regionRequestScheduler{
+			taskQueue: priorityqueue.New[*regionPriorityTask](),
+		},
+	}
+
+	startTs := oracle.GoTimeToTS(currentTime.Add(-time.Hour))
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:            SubscriptionID(1),
+		span:             rawSpan,
+		startTs:          startTs,
+		rangeLock:        regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, startTs),
+		baseScanPriority: ScanPriorityHigh,
+		priorityPolicy:   newScanPriorityPolicy(pdClock, 30*time.Minute),
+	}
+	// newRegionInfo starts at low priority to simulate a retry path that does
+	// not inherit the priority from the previous Region.
+	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), rawSpan, nil, span, false)
+
+	client.scheduleRegionRequest(context.Background(), region)
+	task := popRegionPriorityTask(t, client.regionScheduler.taskQueue)
+	require.Equal(t, ScanPriorityHigh, task.priority())
 }
 
 func popRegionPriorityTask(
 	t *testing.T,
-	queue *priorityqueue.PriorityQueue[PriorityTask],
+	queue *priorityqueue.PriorityQueue[*regionPriorityTask],
 ) *regionPriorityTask {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	task, err := queue.Pop(ctx)
 	require.NoError(t, err)
-	return task.(*regionPriorityTask)
+	return task
 }

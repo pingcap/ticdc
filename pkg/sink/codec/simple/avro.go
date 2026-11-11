@@ -14,6 +14,8 @@
 package simple
 
 import (
+	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -67,6 +69,11 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 		}
 	}
 
+	// Match the checksum's column ID order without changing the shared table schema.
+	colInfos = slices.Clone(colInfos)
+	sort.Slice(colInfos, func(i, j int) bool {
+		return colInfos[i].ID < colInfos[j].ID
+	})
 	columnsSchema := make([]interface{}, 0, len(colInfos))
 	for _, col := range colInfos {
 		mysqlType := map[string]interface{}{

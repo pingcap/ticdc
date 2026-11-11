@@ -46,6 +46,8 @@ type Controller struct {
 	// it's not affected by new node join the cluster.
 	bootstrapped bool
 	startTs      uint64
+	// Immutable after bootstrap; restored cleanup operators may repair ranges later.
+	bootstrapAddedTables map[int64]map[int64]bootstrapAddedTable
 
 	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
@@ -211,9 +213,23 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	// states, but we must disable the self-healing branches. Otherwise a late Stopped/Working heartbeat
 	// can recreate dispatchers for a changefeed that is already shutting down.
 	for _, status := range statusList {
+		if status == nil || status.ID == nil ||
+			(!common.IsDefaultMode(status.Mode) && !common.IsRedoMode(status.Mode)) {
+			log.Warn("ignore invalid dispatcher status",
+				zap.Stringer("changefeedID", c.changefeedID),
+				zap.Any("status", status))
+			continue
+		}
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := c.getOperatorController(status.Mode)
 		spanController := c.getSpanController(status.Mode)
+		if operatorController == nil || spanController == nil {
+			log.Warn("ignore dispatcher status for disabled mode",
+				zap.Stringer("changefeedID", c.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int64("mode", status.Mode))
+			continue
+		}
 
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
@@ -282,22 +298,21 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		// rescheduling, so we mark the span absent to let the scheduler recreate it.
 		//
 		// Safety against message reordering/resend:
-		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
-		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
-		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
-		//   statuses, the worst case is an extra no-op absent mark.
+		// MarkSpanAbsentIfCurrent atomically verifies that stm is still the current desired task and is still bound
+		// to the reporting node. A concurrent split, merge, move, or DDL removal therefore makes this a no-op.
 		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
 			if op := operatorController.GetOperator(dispatcherID); op == nil {
 				if c.removeTerminalSpanCoveredByMergedSpan(spanController, stm) {
 					continue
 				}
-				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("from", from.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.Any("status", status))
-				spanController.MarkSpanAbsent(stm)
+				if spanController.MarkSpanAbsentIfCurrent(stm, from) {
+					log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+						zap.String("changefeed", c.changefeedID.Name()),
+						zap.String("from", from.String()),
+						zap.String("dispatcherID", dispatcherID.String()),
+						zap.Any("status", status))
+				}
 			}
 		}
 	}
@@ -325,9 +340,7 @@ func (c *Controller) removeTerminalSpanCoveredByMergedSpan(
 			log.Info("remove terminal span covered by merged span",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.String("dispatcherID", stm.ID.String()),
-				zap.String("coveringDispatcherID", candidate.ID.String()),
-				zap.String("span", common.FormatTableSpan(stm.Span)),
-				zap.String("coveringSpan", common.FormatTableSpan(candidate.Span)))
+				zap.String("coveringDispatcherID", candidate.ID.String()))
 			spanController.RemoveReplicatingSpan(stm)
 			return true
 		}

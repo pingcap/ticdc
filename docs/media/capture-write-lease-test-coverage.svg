@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820">
+  <defs>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#365f56"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; fill: #24312f; }
+    .title { font-size: 26px; font-weight: 700; }
+    .subtitle { font-size: 13px; fill: #655f55; }
+    .type { font-size: 9px; font-weight: 700; letter-spacing: 1.1px; fill: #746b5f; }
+    .row-title { font-size: 16px; font-weight: 700; }
+    .copy { font-size: 11px; fill: #4f5a57; }
+    .claim { font-size: 13px; font-weight: 700; }
+    .number { font-size: 20px; font-weight: 700; }
+  </style>
+  <rect width="1200" height="820" fill="#f7f2e8"/>
+
+  <text x="48" y="52" text-anchor="start" class="title">Figure 5: Layered tests cover each safety obligation</text>
+  <text x="48" y="77" class="subtitle">Deterministic logic checks prove local invariants; integration and chaos validate wiring, recovery, and data consistency</text>
+  <rect x="971" y="34" width="181" height="42" rx="7" fill="#fffdf7" stroke="#8c7d68" stroke-dasharray="6 4"/>
+  <text x="987" y="51" class="type">TEST STRATEGY</text>
+  <text x="987" y="68" font-size="11" font-weight="700">LAYERED EVIDENCE</text>
+
+  <rect data-graph-role="container" x="48" y="115" width="760" height="570" rx="12" fill="#fffdf7" fill-opacity="0.56" stroke="#8c7d68" stroke-dasharray="8 6"/>
+  <text x="68" y="141" class="type">TEST LAYERS</text>
+
+  <rect data-graph-role="node" x="80" y="170" width="696" height="100" rx="9" fill="#eff6ff" stroke="#93b7d0"/>
+  <circle cx="112" cy="220" r="20" fill="#356a8a"/>
+  <text x="112" y="227" text-anchor="middle" class="number" style="fill:#ffffff">1</text>
+  <text x="150" y="199" class="row-title">Deterministic unit tests</text>
+  <text x="150" y="222" class="copy">Gate truth table · wake-up transition · irreversible fence · request age</text>
+  <text x="150" y="241" class="copy">capability mode · witness rotation · TTL watchdog · captureRemoveTTL</text>
+
+  <rect data-graph-role="node" x="80" y="292" width="696" height="100" rx="9" fill="#f5f3ff" stroke="#a78bba"/>
+  <circle cx="112" cy="342" r="20" fill="#7a5c99"/>
+  <text x="112" y="349" text-anchor="middle" class="number" style="fill:#ffffff">2</text>
+  <text x="150" y="321" class="row-title">Transport boundary tests</text>
+  <text x="150" y="344" class="copy">MySQL resource release · Kafka / Pulsar send · claim-check publication</text>
+  <text x="150" y="363" class="copy">Storage index publication · Redo flush, close, meta, and cleanup</text>
+
+  <rect data-graph-role="node" x="80" y="414" width="696" height="100" rx="9" fill="#fff7ed" stroke="#d9a35b"/>
+  <circle cx="112" cy="464" r="20" fill="#b66a1f"/>
+  <text x="112" y="471" text-anchor="middle" class="number" style="fill:#ffffff">3</text>
+  <text x="150" y="443" class="row-title">Repository integration test</text>
+  <text x="150" y="466" class="copy">Three captures · active MySQL workload · delayed, dropped, and duplicated grants</text>
+  <text x="150" y="485" class="copy">blocked / recovery metrics · stale response rejection · final Sync Diff</text>
+
+  <rect data-graph-role="node" x="80" y="536" width="696" height="120" rx="9" fill="#ecfdf5" stroke="#86b89d"/>
+  <circle cx="112" cy="596" r="20" fill="#365f56"/>
+  <text x="112" y="603" text-anchor="middle" class="number" style="fill:#ffffff">4</text>
+  <text x="150" y="565" class="row-title">Testinfra long-running chaos</text>
+  <text x="150" y="588" class="copy">3→1→3 scale · capture hang · container kill · five network-isolation modes</text>
+  <text x="150" y="607" class="copy">15s stable identity barrier after every round · continuous mixed DML</text>
+  <text x="150" y="626" class="copy">checkpoint catch-up · 100-table CRC · Sync Diff fallback · panic scan</text>
+
+  <path data-graph-role="edge" d="M 808 220 H 886" fill="none" stroke="#365f56" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+  <path data-graph-role="edge" d="M 808 342 H 886" fill="none" stroke="#365f56" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+  <path data-graph-role="edge" d="M 808 464 H 886" fill="none" stroke="#365f56" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+  <path data-graph-role="edge" d="M 808 596 H 886" fill="none" stroke="#365f56" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+
+  <rect data-graph-role="container" x="886" y="150" width="266" height="506" rx="12" fill="#fffdf7" stroke="#365f56" stroke-width="1.7"/>
+  <text x="906" y="176" class="type">PROOF OBLIGATIONS</text>
+  <text x="906" y="215" class="claim" style="fill:#276749">Gate is fail-closed</text>
+  <text x="906" y="237" class="copy">Both required proofs must be fresh.</text>
+  <line x1="906" y1="260" x2="1132" y2="260" stroke="#d8d0c3"/>
+  <text x="906" y="297" class="claim" style="fill:#276749">Stale messages cannot renew</text>
+  <text x="906" y="319" class="copy">Epoch, sequence, and send time bind</text>
+  <text x="906" y="336" class="copy">every accepted grant.</text>
+  <line x1="906" y1="359" x2="1132" y2="359" stroke="#d8d0c3"/>
+  <text x="906" y="396" class="claim" style="fill:#276749">Every real side effect is gated</text>
+  <text x="906" y="418" class="copy">Async queues cannot bypass the final</text>
+  <text x="906" y="435" class="copy">transport-owned admission check.</text>
+  <line x1="906" y1="458" x2="1132" y2="458" stroke="#d8d0c3"/>
+  <text x="906" y="495" class="claim" style="fill:#276749">Replacement starts later</text>
+  <text x="906" y="517" class="copy">captureRemoveTTL separates the old</text>
+  <text x="906" y="534" class="copy">writer bound from rescheduling.</text>
+  <line x1="906" y1="557" x2="1132" y2="557" stroke="#d8d0c3"/>
+  <text x="906" y="594" class="claim" style="fill:#276749">Recovery preserves data</text>
+  <text x="906" y="616" class="copy">Chaos, checkpoint, checksum, and log</text>
+  <text x="906" y="633" class="copy">checks validate the complete system.</text>
+
+  <rect x="48" y="715" width="1104" height="58" rx="10" fill="#fff7ed" stroke="#d9a35b"/>
+  <text x="68" y="740" class="claim" style="fill:#8f5a1e">Coverage conclusion</text>
+  <text x="222" y="740" class="copy">Sufficient for the stated admission-safety invariant and recovery behavior; it does not claim cancellation of in-flight work or broker-level exactly-once.</text>
+  <text x="48" y="806" class="subtitle">EKS qualification evidence: 39 completed network rounds over two hours, followed by matching 100-table CRCs and a clean panic scan.</text>
+</svg>

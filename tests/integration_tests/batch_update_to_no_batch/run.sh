@@ -12,6 +12,18 @@ SINK_TYPE=$1
 # 1. cdc works well in batch mode
 # 2. cdc works well in no-batch mode
 # 3. cdc can switch from batch mode to no-batch mode and vice versa and works well
+function run_composite_key_nul() {
+	# Issue #6638: repeat colliding key pairs in separate autocommit transactions.
+	# Keep each pair distinct so later writes cannot repair a missing INSERT.
+	local i
+	for i in $(seq 1 1000); do
+		echo "INSERT INTO batch_update_to_no_batch.composite_key_nul VALUES (CONCAT('$1-$i', 0x61), 0x620063);
+		INSERT INTO batch_update_to_no_batch.composite_key_nul VALUES (CONCAT('$1-$i', 0x610062), 0x63);
+		DELETE FROM batch_update_to_no_batch.composite_key_nul WHERE a = CONCAT('$1-$i', 0x61) AND b = 0x620063;"
+	done >"$WORK_DIR/composite_key_nul.sql"
+	run_sql_file "$WORK_DIR/composite_key_nul.sql" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+}
+
 function run() {
 	# batch mode only supports mysql sink
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -38,6 +50,7 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_composite_key_nul batch
 
 	# pause changefeed
 	cdc_cli_changefeed pause -c ${changefeed_id}
@@ -47,13 +60,16 @@ function run() {
 	cdc_cli_changefeed resume -c ${changefeed_id}
 
 	run_sql_file $CUR/data/test_v5.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_composite_key_nul no_batch
 
 	# pause changefeed
 	cdc_cli_changefeed pause -c ${changefeed_id}
-	# update changefeed to no batch dml mode
-	cdc_cli_changefeed update -c ${changefeed_id} --sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=true" --no-confirm
+	# Re-enable batch DML and cover the same composite keys in safe mode.
+	cdc_cli_changefeed update -c ${changefeed_id} \
+		--sink-uri="mysql://root@127.0.0.1:3306/?batch-dml-enable=true&safe-mode=true" --no-confirm
 	# resume changefeed
 	cdc_cli_changefeed resume -c ${changefeed_id}
+	run_composite_key_nul safe_mode
 
 	run_sql_file $CUR/data/test_finish.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

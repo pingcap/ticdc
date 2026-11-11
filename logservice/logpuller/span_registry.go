@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,12 +24,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -73,7 +74,9 @@ type subscribedSpan struct {
 	initializationTracker spanInitializationTracker
 	resolvedTsUpdated     atomic.Int64
 	resolvedTs            atomic.Uint64
-	priorityPolicy        scanPriorityPolicy
+	// baseScanPriority is the minimum priority for every Region in this subscription.
+	baseScanPriority ScanPriorityLevel
+	priorityPolicy   scanPriorityPolicy
 }
 
 // spanRegistry tracks subscribed spans and owns span-level background maintenance.
@@ -141,7 +144,7 @@ func newSubscribedSpan(
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
 			resolveLockRateLimiter.cancel(key)
-			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
+			subscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
 	return rt
@@ -185,9 +188,25 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Any("ranges", res))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("subscription client finds slow locked ranges",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("lockedRegionCount", res.LockedRegionCount),
+			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+			zap.Any("fastestRegion", res.FastestRegion),
+			zap.Any("slowestRegion", res.SlowestRegion))
+	}
+}
+
+// formatUnlockedRanges formats unlocked ranges for logging. The span keys may
+// contain row handles, so they are redacted according to the log redaction mode.
+func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
+	res := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		res = append(res, fmt.Sprintf("startKey: %s, endKey: %s, resolvedTs: %d",
+			util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+	}
+	return res
 }
 
 func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
@@ -235,14 +254,14 @@ func (r *spanRegistry) UpdateMetrics() {
 		}
 	}
 	r.RUnlock()
-	metrics.SubscriptionClientSubscribedRegionCount.Set(float64(count))
+	subscriptionClientSubscribedRegionCount.Set(float64(count))
 
 	if pullerMinResolvedTs != 0 {
 		pdTime := r.pdClock.CurrentTime()
 		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
 		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 		if resolvedTsLag > 0 {
-			metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
+			logPullerResolvedTsLag.Set(resolvedTsLag)
 		}
 	}
 }
@@ -252,24 +271,26 @@ type spanAndTargetTs struct {
 	targetTs uint64
 }
 
+// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no
+// need to resolve.
+func getResolvedTargetTs(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
+	resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+	if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+		return 0
+	}
+	resolvedTs := subSpan.resolvedTs.Load()
+	resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+	if currentTime.Sub(resolvedTime) < resolveLockFence {
+		return 0
+	}
+	return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
+}
+
 func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
 	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
 	defer resolveLockTicker.Stop()
 	maxCacheSize := 1024
 	spanAndTsCache := make([]spanAndTargetTs, 0, maxCacheSize)
-	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
-	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time, currentTs uint64) uint64 {
-		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
-		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
-			return 0
-		}
-		resolvedTs := subSpan.resolvedTs.Load()
-		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
-		if currentTime.Sub(resolvedTime) < resolveLockFence {
-			return 0
-		}
-		return min(currentTs, oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence)))
-	}
 
 	for {
 		select {
@@ -321,27 +342,47 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 		currTime := r.pdClock.CurrentTime()
 		r.RLock()
 		for subscriptionID, rt := range r.spans {
+			if rt == nil || rt.stopped.Load() {
+				continue
+			}
 			attr := rt.rangeLock.IterAll(nil)
-			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
+			if attr.LockedRegionCount > 0 {
+				ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
+				if attr.SlowestRegion.Initialized {
+					if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
+						log.Info("subscription client finds a initialized slow region",
+							zap.Uint64("subscriptionID", uint64(subscriptionID)),
+							zap.Int64("tableID", rt.span.TableID),
+							zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+							zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+							zap.Any("slowRegion", attr.SlowestRegion),
+							zap.Duration("resolvedTsLag", currTime.Sub(ckptTime)))
+					}
+				} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
+					log.Info("subscription client initializes a region too slow",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Any("slowRegion", attr.SlowestRegion))
+						zap.Int64("tableID", rt.span.TableID),
+						zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+						zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+						zap.Any("slowRegion", attr.SlowestRegion),
+						zap.Duration("initializeDuration", currTime.Sub(attr.SlowestRegion.Created)))
+				} else if currTime.Sub(ckptTime) > 10*time.Minute {
+					log.Info("subscription client finds a uninitialized slow region",
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Int64("tableID", rt.span.TableID),
+						zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+						zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+						zap.Any("slowRegion", attr.SlowestRegion),
+						zap.Duration("resolvedTsLag", currTime.Sub(ckptTime)))
 				}
-			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				log.Info("subscription client initializes a region too slow",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			} else if currTime.Sub(ckptTime) > 10*time.Minute {
-				log.Info("subscription client finds a uninitialized slow region",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
 			}
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Int64("tableID", rt.span.TableID),
+					zap.Int("lockedRegionCount", attr.LockedRegionCount),
+					zap.Int("holeCount", len(attr.UnLockedRanges)),
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()

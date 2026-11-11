@@ -47,7 +47,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.GetId()))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("dispatcherID", task.dispatcher.GetId()))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
@@ -340,7 +340,8 @@ type HeartBeatInfo struct {
 // Keeping it narrow avoids reintroducing a broader unified block-status API.
 type blockStatusOfferer interface {
 	GetId() common.DispatcherID
-	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
+	offerRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus, canceled <-chan struct{}) bool
+	cancelRetryBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
 }
 
 // ResendTask is responsible for periodically resending the block status to the maintainer.
@@ -351,6 +352,8 @@ type ResendTask struct {
 	callback     func() // function need to be called when the task is cancelled
 	taskHandle   *threadpool.TaskHandle
 	executeCount uint64
+	canceled     chan struct{}
+	cancelOnce   sync.Once
 }
 
 const resendTimeInterval = 5 * time.Second
@@ -363,6 +366,7 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 		dispatcher: dispatcher,
 		message:    message,
 		callback:   callback,
+		canceled:   make(chan struct{}),
 	}
 	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
 	return t
@@ -372,7 +376,9 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 // WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.offerBlockStatus(t.message)
+	if !t.dispatcher.offerRetryBlockStatus(t.message, t.canceled) {
+		return time.Now().Add(resendTimeInterval)
+	}
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {
@@ -385,10 +391,18 @@ func (t *ResendTask) Execute() time.Time {
 
 // Cancel stops future retries and runs the optional completion callback once.
 func (t *ResendTask) Cancel() {
-	if t.callback != nil {
-		t.callback()
-	}
-	t.taskHandle.Cancel()
+	t.cancelOnce.Do(func() {
+		if t.canceled != nil {
+			close(t.canceled)
+		}
+		t.dispatcher.cancelRetryBlockStatus(t.message)
+		if t.callback != nil {
+			t.callback()
+		}
+		if t.taskHandle != nil {
+			t.taskHandle.Cancel()
+		}
+	})
 }
 
 var (
@@ -533,7 +547,7 @@ func addToStatusDynamicStream(d Dispatcher) {
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed",
 			zap.Stringer("changefeedID", d.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.GetId()),
+			zap.Stringer("dispatcherID", d.GetId()),
 			zap.Error(err))
 	}
 }

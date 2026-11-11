@@ -65,6 +65,7 @@ func newCmdUnsafe(f factory.Factory) *cobra.Command {
 	command.AddCommand(newCmdShowMetadata(f))
 	command.AddCommand(newCmdDeleteServiceGcSafepoint(f, commonOptions))
 	command.AddCommand(newCmdResolveLock(f))
+	command.AddCommand(newCmdVerifyGCSafepoint(f))
 
 	return command
 }

@@ -40,29 +40,34 @@ func TestSpanMap(t *testing.T) {
 	require.Equal(t, v, 2)
 	require.True(t, ok)
 
-	// Overwrite then get.
+	// Insert a span with the same start key but different end key.
 	old, ok := m.ReplaceOrInsert(
 		heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}}, 3)
-	require.Equal(t, old, 2)
-	require.True(t, ok)
-	require.Equal(t, 2, m.Len())
+	require.Zero(t, old)
+	require.False(t, ok)
+	require.Equal(t, 3, m.Len())
 	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
+	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}}))
 	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	require.Equal(t, v, 2)
+	require.True(t, ok)
+	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}})
 	require.Equal(t, v, 3)
 	require.True(t, ok)
 
 	// get value
 	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
-	require.Equal(t, v, 3)
+	require.Equal(t, v, 2)
 
 	// Delete than get value
-	v, ok = m.Delete(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	v, ok = m.Delete(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}})
 	require.Equal(t, v, 3)
 	require.True(t, ok)
-	require.Equal(t, 1, m.Len())
-	require.False(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
+	require.Equal(t, 2, m.Len())
+	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
+	require.False(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}}))
 	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
-	require.Equal(t, v, 0)
+	require.Equal(t, v, 2)
 
 	// Pointer value
 	mp := NewBtreeMap[*int]()
@@ -71,7 +76,31 @@ func TestSpanMap(t *testing.T) {
 	vp1, ok := mp.Get(heartbeatpb.TableSpan{TableID: 1})
 	require.Equal(t, vp, vp1)
 	require.True(t, ok)
-	require.Equal(t, 1, m.Len())
+	require.Equal(t, 1, mp.Len())
+}
+
+func TestSpanMapDistinguishesKeyspaceID(t *testing.T) {
+	t.Parallel()
+
+	m := NewBtreeMap[int]()
+	span1 := heartbeatpb.TableSpan{KeyspaceID: 1, TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")}
+	span2 := heartbeatpb.TableSpan{KeyspaceID: 2, TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")}
+
+	old, ok := m.ReplaceOrInsert(span1, 1)
+	require.Zero(t, old)
+	require.False(t, ok)
+
+	old, ok = m.ReplaceOrInsert(span2, 2)
+	require.Zero(t, old)
+	require.False(t, ok)
+
+	require.Equal(t, 2, m.Len())
+	v, ok := m.Get(span1)
+	require.True(t, ok)
+	require.Equal(t, 1, v)
+	v, ok = m.Get(span2)
+	require.True(t, ok)
+	require.Equal(t, 2, v)
 }
 
 func TestMapAscend(t *testing.T) {

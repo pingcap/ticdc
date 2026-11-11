@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/routing"
@@ -110,19 +109,19 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		config: &config.ChangefeedConfig{
 			BDRMode: true,
 		},
-		metricEventDispatcherCount: metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
-		metricCheckpointTs:         metrics.DispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTs:           metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricBlockStatusesChanLen: metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricEventDispatcherCount: eventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
+		metricCheckpointTs:         dispatcherManagerCheckpointTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTs:           dispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricCheckpointTsLag:      dispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTsLag:        dispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen: dispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	// Create shared info for the test manager
 	defaultAtomicity := config.DefaultAtomicityLevel()
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
-		"system",
+		false,
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
 		false, // outputRawChangeEvent
@@ -200,6 +199,7 @@ func (s *bootstrapSchemaStoreForTest) Run(ctx context.Context) error { return ni
 func (s *bootstrapSchemaStoreForTest) Close(ctx context.Context) error { return nil }
 
 func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	snapTs uint64,
 	filter filter.Filter,
@@ -208,6 +208,7 @@ func (s *bootstrapSchemaStoreForTest) GetAllPhysicalTables(
 }
 
 func (s *bootstrapSchemaStoreForTest) RegisterTable(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	startTs uint64,
@@ -223,6 +224,7 @@ func (s *bootstrapSchemaStoreForTest) UnregisterTable(
 }
 
 func (s *bootstrapSchemaStoreForTest) GetTableInfo(
+	ctx context.Context,
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	ts uint64,
@@ -402,7 +404,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectBlockStatusRequest(ctx)
+		manager.collectBlockStatusRequestWithWindow(ctx, 500*time.Millisecond)
 		close(done)
 	}()
 	defer func() {
@@ -416,7 +418,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 2))
 
-	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelDequeue()
 	req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
 	require.NotNil(t, req)
@@ -517,6 +519,7 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 
 func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 	manager := createTestManager(t)
+	require.False(t, manager.IsClosingOrClosed())
 	ctx, cancel := context.WithCancel(context.Background())
 	manager.ctx = ctx
 	manager.cancel = cancel
@@ -534,11 +537,14 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 		require.FailNow(t, "local fence should not wait for dispatcher manager cleanup")
 	}
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.True(t, manager.IsClosingOrClosed())
+	require.False(t, manager.TryClose(false))
 
 	manager.wg.Done()
 	require.Eventually(t, func() bool {
 		return manager.TryClose(false)
 	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.IsClosingOrClosed())
 }
 
 func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {

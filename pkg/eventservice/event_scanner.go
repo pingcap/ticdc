@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -26,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -41,7 +41,7 @@ type eventGetter interface {
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
 	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	GetTableInfo(ctx context.Context, keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -131,19 +131,28 @@ func (s *eventScanner) scan(
 		scanner: s,
 		session: sess,
 	}
+	if err := dispatcherStat.recoverOriginalScan(); err != nil {
+		return 0, nil, scanProgress{}, false, err
+	}
 
 	handled, interrupted, err := strategy.resumePending(scanCtx)
 	if handled {
 		return sess.eventBytes, sess.events, sess.progress, interrupted, err
 	}
 
+	// An unfinished transaction can still have an unprocessed DDL at the
+	// cursor commit-ts, whether resuming from a row or transaction boundary.
+	ddlRange := dataRange
+	if request.Cursor.TxnStartTs != 0 && ddlRange.CommitTsStart > 0 {
+		ddlRange.CommitTsStart--
+	}
 	// Fetch DDL events
 	start := time.Now()
-	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
+	events, err := s.fetchDDLEvents(dispatcherStat, ddlRange)
 	if err != nil {
 		return 0, nil, scanProgress{}, false, err
 	}
-	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
+	eventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
 	scanCtx.merger = newEventMerger(events)
 	scanCtx.processor = newDMLProcessor(
@@ -155,6 +164,17 @@ func (s *eventScanner) scan(
 		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
+	checkpoint, err := dispatcherStat.snapshotOriginalScan()
+	if err != nil {
+		return 0, nil, scanProgress{}, false, err
+	}
+	rollback := func(scanErr error) {
+		if err := dispatcherStat.rollbackOriginalScan(checkpoint); err != nil {
+			log.Warn("rollback large transaction original scan failed",
+				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
+				zap.Error(err), zap.NamedError("scanError", scanErr))
+		}
+	}
 
 	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), request)
 	if err != nil {
@@ -163,9 +183,15 @@ func (s *eventScanner) scan(
 	if iter == nil {
 		interrupted, err := strategy.finishTxn(scanCtx, nextTxnMeta{})
 		if err != nil || interrupted {
+			if err != nil {
+				rollback(err)
+			}
 			return 0, sess.events, sess.progress, interrupted, err
 		}
 		err = finalizeScan(scanCtx.merger, scanCtx.processor, sess, dataRange.CommitTsEnd)
+		if err != nil {
+			rollback(err)
+		}
 		return 0, sess.events, sess.progress, false, err
 	}
 
@@ -178,12 +204,24 @@ func (s *eventScanner) scan(
 				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
 				zap.Error(closeErr))
 		}
-		_ = dispatcherStat.cleanupLargeTxnState()
+		rollback(scanErr)
 		return sess.eventBytes, sess.events, sess.progress, interrupted, scanErr
 	}
 	if closeErr != nil {
-		_ = dispatcherStat.cleanupLargeTxnState()
+		rollback(closeErr)
 		return 0, nil, scanProgress{}, false, closeErr
+	}
+	if scanCtx.processor.cleanupLargeTxnAfterScan {
+		state := dispatcherStat.getLargeTxnState()
+		if state != nil {
+			state.mu.Lock()
+			state.cleanupPending = true
+			state.mu.Unlock()
+			if err := dispatcherStat.cleanupLargeTxnState(); err != nil {
+				log.Warn("cleanup completed large transaction spill failed",
+					zap.Stringer("dispatcherID", dispatcherStat.info.GetID()), zap.Error(err))
+			}
+		}
 	}
 	return sess.eventBytes, sess.events, sess.progress, interrupted, nil
 }
@@ -271,7 +309,7 @@ func (s *eventScanner) scanAndMergeEvents(
 		}
 
 		if isNewTxn {
-			tableInfo, err := s.getTableInfo4Txn(dispatcher, tableID, rawEvent.CRTs-1)
+			tableInfo, err := s.getTableInfo4Txn(session.ctx, dispatcher, tableID, rawEvent.CRTs-1)
 			if err != nil {
 				return false, err
 			}
@@ -348,12 +386,12 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 	return session.dispatcherStat.isRemoved.Load(), nil
 }
 
-func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
+func (s *eventScanner) getTableInfo4Txn(ctx context.Context, dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   dispatcher.info.GetTableSpan().KeyspaceID,
 		Name: dispatcher.info.GetChangefeedID().Keyspace(),
 	}
-	tableInfo, err := s.schemaGetter.GetTableInfo(keyspaceMeta, tableID, ts)
+	tableInfo, err := s.schemaGetter.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}
@@ -576,10 +614,10 @@ func (s *session) isContextDone() bool {
 
 // recordMetrics records the scan duration metrics
 func (s *session) recordMetrics() {
-	metrics.EventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
-	metrics.EventServiceScannedCount.Observe(float64(s.scannedEntryCount))
-	metrics.EventServiceScannedTxnCount.Observe(float64(s.dmlCount))
-	metrics.EventServiceScannedDMLSize.Observe(float64(s.eventBytes))
+	eventServiceScanDuration.Observe(time.Since(s.startTime).Seconds())
+	eventServiceScannedCount.Observe(float64(s.scannedEntryCount))
+	eventServiceScannedTxnCount.Observe(float64(s.dmlCount))
+	eventServiceScannedDMLSize.Observe(float64(s.eventBytes))
 }
 
 func (s *session) appendEvents(events []event.Event) {
@@ -806,10 +844,11 @@ type dmlProcessor struct {
 	mounter      event.Mounter
 	schemaGetter schemaGetter
 
-	filter         filter.Filter
-	filterContext  filter.DMLFilterContext
-	dispatcherStat *dispatcherStat
-	spillDir       string
+	filter                   filter.Filter
+	filterContext            filter.DMLFilterContext
+	dispatcherStat           *dispatcherStat
+	spillDir                 string
+	cleanupLargeTxnAfterScan bool
 
 	// dmlTypeFilterCache caches the pre-decode filter result within the current transaction.
 	// The cache is reset when a new transaction starts. It is safe because tableInfo
@@ -838,6 +877,12 @@ func newDMLProcessor(
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
 	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
+	// Preserve legacy raw UPDATE records for redo applier integration tests.
+	failpoint.Inject("OutputRawRedoUpdates", func() {
+		if common.IsRedoMode(mode) {
+			outputRawChangeEvent = true
+		}
+	})
 	filterContext := filter.DMLFilterContext{}
 	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true

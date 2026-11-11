@@ -122,7 +122,7 @@ func GetKeyspaceTableRange(keyspaceID uint32, tableID int64) (startKey, endKey [
 	// But it actually use the keyspaceID only
 	// We construct a KeyspaceMeta to make the codec happy
 	meta := &keyspacepb.KeyspaceMeta{
-		Id: keyspaceID,
+		Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: keyspaceID},
 	}
 
 	codec, err := tikv.NewCodecV2(tikv.ModeTxn, meta)
@@ -206,7 +206,7 @@ func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 // IsSubSpan returns true if the sub span is parents spans
 func IsSubSpan(sub heartbeatpb.TableSpan, parents ...heartbeatpb.TableSpan) bool {
 	if bytes.Compare(sub.StartKey, sub.EndKey) >= 0 {
-		log.Panic("the sub span is invalid", zap.Reflect("subSpan", sub))
+		log.Panic("the sub span is invalid", zap.String("subSpan", FormatTableSpan(&sub)))
 	}
 	for _, parent := range parents {
 		if StartCompare(parent.StartKey, sub.StartKey) <= 0 &&

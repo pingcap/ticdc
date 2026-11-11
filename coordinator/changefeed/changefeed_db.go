@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -138,8 +139,8 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 
 		info := cf.GetInfo()
 		if info != nil {
-			downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
-			metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
+			_, downstreamType := config.ParseSinkURI(info.SinkURI)
+			ChangefeedDownstreamInfoGauge.DeleteLabelValues(
 				cfID.Keyspace(),
 				cfID.Name(),
 				downstreamType,
@@ -154,12 +155,12 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if info := cf.GetInfo(); info != nil {
 		keyspaceID = info.KeyspaceID
 	}
-	metrics.ChangefeedStatusGauge.DeleteLabelValues(
+	ChangefeedStatusGauge.DeleteLabelValues(
 		cfID.Keyspace(),
 		cfID.Name(),
 		metrics.FormatKeyspaceID(keyspaceID),
 	)
-	metrics.DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
+	DeleteChangefeedCheckpointMetrics(cfID.Keyspace(), cfID.Name(), keyspaceID)
 
 	return nodeID
 }
@@ -286,7 +287,8 @@ func (db *ChangefeedDB) MoveToSchedulingQueue(
 			cf.backoff.StartFinished()
 		}
 		delete(db.stopped, id)
-		cf.isNew = overwriteCheckpointTs
+		info := cf.GetInfo()
+		cf.SetIsNew(overwriteCheckpointTs || (info != nil && util.GetOrZero(info.BootstrapPending)))
 		db.AddAbsentWithoutLock(cf)
 		log.Info("move a changefeed to scheduling queue, it will be scheduled later",
 			zap.Stringer("changefeed", id),
