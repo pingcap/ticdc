@@ -3044,11 +3044,11 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 			},
 		}
 		job.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
-			OldMViewID:           oldMViewID,
-			ShadowTableID:        shadowTableID,
-			BuildReadTSO:         finishedTs - 1,
-			NextTime:             nil,
-			ShouldUpdateNextTime: false,
+			OldMViewID:                         oldMViewID,
+			ShadowTableID:                      shadowTableID,
+			BuildReadTSO:                       finishedTs - 1,
+			NextRefreshUnixSeconds:             nil,
+			ShouldUpdateNextRefreshUnixSeconds: false,
 		})
 		return job
 	}
@@ -3229,11 +3229,11 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLWithTableFilter(t *testing.T) {
 			},
 		}
 		job.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
-			OldMViewID:           oldMViewID,
-			ShadowTableID:        shadowTableID,
-			BuildReadTSO:         finishedTs - 1,
-			NextTime:             nil,
-			ShouldUpdateNextTime: false,
+			OldMViewID:                         oldMViewID,
+			ShadowTableID:                      shadowTableID,
+			BuildReadTSO:                       finishedTs - 1,
+			NextRefreshUnixSeconds:             nil,
+			ShouldUpdateNextRefreshUnixSeconds: false,
 		})
 		return job
 	}
@@ -3319,11 +3319,11 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLFilteredByTableFilter(t *testing.
 			},
 		}
 		job.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
-			OldMViewID:           oldMViewID,
-			ShadowTableID:        shadowTableID,
-			BuildReadTSO:         finishedTs - 1,
-			NextTime:             nil,
-			ShouldUpdateNextTime: false,
+			OldMViewID:                         oldMViewID,
+			ShadowTableID:                      shadowTableID,
+			BuildReadTSO:                       finishedTs - 1,
+			NextRefreshUnixSeconds:             nil,
+			ShouldUpdateNextRefreshUnixSeconds: false,
 		})
 		return job
 	}
@@ -3390,11 +3390,11 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLReturnsConsecutiveCutovers(t *tes
 			},
 		}
 		job.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
-			OldMViewID:           oldMViewID,
-			ShadowTableID:        shadowTableID,
-			BuildReadTSO:         finishedTs - 1,
-			NextTime:             nil,
-			ShouldUpdateNextTime: false,
+			OldMViewID:                         oldMViewID,
+			ShadowTableID:                      shadowTableID,
+			BuildReadTSO:                       finishedTs - 1,
+			NextRefreshUnixSeconds:             nil,
+			ShouldUpdateNextRefreshUnixSeconds: false,
 		})
 		return job
 	}

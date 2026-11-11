@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/util/engine"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +65,7 @@ func NewTiKVEncryptionHTTPClient(pdClient pd.Client, credential *security.Creden
 }
 
 func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
-	stores, err := c.pdClient.GetAllStores(ctx, opt.WithExcludeTombstone())
+	stores, err := c.pdClient.GetAllStores(ctx, pd.WithExcludeTombstone())
 	if err != nil {
 		log.Warn("failed to list TiKV stores",
 			zap.Uint32("keyspaceID", keyspaceID),
