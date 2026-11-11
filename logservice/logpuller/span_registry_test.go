@@ -18,12 +18,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestSpanRegistryUpdateMetrics(t *testing.T) {
@@ -63,11 +67,19 @@ func TestSpanRegistryUpdateMetrics(t *testing.T) {
 	require.InDelta(t, 5.0, testutil.ToFloat64(logPullerResolvedTsLag), 0.001)
 }
 
-func TestSummarizeSpanHealth(t *testing.T) {
+func TestLogSpanHealth(t *testing.T) {
+	core, observedLogs := observer.New(zapcore.InfoLevel)
+	restore := log.ReplaceGlobals(zap.New(core), &log.ZapProperties{
+		Core:  core,
+		Level: zap.NewAtomicLevelAt(zapcore.InfoLevel),
+	})
+	t.Cleanup(restore)
+
 	currentTime := time.Unix(1_700_000_000, 0)
 	newSpan := func(subscriptionID SubscriptionID) *subscribedSpan {
 		return &subscribedSpan{
 			subID: subscriptionID,
+			span:  heartbeatpb.TableSpan{TableID: int64(subscriptionID)},
 			rangeLock: regionlock.NewRangeLock(
 				uint64(subscriptionID), []byte("a"), []byte("z"), 100),
 		}
@@ -80,34 +92,29 @@ func TestSummarizeSpanHealth(t *testing.T) {
 	}
 
 	emptySpan := newSpan(1)
+	logSpanHealth(emptySpan, currentTime)
+	require.Zero(t, observedLogs.FilterMessage(
+		"subscription client initializes a region too slow").Len())
+	holeLogs := observedLogs.FilterMessage("subscription client holes exist").All()
+	require.Len(t, holeLogs, 1)
+	require.EqualValues(t, 1, holeLogs[0].ContextMap()["tableID"])
+	require.EqualValues(t, 0, holeLogs[0].ContextMap()["lockedRegionCount"])
+	require.EqualValues(t, 1, holeLogs[0].ContextMap()["holeCount"])
+
+	observedLogs.TakeAll()
 	initializedSlowSpan := newSpan(2)
 	initializedState := lockFullRange(initializedSlowSpan, 2)
 	initializedState.Initialized.Store(true)
 	initializedState.ResolvedTs.Store(
 		oracle.GoTimeToTS(currentTime.Add(-7 * resolveLockMinInterval)))
-
-	initializingSlowSpan := newSpan(3)
-	initializingState := lockFullRange(initializingSlowSpan, 3)
-	initializingState.Created = currentTime.Add(-11 * time.Minute)
-	initializingState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime))
-
-	uninitializedSlowSpan := newSpan(4)
-	uninitializedState := lockFullRange(uninitializedSlowSpan, 4)
-	uninitializedState.Created = currentTime
-	uninitializedState.ResolvedTs.Store(oracle.GoTimeToTS(currentTime.Add(-11 * time.Minute)))
-
-	summary := summarizeSpanHealth([]spanHealthSnapshot{
-		{subscriptionID: 1, span: emptySpan},
-		{subscriptionID: 2, span: initializedSlowSpan},
-		{subscriptionID: 3, span: initializingSlowSpan},
-		{subscriptionID: 4, span: uninitializedSlowSpan},
-	}, currentTime)
-
-	require.Equal(t, 1, summary.slowInitializedSubscriptionCount)
-	require.Equal(t, 1, summary.slowInitializingSubscriptionCount)
-	require.Equal(t, 1, summary.slowUninitializedSubscriptionCount)
-	require.Equal(t, 1, summary.subscriptionWithHolesCount)
-	require.Equal(t, 1, summary.uncoveredRangeCount)
-	require.Equal(t, []uint64{2, 3, 4}, summary.slowSubscriptionIDs)
-	require.Equal(t, []uint64{1}, summary.holeSubscriptionIDs)
+	logSpanHealth(initializedSlowSpan, currentTime)
+	slowLogs := observedLogs.FilterMessage(
+		"subscription client finds a initialized slow region").All()
+	require.Len(t, slowLogs, 1)
+	require.EqualValues(t, 2, slowLogs[0].ContextMap()["subscriptionID"])
+	require.EqualValues(t, 2, slowLogs[0].ContextMap()["tableID"])
+	require.EqualValues(t, 2, slowLogs[0].ContextMap()["regionID"])
+	require.EqualValues(t, initializedState.ResolvedTs.Load(),
+		slowLogs[0].ContextMap()["resolvedTs"])
+	require.Contains(t, slowLogs[0].ContextMap(), "resolvedTsLag")
 }

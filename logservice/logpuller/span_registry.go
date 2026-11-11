@@ -33,10 +33,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	kvEventsCacheMaxSize    = 32
-	slowRegionLogSampleSize = 3
-)
+const kvEventsCacheMaxSize = 32
 
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
@@ -332,68 +329,46 @@ func (r *spanRegistry) runResolveLockChecker(ctx context.Context) error {
 	}
 }
 
-type spanHealthSnapshot struct {
-	subscriptionID SubscriptionID
-	span           *subscribedSpan
-}
-
-type spanHealthSummary struct {
-	slowInitializedSubscriptionCount   int
-	slowInitializingSubscriptionCount  int
-	slowUninitializedSubscriptionCount int
-	subscriptionWithHolesCount         int
-	uncoveredRangeCount                int
-	slowSubscriptionIDs                []uint64
-	holeSubscriptionIDs                []uint64
-}
-
-func (s *spanHealthSummary) addSlowSubscription(subscriptionID SubscriptionID) {
-	if len(s.slowSubscriptionIDs) < slowRegionLogSampleSize {
-		s.slowSubscriptionIDs = append(s.slowSubscriptionIDs, uint64(subscriptionID))
-	}
-}
-
-func summarizeSpanHealth(spans []spanHealthSnapshot, currentTime time.Time) spanHealthSummary {
-	summary := spanHealthSummary{
-		slowSubscriptionIDs: make([]uint64, 0, slowRegionLogSampleSize),
-		holeSubscriptionIDs: make([]uint64, 0, slowRegionLogSampleSize),
-	}
-	for _, snapshot := range spans {
-		attr := snapshot.span.rangeLock.IterAll(nil)
-		if attr.LockedRegionCount > 0 {
-			checkpointTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			switch {
-			case attr.SlowestRegion.Initialized &&
-				currentTime.Sub(checkpointTime) > 6*resolveLockMinInterval:
-				summary.slowInitializedSubscriptionCount++
-				summary.addSlowSubscription(snapshot.subscriptionID)
-			case !attr.SlowestRegion.Initialized &&
-				currentTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute:
-				summary.slowInitializingSubscriptionCount++
-				summary.addSlowSubscription(snapshot.subscriptionID)
-			case !attr.SlowestRegion.Initialized &&
-				currentTime.Sub(checkpointTime) > 10*time.Minute:
-				summary.slowUninitializedSubscriptionCount++
-				summary.addSlowSubscription(snapshot.subscriptionID)
+func logSpanHealth(span *subscribedSpan, currentTime time.Time) {
+	attr := span.rangeLock.IterAll(nil)
+	if attr.LockedRegionCount > 0 {
+		checkpointTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
+		if attr.SlowestRegion.Initialized {
+			if currentTime.Sub(checkpointTime) > 6*resolveLockMinInterval {
+				log.Info("subscription client finds a initialized slow region",
+					zap.Uint64("subscriptionID", uint64(span.subID)),
+					zap.Int64("tableID", span.span.TableID),
+					zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+					zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+					zap.Any("slowRegion", attr.SlowestRegion),
+					zap.Duration("resolvedTsLag", currentTime.Sub(checkpointTime)))
 			}
-		}
-		if len(attr.UnLockedRanges) > 0 {
-			summary.subscriptionWithHolesCount++
-			summary.uncoveredRangeCount += len(attr.UnLockedRanges)
-			if len(summary.holeSubscriptionIDs) < slowRegionLogSampleSize {
-				summary.holeSubscriptionIDs = append(
-					summary.holeSubscriptionIDs, uint64(snapshot.subscriptionID))
-			}
+		} else if currentTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
+			log.Info("subscription client initializes a region too slow",
+				zap.Uint64("subscriptionID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+				zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+				zap.Any("slowRegion", attr.SlowestRegion),
+				zap.Duration("initializeDuration", currentTime.Sub(attr.SlowestRegion.Created)))
+		} else if currentTime.Sub(checkpointTime) > 10*time.Minute {
+			log.Info("subscription client finds a uninitialized slow region",
+				zap.Uint64("subscriptionID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+				zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+				zap.Any("slowRegion", attr.SlowestRegion),
+				zap.Duration("resolvedTsLag", currentTime.Sub(checkpointTime)))
 		}
 	}
-	return summary
-}
-
-func (s spanHealthSummary) hasAbnormalSpan() bool {
-	return s.slowInitializedSubscriptionCount > 0 ||
-		s.slowInitializingSubscriptionCount > 0 ||
-		s.slowUninitializedSubscriptionCount > 0 ||
-		s.subscriptionWithHolesCount > 0
+	if len(attr.UnLockedRanges) > 0 {
+		log.Info("subscription client holes exist",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int64("tableID", span.span.TableID),
+			zap.Int("lockedRegionCount", attr.LockedRegionCount),
+			zap.Int("holeCount", len(attr.UnLockedRanges)),
+			zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
+	}
 }
 
 func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
@@ -406,29 +381,22 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		spans := make([]spanHealthSnapshot, 0)
+		spans := make([]*subscribedSpan, 0)
 		r.RLock()
-		for subscriptionID, rt := range r.spans {
-			if rt.stopped.Load() {
+		for _, span := range r.spans {
+			if span == nil {
 				continue
 			}
-			spans = append(spans, spanHealthSnapshot{
-				subscriptionID: subscriptionID,
-				span:           rt,
-			})
+			spans = append(spans, span)
 		}
 		r.RUnlock()
 
-		summary := summarizeSpanHealth(spans, r.pdClock.CurrentTime())
-		if summary.hasAbnormalSpan() {
-			log.Info("subscription client detects slow or uncovered regions",
-				zap.Int("slowInitializedSubscriptionCount", summary.slowInitializedSubscriptionCount),
-				zap.Int("slowInitializingSubscriptionCount", summary.slowInitializingSubscriptionCount),
-				zap.Int("slowUninitializedSubscriptionCount", summary.slowUninitializedSubscriptionCount),
-				zap.Int("subscriptionWithHolesCount", summary.subscriptionWithHolesCount),
-				zap.Int("uncoveredRangeCount", summary.uncoveredRangeCount),
-				zap.Uint64s("sampleSlowSubscriptionIDs", summary.slowSubscriptionIDs),
-				zap.Uint64s("sampleHoleSubscriptionIDs", summary.holeSubscriptionIDs))
+		currentTime := r.pdClock.CurrentTime()
+		for _, span := range spans {
+			if span.stopped.Load() {
+				continue
+			}
+			logSpanHealth(span, currentTime)
 		}
 	}
 }

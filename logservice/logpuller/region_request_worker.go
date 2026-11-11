@@ -35,7 +35,7 @@ import (
 
 const (
 	storeReconnectBackoff = time.Second
-	logRegionIDSampleSize = 3
+	logRegionIDSampleSize = 10
 )
 
 // To generate a workerID in `newRegionRequestWorker`.
