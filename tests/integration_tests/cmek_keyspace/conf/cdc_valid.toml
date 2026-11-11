@@ -6,6 +6,8 @@ large-txn-threshold-in-bytes = 1048576
 [encryption]
 enable-encryption = true
 allow-degrade-on-error = false
+# Test-only local TiKV status endpoints use plaintext HTTP.
+allow-insecure-meta = true
 meta-refresh-interval = "1s"
 meta-cache-ttl = "1s"
 

@@ -306,7 +306,8 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 	conf := config.GetGlobalServerConfig()
 	if conf != nil && conf.Encryption != nil && conf.Encryption.EnableEncryption {
-		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(c.pdClient, c.security)
+		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(
+			c.pdClient, c.security, conf.Encryption.AllowInsecureMeta)
 		if err != nil {
 			return err
 		}

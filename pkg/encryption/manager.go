@@ -29,8 +29,9 @@ import (
 
 // EncryptionMetaManager manages encryption metadata for keyspaces
 type EncryptionMetaManager interface {
-	// IsEncryptionEnabled checks if encryption is enabled for a keyspace
-	IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool
+	// IsEncryptionEnabled checks if encryption is enabled for a keyspace.
+	// It returns an error when the status cannot be determined safely.
+	IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) (bool, error)
 
 	// GetCurrentDataKey gets the current data key for a keyspace.
 	// It returns the plaintext data key, the 3-byte data key ID used in the encryption header,
@@ -89,16 +90,15 @@ func NewEncryptionMetaManager(tikvClient TiKVEncryptionClient, kmsClient kms.KMS
 }
 
 // IsEncryptionEnabled checks if encryption is enabled for a keyspace
-func (m *encryptionMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool {
+func (m *encryptionMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) (bool, error) {
 	meta, err := m.getMeta(ctx, keyspaceID)
 	if err != nil {
 		log.Warn("failed to get encryption meta",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Error(err))
-		// If we can't get meta, encryption is not enabled
-		return false
+		return false, err
 	}
-	return meta != nil
+	return meta != nil, nil
 }
 
 // GetCurrentDataKey gets the current data key for a keyspace

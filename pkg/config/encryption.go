@@ -29,6 +29,10 @@ type EncryptionConfig struct {
 	// AllowDegradeOnError allows graceful degradation to unencrypted mode on encryption errors.
 	AllowDegradeOnError bool `toml:"allow-degrade-on-error" json:"allow_degrade_on_error"`
 
+	// AllowInsecureMeta permits fetching encryption metadata over plaintext HTTP.
+	// It is intended only for test and development environments.
+	AllowInsecureMeta bool `toml:"allow-insecure-meta" json:"allow_insecure_meta"`
+
 	// KMS contains optional KMS client overrides. If unset, TiCDC will use the
 	// default credential chain of the corresponding cloud provider.
 	KMS *KMSConfig `toml:"kms" json:"kms"`
@@ -43,7 +47,8 @@ type KMSConfig struct {
 type AWSKMSConfig struct {
 	// Region overrides the region from TiKV encryption metadata.
 	Region string `toml:"region" json:"region"`
-	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	// Endpoint configures a trusted custom endpoint. Endpoints received from
+	// TiKV encryption metadata are ignored.
 	Endpoint string `toml:"endpoint" json:"endpoint"`
 
 	// Profile configures the AWS shared config profile to use.
@@ -56,7 +61,8 @@ type AWSKMSConfig struct {
 }
 
 type GCPKMSConfig struct {
-	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	// Endpoint configures a trusted custom endpoint. Endpoints received from
+	// TiKV encryption metadata are ignored.
 	Endpoint string `toml:"endpoint" json:"endpoint"`
 
 	// CredentialsFile specifies a service account JSON file path.
@@ -71,7 +77,8 @@ func NewDefaultEncryptionConfig() *EncryptionConfig {
 		EnableEncryption:    false,
 		MetaRefreshInterval: TomlDuration(1 * time.Hour),
 		MetaCacheTTL:        TomlDuration(1 * time.Hour),
-		AllowDegradeOnError: true,
+		AllowDegradeOnError: false,
+		AllowInsecureMeta:   false,
 		KMS: &KMSConfig{
 			AWS: &AWSKMSConfig{},
 			GCP: &GCPKMSConfig{},

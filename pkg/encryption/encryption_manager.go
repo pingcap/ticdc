@@ -49,7 +49,7 @@ func NewEncryptionManager(metaManager EncryptionMetaManager) EncryptionManager {
 
 // EncryptData encrypts data for a keyspace
 func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
-	allowDegrade := true
+	allowDegrade := false
 	serverCfg := config.GetGlobalServerConfig()
 	if serverCfg != nil && serverCfg.Encryption != nil {
 		allowDegrade = serverCfg.Encryption.AllowDegradeOnError
@@ -71,9 +71,26 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	}
 
 	if len(dataKey) == 0 {
-		log.Debug("encryption not enabled for keyspace",
-			zap.Uint32("keyspaceID", keyspaceID))
-		return EncodeUnencryptedData(data), nil
+		enabled, err := m.metaManager.IsEncryptionEnabled(ctx, keyspaceID)
+		if err != nil {
+			if allowDegrade {
+				log.Warn("failed to check encryption status, degrade to plaintext",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Error(err))
+				return EncodeUnencryptedData(data), nil
+			}
+			return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		}
+		if !enabled {
+			return EncodeUnencryptedData(data), nil
+		}
+		if allowDegrade {
+			log.Warn("current data key is unavailable, degrade to plaintext",
+				zap.Uint32("keyspaceID", keyspaceID))
+			return EncodeUnencryptedData(data), nil
+		}
+		return nil, cerrors.ErrEncryptionFailed.
+			GenWithStackByArgs("current data key is unavailable")
 	}
 
 	cipherImpl := NewAES256CTRCipher()
