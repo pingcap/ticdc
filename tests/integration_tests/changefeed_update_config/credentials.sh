@@ -140,10 +140,12 @@ EOF
 	cdc_cli_changefeed create -c "$CREDENTIAL_CF" --start-ts="$start_ts" \
 		--sink-uri="$sink_uri" --config="$WORK_DIR/credential-create.toml" >"$CREDENTIAL_OUTPUTS/create.txt" 2>&1
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	credential_resume_and_check 1073747000
 
 	# The CLI reads a redacted API model; omitted credentials must survive TOML defaults.
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	echo 'memory-quota = 2097152' >"$WORK_DIR/credential-update.toml"
 	cdc_cli_changefeed update -c "$CREDENTIAL_CF" --no-confirm --config="$WORK_DIR/credential-update.toml" \
 		>"$CREDENTIAL_OUTPUTS/cli-update.txt" 2>&1
@@ -153,10 +155,12 @@ EOF
 
 	# HTTP partial updates and GET -> edit -> PUT both preserve hidden credentials.
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	credential_request PUT "" partial-update.json 200 -d '{"replica_config":{"memory_quota":3145728}}'
 	jq -e '.config.memory_quota == 3145728' "$CREDENTIAL_OUTPUTS/partial-update.json" >/dev/null
 	credential_resume_and_check 1073747002
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	credential_request GET "" roundtrip-before.json 200
 	jq '{replica_config: (.config | .memory_quota = 4194304)}' "$CREDENTIAL_OUTPUTS/roundtrip-before.json" >"$WORK_DIR/roundtrip-request.json"
 	credential_request PUT "" roundtrip-update.json 200 --data-binary "@$WORK_DIR/roundtrip-request.json"
@@ -166,6 +170,7 @@ EOF
 
 	# Revoke P1 in the downstream before storing P2; success now requires P2.
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	password=credential-sentinel-p2
 	if [ "$SINK_TYPE" = kafka ]; then
 		start_kafka_auth_server "$password"
@@ -185,6 +190,7 @@ EOF
 
 	# Wrong and explicitly empty passwords must reject the whole update.
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	credential_request GET "" rejected-before.json 200
 	# Check the CLI error path as well as HTTP's atomic rejection below.
 	if [ "$SINK_TYPE" = kafka ]; then
@@ -218,6 +224,7 @@ EOF
 		local marker=1073747006
 		for password in '******' xxxxx; do
 			cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+			ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 			start_kafka_auth_server "$password"
 			jq -n --arg password "$password" '{replica_config:{sink:{kafka_config:{sasl_password:$password}}}}' >"$WORK_DIR/literal-request.json"
 			credential_request PUT "" literal.json 200 --data-binary "@$WORK_DIR/literal-request.json"
@@ -229,6 +236,7 @@ EOF
 		# An explicit URI can equal the masked GET value. It still replaces the
 		# real password: revoke P2 and set the downstream's literal password to xxxxx.
 		cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+		ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 		credential_request GET "" literal-uri-before.json 200
 		sink_uri=$(jq -r '.sink_uri' "$CREDENTIAL_OUTPUTS/literal-uri-before.json")
 		mysql -uroot -h"$DOWN_TIDB_HOST" -P"$DOWN_TIDB_PORT" -e "ALTER USER 'credential_update'@'%' IDENTIFIED BY 'xxxxx';"
@@ -244,6 +252,7 @@ EOF
 
 function check_oauth_error_redaction() {
 	cdc_cli_changefeed pause -c "$CREDENTIAL_CF"
+	ensure 60 check_changefeed_stopped "$CREDENTIAL_CF"
 	credential_request GET "" oauth-before.json 200
 	for driver in franz sarama; do
 		local token_calls

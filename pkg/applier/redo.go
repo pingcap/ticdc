@@ -76,6 +76,7 @@ type RedoApplier struct {
 
 	needRecoveryInfo bool
 	txnOrderFilter   tfilter.Filter
+	hasTableRoute    bool
 }
 
 // NewRedoApplier creates a new RedoApplier instance
@@ -356,7 +357,7 @@ func (ra *RedoApplier) applyDDL(
 	if skip {
 		return nil
 	}
-	if err := ra.verifyTxnOrderTable(&ddl.TableName); err != nil {
+	if err := ra.verifyTxnOrderDDL(ctx, ddl); err != nil {
 		return err
 	}
 	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
@@ -378,7 +379,7 @@ func (ra *RedoApplier) applyDDL(
 func (ra *RedoApplier) applyRow(
 	row *commonEvent.RedoDMLEvent, checkpointTs uint64,
 ) error {
-	if err := ra.verifyTxnOrderTable(row.Row.Table); err != nil {
+	if err := ra.verifyRedoTable(row.Row.SourceTable, row.Row.Table); err != nil {
 		return err
 	}
 	tableID := row.Row.Table.TableID
@@ -542,6 +543,14 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.txnOrderFilter, err = config.ParseTxnOrderTables(ra.cfg.SinkConfig.GetTxnOrderTables(sinkURI.Scheme), ra.cfg.CaseSensitive)
 	if err != nil {
 		return err
+	}
+	if ra.cfg.SinkConfig != nil {
+		for _, rule := range ra.cfg.SinkConfig.DispatchRules {
+			if rule != nil && (rule.TargetSchema != "" || rule.TargetTable != "") {
+				ra.hasTableRoute = true
+				break
+			}
+		}
 	}
 	query := sinkURI.Query()
 	query.Set("batch-dml-enable", "false")

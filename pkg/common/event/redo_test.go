@@ -158,6 +158,15 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	require.Equal(t, "target_table", redoRow.Row.Table.Table)
 	require.Empty(t, redoRow.Row.Table.TargetSchema)
 	require.Empty(t, redoRow.Row.Table.TargetTable)
+	require.NotNil(t, redoRow.Row.SourceTable)
+	require.Equal(t, "test", redoRow.Row.SourceTable.Schema)
+	require.Equal(t, "t", redoRow.Row.SourceTable.Table)
+	data, err := redoRow.MarshalMsg(nil)
+	require.NoError(t, err)
+	var restored RedoDMLEvent
+	_, err = restored.UnmarshalMsg(data)
+	require.NoError(t, err)
+	require.Equal(t, redoRow.Row.SourceTable, restored.Row.SourceTable)
 
 	decoded := redoRow.ToDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())

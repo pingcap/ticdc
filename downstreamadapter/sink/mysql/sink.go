@@ -378,6 +378,20 @@ func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
 
+// IsTablePartitioned checks the current downstream schema before replaying legacy DDLs.
+func (s *Sink) IsTablePartitioned(ctx context.Context, schema, table string) (bool, error) {
+	const query = "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
+	var partitioned bool
+	if err := s.controlDB.QueryRowContext(ctx, query, schema, table).Scan(&partitioned); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		// Downstream errors can contain arbitrary server text, including credentials.
+		return false, errors.ErrMySQLQueryError.GenWithStack("partition metadata query failed (%T)", err)
+	}
+	return partitioned, nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch event.GetType() {
