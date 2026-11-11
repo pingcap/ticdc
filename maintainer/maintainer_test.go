@@ -204,7 +204,7 @@ func (m *mockDispatcherManager) onDispatchRequest(
 			log.Warn("dispatcher already exists",
 				zap.String("from", msg.From.String()),
 				zap.String("self", m.self.String()),
-				zap.String("dispatcher", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
+				zap.String("dispatcherID", common.NewDispatcherIDFromPB(request.Config.DispatcherID).String()))
 			return
 		}
 		status := &heartbeatpb.TableSpanStatus{
@@ -696,6 +696,31 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 		require.NotNil(t, newWatermark)
 		require.Equal(t, uint64(10), newWatermark.CheckpointTs)
 		require.Equal(t, uint64(10), newWatermark.ResolvedTs)
+	})
+}
+
+func TestMaintainerIgnoresRedoMessagesWhenRedoIsDisabled(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+	m.initialized.Store(true)
+
+	require.NotPanics(t, func() {
+		m.onBlockStateRequest(&messaging.TargetMessage{
+			From: selfNodeID,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{&heartbeatpb.BlockStatusRequest{
+				ChangefeedID: m.changefeedID.ToPB(),
+				Mode:         common.RedoMode,
+			}},
+		})
+	})
+
+	require.NotPanics(t, func() {
+		m.controller.handleStatus(selfNodeID, []*heartbeatpb.TableSpanStatus{{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+			Mode:            common.RedoMode,
+		}}, true)
 	})
 }
 

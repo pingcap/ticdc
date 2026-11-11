@@ -13,7 +13,10 @@
 package maintainer
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -205,6 +208,7 @@ func TestCoordinatorBootstrapResponseIncludesDispatcherDrainTarget(t *testing.T)
 
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.verifyCoordinator = func(context.Context, node.ID, int64) error { return nil }
 	require.True(t, m.node.tryUpdateDispatcherDrainTarget(node.ID("n2"), 7))
 
 	req := messaging.NewSingleTargetMessage(
@@ -232,6 +236,7 @@ func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
 
 	var nodeLiveness liveness.Liveness
 	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.verifyCoordinator = func(context.Context, node.ID, int64) error { return nil }
 	require.True(t, gate.RenewEtcd(time.Now(), writelease.EtcdProofDuration))
 	require.True(t, gate.IsWritable())
 
@@ -262,6 +267,41 @@ func TestCoordinatorBootstrapNegotiatesP2PWriteLease(t *testing.T) {
 	bootstrap(node.ID("future-coordinator"), heartbeatpb.CurrentWriteLeaseProtocolVersion+1)
 	require.False(t, gate.Status().P2PRequired)
 	require.True(t, gate.IsWritable())
+}
+
+func TestCoordinatorBootstrapRequiresElectionOwner(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+	m.verifyCoordinator = func(_ context.Context, id node.ID, version int64) error {
+		if id != node.ID("coordinator") || version != 7 {
+			return fmt.Errorf("not the current election owner")
+		}
+		return nil
+	}
+
+	forged := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.CoordinatorBootstrapRequest{Version: math.MaxInt64},
+	)
+	forged.From = node.ID("attacker")
+	m.onCoordinatorBootstrapRequest(forged)
+	require.True(t, m.coordinatorID.IsEmpty())
+	require.Zero(t, m.coordinatorVersion)
+	require.Empty(t, mc.GetMessageChannel())
+
+	valid := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.CoordinatorBootstrapRequest{Version: 7},
+	)
+	valid.From = node.ID("coordinator")
+	m.onCoordinatorBootstrapRequest(valid)
+	require.Equal(t, node.ID("coordinator"), m.coordinatorID)
+	require.Equal(t, int64(7), m.coordinatorVersion)
 }
 
 func TestNodeHeartbeatResponseRenewsP2PWriteLease(t *testing.T) {
