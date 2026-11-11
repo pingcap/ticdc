@@ -64,6 +64,7 @@ require (
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20260820070758-623e58e60fa9
 	github.com/pingcap/log v1.1.1-0.20261007233122-0034994d1a22
+	github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
 	github.com/pingcap/tidb v1.1.0-beta.0.20260923092734-13103a00793a
 	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
@@ -305,7 +306,6 @@ require (
 	github.com/pingcap/check v0.0.0-20211026125417-57bd13f7b5f0 // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
-	github.com/pingcap/metering_sdk v0.0.0-20260814062708-9e3b68cd9adf // indirect
 	github.com/pingcap/tipb v0.0.0-20261006155659-59b678398b17 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
