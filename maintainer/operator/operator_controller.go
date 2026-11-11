@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -48,6 +49,7 @@ type Controller struct {
 	changefeedID    common.ChangeFeedID
 	batchSize       int
 	messageCenter   messaging.MessageCenter
+	sendWarnLimiter *rate.Limiter
 	spanController  *span.Controller
 	nodeManager     *watcher.NodeManager
 	maintainerEpoch atomic.Uint64
@@ -91,6 +93,7 @@ func NewOperatorController(
 		mode:               mode,
 		allowedOperatorIDs: make(map[common.DispatcherID]struct{}),
 		lastWarnTime:       make(map[common.DispatcherID]time.Time),
+		sendWarnLimiter:    rate.NewLimiter(rate.Every(30*time.Second), 1),
 	}
 }
 
@@ -180,12 +183,17 @@ func (oc *Controller) scheduleOperator(op operator.Operator[common.DispatcherID,
 		return
 	}
 
-	_ = oc.messageCenter.SendCommand(msg)
-	log.Debug("send command to dispatcher",
-		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operator", op.String()),
-		zap.Any("msg", msg.Message))
+	if err := oc.messageCenter.SendCommand(msg); err != nil && oc.sendWarnLimiter.Allow() {
+		log.Warn("send command to dispatcher failed, operator will retry",
+			zap.String("role", oc.role),
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("dispatcherID", op.ID().String()),
+			zap.String("operator", op.String()),
+			zap.Stringer("nodeID", msg.To),
+			zap.String("topic", msg.Topic),
+			zap.Duration("minRetryInterval", minSendMessageInterval),
+			zap.Error(err))
+	}
 }
 
 // RemoveTasksBySchemaID remove all tasks by schema id.
