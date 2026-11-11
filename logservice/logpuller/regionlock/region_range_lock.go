@@ -504,12 +504,6 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 
 	debugEnabled := log.GetLevel() <= zapcore.DebugLevel
 	var overlapStr []string
-	if debugEnabled {
-		for _, r := range overlappedRangeLocks {
-			overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
-				r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey)))
-		}
-	}
 
 	// Check if the current acuqiring range is stale,
 	// which means there's already a locked range with a equal or greater version.
@@ -520,19 +514,23 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 			break
 		}
 	}
+	if debugEnabled || isStale {
+		for _, r := range overlappedRangeLocks {
+			overlapStr = append(overlapStr, fmt.Sprintf("regionID: %v, ver: %v, start: %v, end: %v",
+				r.regionID, r.regionVersion, hex.EncodeToString(r.startKey), hex.EncodeToString(r.endKey)))
+		}
+	}
 	// If the range is stale, we should return the overlapping ranges to the caller,
 	// so that the caller can retry to lock the rest of the range.
 	if isStale {
 		retryRanges := make([]heartbeatpb.TableSpan, 0)
 		currentRangeStartKey := startKey
 
-		if debugEnabled {
-			log.Debug("try lock range staled",
-				zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
-				zap.String("startKey", hex.EncodeToString(startKey)),
-				zap.String("endKey", hex.EncodeToString(endKey)),
-				zap.Strings("allOverlapping", overlapStr))
-		}
+		log.Info("try lock range staled",
+			zap.Uint64("lockID", l.id), zap.Uint64("regionID", regionID),
+			zap.String("startKey", hex.EncodeToString(startKey)),
+			zap.String("endKey", hex.EncodeToString(endKey)),
+			zap.Strings("allOverlapping", overlapStr))
 
 		for _, r := range overlappedRangeLocks {
 			// Ignore the totally-disjointed range which may be added to the list because of
