@@ -1709,8 +1709,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("type", targetMessage.Type.String()))
 		}
 	}
 	return nil

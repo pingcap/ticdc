@@ -681,7 +681,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
-					zap.Any("resend", msgs),
 					zap.Int64("mode", be.mode),
 				)
 			} else {
@@ -692,7 +691,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Bool("selected", be.selected.Load()),
 					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.Any("blocker", be.blockedDispatchers),
-					zap.Any("resend", msgs),
 					zap.Int64("mode", be.mode),
 				)
 			}

@@ -239,7 +239,7 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	})
 	if len(columnNames) != len(columnValues) {
 		log.Panic("columnNames are not equal columnValues", zap.Int("len(columnNames)", len(columnNames)), zap.Int("len(values)", len(columnValues)),
-			zap.Any("columnNames", columnNames), zap.Any("columnValues", columnValues), zap.Any("table", r.targetTable))
+			zap.Any("columnNames", columnNames), zap.Any("table", r.targetTable))
 	}
 	return columnNames, columnValues
 }

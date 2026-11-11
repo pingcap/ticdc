@@ -84,7 +84,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				// use multi stmt way to execute the dmls
 				if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
 					log.Warn("multiStmtExecute failed, fallback to sequence way",
-						zap.Error(err),
+						zap.String("error", util.RedactAny(err)),
 						zap.Any("sql", dmls.LogWithoutValues()),
 						zap.Int("writerID", w.id))
 					fallbackToSeqWay = true
@@ -169,7 +169,7 @@ func (w *Writer) sequenceExecute(
 		}
 
 		if execError != nil {
-			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
+			log.Error("ExecContext", zap.String("error", util.RedactAny(execError)), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if !errors.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
@@ -261,7 +261,7 @@ func (w *Writer) logDMLTxnErr(
 			zap.Int("count", dmls.rowCount),
 			zap.String("dmls", dmls.String()),
 			zap.Int("writerID", w.id),
-			zap.Error(err))
+			zap.String("error", util.RedactAny(err)))
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
 			log.Error("execute DMLs with error, can not retry",
@@ -271,7 +271,7 @@ func (w *Writer) logDMLTxnErr(
 				zap.Int("count", dmls.rowCount),
 				zap.String("dmls", dmls.String()),
 				zap.Int("writerID", w.id),
-				zap.Error(err))
+				zap.String("error", util.RedactAny(err)))
 		}
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", dmls.String()))

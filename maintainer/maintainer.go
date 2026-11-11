@@ -559,8 +559,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 }
 
@@ -887,7 +886,9 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 		if err != nil {
 			log.Debug("failed to send maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Any("msg", msg), zap.Error(err))
+				zap.Stringer("to", msg.To),
+				zap.String("type", msg.Type.String()),
+				zap.Error(err))
 		}
 	}
 }

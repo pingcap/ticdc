@@ -86,7 +86,7 @@ func (event *regionEvent) getSize() int {
 
 func (event regionEvent) mustFirstState() *regionFeedState {
 	if len(event.states) == 0 || event.states[0] == nil {
-		log.Panic("region event has empty states", zap.Any("event", event))
+		log.Panic("region event has empty states", zap.Int("stateCount", len(event.states)))
 	}
 	return event.states[0]
 }
@@ -147,7 +147,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				}
 			}
 		} else {
-			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
+			log.Panic("should not reach", zap.Uint64("subscriptionID", uint64(span.subID)))
 		}
 	}
 	tryAdvanceResolvedTs := func() {
@@ -293,7 +293,8 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		case cdcpb.Event_Row_PUT:
 			opType = common.OpTypePut
 		default:
-			log.Panic("meet unknown op type", zap.Any("entry", entry))
+			log.Panic("meet unknown op type",
+				zap.Uint64("regionID", regionID), zap.String("opType", entry.GetOpType().String()))
 		}
 		return common.RawKVEntry{
 			OpType:   opType,

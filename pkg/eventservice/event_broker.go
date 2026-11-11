@@ -840,7 +840,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("cursorTxnStartTs", request.Cursor.TxnStartTs),
 			zap.String("cursorPosition", util.RedactKey(request.Cursor.Position)),
 			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
-			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.String("error", util.RedactAny(err)))
 		return
 	}
 	if scannedBytes < 0 {
@@ -1015,14 +1015,14 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(errors.AppError)
-			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("to", tMsg.To), zap.String("type", tMsg.Type.String()), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
 				time.Sleep(congestedRetryInterval)
 				continue
 			} else {
-				log.Info("send message failed, drop it", zap.Error(err), zap.Stringer("tMsg", tMsg))
+				log.Info("send message failed, drop it", zap.Error(err), zap.Stringer("to", tMsg.To), zap.String("type", tMsg.Type.String()))
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.

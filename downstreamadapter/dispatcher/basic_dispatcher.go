@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -568,7 +569,7 @@ func (d *BasicDispatcher) HandleError(err error) {
 		log.Error("error channel is full, discard error",
 			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 			zap.Stringer("dispatcherID", d.id),
-			zap.Error(err))
+			zap.String("error", util.RedactAny(err)))
 	}
 }
 

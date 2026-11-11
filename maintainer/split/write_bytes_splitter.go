@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -68,7 +69,7 @@ func (m *writeBytesSplitter) split(
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.Int64("tableID", span.TableID),
-			zap.Error(err))
+			zap.String("error", util.RedactAny(err)))
 		return []*heartbeatpb.TableSpan{span}
 	}
 

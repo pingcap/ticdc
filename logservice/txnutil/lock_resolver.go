@@ -105,7 +105,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 				zap.Strings("sampleLocks", sampleLocks),
 				zap.Uint64("maxVersion", maxVersion),
 				zap.Duration("duration", cost),
-				zap.Error(err))
+				zap.String("error", util.RedactAny(err)))
 		}
 	}()
 
