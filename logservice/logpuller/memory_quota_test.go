@@ -527,8 +527,7 @@ func TestAdmissionScanWaitDurationObservedOnceAfterNotifications(t *testing.T) {
 		return metric.GetHistogram().GetSampleCount()
 	}
 	initialCount := countObservations()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	interrupt := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {

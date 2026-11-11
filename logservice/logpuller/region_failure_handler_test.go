@@ -140,7 +140,7 @@ func TestRegionFailureHandlerInterleavesDrainedSpansAndErrors(t *testing.T) {
 		func(context.Context, regionInfo) {},
 		func(context.Context, rangeTask) {},
 	)
-	for i := 0; i < drainedSpanBatchSize+1; i++ {
+	for i := range drainedSpanBatchSize + 1 {
 		handler.cache.addDrainedSpan(&subscribedSpan{subID: SubscriptionID(i + 1)})
 	}
 	errInfo := newTestRegionErrorInfo(errors.New("unrecoverable"))

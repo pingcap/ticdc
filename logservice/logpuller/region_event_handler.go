@@ -262,7 +262,7 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 		zap.Uint64("resolvedTs", event.resolvedTs),
 		zap.Int("states", len(event.states)),
 		zap.Uint64("regionID", state.getRegionID()),
-		zap.Uint64("subscriptionID", uint64(state.requestID)),
+		zap.Uint64("subscriptionID", state.requestID),
 		zap.Bool("stateIsStale", state.isStale()),
 		zap.Uint64("workerID", state.worker.workerID),
 	}

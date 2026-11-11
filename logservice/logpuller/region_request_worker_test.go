@@ -498,7 +498,7 @@ func TestDispatchResolvedTsEventBatchSplitForLargeRegions(t *testing.T) {
 
 func requireRegionIDSample(t *testing.T, regionIDs []uint64, value any) {
 	t.Helper()
-	sample, ok := value.([]interface{})
+	sample, ok := value.([]any)
 	require.True(t, ok)
 	require.Len(t, sample, min(len(regionIDs), logRegionIDSampleSize))
 	for i, regionID := range regionIDs[:len(sample)] {
