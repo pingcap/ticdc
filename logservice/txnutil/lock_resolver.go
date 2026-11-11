@@ -24,11 +24,8 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/util"
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"

@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -187,9 +188,6 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	res := span.rangeLock.IterAll(span.tryResolveLock)
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
-<<<<<<< HEAD
-		zap.Any("ranges", res))
-=======
 		zap.Int("lockedRegionCount", res.LockedRegionCount),
 		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
 		zap.Any("fastestRegion", res.FastestRegion),
@@ -205,7 +203,6 @@ func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
 			util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
 	}
 	return res
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 }
 
 func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
@@ -361,7 +358,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()

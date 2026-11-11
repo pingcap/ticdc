@@ -22,11 +22,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/util"
->>>>>>> f6fd6aa73 (log: honor redaction for span and region keys (#6839))
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
