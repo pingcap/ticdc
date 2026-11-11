@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	pdclient "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/atomic"
@@ -136,7 +135,7 @@ func createPDClient(ctx context.Context,
 	}
 	return pdclient.NewClientWithContext(
 		ctx, pdEndpoints, conf.PDSecurityOption(),
-		pdopt.WithGRPCDialOptions(
+		pdclient.WithGRPCDialOptions(
 			grpcTLSOption,
 			grpc.WithBlock(),
 			grpc.WithConnectParams(grpc.ConnectParams{
@@ -149,7 +148,7 @@ func createPDClient(ctx context.Context,
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
-		pdopt.WithForwardingOption(config.EnablePDForwarding),
+		pdclient.WithForwardingOption(config.EnablePDForwarding),
 	)
 }
 
