@@ -188,18 +188,18 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
 		zap.Int("lockedRegionCount", res.LockedRegionCount),
-		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges, span.span.TableID)),
 		zap.Any("fastestRegion", res.FastestRegion),
 		zap.Any("slowestRegion", res.SlowestRegion))
 }
 
 // formatUnlockedRanges formats unlocked ranges for logging. The span keys may
 // contain row handles, so they are redacted according to the log redaction mode.
-func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
+func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic, tableID int64) []string {
 	res := make([]string, 0, len(ranges))
 	for _, r := range ranges {
-		res = append(res, fmt.Sprintf("startKey: %s, endKey: %s, resolvedTs: %d",
-			util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+		res = append(res, fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, resolvedTs: %d",
+			tableID, util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
 	}
 	return res
 }
@@ -357,7 +357,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges, rt.span.TableID)))
 			}
 		}
 		r.RUnlock()

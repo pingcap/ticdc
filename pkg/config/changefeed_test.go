@@ -254,6 +254,54 @@ func TestChangeFeedInfoToChangefeedConfigPerformanceMode(t *testing.T) {
 	require.True(t, changefeedConfig.IsLowLatencyMode())
 }
 
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: new("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"redo-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	require.Contains(t, output, "secret-access-key=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
+	storage := "azblob://container/prefix?account-name=account&endpoint=" +
+		"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel"
+	cfg := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &storage}}
+	original, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	output := cfg.String()
+	require.NotContains(t, output, "nested-sas-secret-sentinel")
+	require.Contains(t, output, "endpoint=xxxxxx")
+	after, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+
+	plainStorage := "azblob://container/prefix?endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F"
+	plainConfig := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &plainStorage}}
+	require.Contains(t, plainConfig.String(), "endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F")
+}
+
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {
 	for _, sinkURI := range []string{"mysql://127.0.0.1:3306", "file:///tmp/cdc"} {
 		t.Run(sinkURI, func(t *testing.T) {
