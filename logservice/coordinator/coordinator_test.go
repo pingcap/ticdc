@@ -19,9 +19,11 @@ import (
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +37,31 @@ func newLogCoordinatorForTest() *logCoordinator {
 	c.nodes.m = make(map[node.ID]*node.Info)
 	c.changefeedStates.m = make(map[common.GID]*changefeedState)
 	return c
+}
+
+func TestHandleReusableEventServiceRequestRequiresID(t *testing.T) {
+	c := newLogCoordinatorForTest()
+	c.requestChan = chann.NewAutoDrainChann[requestAndTarget](chann.Cap(3))
+	t.Cleanup(c.requestChan.CloseAndDrain)
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
+	valid := &logservicepb.ReusableEventServiceRequest{
+		ID:      common.NewDispatcherID().ToPB(),
+		Span:    &span,
+		StartTs: 100,
+	}
+	message := &messaging.TargetMessage{
+		From: node.ID("request-node"),
+		Message: []messaging.IOTypeT{
+			(*logservicepb.ReusableEventServiceRequest)(nil),
+			&logservicepb.ReusableEventServiceRequest{Span: &span, StartTs: 100},
+			valid,
+		},
+	}
+	require.NoError(t, c.handleMessage(t.Context(), message))
+	require.Len(t, c.requestChan.Out(), 1)
+	queued := <-c.requestChan.Out()
+	require.Same(t, valid, queued.req)
+	require.Equal(t, message.From, queued.target)
 }
 
 func TestGetCandidateNodes(t *testing.T) {

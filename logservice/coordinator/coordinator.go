@@ -158,6 +158,11 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		case *logservicepb.ChangefeedStates:
 			c.updateChangefeedStates(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
+			if msg.GetID() == nil {
+				log.Warn("ignore reusable event service request without dispatcher ID",
+					zap.Stringer("requestNodeID", targetMessage.From))
+				continue
+			}
 			c.requestChan.In() <- requestAndTarget{
 				req:    msg,
 				target: targetMessage.From,
