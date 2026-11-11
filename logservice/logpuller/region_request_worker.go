@@ -42,11 +42,8 @@ const (
 var workerIDGen atomic.Uint64
 
 var (
-	metricsResolvedTsCount            = pullerEventCounter.WithLabelValues("resolved_ts")
-	metricBatchResolvedSize           = batchResolvedEventSize.WithLabelValues("event-store")
-	metricUntrackedRegionEventCounter = logPullerUnexpectedEventCounter.WithLabelValues("untracked_region_event")
-	metricUntrackedResolvedTsCounter  = logPullerUnexpectedEventCounter.WithLabelValues("untracked_resolved_ts")
-	metricZeroResolvedTsCounter       = logPullerUnexpectedEventCounter.WithLabelValues("zero_resolved_ts")
+	metricsResolvedTsCount  = pullerEventCounter.WithLabelValues("resolved_ts")
+	metricBatchResolvedSize = batchResolvedEventSize.WithLabelValues("event-store")
 )
 
 type deregisterRequest struct {
@@ -368,7 +365,6 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		}
 	}
 	if untrackedCount > 0 {
-		metricUntrackedRegionEventCounter.Add(float64(untrackedCount))
 		log.Warn("region request worker receives events for untracked regions",
 			zap.Uint64("workerID", s.workerID),
 			zap.Int("untrackedRegionCount", untrackedCount),
@@ -383,7 +379,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	metricBatchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
-		metricZeroResolvedTsCounter.Inc()
 		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
@@ -429,7 +424,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	}
 	flush()
 	if untrackedCount > 0 {
-		metricUntrackedResolvedTsCounter.Add(float64(untrackedCount))
 		log.Warn("region request worker receives resolved ts for untracked regions",
 			zap.Uint64("workerID", s.workerID),
 			zap.Uint64("subscriptionID", uint64(subscriptionID)),
