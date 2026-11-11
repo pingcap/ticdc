@@ -99,7 +99,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		return
 	}
 	if !replica.enabledSplit {
-		log.Debug("default span split checker: replica not enabled to split, skip add", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()))
+		log.Debug("default span split checker: replica not enabled to split, skip add", zap.Stringer("changefeed", s.changefeedID), zap.String("dispatcherID", replica.ID.String()))
 		return
 	}
 	s.allTasks[replica.ID] = &spanSplitStatus{
@@ -125,7 +125,7 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
+		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", replica.ID.String()))
 		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {

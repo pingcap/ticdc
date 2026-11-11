@@ -87,18 +87,18 @@ func (m *AddDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpa
 	case heartbeatpb.ComponentState_Working:
 		log.Info("dispatcher report working status",
 			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.finished.Store(true)
 	case heartbeatpb.ComponentState_Removed:
 		log.Info("dispatcher report removed status",
 			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.finished.Store(true)
 		m.removed.Store(true)
 	case heartbeatpb.ComponentState_Stopped:
 		log.Warn("dispatcher report unexpected stopped status, ignore",
 			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 	}
 }
 

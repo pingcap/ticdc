@@ -430,7 +430,7 @@ func (s *dispatcherSession) resetCurrentEventService() {
 	if serverID.IsEmpty() {
 		log.Warn("skip reset because current event service is empty",
 			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", s.target.GetId()))
+			zap.Stringer("dispatcherID", s.target.GetId()))
 		return
 	}
 	s.doResetLocked(serverID, s.target.GetCheckpointTs())
@@ -458,7 +458,7 @@ func (s *dispatcherSession) doResetLocked(serverID node.ID, resetTs uint64) {
 	s.sendMessage(msg)
 	log.Info("send reset dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", s.target.GetId()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("epoch", epoch),
 		zap.Uint64("resetTs", resetTs))
@@ -484,7 +484,7 @@ func (s *dispatcherSession) remove() {
 func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", s.target.GetId()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -565,7 +565,7 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked(resetTs uint64) {
 	}
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", s.target.GetId()))
+		zap.Stringer("dispatcherID", s.target.GetId()))
 	s.doResetLocked(s.localServerID, resetTs)
 }
 
@@ -573,12 +573,12 @@ func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {
 	if s.readyCallback != nil {
 		log.Panic("ready callback should be nil when accepting remote ready",
 			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", s.target.GetId()),
+			zap.Stringer("dispatcherID", s.target.GetId()),
 			zap.Stringer("eventServiceID", serverID))
 	}
 	log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", s.target.GetId()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
 	s.doResetLocked(serverID, s.target.GetCheckpointTs())
 }

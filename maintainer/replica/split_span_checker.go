@@ -227,7 +227,7 @@ func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		log.Warn("split span checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
+		log.Warn("split span checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", replica.ID.String()))
 		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {
@@ -436,7 +436,8 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			zap.Any("changefeedID", s.changefeedID),
 			zap.Any("groupID", s.groupID),
 			zap.Int("moveCount", len(result)),
-			zap.Any("moves", result))
+			zap.Stringer("minTrafficNodeID", minTrafficNodeID),
+			zap.Stringer("maxTrafficNodeID", maxTrafficNodeID))
 		return results
 	}
 
@@ -766,7 +767,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		log.Info("chooseMergedSpans merge spans",
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", s.groupID),
-			zap.Any("mergeSpans", mergeSpans),
+			zap.Int("mergeSpanCount", len(mergeSpans)),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
 		results = append(results, SplitSpanCheckResult{
@@ -792,10 +793,8 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			// just panic for debug
 			log.Panic("unexpected error: span is not continuous",
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("prev.Span", common.FormatTableSpan(prev.Span)),
-				zap.Any("prev.dispatcherID", prev.ID),
-				zap.Any("cur.Span", common.FormatTableSpan(cur.Span)),
-				zap.Any("cur.dispatcherID", cur.ID),
+				zap.Any("previousDispatcherID", prev.ID),
+				zap.Any("dispatcherID", cur.ID),
 			)
 		}
 		// not in the same node, can't merge
@@ -917,8 +916,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 		if nodeID == "" {
 			log.Info("split span checker: node id is empty, please check the node id",
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.String("dispatcherID", status.ID.String()),
-				zap.String("span", common.FormatTableSpan(status.Span)))
+				zap.Stringer("dispatcherID", status.ID))
 			continue
 		}
 
@@ -943,7 +941,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
 					zap.Int64("group", s.groupID),
-					zap.String("splitSpan", status.ID.String()),
+					zap.String("dispatcherID", status.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -967,7 +965,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.String("splitSpan", status.ID.String()),
+					zap.String("dispatcherID", status.ID.String()),
 					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1128,8 +1126,8 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			log.Panic("unexpected error: diffTraffic is less than 0",
 				zap.Float64("diffTraffic", diffTraffic),
 				zap.String("changefeed", s.changefeedID.Name()),
-				zap.Any("moveSpans", moveSpans),
-				zap.Any("taskMap", taskMap),
+				zap.Int("moveSpanCount", len(moveSpans)),
+				zap.Int("nodeCount", len(taskMap)),
 			)
 		}
 		// we can only find next possible in sortedSpans[:idx]
@@ -1145,7 +1143,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		log.Info("checkBalanceTraffic move spans",
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", s.groupID),
-			zap.Any("moveSpans", moveSpans),
+			zap.Int("moveSpanCount", len(moveSpans)),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 		)
 		results = append(results, SplitSpanCheckResult{
@@ -1167,7 +1165,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	log.Info("checkBalanceTraffic split span",
 		zap.Stringer("changefeed", s.changefeedID),
-		zap.String("splitSpan", span.ID.String()),
+		zap.String("dispatcherID", span.ID.String()),
 		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
