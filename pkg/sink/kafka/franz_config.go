@@ -121,12 +121,16 @@ func buildSASLMechanism(ctx context.Context, cfg *saslConfig) (sasl.Mechanism, e
 		return scram.Auth{User: cfg.user, Pass: cfg.password}.AsSha512Mechanism(), nil
 	case oauthMechanism:
 		if cfg.oauthProvider == SASLOAuthProviderAWSMSKIAM {
+			provider, err := newAWSMSKIAMTokenProvider(ctx, cfg.awsMSKIAM)
+			if err != nil {
+				return nil, err
+			}
 			return oauth.Oauth(func(ctx context.Context) (oauth.Auth, error) {
-				token, err := newAWSMSKIAMTokenProvider(ctx, cfg.awsMSKIAM).Token()
+				token, err := provider.token(ctx)
 				if err != nil {
 					return oauth.Auth{}, err
 				}
-				return oauth.Auth{Token: token.Token}, nil
+				return oauth.Auth{Token: token}, nil
 			}), nil
 		}
 		return buildOAuthMechanism(ctx, cfg.oauth2)
