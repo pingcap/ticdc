@@ -700,8 +700,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				wakeCallback()
 				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
-				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("cost", cost), zap.String("query", ddl.Query))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
