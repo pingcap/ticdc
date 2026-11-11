@@ -317,6 +317,13 @@ func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
 			wantDisplay: "endpoint=xxxxxx",
 		},
 		{
+			name:        "S3 uppercase endpoint userinfo",
+			storage:     "s3://bucket/prefix?region=us-east-1&ENDPOINT=https%3A%2F%2Fuser%3Auppercase-endpoint-secret-sentinel%40storage.example",
+			secret:      "uppercase-endpoint-secret-sentinel",
+			wantOuter:   "region=us-east-1",
+			wantDisplay: "ENDPOINT=xxxxxx",
+		},
+		{
 			name:        "S3 plain endpoint",
 			storage:     "s3://bucket/prefix?region=us-east-1&endpoint=https%3A%2F%2Fstorage.example",
 			wantOuter:   "region=us-east-1",

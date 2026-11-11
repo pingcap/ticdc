@@ -163,13 +163,22 @@ func (c *ConsistentConfig) MaskSensitiveData() {
 	parsed, err := url.Parse(redactedStorage)
 	if err == nil {
 		query := parsed.Query()
-		for _, endpoint := range query["endpoint"] {
-			if objstore.RedactURL(endpoint) != endpoint {
-				query.Set("endpoint", "xxxxxx")
-				parsed.RawQuery = query.Encode()
-				redactedStorage = parsed.String()
-				break
+		maskedEndpoint := false
+		for key, endpoints := range query {
+			if objstore.NormalizeQueryParameterKey(key) != "endpoint" {
+				continue
 			}
+			for _, endpoint := range endpoints {
+				if objstore.RedactURL(endpoint) != endpoint {
+					query.Set(key, "xxxxxx")
+					maskedEndpoint = true
+					break
+				}
+			}
+		}
+		if maskedEndpoint {
+			parsed.RawQuery = query.Encode()
+			redactedStorage = parsed.String()
 		}
 	}
 	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(redactedStorage))
