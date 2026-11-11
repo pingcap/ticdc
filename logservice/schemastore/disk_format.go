@@ -1167,6 +1167,15 @@ func loadAllPhysicalTablesAtTs(
 		}
 
 		splitable := traits.splitable
+		if tableFilter != nil && tableFilter.ShouldKeepTxnOrder(schemaName, tableInfo.Name) {
+			_, isPartition := partitionMap[tableID]
+			if err := tableFilter.VerifyTxnOrderTable(&common.TableInfo{TableName: common.TableName{
+				Schema: schemaName, Table: tableInfo.Name, TableID: tableID, IsPartition: isPartition,
+			}}); err != nil {
+				return nil, err
+			}
+			splitable = false
+		}
 		if partitionInfo, ok := partitionMap[tableID]; ok {
 			for partitionID := range partitionInfo {
 				tables = append(tables, commonEvent.Table{

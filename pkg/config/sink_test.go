@@ -24,6 +24,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTxnOrderTables(t *testing.T) {
+	for _, scheme := range []string{"mysql", "mysql+ssl", "tidb", "tidb+ssl"} {
+		cfg := GetDefaultReplicaConfig()
+		cfg.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"APP.orders", "app.ledger_*", "!app.ledger_skip"}}
+		cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
+		cfg.Scheduler.ForceSplit = util.AddressOf(true)
+		uri, err := url.Parse(scheme + "://127.0.0.1/")
+		require.NoError(t, err)
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.False(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+		f, err := ParseTxnOrderTables(cfg.Sink.GetTxnOrderTables(scheme), false)
+		require.NoError(t, err)
+		require.True(t, f.MatchTable("app", "orders"))
+		require.True(t, f.MatchTable("APP", "LEDGER_1"))
+		require.False(t, f.MatchTable("app", "ledger_skip"))
+		require.False(t, f.MatchTable("app", "other"))
+		f, err = ParseTxnOrderTables(cfg.Sink.MySQLConfig.TxnOrderTables, true)
+		require.NoError(t, err)
+		require.False(t, f.MatchTable("app", "orders"))
+		require.True(t, f.MatchTable("APP", "orders"))
+		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
+	}
+	cfg := GetDefaultReplicaConfig()
+	_, err := toml.Decode("[sink.mysql-config]\ntxn-order-tables = [\"app.orders\", \"app.ledger_*\"]", cfg)
+	require.NoError(t, err)
+	require.Equal(t, []string{"app.orders", "app.ledger_*"}, cfg.Sink.MySQLConfig.TxnOrderTables)
+	cfg.Sink.MySQLConfig.TxnOrderTables = []string{"invalid"}
+	uri, err := url.Parse("mysql://127.0.0.1/")
+	require.NoError(t, err)
+	require.ErrorContains(t, cfg.ValidateAndAdjust(uri), "txn-order-tables")
+	for _, sinkURI := range []string{"kafka://127.0.0.1/topic?protocol=open-protocol", "blackhole://", "s3://bucket/prefix?protocol=csv"} {
+		uri, err := url.Parse(sinkURI)
+		require.NoError(t, err)
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.Nil(t, cfg.Sink.GetTxnOrderTables(uri.Scheme))
+		require.Equal(t, []string{"invalid"}, cfg.Sink.MySQLConfig.TxnOrderTables)
+	}
+	f, err := ParseTxnOrderTables(nil, false)
+	require.NoError(t, err)
+	require.Nil(t, f)
+}
+
 func TestDateSeparatorSerialization(t *testing.T) {
 	t.Parallel()
 

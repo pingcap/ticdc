@@ -227,7 +227,7 @@ func newMySQLSinkWithDBs(
 				Size:          1024,
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
-			changefeedID),
+			changefeedID, cfg.TxnOrderFilter),
 		isNormal:                       atomic.NewBool(true),
 		cfg:                            cfg,
 		maxTxnRows:                     cfg.MaxTxnRow,
@@ -317,7 +317,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
+				previousTable := txnEvents[i-1].TableInfo
+				ordered := s.cfg.TxnOrderFilter != nil && s.cfg.TxnOrderFilter.MatchTable(previousTable.GetSchemaName(), previousTable.GetTableName())
+				if ordered || rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}

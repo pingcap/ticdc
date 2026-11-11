@@ -910,6 +910,9 @@ func (p *dmlProcessor) startTxn(
 	commitTs uint64,
 	shouldSplitTxn bool,
 ) error {
+	if p.filter != nil && tableInfo != nil && p.filter.ShouldKeepTxnOrder(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+		shouldSplitTxn = false
+	}
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}

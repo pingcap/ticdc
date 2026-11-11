@@ -32,6 +32,7 @@ import (
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -52,9 +53,11 @@ var (
 
 // RedoApplierConfig is the configuration used by a redo log applier
 type RedoApplierConfig struct {
-	SinkURI string
-	Storage string
-	Dir     string
+	SinkURI       string
+	Storage       string
+	Dir           string
+	SinkConfig    *config.SinkConfig
+	CaseSensitive bool
 }
 
 // RedoApplier implements a redo log applier
@@ -72,6 +75,7 @@ type RedoApplier struct {
 	appliedLogCount uint64
 
 	needRecoveryInfo bool
+	txnOrderFilter   tfilter.Filter
 }
 
 // NewRedoApplier creates a new RedoApplier instance
@@ -352,6 +356,9 @@ func (ra *RedoApplier) applyDDL(
 	if skip {
 		return nil
 	}
+	if err := ra.verifyTxnOrderTable(&ddl.TableName); err != nil {
+		return err
+	}
 	log.Warn("apply DDL", zap.String("ddl", ddl.DDL.Query))
 	// Wait block tables to flush data before applying DDL.
 	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
@@ -371,6 +378,9 @@ func (ra *RedoApplier) applyDDL(
 func (ra *RedoApplier) applyRow(
 	row *commonEvent.RedoDMLEvent, checkpointTs uint64,
 ) error {
+	if err := ra.verifyTxnOrderTable(row.Row.Table); err != nil {
+		return err
+	}
 	tableID := row.Row.Table.TableID
 	if _, ok := ra.eventsGroup[tableID]; !ok {
 		ra.eventsGroup[tableID] = cmdutil.NewEventsGroup(0, tableID, ra.spillStore)
@@ -412,6 +422,14 @@ func (ra *RedoApplier) applyRow(
 	}
 
 	ra.appliedLogCount++
+	return nil
+}
+
+func (ra *RedoApplier) verifyTxnOrderTable(table *commonType.TableName) error {
+	if ra.txnOrderFilter != nil && table != nil && table.IsPartition && ra.txnOrderFilter.MatchTable(table.Schema, table.Table) {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"sink.mysql-config.txn-order-tables does not support partitioned table " + table.String())
+	}
 	return nil
 }
 
@@ -519,7 +537,11 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 
 	sinkURI, err := url.Parse(ra.cfg.SinkURI)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), util.MaskSensitiveDataInURIForError(ra.cfg.SinkURI))
+	}
+	ra.txnOrderFilter, err = config.ParseTxnOrderTables(ra.cfg.SinkConfig.GetTxnOrderTables(sinkURI.Scheme), ra.cfg.CaseSensitive)
+	if err != nil {
+		return err
 	}
 	query := sinkURI.Query()
 	query.Set("batch-dml-enable", "false")
@@ -537,8 +559,12 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		SinkURI: sinkURI.String(),
 		// Redo apply runs without a CDC server instance, so resolve the default
 		// server timezone for the same sink URI validation as normal changefeeds.
-		TimeZone:   timezone,
-		SinkConfig: &config.SinkConfig{},
+		TimeZone:      timezone,
+		CaseSensitive: ra.cfg.CaseSensitive,
+		SinkConfig:    ra.cfg.SinkConfig,
+	}
+	if replicaConfig.SinkConfig == nil {
+		replicaConfig.SinkConfig = &config.SinkConfig{}
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(

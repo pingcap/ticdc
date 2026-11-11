@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -25,6 +26,32 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnOrderTableKeys(t *testing.T) {
+	pk := types.NewFieldType(mysql.TypeLong)
+	pk.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	ti := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID: 100, Name: ast.NewCIStr("ordered"), PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *pk}},
+	})
+	makeEvent := func(id int64) *commonEvent.DMLEvent {
+		e := commonEvent.NewDMLEvent(common.DispatcherID{Low: 1}, 100, 1, 2, ti)
+		e.SetRows(chunk.NewChunkWithCapacity(ti.GetFieldSlice(), 1))
+		e.Rows.AppendInt64(0, id)
+		e.RowTypes = []common.RowType{common.RowTypeInsert}
+		e.Length = 1
+		return e
+	}
+	first, second := makeEvent(1), makeEvent(2)
+	require.NotEqual(t, ConflictKeys(first, nil), ConflictKeys(second, nil))
+	f, err := config.ParseTxnOrderTables([]string{"test.ordered"}, false)
+	require.NoError(t, err)
+	want := map[uint64]struct{}{uint64(100) | (1 << 63): {}}
+	require.Equal(t, want, ConflictKeys(first, f))
+	require.Equal(t, want, ConflictKeys(second, f))
+	second.PhysicalTableID = 101
+	require.NotEqual(t, want, ConflictKeys(second, f))
+}
 
 func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 	t.Parallel()

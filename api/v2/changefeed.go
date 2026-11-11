@@ -1819,7 +1819,7 @@ func getVerifiedTables(
 	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]common.TableName, []common.TableName, []common.TableName, error) {
-	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
+	f, err := filter.NewFilterWithTxnOrderTables(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate), replicaConfig.Sink.GetTxnOrderTables(scheme))
 	if err != nil {
 		return nil, nil, nil, err
 	}

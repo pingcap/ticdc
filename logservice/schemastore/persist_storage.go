@@ -987,7 +987,45 @@ func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 // NOTE: tableID identifies the dispatcher for exchange partition, rename tables,
 // and eligibility-changing DDLs. Table trigger callers use common.DDLSpanTableID.
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	return getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	ddl, ok, err := getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
+	if err == nil && ok {
+		err = verifyTxnOrderDDL(rawEvent, tableFilter)
+	}
+	return ddl, ok, err
+}
+
+// verifyTxnOrderDDL checks post-DDL schemas before admitting new table dispatchers.
+func verifyTxnOrderDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) error {
+	if tableFilter == nil {
+		return nil
+	}
+	verify := func(schema string, info *model.TableInfo) error {
+		if info == nil || info.GetPartitionInfo() == nil || !tableFilter.ShouldKeepTxnOrder(schema, info.Name.O) {
+			return nil
+		}
+		tableInfo := common.WrapTableInfo(schema, info)
+		if !tableFilter.IsEligibleTable(tableInfo) {
+			return nil
+		}
+		return tableFilter.VerifyTxnOrderTable(tableInfo)
+	}
+	schema := rawEvent.SchemaName
+	if model.ActionType(rawEvent.Type) == model.ActionExchangeTablePartition {
+		schema = rawEvent.ExtraSchemaName
+	}
+	if err := verify(schema, rawEvent.TableInfo); err != nil {
+		return err
+	}
+	for i, info := range rawEvent.MultipleTableInfos {
+		schema := rawEvent.SchemaName
+		if len(rawEvent.SchemaNames) > i {
+			schema = rawEvent.SchemaNames[i]
+		}
+		if err := verify(schema, info); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // buildTableDDLEvent builds the DDL event fetched for one physical table
@@ -1004,6 +1042,9 @@ func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, 
 	ddlEvent, ok, err := handler.buildDDLEventFunc(rawEvent, tableFilter, tableID)
 	if err != nil || !ok {
 		return ddlEvent, ok, err
+	}
+	if err := verifyTxnOrderDDL(rawEvent, tableFilter); err != nil {
+		return ddlEvent, false, err
 	}
 	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
 	change := &commonEvent.TableStateChange{
