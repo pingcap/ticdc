@@ -44,9 +44,9 @@ var workerIDGen atomic.Uint64
 var (
 	metricsResolvedTsCount            = pullerEventCounter.WithLabelValues("resolved_ts")
 	metricBatchResolvedSize           = batchResolvedEventSize.WithLabelValues("event-store")
-	metricUntrackedRegionEventCounter = eventFeedErrorCounter.WithLabelValues("UntrackedRegionEvent")
-	metricUntrackedResolvedTsCounter  = eventFeedErrorCounter.WithLabelValues("UntrackedResolvedTs")
-	metricZeroResolvedTsCounter       = eventFeedErrorCounter.WithLabelValues("ZeroResolvedTs")
+	metricUntrackedRegionEventCounter = logPullerUnexpectedEventCounter.WithLabelValues("untracked_region_event")
+	metricUntrackedResolvedTsCounter  = logPullerUnexpectedEventCounter.WithLabelValues("untracked_resolved_ts")
+	metricZeroResolvedTsCounter       = logPullerUnexpectedEventCounter.WithLabelValues("zero_resolved_ts")
 )
 
 type deregisterRequest struct {

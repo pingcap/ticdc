@@ -62,6 +62,14 @@ var (
 			Help:      "The number of matchers",
 		})
 
+	logPullerUnexpectedEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller",
+			Name:      "unexpected_event_count",
+			Help:      "The number of unexpected events observed by the log puller.",
+		}, []string{"type"})
+
 	logPullerResolvedTsLag = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -180,6 +188,7 @@ func RegisterMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(batchResolvedEventSize)
 	registry.MustRegister(logPullerPrewriteCacheRowNum)
 	registry.MustRegister(logPullerMatcherCount)
+	registry.MustRegister(logPullerUnexpectedEventCounter)
 	registry.MustRegister(logPullerResolvedTsLag)
 	registry.MustRegister(logPullerMemoryQuota)
 	registry.MustRegister(logPullerMemoryQuotaEventWaiterCount)

@@ -496,6 +496,16 @@ func TestDispatchResolvedTsEventBatchSplitForLargeRegions(t *testing.T) {
 	require.Equal(t, 2, ds.pushed[2].statesCount)
 }
 
+func requireRegionIDSample(t *testing.T, regionIDs []uint64, value any) {
+	t.Helper()
+	sample, ok := value.([]interface{})
+	require.True(t, ok)
+	require.Len(t, sample, min(len(regionIDs), logRegionIDSampleSize))
+	for i, regionID := range regionIDs[:len(sample)] {
+		require.Equal(t, regionID, sample[i])
+	}
+}
+
 func TestDispatchUntrackedEventsLogsSummary(t *testing.T) {
 	core, observedLogs := observer.New(zapcore.WarnLevel)
 	restore := log.ReplaceGlobals(zap.New(core), nil)
@@ -522,8 +532,7 @@ func TestDispatchUntrackedEventsLogsSummary(t *testing.T) {
 		"region request worker receives events for untracked regions").All()
 	require.Len(t, entries, 1)
 	require.EqualValues(t, 10, entries[0].ContextMap()["untrackedRegionCount"])
-	require.Equal(t, []interface{}{uint64(1), uint64(2), uint64(3)},
-		entries[0].ContextMap()["sampleRegionIDs"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
 
 	observedLogs.TakeAll()
 	worker.dispatchResolvedTsEvent(&cdcpb.ResolvedTs{
@@ -535,8 +544,7 @@ func TestDispatchUntrackedEventsLogsSummary(t *testing.T) {
 		"region request worker receives resolved ts for untracked regions").All()
 	require.Len(t, entries, 1)
 	require.EqualValues(t, 10, entries[0].ContextMap()["untrackedRegionCount"])
-	require.Equal(t, []interface{}{uint64(1), uint64(2), uint64(3)},
-		entries[0].ContextMap()["sampleRegionIDs"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
 }
 
 func TestDispatchZeroResolvedTsLogsBoundedRegionSample(t *testing.T) {
@@ -555,8 +563,7 @@ func TestDispatchZeroResolvedTsLogsBoundedRegionSample(t *testing.T) {
 		"region request worker receives a resolved ts event with zero value, ignore it").All()
 	require.Len(t, entries, 1)
 	require.EqualValues(t, len(regionIDs), entries[0].ContextMap()["regionCount"])
-	require.Equal(t, []interface{}{uint64(1), uint64(2), uint64(3)},
-		entries[0].ContextMap()["sampleRegionIDs"])
+	requireRegionIDSample(t, regionIDs, entries[0].ContextMap()["sampleRegionIDs"])
 }
 
 func BenchmarkDispatchResolvedTsEventSingleRegionLegacy(b *testing.B) {
