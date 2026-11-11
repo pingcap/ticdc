@@ -404,7 +404,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectBlockStatusRequest(ctx)
+		manager.collectBlockStatusRequestWithWindow(ctx, 500*time.Millisecond)
 		close(done)
 	}()
 	defer func() {
@@ -418,7 +418,7 @@ func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 2))
 
-	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelDequeue()
 	req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
 	require.NotNil(t, req)

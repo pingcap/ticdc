@@ -891,3 +891,7 @@ func TestReceiveAndDispatchChangeEventsDoesNotLogAfterCancellation(t *testing.T)
 	require.Zero(t, observedLogs.FilterMessage(
 		"region request worker receive from grpc stream failed").Len())
 }
+
+func (m *recordingRegionEventDynamicStream) CheckMemoryPressure() {}
+
+func (m *mockRegionEventDynamicStream) CheckMemoryPressure() {}

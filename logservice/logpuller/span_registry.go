@@ -203,8 +203,8 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
 	res := make([]string, 0, len(ranges))
 	for _, r := range ranges {
-		res = append(res, fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, resolvedTs: %d",
-			r.Span.TableID, util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+		res = append(res, fmt.Sprintf("startKey: %s, endKey: %s, resolvedTs: %d",
+			util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
 	}
 	return res
 }

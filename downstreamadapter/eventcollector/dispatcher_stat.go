@@ -119,7 +119,7 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	if state == nil {
 		log.Panic("dispatcher epoch state is not initialized",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()))
+			zap.Stringer("dispatcherID", d.getDispatcherID()))
 	}
 	return state
 }
@@ -164,7 +164,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 	if event.GetType() != commonEvent.TypeHandshakeEvent && state.lastEventSeq.Load() == 0 {
 		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return false
 	}
@@ -179,7 +179,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		if debugEnabled {
 			log.Debug("check event sequence",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
@@ -200,7 +200,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		if event.GetSeq() != expectedSeq {
 			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("lastEventSeq", lastEventSeq),
 				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
@@ -214,7 +214,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 			if debugEnabled {
 				log.Debug("check batch DML event sequence",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("dispatcherID", d.getDispatcherID()),
 					zap.Uint64("receivedSeq", e.Seq),
 					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 					zap.Uint64("commitTs", e.CommitTs))
@@ -224,7 +224,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("dispatcherID", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
@@ -260,7 +260,7 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 		log.Warn("receive a event older than sendCommitTs, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
 			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
@@ -340,7 +340,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			if logger.IsDebugEnabled() {
 				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("dispatcherID", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 					zap.Any("event", event.Event))
 			}
@@ -363,7 +363,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()))
+					zap.Stringer("dispatcherID", d.getDispatcherID()))
 			}
 			// The cloudstorage sink replicate different file according the table version.
 			// If one table is just scheduled to a new processor, the tableInfoVersion should be
@@ -422,7 +422,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	if !d.isFromCurrentEpoch(events[0], state) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())),
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
 			zap.Uint64("dispatcherEpoch", state.epoch),
@@ -443,7 +443,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if err != nil {
 			log.Error("failed to apply routing to DDL event",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.Error(err))
 			if target, ok := d.target.(dispatcher.Dispatcher); ok {
 				target.HandleError(err)
@@ -493,7 +493,7 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 	if change.PhysicalTableID != tableSpan.TableID {
 		log.Error("table state change was delivered to the wrong dispatcher",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Int64("expectedPhysicalTableID", tableSpan.TableID),
 			zap.Int64("actualPhysicalTableID", change.PhysicalTableID),
 			zap.Uint64("commitTs", ddl.FinishedTs))
@@ -556,7 +556,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 	if !ok {
 		log.Panic("drop event is not a drop event",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
 
@@ -565,7 +565,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		if logger.IsDebugEnabled() {
 			log.Debug("receive a drop event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.Any("event", event.Event))
 		}
 		return
@@ -573,7 +573,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("dispatcherID", d.getDispatcherID()),
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
@@ -584,7 +584,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) {
 	log.Info("handle handshake event",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("dispatcherID", d.getDispatcherID()),
 		zap.Any("event", event))
 
 	handshakeEvent, ok := event.Event.(*commonEvent.HandshakeEvent)
@@ -595,14 +595,14 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !d.isFromCurrentEpoch(event, state) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return
 	}
 	if event.GetSeq() != 1 {
 		log.Warn("should not happen: handshake event sequence number is not 1",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Uint64("sequence", event.GetSeq()))
 		return
 	}
@@ -612,7 +612,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		if err != nil {
 			log.Error("failed to apply routing to handshake table info",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("dispatcherID", d.getDispatcherID()),
 				zap.Error(err))
 			if target, ok := d.target.(dispatcher.Dispatcher); ok {
 				target.HandleError(err)
