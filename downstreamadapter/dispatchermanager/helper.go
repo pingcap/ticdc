@@ -344,11 +344,10 @@ func handleScheduleCreate(
 		SchemaID:         config.SchemaID,
 		SkipDMLAsStartTs: config.SkipDMLAsStartTs,
 	}
+	dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 	if common.IsRedoMode(config.Mode) {
-		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		redoInfos[dispatcherID] = info
 	} else {
-		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		infos[dispatcherID] = info
 	}
 }
@@ -367,12 +366,6 @@ func handleScheduleRemove(
 		}
 		if _, exists := dispatcherManager.redoDispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-		} else {
-			log.Debug("redo dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
 		}
 		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
 		// can emit a terminal status back to the maintainer and help it converge.
@@ -382,12 +375,6 @@ func handleScheduleRemove(
 		// Otherwise, the operator may never be cleaned up because cleanEventDispatcher won't be called.
 		if _, exists := dispatcherManager.dispatcherMap.Get(dispatcherID); exists {
 			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
-		} else {
-			log.Debug("dispatcher not found, skip remove operator store",
-				zap.String("changefeedID", req.ChangefeedID.String()),
-				zap.String("dispatcherID", dispatcherID.String()),
-				zap.Any("operator", req),
-			)
 		}
 		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
 		// can emit a terminal status back to the maintainer and help it converge.

@@ -377,15 +377,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	upperSpanCount = max(upperSpanCount, len(aliveNodeIDs)) * 2
 
 	if upperSpanCount >= len(s.allTasks) {
-		log.Debug("the span count is proper, so we don't need merge spans",
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Int64("groupID", s.groupID),
-			zap.Float64("totalTraffic", lastThreeTrafficSum[0]),
-			zap.Int("totalRegionCount", totalRegionCount),
-			zap.Int("regionThreshold", s.regionThreshold),
-			zap.Float32("writeThreshold", float32(s.writeThreshold)),
-			zap.Int("spanCount", len(s.allTasks)),
-		)
 		return results
 	}
 
@@ -1085,15 +1076,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		return
 	} else {
 		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-		log.Debug("should balance, thus update score",
-			zap.Any("minTrafficNodeID", minTrafficNodeID),
-			zap.Any("maxTrafficNodeID", maxTrafficNodeID),
-			zap.Any("balanceCauseByMinNode", balanceCauseByMinNode),
-			zap.Any("balanceCauseByMaxNode", balanceCauseByMaxNode),
-			zap.Any("balanceScore", s.balanceCondition.balanceScore),
-			zap.Any("groupID", s.groupID),
-			zap.Any("changefeedID", s.changefeedID),
-		)
 		if s.balanceCondition.balanceScore < s.balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
 			return

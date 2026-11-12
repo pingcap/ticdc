@@ -42,40 +42,24 @@ func (a *BatchEncoder) getValueSchemaCodec(
 	ctx context.Context, topic string, tableName *commonType.TableName, tableVersion uint64, input *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
-		schema, err := a.value2AvroSchema(tableName, input)
-		if err != nil {
-			return "", err
-		}
-		return schema, nil
+		return a.value2AvroSchema(tableName, input)
 	}
 
 	subject := topicName2SchemaSubjects(topic, valueSchemaSuffix)
-	avroCodec, header, err := a.codecCache.GetOrRegister(
+	return a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
-	if err != nil {
-		return nil, nil, err
-	}
-	return avroCodec, header, nil
 }
 
 func (a *BatchEncoder) getKeySchemaCodec(
 	ctx context.Context, topic string, tableName *commonType.TableName, tableVersion uint64, keyColumns *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
-		schema, err := a.key2AvroSchema(tableName, keyColumns)
-		if err != nil {
-			return "", err
-		}
-		return schema, nil
+		return a.key2AvroSchema(tableName, keyColumns)
 	}
 
 	subject := topicName2SchemaSubjects(topic, keySchemaSuffix)
-	avroCodec, header, err := a.codecCache.GetOrRegister(
+	return a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
-	if err != nil {
-		return nil, nil, err
-	}
-	return avroCodec, header, nil
 }
 
 func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
@@ -115,11 +99,7 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.Row
 		data:   bin,
 		header: header,
 	}
-	data, err := result.toEnvelope()
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return result.toEnvelope()
 }
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
@@ -187,11 +167,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 		data:   bin,
 		header: header,
 	}
-	data, err := result.toEnvelope()
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return result.toEnvelope()
 }
 
 func (a *BatchEncoder) nativeValueWithExtension(
