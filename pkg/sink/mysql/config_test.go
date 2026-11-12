@@ -23,6 +23,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/failpoint"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -329,6 +330,103 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 
 	expected.sinkURI = uri
 	require.Equal(t, expected, cfg)
+}
+
+func TestApplyDeleteFilter(t *testing.T) {
+	t.Parallel()
+	uri, err := url.Parse("mysql://127.0.0.1:3306/?batch-dml-enable=true")
+	require.NoError(t, err)
+	for _, tt := range []struct {
+		name     string
+		filter   *config.FilterConfig
+		expected bool
+	}{
+		{name: "no filter"},
+		{name: "table filter", filter: &config.FilterConfig{Rules: []string{"test.*"}}},
+		{name: "delete event", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+		}}, expected: true},
+		{name: "delete expression", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreDeleteValueExpr: new("id > 0")},
+		}}, expected: true},
+		{name: "empty delete expression", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreDeleteValueExpr: new("")},
+		}}},
+		{name: "all dml", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreEvent: []bf.EventType{bf.AllDML}},
+		}}, expected: true},
+		{name: "all events", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreEvent: []bf.EventType{bf.AllEvent}},
+		}}, expected: true},
+		{name: "other event filters", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t"}, IgnoreEvent: []bf.EventType{bf.InsertEvent, bf.UpdateEvent}},
+			{Matcher: []string{"test.t2"}, IgnoreUpdateNewValueExpr: new("id > 0")},
+		}}},
+		{name: "delete in a later rule", filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"test.t1"}, IgnoreEvent: []bf.EventType{bf.CreateTable}},
+			{Matcher: []string{"test.t"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+		}}, expected: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := New()
+			require.NoError(t, cfg.Apply(uri, common.NewChangefeedID4Test("test", "test"), &config.ChangefeedConfig{
+				TimeZone: "UTC",
+				Filter:   tt.filter,
+				SinkConfig: &config.SinkConfig{
+					TiDBSourceID: 1,
+				},
+			}))
+			require.Equal(t, tt.expected, cfg.hasDeleteFilter("test", "t"))
+			require.False(t, cfg.hasDeleteFilter("test", "unfiltered"))
+			// Per-event batching remains enabled, including when the URI enables it.
+			require.True(t, cfg.BatchDMLEnable)
+		})
+	}
+}
+
+func TestDeleteFilterTableMatching(t *testing.T) {
+	t.Parallel()
+	for _, caseSensitive := range []bool{false, true} {
+		filters, err := buildDeleteEventFilters(&config.ChangefeedConfig{
+			CaseSensitive: caseSensitive,
+			Filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+				// Exclusion in one rule must not override a separate matching rule.
+				{Matcher: []string{"test.reincluded"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+				{Matcher: []string{"test.*", "!test.unfiltered", "!test.reincluded"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+				{Matcher: []string{"other.t"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+				{Matcher: []string{"test.unfiltered"}, IgnoreEvent: []bf.EventType{bf.UpdateEvent}},
+				{Matcher: []string{"expr.*", "!expr.skip"}, IgnoreDeleteValueExpr: new("id > 0")},
+			}},
+		})
+		require.NoError(t, err)
+		cfg := New()
+		cfg.deleteEventFilters = filters
+		for _, tt := range []struct {
+			schema   string
+			table    string
+			expected bool
+		}{
+			{"test", "t", true},
+			{"test", "unfiltered", false},
+			{"test", "reincluded", true},
+			{"other", "t", true},
+			{"other", "unfiltered", false},
+			{"TEST", "T", !caseSensitive},
+			{"expr", "t", true},
+			{"expr", "skip", false},
+			{"EXPR", "T", false},
+		} {
+			require.Equal(t, tt.expected, cfg.hasDeleteFilter(tt.schema, tt.table),
+				"caseSensitive=%t, table=%s.%s", caseSensitive, tt.schema, tt.table)
+		}
+	}
+
+	_, err := buildDeleteEventFilters(&config.ChangefeedConfig{
+		Filter: &config.FilterConfig{EventFilters: []*config.EventFilterRule{
+			{Matcher: []string{"invalid"}, IgnoreEvent: []bf.EventType{bf.DeleteEvent}},
+		}},
+	})
+	require.ErrorContains(t, err, "ErrFilterRuleInvalid")
 }
 
 func TestApplyAsyncDDLTimeout(t *testing.T) {
