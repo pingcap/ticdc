@@ -135,32 +135,12 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 			}
 			err = c.writeDebeziumFieldValue(writer, row, i, colInfo)
 			if err != nil {
-				// Get value for logging with truncation
-				ft := &colInfo.FieldType
-				datum := row.GetDatum(i, ft)
-				var valueStr string
-				// Use hex encoding for binary types for better readability
-				switch ft.GetType() {
-				case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
-					if mysql.HasBinaryFlag(ft.GetFlag()) {
-						valueStr = hex.EncodeToString(datum.GetBytes())
-					} else {
-						valueStr = datum.String()
-					}
-				default:
-					valueStr = datum.String()
-				}
-				const maxValueLen = 1024
-				if len(valueStr) > maxValueLen {
-					valueStr = valueStr[:maxValueLen] + "...(truncated)"
-				}
 				log.Error("failed to write Debezium field value",
 					zap.String("schema", tableInfo.GetTargetSchemaName()),
 					zap.String("table", tableInfo.GetTargetTableName()),
 					zap.String("column", colInfo.Name.O),
-					zap.String("value", valueStr),
 					zap.Uint64("commitTs", commitTs),
-					zap.Error(err))
+					zap.String("error", util.RedactAny(err)))
 				break
 			}
 		}
