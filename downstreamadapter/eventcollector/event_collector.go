@@ -257,7 +257,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	readyCallback func(),
 ) {
 	changefeedID := target.GetChangefeedID()
-	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcher", target.GetId()))
+	log.Info("add dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done",
 			zap.Stringer("changefeedID", changefeedID),
@@ -503,12 +503,14 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 					sleepInterval = 1 * time.Second
 				}
 				log.Info("failed to send dispatcher request message, try again later",
-					zap.String("message", req.Message.String()),
+					zap.Stringer("to", req.Message.To),
+					zap.String("type", req.Message.Type.String()),
 					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
-						zap.String("message", req.Message.String()))
+						zap.Stringer("to", req.Message.To),
+						zap.String("type", req.Message.Type.String()))
 					continue
 				}
 				// Put the request back to the channel for later retry.
@@ -523,7 +525,9 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
+		log.Panic("invalid dispatcher heartbeat response message",
+			zap.Stringer("from", targetMessage.From),
+			zap.Int("messageCount", len(targetMessage.Message)))
 	}
 
 	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
@@ -567,8 +571,7 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:
 			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("type", targetMessage.Type.String()))
 		}
 	}
 	return nil
@@ -587,8 +590,7 @@ func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMes
 		return nil
 	}
 	log.Warn("unknown message type, ignore it",
-		zap.String("type", targetMessage.Type.String()),
-		zap.Any("msg", targetMessage))
+		zap.String("type", targetMessage.Type.String()))
 	return nil
 }
 
@@ -623,8 +625,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 					}
 				default:
 					log.Warn("unknown message type, ignore it",
-						zap.String("type", targetMessage.Type.String()),
-						zap.Any("msg", msg))
+						zap.String("type", targetMessage.Type.String()))
 				}
 			}
 		}

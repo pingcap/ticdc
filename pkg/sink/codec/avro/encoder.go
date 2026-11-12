@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -62,13 +63,21 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 
 	key, err := a.encodeKey(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding key failed", zap.Error(err), zap.Any("event", e))
+		log.Error("avro encoding key failed",
+			zap.String("schema", e.TableInfo.GetTargetSchemaName()),
+			zap.String("table", e.TableInfo.GetTargetTableName()),
+			zap.Uint64("commitTs", e.CommitTs),
+			zap.String("error", util.RedactAny(err)))
 		return errors.Trace(err)
 	}
 
 	value, err := a.encodeValue(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding value failed", zap.Error(err), zap.Any("event", e))
+		log.Error("avro encoding value failed",
+			zap.String("schema", e.TableInfo.GetTargetSchemaName()),
+			zap.String("table", e.TableInfo.GetTargetTableName()),
+			zap.Uint64("commitTs", e.CommitTs),
+			zap.String("error", util.RedactAny(err)))
 		return errors.Trace(err)
 	}
 

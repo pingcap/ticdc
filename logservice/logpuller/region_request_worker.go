@@ -320,14 +320,15 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
-					zap.Any("error", eventData.Error))
+					zap.String("error", util.RedactAny(eventData.Error)))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				continue
 			default:
-				log.Panic("unknown event type", zap.Any("event", event))
+				log.Panic("unknown event type",
+					zap.Uint64("regionID", event.RegionId), zap.Uint64("subscriptionID", uint64(subscriptionID)))
 			}
 			s.eventSink.Push(subscriptionID, regionEvent)
 		} else {

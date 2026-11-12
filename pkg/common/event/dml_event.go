@@ -564,7 +564,8 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	// Just ignore these row changed events
 	// See https://github.com/pingcap/tiflow/issues/2612 for more details.
 	if len(raw.Value) == 0 && len(raw.OldValue) == 0 {
-		log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", raw.String()))
+		log.Debug("the value and old_value of the raw kv entry are both nil, skip it",
+			zap.Uint64("regionID", raw.RegionID), zap.Uint64("startTs", raw.StartTs), zap.Uint64("commitTs", raw.CRTs))
 		return nil
 	}
 
@@ -582,7 +583,8 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		return err
 	}
 	if count <= 0 {
-		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry", zap.String("raw", raw.String()))
+		log.Panic("DMLEvent.AppendRow: no rows decoded from the raw KV entry",
+			zap.Uint64("regionID", raw.RegionID), zap.Uint64("startTs", raw.StartTs), zap.Uint64("commitTs", raw.CRTs))
 	}
 
 	var preRow, row chunk.Row
@@ -590,25 +592,25 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	case common.RowTypeInsert:
 		if count != 1 {
 			log.Panic("DMLEvent.AppendRow: insert row count should be 1",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count), zap.Stringer("dispatcherID", t.DispatcherID), zap.Uint64("commitTs", raw.CRTs))
 		}
 		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	case common.RowTypeDelete:
 		if count != 1 {
 			log.Panic("DMLEvent.AppendRow: delete row count should be 1",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count), zap.Stringer("dispatcherID", t.DispatcherID), zap.Uint64("commitTs", raw.CRTs))
 		}
 		preRow = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	case common.RowTypeUpdate:
 		if count != 2 {
 			log.Panic("DMLEvent.AppendRow: update row count should be 2",
-				zap.Int("count", count), zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+				zap.Int("count", count), zap.Stringer("dispatcherID", t.DispatcherID), zap.Uint64("commitTs", raw.CRTs))
 		}
 		preRow = t.Rows.GetRow(t.Rows.NumRows() - 2)
 		row = t.Rows.GetRow(t.Rows.NumRows() - 1)
 	default:
 		log.Panic("DMLEvent.AppendRow: invalid row type", zap.Uint8("rowType", uint8(rowType)),
-			zap.Any("raw", raw), zap.Any("tableInfo", t.TableInfo))
+			zap.Stringer("dispatcherID", t.DispatcherID), zap.Uint64("commitTs", raw.CRTs))
 	}
 
 	if filter != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -371,7 +372,7 @@ func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionEr
 
 		log.Warn("empty or unknown cdc error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Stringer("error", innerErr))
+			zap.String("error", util.RedactAny(innerErr)))
 		metricFeedUnknownErrorCounter.Inc()
 		retryRegion(0)
 		return nil

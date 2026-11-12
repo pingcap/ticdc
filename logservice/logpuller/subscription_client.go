@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -264,8 +263,7 @@ func (s *subscriptionClient) Subscribe(
 		priority:       cdcpb.ScanPriority_SCAN_PRIORITY_LOW,
 	}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
-			zap.String("startKey", spanz.HexKey(span.StartKey)), zap.String("endKey", spanz.HexKey(span.EndKey)))
+			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs))
 	}
 }
 
@@ -382,7 +380,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+			zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.upstream.regionCache.BatchLoadRegionsWithKeyRange(
@@ -390,7 +389,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)),
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -405,7 +405,8 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)))
+				zap.String("startKey", util.RedactKey(nextSpan.StartKey)),
+				zap.String("endKey", util.RedactKey(nextSpan.EndKey)))
 			backoffBeforeLoad = true
 			continue
 		}
@@ -510,7 +511,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("targetTs", targetTs),
 				zap.Any("state", state),
-				zap.Error(err))
+				zap.String("error", util.RedactAny(err)))
 		} else {
 			metricResolveLockSuccessCounter.Inc()
 		}

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -67,8 +68,8 @@ func (m *writeBytesSplitter) split(
 		log.Warn("scan regions failed, skip split span",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Error(err))
+			zap.Int64("tableID", span.TableID),
+			zap.String("error", util.RedactAny(err)))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
@@ -76,7 +77,7 @@ func (m *writeBytesSplitter) split(
 	log.Info("split span by written keys",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("span", common.FormatTableSpan(span)),
+		zap.Int64("tableID", span.TableID),
 		zap.Ints("perSpanRegionCounts", splitInfo.RegionCounts),
 		zap.Uint64s("weights", splitInfo.Weights),
 		zap.Int("spans", len(splitInfo.Spans)),
