@@ -126,7 +126,6 @@ func (m *confluentSchemaManager) Register(
 	schemaDefinition string,
 ) (SchemaID, error) {
 	id := SchemaID{}
-	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
 
 	reqBody := registerRequest{
 		Schema: schemaDefinition,
@@ -137,7 +136,6 @@ func (m *confluentSchemaManager) Register(
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
-	log.Info("Registering schema", zap.ByteString("payload", payload))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
@@ -170,8 +168,6 @@ func (m *confluentSchemaManager) Register(
 		log.Error(
 			"Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
-			zap.ByteString("requestBody", payload),
-			zap.ByteString("responseBody", body),
 		)
 		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"register schema failed with status " + strconv.Itoa(resp.StatusCode),
@@ -191,10 +187,6 @@ func (m *confluentSchemaManager) Register(
 			jsonResp.SchemaID,
 		)
 	}
-
-	log.Info("Registered schema successfully",
-		zap.Int("schemaID", jsonResp.SchemaID),
-		zap.ByteString("body", body))
 
 	id.confluentSchemaID = jsonResp.SchemaID
 	return id, nil
@@ -240,8 +232,7 @@ func (m *confluentSchemaManager) Lookup(
 
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
 		log.Error("Failed to query schema from the Registry, HTTP error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("responseBody", body))
+			zap.Int("status", resp.StatusCode))
 		return "", errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
 		)
@@ -326,8 +317,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	} else {
 		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
 			zap.Uint64("schemaVersion", entry.schemaVersion),
-			zap.Int("schemaID", entry.schemaID.confluentSchemaID),
-			zap.String("schema", entry.schemaDefinition))
+			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
 	}
 
 	return entry.header, nil

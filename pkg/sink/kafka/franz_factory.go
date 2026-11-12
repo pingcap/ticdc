@@ -55,11 +55,10 @@ func newFranzFactory(ctx context.Context, o *options, changefeedID common.Change
 	}
 	producerOpts := producerOptions(o)
 	metricsHook := newMetricsHook(changefeedID)
-	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+4)
+	opts := make([]kgo.Opt, 0, len(clientOpts)+len(producerOpts)+3)
 	opts = append(opts, clientOpts...)
 	opts = append(opts,
 		kgo.WithContext(ctx),
-		kgo.WithLogger(newClientLogger(changefeedID)),
 		kgo.WithHooks(metricsHook),
 		kgo.MetadataMinAge(adminMetadataMinAge))
 	opts = append(opts, producerOpts...)
