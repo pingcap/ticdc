@@ -481,12 +481,12 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 					sleepInterval = 1 * time.Second
 				}
 				log.Info("failed to send dispatcher request message, try again later",
-					zap.String("message", req.Message.String()),
 					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
-						zap.String("message", req.Message.String()))
+						zap.String("type", req.Message.Type.String()),
+						zap.Stringer("to", req.Message.To))
 					continue
 				}
 				// Put the request back to the channel for later retry.

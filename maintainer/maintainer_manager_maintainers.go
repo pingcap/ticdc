@@ -424,8 +424,7 @@ func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	c, ok := p.registry.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.Stringer("changefeedID", changefeed),
-			zap.String("message", msg.String()))
+			zap.Stringer("changefeedID", changefeed))
 		return nil
 	}
 	select {
