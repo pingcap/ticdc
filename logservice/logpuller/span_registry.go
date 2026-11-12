@@ -337,7 +337,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()

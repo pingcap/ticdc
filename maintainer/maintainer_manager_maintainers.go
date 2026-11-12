@@ -122,7 +122,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 	case messaging.TypeRemoveMaintainerRequest:
 		return m.onRemoveMaintainerRequest(msg)
 	default:
-		log.Warn("unknown message type", zap.Any("message", msg.Message))
+		log.Warn("unknown message type", zap.String("type", msg.Type.String()))
 	}
 	return nil
 }

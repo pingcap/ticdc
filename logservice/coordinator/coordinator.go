@@ -165,8 +165,7 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
 			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("type", targetMessage.Type.String()))
 		}
 	}
 	return nil
