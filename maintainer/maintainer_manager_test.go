@@ -16,6 +16,7 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -690,6 +691,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
+		KeyspaceID:   keyspaceID,
 	}
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
@@ -698,6 +700,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			Id:           cfID.ToPB(),
 			Config:       data,
 			CheckpointTs: 10,
+			KeyspaceId:   keyspaceID,
 		}))
 
 	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
@@ -878,4 +881,11 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 
 func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
 	return config.CaptureID(m.ownerID), nil
+}
+
+func (m *mockEtcdClient) GetOwnerRevision(_ context.Context, captureID config.CaptureID) (int64, error) {
+	if captureID != m.ownerID {
+		return 0, fmt.Errorf("capture %s is not the owner", captureID)
+	}
+	return 1, nil
 }

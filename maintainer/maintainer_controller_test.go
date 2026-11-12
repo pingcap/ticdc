@@ -712,7 +712,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			controller.spanController.UpdateStatus(spanReplica, status)
 		}
 
-		log.Info("spanReplica", zap.Any("j", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+		log.Info("spanReplica", zap.Any("j", j), zap.Any("dispatcherID", spanReplica.ID))
 	}
 
 	// first keep the system is balanced
@@ -790,8 +790,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID8 = spanTmp1
 	}
 
-	log.Info("spanReplica7", zap.Any("changefeedID", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	log.Info("spanReplica8", zap.Any("changefeedID", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	log.Info("spanReplica7", zap.Any("dispatcherID", spanReplica7.ID))
+	log.Info("spanReplica8", zap.Any("dispatcherID", spanReplica8.ID))
 	trafficForSpanReplica7 := 50
 	trafficForSpanReplica8 := 150
 
@@ -883,8 +883,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID9 = spanID2
 	}
 
-	log.Info("spanReplica9", zap.Any("changefeedID", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	log.Info("spanReplica10", zap.Any("changefeedID", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	log.Info("spanReplica9", zap.Any("dispatcherID", spanReplica9.ID))
+	log.Info("spanReplica10", zap.Any("dispatcherID", spanReplica10.ID))
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -941,7 +941,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanReplicaID9)
 	spanReplicaID11 := typeCount["merge"][0].ID()
 	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
-	log.Info("spanReplica11", zap.Any("changefeedID", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
+	log.Info("spanReplica11", zap.Any("dispatcherID", spanReplica11.ID))
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
@@ -973,7 +973,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 50    |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("dispatcherID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 3)
 
@@ -1025,7 +1025,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 400   |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("changefeedID", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("dispatcherID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 7)
 	typeCount = make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
@@ -1693,6 +1693,49 @@ func TestFinishBootstrapAdoptsWorkingDispatcherOfTableCreatedAfterStartTs(t *tes
 				})
 			}
 		}
+	}
+}
+
+func TestValidBootstrapSpanInfo(t *testing.T) {
+	const tableID int64 = 42
+	newSpanInfo := func() *heartbeatpb.BootstrapTableSpan {
+		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
+		return &heartbeatpb.BootstrapTableSpan{
+			ID:              common.NewDispatcherID().ToPB(),
+			Span:            &span,
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		}
+	}
+	tableSplitMap := map[int64]bool{tableID: true}
+
+	tests := []struct {
+		name   string
+		mutate func(*heartbeatpb.BootstrapTableSpan)
+	}{
+		{name: "missing id", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.ID = nil }},
+		{name: "zero id", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.ID = &heartbeatpb.DispatcherID{} }},
+		{name: "missing span", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span = nil }},
+		{name: "wrong mode", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Mode = common.RedoMode }},
+		{name: "zero checkpoint", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.CheckpointTs = 0 }},
+		{name: "wrong keyspace", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.KeyspaceID++ }},
+		{name: "unknown table", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.TableID++ }},
+		{name: "empty range", mutate: func(info *heartbeatpb.BootstrapTableSpan) { info.Span.EndKey = info.Span.StartKey }},
+		{name: "reversed range", mutate: func(info *heartbeatpb.BootstrapTableSpan) {
+			info.Span.StartKey, info.Span.EndKey = info.Span.EndKey, info.Span.StartKey
+		}},
+	}
+
+	require.True(t, validBootstrapSpanInfo(
+		newSpanInfo(), tableSplitMap, common.DefaultMode, common.DefaultKeyspaceID))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := newSpanInfo()
+			test.mutate(info)
+			require.False(t, validBootstrapSpanInfo(
+				info, tableSplitMap, common.DefaultMode, common.DefaultKeyspaceID))
+		})
 	}
 }
 

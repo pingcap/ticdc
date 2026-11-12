@@ -619,7 +619,7 @@ func (m *mockEventStore) GetIterator(
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		log.Panic("span not found", zap.Any("span", span), zap.Stringer("dispatcherID", dispatcherID))
+		log.Panic("span not found", zap.Stringer("dispatcherID", dispatcherID))
 	}
 
 	spanStats := v.(*mockSpanStats)
@@ -680,8 +680,7 @@ func (m *mockEventStore) RegisterDispatcher(
 		return false
 	}
 	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
-		zap.Uint64("startTs", startTS),
-		zap.Any("span", common.FormatTableSpan(span)))
+		zap.Uint64("startTs", startTS))
 	spanStats := &mockSpanStats{
 		startTs:            startTS,
 		resolvedTsNotifier: notifier,
@@ -920,6 +919,42 @@ func (m *mockDispatcherInfo) EnableIgnoreUpdateOnlyColumns() bool {
 
 func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
+}
+
+func TestMsgToDispatcherInfoRejectsMalformedRequests(t *testing.T) {
+	dispatcherID := common.NewDispatcherID().ToPB()
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName).ToPB()
+	validRemove := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+		ActionType:   eventpb.ActionType_ACTION_TYPE_REMOVE,
+		DispatcherId: dispatcherID,
+		ChangefeedId: changefeedID,
+		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+	}}
+	validRegister := &messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+		ActionType:   eventpb.ActionType_ACTION_TYPE_REGISTER,
+		DispatcherId: dispatcherID,
+		ChangefeedId: changefeedID,
+		TableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		FilterConfig: &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+			Rules: []string{"*.*"},
+		}},
+	}}
+
+	infos := msgToDispatcherInfo(&messaging.TargetMessage{Message: []messaging.IOTypeT{
+		nil,
+		&commonEvent.DispatcherHeartbeat{},
+		&messaging.DispatcherRequest{},
+		&messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+		}},
+		&messaging.DispatcherRequest{DispatcherRequest: &eventpb.DispatcherRequest{
+			ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+			TableSpan:  &heartbeatpb.TableSpan{TableID: 1},
+		}},
+		validRemove,
+		validRegister,
+	}})
+	require.Equal(t, []DispatcherInfo{validRemove, validRegister}, infos)
 }
 
 func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
