@@ -108,7 +108,6 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.Row
 
 	native, err := a.columns2AvroData(keyColumns)
 	if err != nil {
-		log.Error("avro: key converting to native failed", zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
@@ -168,7 +167,6 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 	}
 	native, err := a.columns2AvroData(input)
 	if err != nil {
-		log.Error("avro: converting input to native failed", zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 	if a.config.AvroIncludeBeforeValue {
@@ -254,7 +252,6 @@ func (a *BatchEncoder) nativeValueWithBeforeValue(
 	}
 	before, err := a.columns2AvroData(input)
 	if err != nil {
-		log.Error("avro: converting before value to native failed", zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 	native[ticdcBefore] = goavro.Union(a.beforeValueRecordFullName(tableName), before)

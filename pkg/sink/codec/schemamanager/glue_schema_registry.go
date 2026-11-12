@@ -15,7 +15,6 @@ package schemamanager
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -180,8 +179,6 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 				zap.String("schemaName", schemaName),
 				zap.String("schemaIdentity", schemaIdentity),
 				zap.Uint64("schemaVersion", schemaVersion))
-
-			log.Info(fmt.Sprintf("The schema to be registered: %#v", schemaDefinition))
 
 			id, err := m.Register(ctx, schemaName, schemaDefinition)
 			if err != nil {

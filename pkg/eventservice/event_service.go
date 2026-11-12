@@ -177,7 +177,10 @@ func (s *eventService) Run(ctx context.Context) error {
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
 			default:
-				log.Warn("invalid action type, ingore it", zap.Any("info", info))
+				log.Warn("invalid action type, ignore it",
+					zap.Stringer("dispatcherID", info.GetID()),
+					zap.Int32("actionType", int32(info.GetActionType())),
+					zap.String("serverID", info.GetServerID()))
 			}
 		case heartbeat := <-s.dispatcherHeartbeat:
 			s.handleDispatcherHeartbeat(heartbeat)
@@ -395,7 +398,7 @@ func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 	for _, m := range msg.Message {
 		info, ok := m.(*messaging.DispatcherRequest)
 		if !ok {
-			log.Warn("invalid dispatcher info, ignore it", zap.Any("info", m))
+			log.Warn("invalid dispatcher info, ignore it", zap.Stringer("from", msg.From))
 		}
 		res = append(res, info)
 	}

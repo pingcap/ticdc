@@ -30,6 +30,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -186,12 +187,14 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Int("lockedRegionCount", res.LockedRegionCount),
-		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
-		zap.Any("fastestRegion", res.FastestRegion),
-		zap.Any("slowestRegion", res.SlowestRegion))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("subscription client finds slow locked ranges",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("lockedRegionCount", res.LockedRegionCount),
+			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+			zap.Any("fastestRegion", res.FastestRegion),
+			zap.Any("slowestRegion", res.SlowestRegion))
+	}
 }
 
 // formatUnlockedRanges formats unlocked ranges for logging. The span keys may

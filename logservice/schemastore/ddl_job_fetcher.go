@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -151,7 +152,11 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 	for _, entry := range kvs {
 		job, err := p.unmarshalDDL(&entry)
 		if err != nil {
-			log.Fatal("unmarshal ddl failed", zap.Any("entry", entry), zap.Error(err))
+			log.Fatal("unmarshal ddl failed",
+				zap.Uint64("regionID", entry.RegionID),
+				zap.Uint64("startTs", entry.StartTs),
+				zap.Uint64("commitTs", entry.CRTs),
+				zap.String("error", util.RedactAny(err)))
 		}
 
 		if job == nil {
