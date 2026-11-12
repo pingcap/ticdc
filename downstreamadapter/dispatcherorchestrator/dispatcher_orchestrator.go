@@ -101,7 +101,6 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) error {
 	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() && !m.fenced.Load() }) {
-		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
 		return nil
 	}
 	defer m.msgGuardWaitGroup.Done()

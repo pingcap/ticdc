@@ -182,11 +182,6 @@ func (oc *Controller) scheduleOperator(op operator.Operator[common.DispatcherID,
 	}
 
 	_ = oc.messageCenter.SendCommand(msg)
-	log.Debug("send command to dispatcher",
-		zap.String("role", oc.role),
-		zap.Stringer("changefeedID", oc.changefeedID),
-		zap.String("operator", op.String()),
-		zap.Any("msg", msg.Message))
 }
 
 // RemoveTasksBySchemaID remove all tasks by schema id.

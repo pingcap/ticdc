@@ -501,7 +501,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 
 func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
-		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
+		log.Panic("invalid dispatcher heartbeat response message", zap.Int("messageCount", len(targetMessage.Message)))
 	}
 
 	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
