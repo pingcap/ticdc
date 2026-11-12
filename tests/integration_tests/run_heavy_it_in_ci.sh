@@ -136,40 +136,39 @@ pulsar_groups=(
 	'debezium03'
 )
 
-# Temporarily repeat this case in every storage group for PR validation.
 storage_groups=(
 	# G00
-	'canal_json_storage_partition_table'
+	'generate_column many_pk_or_uk multi_source'
 	# G01
-	'canal_json_storage_partition_table'
+	'csv_storage_update_pk_clustered csv_storage_update_pk_nonclustered'
 	# G02
-	'canal_json_storage_partition_table storage_split_span_schema'
+	'canal_json_storage_basic canal_json_storage_partition_table storage_split_span_schema'
 	# G03
-	'canal_json_storage_partition_table'
+	'csv_storage_basic storage_csv_update'
 	# G04
-	'canal_json_storage_partition_table'
+	'ddl_for_split_tables_with_random_move_table'
 	# G05
-	'canal_json_storage_partition_table'
+	'move_table drop_many_tables'
 	# G06
-	'canal_json_storage_partition_table'
+	'cdc default_value checkpoint_race_ddl_crash'
 	# G07
-	'canal_json_storage_partition_table'
+	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'canal_json_storage_partition_table'
+	'tidb_mysql_test ddl_for_split_tables'
 	# G09
-	'canal_json_storage_partition_table'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G10
-	'canal_json_storage_partition_table'
+	'ddl_for_split_tables_with_random_merge_and_split'
 	# G11
-	'canal_json_storage_partition_table'
+	'ddl_for_split_tables_random_schedule'
 	# G12
-	'canal_json_storage_partition_table'
+	'ddl_with_random_move_table cli_tls_with_auth'
 	# G13
-	'canal_json_storage_partition_table'
+	'fail_over region_merge multi_changefeeds'
 	# G14
-	'canal_json_storage_partition_table'
+	'column_selector fail_over_ddl_mix'
 	# G15
-	'canal_json_storage_partition_table'
+	'csv_storage_column_selector random_drop_message'
 )
 
 # Source shared functions and check test coverage
