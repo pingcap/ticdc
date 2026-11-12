@@ -56,7 +56,6 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			log.Debug("dispatcher is initializing",
 				zap.Stringer("changefeedID", dispatcherItem.GetChangefeedID()),
 				zap.Stringer("dispatcherID", id),
-				zap.String("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()),
 			)
 			return nil, nil, &heartBeatInfo.Watermark
@@ -177,8 +176,6 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 					zap.Stringer("changefeedID", changefeedID),
 					zap.Any("dispatcherIDs", dispatcherIDs),
 					zap.Int64("mode", dispatcherItem.GetMode()),
-					zap.Any("prevTableSpan", prevTableSpan),
-					zap.Any("currentTableSpan", currentTableSpan),
 				)
 				return nil, 0, 0
 			}
@@ -229,7 +226,6 @@ func registerMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.Change
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", mergedDispatcher.GetId()),
 				zap.Int64("mode", mergedDispatcher.GetMode()),
-				zap.Any("tableSpan", common.FormatTableSpan(mergedDispatcher.GetTableSpan())),
 			)
 		})
 }

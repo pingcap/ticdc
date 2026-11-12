@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
+	"golang.org/x/time/rate"
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
@@ -82,6 +83,24 @@ func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
 	secondStatus := broker.getOrSetChangefeedStatus(second)
 
 	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
+}
+
+func TestTryGetOrSetChangefeedStatusRejectsInvalidFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.filterConfig = nil
+	status, err := broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
+
+	info.filterConfig = &eventpb.FilterConfig{FilterConfig: &eventpb.InnerFilterConfig{
+		Rules: []string{"["},
+	}}
+	status, err = broker.tryGetOrSetChangefeedStatus(info)
+	require.Error(t, err)
+	require.Nil(t, status)
 }
 
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
@@ -1333,6 +1352,26 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestDuplicateRegisterRestoresChangefeedStatus(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	original, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok)
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	replacement, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.True(t, ok, "replacement changefeedStatus should be stored")
+	require.NotSame(t, original, replacement)
+	require.False(t, replacement.(*changefeedStatus).isEmpty())
+
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.Same(t, replacement, dispatcher.changefeedStat)
+}
+
 func TestRemoveDispatcherCleansUpSharedFilter(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
@@ -2112,4 +2151,26 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(0)
+	shared := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(node.ID(info.GetServerID()), shared)
+	broker.scanRateLimiter = rate.NewLimiter(0, minScanLimitInBytes*2)
+	before := broker.scanRateLimiter.Tokens()
+	cursor := disp.sentResolvedTs.Load()
+	disp.scanState = dispatcherScanQueued
+	broker.doScan(context.Background(), disp)
+	require.Equal(t, before, broker.scanRateLimiter.Tokens())
+	require.Equal(t, uint64(minScanLimitInBytes*2), shared.Load())
+	require.Equal(t, cursor, disp.sentResolvedTs.Load(), "unsent DML must not be bypassed by a resolved signal")
 }

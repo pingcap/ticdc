@@ -16,6 +16,7 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -189,8 +190,7 @@ func (b *BatchDMLEvent) Unmarshal(data []byte) error {
 }
 
 func (b *BatchDMLEvent) decodeV1(data []byte) error {
-	// Minimum payload: DMLEventCount(8B)
-	// Even with 0 events, we still need to read the count field
+	// Minimum payload: DMLEventCount(8B).
 	if len(data) < 8 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
@@ -198,25 +198,39 @@ func (b *BatchDMLEvent) decodeV1(data []byte) error {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Int("version", b.Version))
 		return nil
 	}
-	offset := 0
-
-	// Read DMLEventCount
-	dmlEventCount := int32(binary.BigEndian.Uint64(data[offset:]))
-	b.DMLEventCount = dmlEventCount
-	offset += 8
+	offset := 8
+	dmlEventCount := binary.BigEndian.Uint64(data[:offset])
+	if dmlEventCount == 0 {
+		return errors.ErrDecodeFailed.FastGenByArgs("batch DML event must contain at least one DML event")
+	}
+	if dmlEventCount > math.MaxInt32 {
+		return errors.ErrDecodeFailed.FastGenByArgs("batch DML event count exceeds the supported limit")
+	}
+	// Every entry needs an 8-byte size prefix and at least one event header.
+	minEventSize := 8 + GetEventHeaderSize()
+	if dmlEventCount > uint64((len(data)-offset)/minEventSize) {
+		return errors.ErrDecodeFailed.FastGenByArgs("batch DML event count exceeds the payload size")
+	}
+	b.DMLEventCount = int32(dmlEventCount)
 
 	// Read each DML event
-	b.DMLEvents = make([]*DMLEvent, 0, dmlEventCount)
-	for i := int32(0); i < dmlEventCount; i++ {
-		event := &DMLEvent{}
-		eventDataSize := int(binary.BigEndian.Uint64(data[offset:]))
+	b.DMLEvents = make([]*DMLEvent, 0, int(dmlEventCount))
+	for range dmlEventCount {
+		if len(data)-offset < 8 {
+			return errors.ErrDecodeFailed.FastGenByArgs("incomplete batch DML event size")
+		}
+		eventDataSize := binary.BigEndian.Uint64(data[offset : offset+8])
 		offset += 8
-		err := event.Unmarshal(data[offset:])
-		if err != nil {
+		if eventDataSize < uint64(GetEventHeaderSize()) || eventDataSize > uint64(len(data)-offset) {
+			return errors.ErrDecodeFailed.FastGenByArgs("invalid batch DML event size")
+		}
+		eventEnd := offset + int(eventDataSize)
+		event := &DMLEvent{}
+		if err := event.Unmarshal(data[offset:eventEnd]); err != nil {
 			return err
 		}
 		b.DMLEvents = append(b.DMLEvents, event)
-		offset += eventDataSize
+		offset = eventEnd
 	}
 
 	// Remaining data is RawRows
@@ -849,33 +863,16 @@ func (t *DMLEvent) Unmarshal(data []byte) error {
 	// Store the total event size including header
 	t.eventSize = int64(len(data))
 
-	// 1. Parse unified header
-	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeDMLEvent)
 	if err != nil {
 		return err
 	}
 
-	// 2. Validate event type
-	if eventType != TypeDMLEvent {
-		return fmt.Errorf("expected DMLEvent (type %d), got type %d (%s)",
-			TypeDMLEvent, eventType, TypeToString(eventType))
-	}
-
-	// 3. Validate total data length
-	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
-	}
-
-	// 4. Extract payload
-	payload := data[headerSize:expectedLen]
-
-	// 5. Store version
+	// 2. Store version
 	t.Version = version
 
-	// 6. Decode based on version
+	// 3. Decode based on version
 	switch version {
 	case DMLEventVersion1:
 		return t.decodeV1(payload)
@@ -1017,28 +1014,52 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 	offset += 8
 	t.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Length = int32(binary.BigEndian.Uint32(data[offset:]))
+	length := binary.BigEndian.Uint32(data[offset:])
+	if length > math.MaxInt32 {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML row count exceeds the supported limit")
+	}
+	t.Length = int32(length)
 	offset += 4
-	t.ApproximateSize = int64(binary.BigEndian.Uint64(data[offset:]))
+	approximateSize := binary.BigEndian.Uint64(data[offset:])
+	if approximateSize > math.MaxInt64 {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML approximate size exceeds the supported limit")
+	}
+	t.ApproximateSize = int64(approximateSize)
 	offset += 8
 	t.PreviousTotalOffset = int(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
-	length := int32(binary.BigEndian.Uint32(data[offset:]))
+	rowTypeCount := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
-	t.RowTypes = make([]common.RowType, length)
-	for i := 0; i < int(length); i++ {
+	if uint64(rowTypeCount) > uint64(len(data)-offset) {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML row type count exceeds the payload size")
+	}
+	t.RowTypes = make([]common.RowType, int(rowTypeCount))
+	for i := range t.RowTypes {
 		t.RowTypes[i] = common.RowType(data[offset])
 		offset++
 	}
-	rowKeysLen := int32(binary.BigEndian.Uint32(data[offset:]))
+	if len(data)-offset < 4 {
+		return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML row key count")
+	}
+	rowKeysLen := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
-	t.RowKeys = make([][]byte, rowKeysLen)
-	for i := 0; i < int(rowKeysLen); i++ {
-		len := int32(binary.BigEndian.Uint32(data[offset:]))
+	if uint64(rowKeysLen) > uint64((len(data)-offset)/4) {
+		return errors.ErrDecodeFailed.FastGenByArgs("DML row key count exceeds the payload size")
+	}
+	t.RowKeys = make([][]byte, int(rowKeysLen))
+	for i := range t.RowKeys {
+		if len(data)-offset < 4 {
+			return errors.ErrDecodeFailed.FastGenByArgs("incomplete DML row key length")
+		}
+		rowKeyLen := binary.BigEndian.Uint32(data[offset:])
 		offset += 4
-		t.RowKeys[i] = make([]byte, len)
-		copy(t.RowKeys[i], data[offset:offset+int(len)])
-		offset += int(len)
+		if uint64(rowKeyLen) > uint64(len(data)-offset) {
+			return errors.ErrDecodeFailed.FastGenByArgs("DML row key length exceeds the payload size")
+		}
+		rowKeyEnd := offset + int(rowKeyLen)
+		t.RowKeys[i] = make([]byte, int(rowKeyLen))
+		copy(t.RowKeys[i], data[offset:rowKeyEnd])
+		offset = rowKeyEnd
 	}
 	// Older V1 payloads end after RowKeys and have no checksum metadata.
 	t.Checksum = nil
