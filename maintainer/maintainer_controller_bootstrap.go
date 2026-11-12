@@ -82,7 +82,7 @@ func (c *Controller) FinishBootstrap(
 	if c.bootstrapped {
 		log.Info("maintainer already bootstrapped, may a new node join the cluster",
 			zap.Stringer("changefeed", c.changefeedID),
-			zap.Any("allNodesResp", allNodesResp))
+			zap.Int("nodeCount", len(allNodesResp)))
 		return nil, nil
 	}
 

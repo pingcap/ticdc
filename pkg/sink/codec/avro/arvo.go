@@ -344,7 +344,6 @@ func (a *BatchEncoder) getDefaultValue(col *model.ColumnInfo) (any, error) {
 	// see https://github.com/pingcap/tidb/blob/72b1b7c564c301de33a4bd335a05770c78528db4/pkg/ddl/add_column.go#L791
 	v, ok := defaultVal.(string)
 	if !ok {
-		log.Debug("default value is not string", zap.Any("defaultValue", defaultVal))
 		return defaultVal, nil
 	}
 
@@ -522,10 +521,6 @@ func (a *BatchEncoder) value2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: row to schema",
-		zap.ByteString("schema", str),
-		zap.Bool("enableTiDBExtension", a.config.EnableRowChecksum),
-		zap.Bool("enableRowLevelChecksum", a.config.EnableRowChecksum))
 	return string(str), nil
 }
 
@@ -542,7 +537,6 @@ func (a *BatchEncoder) key2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: key to schema", zap.ByteString("schema", str))
 	return string(str), nil
 }
 
@@ -768,7 +762,6 @@ func (a *BatchEncoder) columnToAvroData(
 		number := d.GetMysqlEnum().Value
 		enumVar, err := types.ParseEnumValue(elements, number)
 		if err != nil {
-			log.Info("avro encoder parse enum value failed", zap.Strings("elements", elements), zap.Uint64("number", number))
 			return nil, "", errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return enumVar.Name, "string", nil
@@ -777,8 +770,6 @@ func (a *BatchEncoder) columnToAvroData(
 		number := d.GetMysqlSet().Value
 		setVar, err := types.ParseSetValue(elements, number)
 		if err != nil {
-			log.Info("avro encoder parse set value failed",
-				zap.Strings("elements", elements), zap.Uint64("number", number), zap.Error(err))
 			return nil, "", errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return setVar.Name, "string", nil
