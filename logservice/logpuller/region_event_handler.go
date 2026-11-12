@@ -245,14 +245,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	worker := state.worker
-	if err != nil {
-		log.Debug("region event handler get a region error",
-			zap.Uint64("workerID", worker.workerID),
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-			zap.Uint64("regionID", state.region.verID.GetID()),
-			zap.Bool("reschedule", stepsToRemoved),
-			zap.Error(err))
-	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
 		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))

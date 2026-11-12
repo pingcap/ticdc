@@ -107,13 +107,6 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 
 func (r *regionFailureHandler) handleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
-	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
-		log.Debug("cdc region error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", errInfo.verID.GetID()),
-			zap.Error(err))
-	}
 
 	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	switch eerr := err.(type) {
