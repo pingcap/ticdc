@@ -10,7 +10,7 @@ schedule downstream.
 | Source event | TiCDC behavior | Downstream behavior |
 | --- | --- | --- |
 | `CREATE MATERIALIZED VIEW` | Records the MV's table metadata and adds its physical table to the changefeed when it matches the table filter and eligibility rules. | Kafka sends `CREATE TABLE` for the MV name. The generated statement contains visible columns, their types, `NOT NULL` where applicable, and the primary key. It does not contain the MV query, refresh settings, or secondary indexes. Other sinks ignore this DDL. |
-| `DROP MATERIALIZED VIEW` | Handles TiDB's `ActionDropTable` event and removes the MV's physical table. | Kafka sends `DROP TABLE` for the MV name. Other sinks ignore this DDL. |
+| `DROP MATERIALIZED VIEW` | Handles TiDB's `ActionDropMaterializedView` event and removes the MV's physical table. | Kafka sends `DROP TABLE` for the MV name. Other sinks ignore this DDL. |
 | `CREATE MATERIALIZED VIEW LOG` | Tracks the log table in schema metadata, but excludes it from physical table dispatchers. Its create and drop events do not reach the downstream sink. | No log table is created or dropped. |
 | TiDB internal `ActionCreateMaterializedViewShadow` | Tracks the shadow table in schema metadata, but excludes it from physical table dispatchers while it is a shadow table. | The shadow table's create event is not sent. |
 | `REFRESH MATERIALIZED VIEW ... COMPLETE OUT OF PLACE` cutover | Replaces the old MV physical table ID with the shadow table ID under the MV name. For a partitioned MV, it replaces the old partition IDs with the new ones. | The cutover DDL is marked `NotSync` and is not sent to the sink. |
@@ -46,9 +46,8 @@ generated `CREATE TABLE` likewise does not copy any rows already present when
 the MV is created. If the downstream needs the initial MV contents or the full
 result of an out-of-place refresh, those contents require a separate load.
 
-MV log table drops are suppressed. A standalone shadow-table drop is currently
-handled by the general `DROP TABLE` path, so it can produce a downstream drop
-event even though shadow-table creation is suppressed.
+MV log and shadow-table drops update schema-store metadata but are suppressed
+from downstream sinks.
 
 ## Event filters
 

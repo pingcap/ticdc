@@ -53,6 +53,7 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	timodel.ActionCreateTables:                 bf.CreateTable,
 	timodel.ActionCreateMaterializedView:       bf.CreateTable,
 	timodel.ActionDropTable:                    bf.DropTable,
+	timodel.ActionDropMaterializedView:         bf.DropTable,
 	timodel.ActionTruncateTable:                bf.TruncateTable,
 	timodel.ActionRenameTable:                  bf.RenameTable,
 	timodel.ActionRenameTables:                 bf.RenameTable,
@@ -183,6 +184,7 @@ var globalTableDDLs = map[timodel.ActionType]struct{}{
 	timodel.ActionModifySchemaCharsetAndCollate: {},
 	timodel.ActionCreateTable:                   {},
 	timodel.ActionDropTable:                     {},
+	timodel.ActionDropMaterializedView:          {},
 	timodel.ActionCreateTables:                  {},
 	timodel.ActionRecoverTable:                  {},
 }

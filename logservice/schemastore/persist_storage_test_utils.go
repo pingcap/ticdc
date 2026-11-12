@@ -452,15 +452,31 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
-func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+func buildDropTableLikeJobForTest(jobType model.ActionType, schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
-		Type:     model.ActionDropTable,
+		Type:     jobType,
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
 	}
+}
+
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return buildDropTableLikeJobForTest(model.ActionDropTable, schemaID, tableID, finishedTs)
+}
+
+func buildDropMaterializedViewJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return buildDropTableLikeJobForTest(model.ActionDropMaterializedView, schemaID, tableID, finishedTs)
+}
+
+func buildDropMaterializedViewLogJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return buildDropTableLikeJobForTest(model.ActionDropMaterializedViewLog, schemaID, tableID, finishedTs)
+}
+
+func buildDropMaterializedViewShadowJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return buildDropTableLikeJobForTest(model.ActionDropMaterializedViewShadow, schemaID, tableID, finishedTs)
 }
 
 // Note: `partitionIDs` must include all partition IDs of the original table.

@@ -2770,7 +2770,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		checkPhysicalTables(t, pStorage, 1025, map[int64]string{})
 
 		dropMVDDL := readDDLEventForTest(t, pStorage, 1020)
-		require.Equal(t, byte(model.ActionDropTable), dropMVDDL.Type)
+		require.Equal(t, byte(model.ActionDropMaterializedView), dropMVDDL.Type)
 		require.Equal(t, schemaName, dropMVDDL.SchemaName)
 		require.Equal(t, mviewName, dropMVDDL.TableName)
 		require.Equal(t, expectedDropTableQuery, dropMVDDL.Query)
@@ -2818,7 +2818,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
 	checkCreatedState(t, pStorage)
 
-	require.NoError(t, pStorage.handleDDLJob(buildDropTableJobForTest(schemaID, mviewID, 1020)))
+	require.NoError(t, pStorage.handleDDLJob(buildDropMaterializedViewJobForTest(schemaID, mviewID, 1020)))
 	checkDroppedState(t, pStorage)
 	pStorage.close()
 
@@ -2945,7 +2945,7 @@ func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
 		})
 
 		dropMLogDDL := readDDLEventForTest(t, pStorage, 1030)
-		require.Equal(t, byte(model.ActionDropTable), dropMLogDDL.Type)
+		require.Equal(t, byte(model.ActionDropMaterializedViewLog), dropMLogDDL.Type)
 		require.Equal(t, schemaName, dropMLogDDL.SchemaName)
 		require.Equal(t, mlogTableID, dropMLogDDL.TableID)
 		require.Equal(t, mlogTableName, dropMLogDDL.TableName)
@@ -2980,7 +2980,7 @@ func TestActionCreateMaterializedViewLogDDL(t *testing.T) {
 	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
 	checkCreatedState(t, pStorage)
 
-	require.NoError(t, pStorage.handleDDLJob(buildDropTableJobForTest(schemaID, mlogTableID, 1030)))
+	require.NoError(t, pStorage.handleDDLJob(buildDropMaterializedViewLogJobForTest(schemaID, mlogTableID, 1030)))
 	checkDroppedState(t, pStorage)
 	pStorage.close()
 
@@ -3479,7 +3479,7 @@ func TestActionCreateMaterializedViewShadowDDL(t *testing.T) {
 	checkState := func(t *testing.T, pStorage *persistentStorage) {
 		t.Helper()
 
-		require.Equal(t, []uint64{1000, 1030}, pStorage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1000}, pStorage.tableTriggerDDLHistory)
 		require.Equal(t, []uint64{1020, 1030}, pStorage.tablesDDLHistory[shadowTableID])
 
 		checkPhysicalTables(t, pStorage, 1025, map[int64]string{})
@@ -3502,29 +3502,24 @@ func TestActionCreateMaterializedViewShadowDDL(t *testing.T) {
 		_, err = pStorage.forceGetTableInfo(shadowTableID, 1030)
 		require.ErrorAs(t, err, &deletedErr)
 
+		dropShadowDDL := readDDLEventForTest(t, pStorage, 1030)
+		require.Equal(t, byte(model.ActionDropMaterializedViewShadow), dropShadowDDL.Type)
+		require.Equal(t, shadowTableName, dropShadowDDL.TableName)
+
 		tableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), shadowTableID, nil, 0, 2000)
 		require.NoError(t, err)
-		require.Len(t, tableEvents, 1)
-		require.Equal(t, byte(model.ActionDropTable), tableEvents[0].Type)
-		require.Equal(t, uint64(1030), tableEvents[0].FinishedTs)
-		require.Equal(t, fmt.Sprintf("DROP TABLE `%s`.`%s`", schemaName, shadowTableName), tableEvents[0].Query)
-		require.Equal(t, &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{shadowTableID},
-		}, tableEvents[0].NeedDroppedTables)
+		require.Empty(t, tableEvents)
 
 		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, 10)
 		require.NoError(t, err)
-		require.Len(t, triggerEvents, 1)
-		require.Equal(t, byte(model.ActionDropTable), triggerEvents[0].Type)
-		require.Equal(t, uint64(1030), triggerEvents[0].FinishedTs)
+		require.Empty(t, triggerEvents)
 	}
 
 	pStorage := newPersistentStorageForTest(dbPath, nil)
 	for _, job := range []*model.Job{
 		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
 		buildCreateMaterializedViewShadowJob(1020),
-		buildDropTableJobForTest(schemaID, shadowTableID, 1030),
+		buildDropMaterializedViewShadowJobForTest(schemaID, shadowTableID, 1030),
 	} {
 		require.NoError(t, pStorage.handleDDLJob(job))
 	}

@@ -304,6 +304,7 @@ func TestShouldDiscardDDL(t *testing.T) {
 	// DDL (create table) does not match any discard rule, should not discard.
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil))
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateMaterializedView, nil))
+	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionDropMaterializedView, nil))
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionMViewRefreshOutOfPlaceCutover, nil))
 
 	// DDL on system schema, should discard.
@@ -337,6 +338,12 @@ func TestShouldIgnoreDDL(t *testing.T) {
 
 	// DDL matches an event filter rule (drop table), should ignore.
 	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, 0)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	// DROP MATERIALIZED VIEW is emitted downstream as DROP TABLE and uses the
+	// same event-filter type.
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "DROP MATERIALIZED VIEW t1", model.ActionDropMaterializedView, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
@@ -688,7 +695,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 43)
+	require.Len(t, ddlWhiteListMap, 44)
 	type testCase struct {
 		model.ActionType
 		allowed bool

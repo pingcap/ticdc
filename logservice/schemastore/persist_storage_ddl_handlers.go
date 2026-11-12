@@ -184,6 +184,33 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
 		buildDDLEventFunc:          buildDDLEventForDropTable,
 	},
+	model.ActionDropMaterializedView: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
+		buildDDLEventFunc:          buildDDLEventForDropMaterializedView,
+	},
+	model.ActionDropMaterializedViewLog: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
+	model.ActionDropMaterializedViewShadow: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
 	model.ActionAddColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -2572,6 +2599,15 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 	}
 	ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{{SchemaName: rawEvent.SchemaName, TableName: rawEvent.TableName}}
 	return ddlEvent, true, err
+}
+
+func buildDDLEventForDropMaterializedView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEventForDropTable(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	ddlEvent.Type = byte(model.ActionDropTable)
+	return ddlEvent, true, nil
 }
 
 func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
