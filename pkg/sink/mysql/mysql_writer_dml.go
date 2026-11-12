@@ -109,8 +109,15 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
+<<<<<<< HEAD
 			if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 				queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
+=======
+			if w.cfg.EnableActiveActive {
+				queryList, argsList, rowTypesList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
+			} else if w.cfg.hasDeleteFilter(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+				queryList, argsList, rowTypesList = w.generateSQLsWithDeleteFilter(eventsInGroup)
+>>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
 			} else {
 				queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
 			}
@@ -127,6 +134,55 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	return dmls, nil
 }
 
+<<<<<<< HEAD
+=======
+// generateSQLsWithDeleteFilter preserves event order as the legacy MySQL sink
+// does. Deletes removed by filtering must not cause rows from different events
+// to be merged. Batching within each event still follows the configured limits.
+func (w *Writer) generateSQLsWithDeleteFilter(events []*commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
+	if len(events) == 0 {
+		return nil, nil, nil
+	}
+	// The caller groups events by table and schema version, so table eligibility
+	// is shared. A single event cannot contain mixed recovery safe-mode states.
+	canBatch := w.canBatchTable(events[0].TableInfo)
+	queries := make([]string, 0, len(events))
+	args := make([][]any, 0, len(events))
+	rowTypes := make([]common.RowType, 0, len(events))
+	for _, event := range events {
+		if event.Len() == 0 {
+			continue
+		}
+		var (
+			sqls  []string
+			vals  [][]any
+			types []common.RowType
+		)
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
+		if canBatch && event.Len() > 1 {
+			if inSafeMode {
+				sqls, vals, types = w.generateSafeBatchSQLForSingleEvent(event)
+			} else {
+				sqls, vals, types = w.generateSQLForSingleEvent(event, false)
+			}
+		} else {
+			sqls, vals, types = w.generateNormalSQL(event)
+		}
+		queries = append(queries, sqls...)
+		args = append(args, vals...)
+		rowTypes = append(rowTypes, types...)
+	}
+	return queries, args, rowTypes
+}
+
+func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
+	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
+		return w.generateActiveActiveNormalSQLs(eventsInGroup)
+	}
+	return w.generateActiveActiveBatchSQL(eventsInGroup)
+}
+
+>>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
@@ -135,6 +191,19 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
 func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) bool {
+	if !w.canBatchTable(tableInfo) {
+		return false
+	}
+	if len(events) == 1 && events[0].Len() == 1 {
+		return false
+	}
+
+	return allRowInSameSafeMode(w.cfg.SafeMode, events)
+}
+
+// canBatchTable checks the configuration and table properties shared by all
+// events with the same table ID and schema version.
+func (w *Writer) canBatchTable(tableInfo *common.TableInfo) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
@@ -156,12 +225,7 @@ func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*common
 			return false
 		}
 	}
-	// if tableInfo.HasVirtualColumns()
-	if len(events) == 1 && events[0].Len() == 1 {
-		return false
-	}
-
-	return allRowInSameSafeMode(w.cfg.SafeMode, events)
+	return true
 }
 
 // allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
