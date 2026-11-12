@@ -294,12 +294,6 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 				return nil, err
 			}
 
-			log.Info("Avro schema registered",
-				zap.String("schemaSubject", schemaSubject),
-				zap.String("schemaIdentity", schemaIdentity),
-				zap.Uint64("schemaVersion", schemaVersion),
-				zap.Int("schemaID", id.confluentSchemaID))
-
 			return &schemaCacheEntry{
 				schemaVersion:    schemaVersion,
 				schemaID:         id,
