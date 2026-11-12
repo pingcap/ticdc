@@ -471,7 +471,7 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := c.mc.SendCommand(msg)
 		if err != nil {
-			log.Error("failed to send coordinator request", zap.Any("msg", msg), zap.Error(err))
+			log.Error("failed to send coordinator request", zap.Error(err))
 			continue
 		}
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/google/btree"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"go.uber.org/zap"
 )
 
@@ -128,8 +129,8 @@ func (m *BtreeMap[T]) AscendRange(start, end heartbeatpb.TableSpan, iterator Ite
 func (m *BtreeMap[T]) FindHoles(start, end heartbeatpb.TableSpan) ([]heartbeatpb.TableSpan, []heartbeatpb.TableSpan) {
 	if bytes.Compare(start.StartKey, end.StartKey) >= 0 {
 		log.Panic("start must be larger than end",
-			zap.String("start", start.String()),
-			zap.String("end", end.String()))
+			zap.String("start", common.FormatTableSpan(&start)),
+			zap.String("end", common.FormatTableSpan(&end)))
 	}
 	if m.cache == nil || time.Since(m.cache.lastGC) > time.Minute {
 		m.cache = &struct {
@@ -155,8 +156,8 @@ func (m *BtreeMap[T]) FindHoles(start, end heartbeatpb.TableSpan) ([]heartbeatpb
 			})
 		} else if ord > 0 {
 			log.Panic("map is out of order",
-				zap.String("lastSpan", lastSpan.String()),
-				zap.String("current", current.String()))
+				zap.String("lastSpan", common.FormatTableSpan(&lastSpan)),
+				zap.String("current", common.FormatTableSpan(&current)))
 		}
 
 		lastSpan = current

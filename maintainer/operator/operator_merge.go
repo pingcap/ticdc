@@ -14,9 +14,7 @@
 package operator
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -55,22 +53,11 @@ type MergeDispatcherOperator struct {
 
 	toMergedReplicaSets []*replica.SpanReplication
 	newReplicaSet       *replica.SpanReplication
-	mergedSpanInfo      string
 	checkpointTs        uint64
 
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
 	sendThrottler sendThrottler
-}
-
-func buildMergedSpanInfo(toMergedReplicaSets []*replica.SpanReplication) string {
-	var spansInfo strings.Builder
-	for _, replicaSet := range toMergedReplicaSets {
-		span := replicaSet.Span
-		fmt.Fprintf(&spansInfo, "[%s,%s,%d]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey), span.TableID)
-	}
-	return spansInfo.String()
 }
 
 func buildDispatcherIDs(toMergedReplicaSets []*replica.SpanReplication) []*heartbeatpb.DispatcherID {
@@ -115,7 +102,6 @@ func newMergeDispatcherOperator(
 		dispatcherIDs:       buildDispatcherIDs(toMergedReplicaSets),
 		maintainerEpoch:     maintainerEpoch,
 		toMergedReplicaSets: toMergedReplicaSets,
-		mergedSpanInfo:      buildMergedSpanInfo(toMergedReplicaSets),
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       mergedReplicaSet,
 		sendThrottler:       newSendThrottler(),
@@ -187,7 +173,9 @@ func (m *MergeDispatcherOperator) Start() {
 func (m *MergeDispatcherOperator) OnNodeRemove(n node.ID) {
 	if n == m.originNode {
 		log.Info("origin node is removed",
-			zap.Any("toMergedReplicaSets", m.toMergedReplicaSets))
+			zap.Stringer("dispatcherID", m.id),
+			zap.Stringer("nodeID", n),
+			zap.Int("sourceReplicaSetCount", len(m.toMergedReplicaSets)))
 
 		m.aborted.Store(true)
 		m.finished.Store(true)
@@ -238,7 +226,7 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 // OnTaskRemoved is called when the task is removed by ddl
 func (m *MergeDispatcherOperator) OnTaskRemoved() {
-	log.Info("task removed", zap.String("replicaSet", m.newReplicaSet.ID.String()))
+	log.Info("task removed", zap.String("dispatcherID", m.newReplicaSet.ID.String()))
 	m.abortedByDDL.Store(true)
 	m.aborted.Store(true)
 	m.finished.Store(true)
@@ -266,7 +254,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 			}
 		}
 		m.spanController.RemoveReplicatingSpan(m.newReplicaSet)
-		log.Info("merge dispatcher operator finished due to removed", zap.String("id", m.id.String()))
+		log.Info("merge dispatcher operator finished due to removed", zap.String("dispatcherID", m.id.String()))
 		return
 	}
 
@@ -275,11 +263,11 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	}
 
 	m.spanController.MarkSpanReplicating(m.newReplicaSet)
-	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
+	log.Info("merge dispatcher operator finished", zap.String("dispatcherID", m.id.String()))
 }
 
 func (m *MergeDispatcherOperator) String() string {
-	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, mergedSpanInfo: %s", m.id, m.mergedSpanInfo)
+	return fmt.Sprintf("merge dispatcher operator new dispatcherID: %s, sourceReplicaSetCount: %d", m.id, len(m.toMergedReplicaSets))
 }
 
 func (m *MergeDispatcherOperator) Type() string {

@@ -114,8 +114,7 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
 		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+			zap.String("type", msg.Type.String()))
 	}
 	return nil
 }

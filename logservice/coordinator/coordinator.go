@@ -134,7 +134,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				}
 			}
 		case req := <-c.requestChan.Out():
-			nodes := c.getCandidateNodes(req.target, req.req.GetSpan(), req.req.GetStartTs())
+			nodes := c.getCandidateNodes(req)
 			response := &logservicepb.ReusableEventServiceResponse{
 				ID:    req.req.GetID(),
 				Nodes: nodes,
@@ -165,8 +165,7 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
 			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+				zap.String("type", targetMessage.Type.String()))
 		}
 	}
 	return nil
@@ -331,9 +330,13 @@ func (c *logCoordinator) getMinLogServiceResolvedTs(cfID common.ChangeFeedID) ui
 	return 0
 }
 
-// getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,
+// getCandidateNodes returns all nodes (excluding the request node) which may contain data
+// for the requested span from the requested startTs,
 // and the return slice should be sorted by resolvedTs(largest first).
-func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbeatpb.TableSpan, startTs uint64) []string {
+func (c *logCoordinator) getCandidateNodes(req requestAndTarget) []string {
+	requestNodeID := req.target
+	span := req.req.GetSpan()
+	startTs := req.req.GetStartTs()
 	type candidateSubscription struct {
 		nodeID         node.ID
 		subscriptionID uint64
@@ -405,7 +408,8 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	}
 	log.Info("log coordinator get candidate nodes",
 		zap.String("requestNodeID", requestNodeID.String()),
-		zap.String("span", common.FormatTableSpan(span)),
+		zap.Stringer("dispatcherID", common.NewDispatcherIDFromPB(req.req.GetID())),
+		zap.Int64("tableID", span.GetTableID()),
 		zap.Uint64("startTs", startTs),
 		zap.Strings("candidateNodes", candidateNodes),
 		zap.Uint64s("subscriptionIDs", subIDs))

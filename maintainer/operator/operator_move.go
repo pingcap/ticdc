@@ -125,7 +125,7 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 
 	if from == m.origin && status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		log.Info("replica set removed from origin node",
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 		// reset last send message time
 		m.sendThrottler.reset()
@@ -141,7 +141,7 @@ func (m *MoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSp
 	if m.state == moveStateAddDest && from == m.dest && status.ComponentStatus == heartbeatpb.ComponentState_Working {
 		log.Info("replica set added to dest node",
 			zap.String("dest", m.dest.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.state = moveStateDoneSuccess
 	}
 }
@@ -174,7 +174,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 
 	if m.isFinished() {
 		log.Info("move dispatcher operator is finished, no need to handle node remove",
-			zap.String("replicaSet", m.replicaSet.ID.String()),
+			zap.String("dispatcherID", m.replicaSet.ID.String()),
 			zap.String("origin", m.origin.String()),
 			zap.String("dest", m.dest.String()))
 		return
@@ -191,7 +191,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 		log.Info("dest node is offline, abort move and reschedule span",
 			zap.String("dest", m.dest.String()),
 			zap.String("origin", m.origin.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 		switch m.state {
 		case moveStateAddDest:
@@ -205,7 +205,7 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 	if n == m.origin {
 		log.Info("origin node is stopped",
 			zap.String("origin", m.origin.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		// Allow sending the next message immediately since move phase changes.
 		m.sendThrottler.reset()
 
@@ -244,7 +244,7 @@ func (m *MoveDispatcherOperator) OnTaskRemoved() {
 	defer m.lck.Unlock()
 
 	log.Info("replicaset is removed, mark move dispatcher operator finished",
-		zap.String("replicaSet", m.replicaSet.ID.String()),
+		zap.String("dispatcherID", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
 	m.state = moveStateDoneNoPostFinish
@@ -258,7 +258,7 @@ func (m *MoveDispatcherOperator) Start() {
 		log.Info("origin and dest are the same, no need to move",
 			zap.String("origin", m.origin.String()),
 			zap.String("dest", m.dest.String()),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.state = moveStateDoneSuccess
 		return
 	}

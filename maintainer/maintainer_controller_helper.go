@@ -237,7 +237,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 		log.Info("wait for split table operator finished", zap.Int("count", count))
 	}
 
-	log.Info("successfully split table by region count", zap.Any("tableID", tableID), zap.Any("replications", replications))
+	log.Info("successfully split table by region count", zap.Any("tableID", tableID), zap.Int("replicationCount", len(replications)))
 
 	return errors.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
@@ -284,8 +284,6 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 	sort.Slice(replications, func(i, j int) bool {
 		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
 	})
-
-	log.Debug("sorted replications in mergeTable", zap.Any("replications", replications))
 
 	// try to select two consecutive spans in the same node to merge
 	// if we can't find, we just move one span to make it satisfied.

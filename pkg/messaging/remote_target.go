@@ -537,7 +537,6 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 			return ctx.Err()
 		case msg := <-sendCh:
 			failpoint.Inject("InjectDropRemoteMessage", func() {
-				log.Info("Inject Drop Remote Message", zap.Stringer("localID", s.messageCenterID), zap.String("localAddr", s.localAddr), zap.Stringer("remoteID", s.targetId), zap.String("remoteAddr", s.targetAddr), zap.String("streamType", streamType), zap.Any("message", msg))
 				failpoint.Continue()
 			})
 
@@ -548,8 +547,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 					zap.String("localAddr", s.localAddr),
 					zap.Stringer("remoteID", s.targetId),
 					zap.String("remoteAddr", s.targetAddr),
-					zap.String("streamType", streamType),
-					zap.Stringer("message", msg))
+					zap.String("streamType", streamType))
 				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 				return err
 			}
@@ -668,7 +666,6 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 			buf, err := im.Marshal()
 			if err != nil {
 				log.Warn("marshal message failed ",
-					zap.Any("msg", im),
 					zap.Error(err),
 					zap.Stringer("localID", s.messageCenterID),
 					zap.String("localAddr", s.localAddr),

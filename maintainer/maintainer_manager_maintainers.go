@@ -122,7 +122,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 	case messaging.TypeRemoveMaintainerRequest:
 		return m.onRemoveMaintainerRequest(msg)
 	default:
-		log.Warn("unknown message type", zap.Any("message", msg.Message))
+		log.Warn("unknown message type", zap.String("type", msg.Type.String()))
 	}
 	return nil
 }
@@ -424,8 +424,7 @@ func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	c, ok := p.registry.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.Stringer("changefeedID", changefeed),
-			zap.String("message", msg.String()))
+			zap.Stringer("changefeedID", changefeed))
 		return nil
 	}
 	select {

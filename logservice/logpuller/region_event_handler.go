@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
@@ -246,14 +245,6 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	worker := state.worker
-	if err != nil {
-		log.Debug("region event handler get a region error",
-			zap.Uint64("workerID", worker.workerID),
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-			zap.Uint64("regionID", state.region.verID.GetID()),
-			zap.Bool("reschedule", stepsToRemoved),
-			zap.Error(err))
-	}
 	if stepsToRemoved {
 		worker.takeRegionState(SubscriptionID(state.requestID), state.getRegionID())
 		h.failureHandler.Report(newRegionErrorInfo(state.getRegionInfo(), err))
@@ -290,9 +281,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
-				zap.Uint64("requestID", state.requestID),
-				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
-				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
+				zap.Uint64("requestID", state.requestID))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
