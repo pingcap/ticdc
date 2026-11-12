@@ -511,7 +511,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("targetTs", targetTs),
 				zap.Any("state", state),
-				zap.String("error", util.RedactAny(err)))
+				zap.Error(err))
 		} else {
 			metricResolveLockSuccessCounter.Inc()
 		}

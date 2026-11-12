@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
@@ -50,7 +49,7 @@ func (m *mounter) verifyChecksum(
 		if err != nil {
 			log.Error("calculate raw checksum failed",
 				zap.Int("version", version), zap.Any("tz", m.tz),
-				zap.Any("columns", columnInfos), zap.String("error", util.RedactAny(err)))
+				zap.Any("columns", columnInfos), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
 		if !matched {
@@ -60,7 +59,7 @@ func (m *mounter) verifyChecksum(
 		if err != nil {
 			log.Error("failed to calculate column-level checksum, after raw checksum verification passed",
 				zap.Any("columnsInfo", columnInfos),
-				zap.Any("tz", m.tz), zap.String("error", util.RedactAny(err)))
+				zap.Any("tz", m.tz), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
 		return columnChecksum, true, nil
@@ -83,7 +82,7 @@ func (m *mounter) verifyColumnChecksum(
 	checksum, err := calculateColumnChecksum(columnInfos, row, m.tz)
 	if err != nil {
 		log.Error("failed to calculate the checksum",
-			zap.Uint32("first", first), zap.Any("columnInfos", columnInfos), zap.String("error", util.RedactAny(err)))
+			zap.Uint32("first", first), zap.Any("columnInfos", columnInfos), zap.Error(err))
 		return 0, false, err
 	}
 

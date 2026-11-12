@@ -17,7 +17,6 @@ import (
 	"fmt"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -27,7 +26,7 @@ type eventError struct {
 
 // Error implement error interface.
 func (e *eventError) Error() string {
-	return util.RedactAny(e.err)
+	return e.err.String()
 }
 
 type rpcCtxUnavailableErr struct {

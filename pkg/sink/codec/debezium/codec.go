@@ -140,7 +140,7 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 					zap.String("table", tableInfo.GetTargetTableName()),
 					zap.String("column", colInfo.Name.O),
 					zap.Uint64("commitTs", commitTs),
-					zap.String("error", util.RedactAny(err)))
+					zap.Error(err))
 				break
 			}
 		}

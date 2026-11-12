@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -308,7 +307,7 @@ func (s *eventScanner) scanAndMergeEvents(
 
 		session.observeRawEntry(rawEvent, position)
 		if err = processor.appendRow(rawEvent); err != nil {
-			log.Error("append row failed", zap.String("error", util.RedactAny(err)),
+			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", rawEvent.StartTs),

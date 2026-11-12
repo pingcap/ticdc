@@ -551,13 +551,13 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		val, err := types.ParseTime(types.DefaultStmtNoWarningContext, raw.(string), ft.GetType(), types.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for data time", zap.String("raw", util.RedactAny(raw)), zap.String("error", util.RedactAny(err)))
+			log.Panic("invalid column value for data time", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendTime(idx, val)
 	case mysql.TypeDuration:
 		val, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, raw.(string), types.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.String("raw", util.RedactAny(raw)), zap.String("error", util.RedactAny(err)))
+			log.Panic("invalid column value for duration", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendDuration(idx, val)
 	case mysql.TypeEnum:
@@ -571,13 +571,13 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	case mysql.TypeJSON:
 		result, err := types.ParseBinaryJSONFromString(raw.(string))
 		if err != nil {
-			log.Panic("invalid column value for json", zap.String("raw", util.RedactAny(raw)), zap.String("error", util.RedactAny(err)))
+			log.Panic("invalid column value for json", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendJSON(idx, result)
 	case mysql.TypeTiDBVectorFloat32:
 		result, err := types.ParseVectorFloat32(raw.(string))
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactAny(raw)), zap.String("error", util.RedactAny(err)))
+			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendVectorFloat32(idx, result)
 	default:

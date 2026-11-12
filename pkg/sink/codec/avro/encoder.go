@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -67,7 +66,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 			zap.String("schema", e.TableInfo.GetTargetSchemaName()),
 			zap.String("table", e.TableInfo.GetTargetTableName()),
 			zap.Uint64("commitTs", e.CommitTs),
-			zap.String("error", util.RedactAny(err)))
+			zap.Error(err))
 		return errors.Trace(err)
 	}
 
@@ -77,7 +76,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 			zap.String("schema", e.TableInfo.GetTargetSchemaName()),
 			zap.String("table", e.TableInfo.GetTargetTableName()),
 			zap.Uint64("commitTs", e.CommitTs),
-			zap.String("error", util.RedactAny(err)))
+			zap.Error(err))
 		return errors.Trace(err)
 	}
 

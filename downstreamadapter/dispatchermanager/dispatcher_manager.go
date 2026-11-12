@@ -705,7 +705,7 @@ func (e *DispatcherManager) handleError(ctx context.Context, err error) {
 		default:
 			log.Error("error channel is full, discard error",
 				zap.Stringer("changefeedID", e.changefeedID),
-				zap.String("error", util.RedactAny(err)),
+				zap.Error(err),
 			)
 		}
 	}
@@ -721,7 +721,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
 					zap.Stringer("changefeedID", e.changefeedID),
-					zap.String("error", util.RedactAny(err)),
+					zap.Error(err),
 				)
 
 				// report error to maintainer
@@ -731,7 +731,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 					Time:    time.Now().String(),
 					Node:    appcontext.GetID(),
 					Code:    string(errors.ErrorCode(err)),
-					Message: util.RedactAny(err),
+					Message: err.Error(),
 				}
 				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 

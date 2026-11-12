@@ -840,7 +840,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("cursorTxnStartTs", request.Cursor.TxnStartTs),
 			zap.String("cursorPosition", util.RedactKey(request.Cursor.Position)),
 			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
-			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.String("error", util.RedactAny(err)))
+			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
 	if scannedBytes < 0 {
