@@ -409,7 +409,7 @@ func (c *logCoordinator) getCandidateNodes(req requestAndTarget) []string {
 	log.Info("log coordinator get candidate nodes",
 		zap.String("requestNodeID", requestNodeID.String()),
 		zap.Stringer("dispatcherID", common.NewDispatcherIDFromPB(req.req.GetID())),
-		zap.Int64("tableID", span.TableID),
+		zap.Int64("tableID", span.GetTableID()),
 		zap.Uint64("startTs", startTs),
 		zap.Strings("candidateNodes", candidateNodes),
 		zap.Uint64s("subscriptionIDs", subIDs))
