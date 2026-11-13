@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -453,6 +454,7 @@ func TestIsSchemaFile(t *testing.T) {
 // func TestCheckOrWriteSchema(t *testing.T) {
 // 	t.Parallel()
 
+<<<<<<< HEAD
 // 	ctx, cancel := context.WithCancel(context.Background())
 // 	defer cancel()
 // 	dir := t.TempDir()
@@ -521,6 +523,175 @@ func TestIsSchemaFile(t *testing.T) {
 // 	require.NoError(t, err)
 // 	require.Equal(t, 2, len(files))
 // }
+=======
+	for _, enableTableAcrossNodes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tableAcrossNodes=%t", enableTableAcrossNodes), func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			f := testFilePathGenerator(ctx, t, dir)
+			f.config.EnableTableAcrossNodes = enableTableAcrossNodes
+
+			var columns []*timodel.ColumnInfo
+			ft := types.NewFieldType(mysql.TypeLong)
+			ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+			col := &timodel.ColumnInfo{
+				Name:         ast.NewCIStr("Id"),
+				FieldType:    *ft,
+				DefaultValue: 10,
+			}
+			columns = append(columns, col)
+			tidbInfo := &timodel.TableInfo{
+				ID:      20,
+				Name:    ast.NewCIStr("table1"),
+				Columns: columns,
+				Version: 100,
+			}
+			tableInfo := commonType.WrapTableInfo("test", tidbInfo)
+
+			table := VersionedTableName{
+				TableNameWithPhysicTableID: tableInfo.TableName,
+				TableInfoVersion:           100,
+			}
+
+			effectiveTableVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+			// A lower input version with the same checksum must reuse the schema,
+			// since dispatcher startTs can differ without a schema change.
+			table.TableInfoVersion = 99
+			effectiveTableVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, uint64(100), effectiveTableVersion)
+
+			// The cached result must preserve the effective schema version.
+			effectiveTableVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, uint64(100), effectiveTableVersion)
+
+			// test only table version changed, schema file should be reused
+			table.TableInfoVersion = 101
+			effectiveTableVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, uint64(tidbInfo.Version), effectiveTableVersion)
+
+			dir = filepath.Join(dir, "test/table1/meta")
+			files, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(files))
+
+			// test schema file is invalid
+			err = os.WriteFile(filepath.Join(dir,
+				fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
+				[]byte("invalid"), 0o644)
+			require.NoError(t, err)
+			err = os.Remove(filepath.Join(dir, files[0].Name()))
+			require.NoError(t, err)
+			delete(f.versionMap, table)
+			effectiveTableVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
+
+			files, err = os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Equal(t, 2, len(files))
+		})
+	}
+}
+
+func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
+	t.Parallel()
+
+	type storedSchema struct {
+		version uint64
+		query   string
+		altered bool
+		ddlType byte
+	}
+	for _, tc := range []struct {
+		name     string
+		version  uint64
+		schemas  []storedSchema
+		expected uint64
+	}{
+		{
+			name: "pendingDrop", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}},
+		},
+		{
+			name: "pendingDropWithoutEarlierSchema", version: 150, expected: 150,
+			schemas: []storedSchema{{200, "DROP TABLE table1", false, 0}},
+		},
+		{
+			name: "newerSnapshotBeforeDrop", version: 90, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "", false, 0}},
+		},
+		{
+			name: "pendingRecreate", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "CREATE TABLE table1 (id INT)", false, 0}},
+		},
+		{
+			name: "afterRecreate", version: 350, expected: 300,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "CREATE TABLE table1 (id INT)", false, 0}},
+		},
+		{
+			name: "differentChecksumBoundary", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true, 0}, {300, "", false, 0}},
+		},
+		{
+			name: "noMatchingSchemaAfterDDL", version: 250, expected: 250,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true, 0}},
+		},
+		{
+			name: "pendingExchangeWithoutQuery", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", false, byte(timodel.ActionExchangeTablePartition)}, {300, "", false, 0}},
+		},
+		{
+			name: "differentChecksumExchangeWithoutQuery", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", true, byte(timodel.ActionExchangeTablePartition)}, {300, "", false, 0}},
+		},
+		{
+			name: "noMatchingSchemaAfterExchangeWithoutQuery", version: 250, expected: 250,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", true, byte(timodel.ActionExchangeTablePartition)}},
+		},
+		{
+			name: "afterExchangeWithoutQuery", version: 250, expected: 200,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", false, byte(timodel.ActionExchangeTablePartition)}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			f := testFilePathGenerator(ctx, t, t.TempDir())
+			tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+				ID: 20, Name: ast.NewCIStr("table1"),
+				Columns: []*timodel.ColumnInfo{{Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}},
+			})
+			for _, stored := range tc.schemas {
+				var schema SchemaFile
+				schema.Build(&commonEvent.DDLEvent{
+					TableInfo: tableInfo, FinishedTs: stored.version, Query: stored.query,
+					Type: stored.ddlType,
+				}, false)
+				if stored.altered {
+					schema.Columns = append(schema.Columns, TableCol{Name: "extra", Tp: "INT"})
+					schema.TotalColumns++
+				}
+				require.NoError(t, f.storage.WriteFile(ctx, schema.Path(false, 20), schema.Marshal()))
+			}
+			table := VersionedTableName{
+				TableNameWithPhysicTableID: tableInfo.TableName,
+				TableInfoVersion:           tc.version,
+			}
+			version, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, version)
+			version, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, version, "cached versions must respect the same DDL boundary")
+		})
+	}
+}
+>>>>>>> b108b60c2 (sink: stop discarding DML based on schema versions for storage sink (#6659))
 
 func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 	t.Parallel()
@@ -551,9 +722,8 @@ func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 		TableInfoVersion: 100,
 	}
 
-	effectiveTableVersion, hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	effectiveTableVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, effectiveTableVersion)
 
 	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))

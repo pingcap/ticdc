@@ -15,12 +15,14 @@ package cloudstorage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -158,12 +160,9 @@ type VersionedTableName struct {
 	// Source:
 	// 1. DDL finishedTs for schema-changing DDLs.
 	// 2. Checkpoint/startTs during dispatcher recover/move.
-	// Usage:
-	// 1. CheckOrWriteSchema uses it to detect whether incoming DML is older than
-	//    the latest schema version already stored.
-	// 2. If no exact schema file exists but an equivalent schema checksum exists,
-	//    storage sink may reuse an older/newer existing schema version as the
-	//    output directory version via versionMap.
+	// If no exact schema file exists but an equivalent schema checksum exists,
+	// storage sink may reuse an older/newer existing schema version as the
+	// output directory version via versionMap, without crossing a DDL boundary.
 	TableInfoVersion uint64
 	// DispatcherID identifies the dispatcher producing this table stream.
 	// It participates in index/data file names when table-across-nodes is enabled.
@@ -217,18 +216,16 @@ func (f *FilePathGenerator) SetWriteGate(gate *writelease.Gate) {
 }
 
 // CheckOrWriteSchema ensures the schema file for table/tableInfo exists.
-// The first return value is the schema version that must be used in later
-// data/index paths. The second return value is true when storage already has a
-// newer schema with the same checksum, so the caller should discard the old DML
-// batch. Storage errors are returned from checking, walking, or writing schema
-// files.
+// It returns the effective schema version to use in later data/index paths.
+// An existing schema with the same checksum can be reused within the same DDL
+// interval, even if its dispatcher startTs is newer than the input version.
 func (f *FilePathGenerator) CheckOrWriteSchema(
 	ctx context.Context,
 	table VersionedTableName,
 	tableInfo *commonType.TableInfo,
-) (uint64, bool, error) {
+) (uint64, error) {
 	if version, ok := f.versionMap[table]; ok {
-		return version, false, nil
+		return version, nil
 	}
 
 	keyspace := f.changefeedID.Keyspace()
@@ -247,45 +244,93 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	schemaFilePath := schemaFile.Path(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	exist, err := f.storage.FileExists(ctx, schemaFilePath)
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
-		return table.TableInfoVersion, false, nil
+		return table.TableInfoVersion, nil
 	}
-	// walk the table meta path to find the last schema file
+	// Collect schema versions so reuse can stop at DDL boundaries, including DDLs
+	// that preserve the checksum, such as DROP, TRUNCATE, or table recreation.
 	_, checksum := mustParseSchemaFileName(schemaFilePath)
 	schemaFileCount := 0
 	lastVersion := uint64(0)
+	type schemaVersion struct {
+		path     string
+		version  uint64
+		checksum uint32
+	}
+	var schemas []schemaVersion
 	tablePathPart := generateTablePath(schemaFile.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
 	subDir := fmt.Sprintf(tableMetaPrefix, schemaFile.Schema, tablePathPart)
 	if f.config.UseTableIDAsPath {
 		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	}
+<<<<<<< HEAD
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
+=======
+	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
+>>>>>>> b108b60c2 (sink: stop discarding DML based on schema versions for storage sink (#6659))
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
 		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
 		schemaFileCount++
-		if !strings.HasSuffix(path, checksumSuffix) {
+		if !IsSchemaFile(path) {
 			return nil
 		}
-		version, _ := mustParseSchemaFileName(path)
-		if version > table.TableInfoVersion {
-			hasNewerSchemaVersion = true
-		}
-		if version > lastVersion {
-			lastVersion = version
-		}
+		version, fileChecksum := mustParseSchemaFileName(path)
+		schemas = append(schemas, schemaVersion{path, version, fileChecksum})
 		return nil
 	})
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
-	if hasNewerSchemaVersion {
-		return table.TableInfoVersion, true, nil
+	sort.Slice(schemas, func(i, j int) bool { return schemas[i].version < schemas[j].version })
+	next := sort.Search(len(schemas), func(i int) bool { return schemas[i].version > table.TableInfoVersion })
+	containsDDL := func(schemaPath string) (bool, error) {
+		data, err := f.storage.ReadFile(ctx, schemaPath)
+		if err != nil {
+			return false, errors.WrapError(errors.ErrExternalStorageAPI, err)
+		}
+		var schema SchemaFile
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return false, errors.WrapError(errors.ErrUnmarshalFailed, err)
+		}
+		// Query is empty when the DDL is replayed from another table's schema,
+		// as with EXCHANGE PARTITION. Its type still marks a DDL boundary.
+		return schema.Type != 0 || schema.Query != "", nil
+	}
+	// A newer snapshot may be shared by idle spans, but a future DDL must never
+	// move older DML into that DDL's directory or a later snapshot's directory.
+	for _, candidate := range schemas[next:] {
+		ddl, err := containsDDL(candidate.path)
+		if err != nil {
+			return 0, err
+		}
+		if ddl {
+			break
+		}
+		if candidate.checksum == checksum {
+			lastVersion = candidate.version
+		}
+	}
+	if lastVersion == 0 {
+		for i := next - 1; i >= 0; i-- {
+			candidate := schemas[i]
+			if candidate.checksum == checksum {
+				lastVersion = candidate.version
+				break
+			}
+			ddl, err := containsDDL(candidate.path)
+			if err != nil {
+				return 0, err
+			}
+			if ddl {
+				break
+			}
+		}
 	}
 
 	// Case 2: the table meta path is not empty.
@@ -299,7 +344,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		// record the last version of the schema file.
 		// we don't need to write schema file to external storage again.
 		f.versionMap[table] = lastVersion
-		return lastVersion, false, nil
+		return lastVersion, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:
@@ -314,13 +359,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedSchemaFile := schemaFile.Marshal()
 	if err := writelease.WaitForWrite(ctx, f.writeGate); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if err := f.storage.WriteFile(ctx, schemaFilePath, encodedSchemaFile); err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	f.versionMap[table] = table.TableInfoVersion
-	return table.TableInfoVersion, false, nil
+	return table.TableInfoVersion, nil
 }
 
 // SetClock sets the clock used by GenerateDateStr. It is used by tests.
