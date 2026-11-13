@@ -2731,7 +2731,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 			{
 				SchemaID:  schemaID,
 				TableID:   mviewID,
-				Splitable: true,
+				Splitable: false,
 			},
 		}, events[0].NeedAddedTables)
 		require.Equal(t, &commonEvent.TableNameChange{
