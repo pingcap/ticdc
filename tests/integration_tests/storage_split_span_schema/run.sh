@@ -33,7 +33,7 @@ wait_for() {
 
 dispatcher_log() {
 	grep -F '"new dispatcher created"' "$WORK_DIR/cdc$1.log" |
-		grep -F "tableID: $table_id," | tail -n 1
+		grep -F "[tableID=$table_id]" | tail -n 1
 }
 
 captures_ready() {
@@ -45,6 +45,31 @@ initial_dispatchers_ready() {
 	first=$(dispatcher_log 0) || return 1
 	second=$(dispatcher_log 1) || return 1
 	[[ $first == *"[startTs=$start_ts]"* && $second == *"[startTs=$start_ts]"* ]]
+}
+
+span_keys_ready() {
+	local regions moved_region
+	# TiDB returns record regions in key order, so the first contains -1 and the second 1.
+	regions=$(curl -fsS "http://$UP_TIDB_HOST:$UP_TIDB_STATUS/tables/storage_split_span_schema/t/regions" |
+		jq -ce '.record_regions | select(length == 2) | map(.region_id | tostring)') || return 1
+	# Identify node 1's span by region ID instead of parsing redacted span keys from logs.
+	moved_region=$(curl -fsS 'http://127.0.0.1:8301/debug/puller?subscription_limit=20&region_limit=20' |
+		jq -er --arg table_id "$table_id" '[.slow_subscriptions[] |
+			select(.table_id == $table_id and .initialized and .locked_regions == 1) |
+			.slow_regions[].region_id] | select(length == 1) | .[0]') || return 1
+	case "$(jq -er --arg region "$moved_region" 'index($region)' <<<"$regions")" in
+	0)
+		moved_key=-1
+		retained_key=1
+		;;
+	1)
+		moved_key=1
+		retained_key=-1
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 checkpoint_advanced() {
@@ -116,18 +141,8 @@ run() {
 	second=$(dispatcher_log 1)
 	retained_id=$(echo "$first" | sed -E 's/.*\[dispatcherID=([^]]+)\].*/\1/')
 	moved_id=$(echo "$second" | sed -E 's/.*\[dispatcherID=([^]]+)\].*/\1/')
-	local first_key second_key
-	first_key=$(echo "$first" | sed -E 's/.*startKey: ([0-9a-f]+),.*/\1/')
-	second_key=$(echo "$second" | sed -E 's/.*startKey: ([0-9a-f]+),.*/\1/')
 	[[ $retained_id =~ ^[0-9]+$ && $moved_id =~ ^[0-9]+$ && $retained_id != "$moved_id" ]]
-	[[ $first_key =~ ^[0-9a-f]+$ && $second_key =~ ^[0-9a-f]+$ && $first_key != "$second_key" ]]
-	if [[ $first_key < $second_key ]]; then
-		retained_key=-1
-		moved_key=1
-	else
-		retained_key=1
-		moved_key=-1
-	fi
+	wait_for span_keys_ready
 
 	wait_for checkpoint_advanced
 	# Only the span on node 1 moves; node 0 keeps its original dispatcher.
