@@ -1,3 +1,0 @@
-[sink]
-send-bootstrap-interval-in-sec = 1
-send-bootstrap-in-msg-count = 1
