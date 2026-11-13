@@ -191,6 +191,7 @@ func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	if log.GetLevel() <= zapcore.DebugLevel {
 		log.Debug("subscription client finds slow locked ranges",
 			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int64("tableID", span.span.TableID),
 			zap.Int("lockedRegionCount", res.LockedRegionCount),
 			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
 			zap.Any("fastestRegion", res.FastestRegion),
