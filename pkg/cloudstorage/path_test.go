@@ -536,6 +536,7 @@ func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
 		version uint64
 		query   string
 		altered bool
+		ddlType byte
 	}
 	for _, tc := range []struct {
 		name     string
@@ -545,31 +546,47 @@ func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
 	}{
 		{
 			name: "pendingDrop", version: 150, expected: 100,
-			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}},
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}},
 		},
 		{
 			name: "pendingDropWithoutEarlierSchema", version: 150, expected: 150,
-			schemas: []storedSchema{{200, "DROP TABLE table1", false}},
+			schemas: []storedSchema{{200, "DROP TABLE table1", false, 0}},
 		},
 		{
 			name: "newerSnapshotBeforeDrop", version: 90, expected: 100,
-			schemas: []storedSchema{{100, "", false}, {200, "DROP TABLE table1", false}, {300, "", false}},
+			schemas: []storedSchema{{100, "", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "", false, 0}},
 		},
 		{
 			name: "pendingRecreate", version: 150, expected: 100,
-			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}, {300, "CREATE TABLE table1 (id INT)", false}},
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "CREATE TABLE table1 (id INT)", false, 0}},
 		},
 		{
 			name: "afterRecreate", version: 350, expected: 300,
-			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}, {300, "CREATE TABLE table1 (id INT)", false}},
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false, 0}, {200, "DROP TABLE table1", false, 0}, {300, "CREATE TABLE table1 (id INT)", false, 0}},
 		},
 		{
 			name: "differentChecksumBoundary", version: 150, expected: 100,
-			schemas: []storedSchema{{100, "", false}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true}, {300, "", false}},
+			schemas: []storedSchema{{100, "", false, 0}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true, 0}, {300, "", false, 0}},
 		},
 		{
 			name: "noMatchingSchemaAfterDDL", version: 250, expected: 250,
-			schemas: []storedSchema{{100, "", false}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true}},
+			schemas: []storedSchema{{100, "", false, 0}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true, 0}},
+		},
+		{
+			name: "pendingExchangeWithoutQuery", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", false, byte(timodel.ActionExchangeTablePartition)}, {300, "", false, 0}},
+		},
+		{
+			name: "differentChecksumExchangeWithoutQuery", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", true, byte(timodel.ActionExchangeTablePartition)}, {300, "", false, 0}},
+		},
+		{
+			name: "noMatchingSchemaAfterExchangeWithoutQuery", version: 250, expected: 250,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", true, byte(timodel.ActionExchangeTablePartition)}},
+		},
+		{
+			name: "afterExchangeWithoutQuery", version: 250, expected: 200,
+			schemas: []storedSchema{{100, "", false, 0}, {200, "", false, byte(timodel.ActionExchangeTablePartition)}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -583,6 +600,7 @@ func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
 				var schema SchemaFile
 				schema.Build(&commonEvent.DDLEvent{
 					TableInfo: tableInfo, FinishedTs: stored.version, Query: stored.query,
+					Type: stored.ddlType,
 				}, false)
 				if stored.altered {
 					schema.Columns = append(schema.Columns, TableCol{Name: "extra", Tp: "INT"})
