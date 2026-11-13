@@ -866,6 +866,38 @@ func (z *DMLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 					}
 				}
 			}
+		case "index-column-lengths":
+			var zb0006 uint32
+			zb0006, err = dc.ReadArrayHeader()
+			if err != nil {
+				err = msgp.WrapError(err, "IndexColumnLengths")
+				return
+			}
+			if cap(z.IndexColumnLengths) >= int(zb0006) {
+				z.IndexColumnLengths = (z.IndexColumnLengths)[:zb0006]
+			} else {
+				z.IndexColumnLengths = make([][]int, zb0006)
+			}
+			for za0005 := range z.IndexColumnLengths {
+				var zb0007 uint32
+				zb0007, err = dc.ReadArrayHeader()
+				if err != nil {
+					err = msgp.WrapError(err, "IndexColumnLengths", za0005)
+					return
+				}
+				if cap(z.IndexColumnLengths[za0005]) >= int(zb0007) {
+					z.IndexColumnLengths[za0005] = (z.IndexColumnLengths[za0005])[:zb0007]
+				} else {
+					z.IndexColumnLengths[za0005] = make([]int, zb0007)
+				}
+				for za0006 := range z.IndexColumnLengths[za0005] {
+					z.IndexColumnLengths[za0005][za0006], err = dc.ReadInt()
+					if err != nil {
+						err = msgp.WrapError(err, "IndexColumnLengths", za0005, za0006)
+						return
+					}
+				}
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -879,113 +911,155 @@ func (z *DMLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *DMLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 6
-	// write "start-ts"
-	err = en.Append(0x86, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+	// check for omitted fields
+	zb0001Len := uint32(7)
+	var zb0001Mask uint8 /* 7 bits */
+	_ = zb0001Mask
+	if z.IndexColumnLengths == nil {
+		zb0001Len--
+		zb0001Mask |= 0x40
+	}
+	// variable map header, size zb0001Len
+	err = en.Append(0x80 | uint8(zb0001Len))
 	if err != nil {
 		return
 	}
-	err = en.WriteUint64(z.StartTs)
-	if err != nil {
-		err = msgp.WrapError(err, "StartTs")
-		return
-	}
-	// write "commit-ts"
-	err = en.Append(0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
-	if err != nil {
-		return
-	}
-	err = en.WriteUint64(z.CommitTs)
-	if err != nil {
-		err = msgp.WrapError(err, "CommitTs")
-		return
-	}
-	// write "table"
-	err = en.Append(0xa5, 0x74, 0x61, 0x62, 0x6c, 0x65)
-	if err != nil {
-		return
-	}
-	if z.Table == nil {
-		err = en.WriteNil()
+
+	// skip if no fields are to be emitted
+	if zb0001Len != 0 {
+		// write "start-ts"
+		err = en.Append(0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
 		if err != nil {
 			return
 		}
-	} else {
-		err = z.Table.EncodeMsg(en)
+		err = en.WriteUint64(z.StartTs)
 		if err != nil {
-			err = msgp.WrapError(err, "Table")
+			err = msgp.WrapError(err, "StartTs")
 			return
 		}
-	}
-	// write "columns"
-	err = en.Append(0xa7, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	if err != nil {
-		return
-	}
-	err = en.WriteArrayHeader(uint32(len(z.Columns)))
-	if err != nil {
-		err = msgp.WrapError(err, "Columns")
-		return
-	}
-	for za0001 := range z.Columns {
-		if z.Columns[za0001] == nil {
+		// write "commit-ts"
+		err = en.Append(0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
+		if err != nil {
+			return
+		}
+		err = en.WriteUint64(z.CommitTs)
+		if err != nil {
+			err = msgp.WrapError(err, "CommitTs")
+			return
+		}
+		// write "table"
+		err = en.Append(0xa5, 0x74, 0x61, 0x62, 0x6c, 0x65)
+		if err != nil {
+			return
+		}
+		if z.Table == nil {
 			err = en.WriteNil()
 			if err != nil {
 				return
 			}
 		} else {
-			err = z.Columns[za0001].EncodeMsg(en)
+			err = z.Table.EncodeMsg(en)
 			if err != nil {
-				err = msgp.WrapError(err, "Columns", za0001)
+				err = msgp.WrapError(err, "Table")
 				return
 			}
 		}
-	}
-	// write "pre-columns"
-	err = en.Append(0xab, 0x70, 0x72, 0x65, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	if err != nil {
-		return
-	}
-	err = en.WriteArrayHeader(uint32(len(z.PreColumns)))
-	if err != nil {
-		err = msgp.WrapError(err, "PreColumns")
-		return
-	}
-	for za0002 := range z.PreColumns {
-		if z.PreColumns[za0002] == nil {
-			err = en.WriteNil()
-			if err != nil {
-				return
-			}
-		} else {
-			err = z.PreColumns[za0002].EncodeMsg(en)
-			if err != nil {
-				err = msgp.WrapError(err, "PreColumns", za0002)
-				return
-			}
-		}
-	}
-	// write "index-columns"
-	err = en.Append(0xad, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	if err != nil {
-		return
-	}
-	err = en.WriteArrayHeader(uint32(len(z.IndexColumns)))
-	if err != nil {
-		err = msgp.WrapError(err, "IndexColumns")
-		return
-	}
-	for za0003 := range z.IndexColumns {
-		err = en.WriteArrayHeader(uint32(len(z.IndexColumns[za0003])))
+		// write "columns"
+		err = en.Append(0xa7, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
 		if err != nil {
-			err = msgp.WrapError(err, "IndexColumns", za0003)
 			return
 		}
-		for za0004 := range z.IndexColumns[za0003] {
-			err = en.WriteInt(z.IndexColumns[za0003][za0004])
+		err = en.WriteArrayHeader(uint32(len(z.Columns)))
+		if err != nil {
+			err = msgp.WrapError(err, "Columns")
+			return
+		}
+		for za0001 := range z.Columns {
+			if z.Columns[za0001] == nil {
+				err = en.WriteNil()
+				if err != nil {
+					return
+				}
+			} else {
+				err = z.Columns[za0001].EncodeMsg(en)
+				if err != nil {
+					err = msgp.WrapError(err, "Columns", za0001)
+					return
+				}
+			}
+		}
+		// write "pre-columns"
+		err = en.Append(0xab, 0x70, 0x72, 0x65, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
+		if err != nil {
+			return
+		}
+		err = en.WriteArrayHeader(uint32(len(z.PreColumns)))
+		if err != nil {
+			err = msgp.WrapError(err, "PreColumns")
+			return
+		}
+		for za0002 := range z.PreColumns {
+			if z.PreColumns[za0002] == nil {
+				err = en.WriteNil()
+				if err != nil {
+					return
+				}
+			} else {
+				err = z.PreColumns[za0002].EncodeMsg(en)
+				if err != nil {
+					err = msgp.WrapError(err, "PreColumns", za0002)
+					return
+				}
+			}
+		}
+		// write "index-columns"
+		err = en.Append(0xad, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
+		if err != nil {
+			return
+		}
+		err = en.WriteArrayHeader(uint32(len(z.IndexColumns)))
+		if err != nil {
+			err = msgp.WrapError(err, "IndexColumns")
+			return
+		}
+		for za0003 := range z.IndexColumns {
+			err = en.WriteArrayHeader(uint32(len(z.IndexColumns[za0003])))
 			if err != nil {
-				err = msgp.WrapError(err, "IndexColumns", za0003, za0004)
+				err = msgp.WrapError(err, "IndexColumns", za0003)
 				return
+			}
+			for za0004 := range z.IndexColumns[za0003] {
+				err = en.WriteInt(z.IndexColumns[za0003][za0004])
+				if err != nil {
+					err = msgp.WrapError(err, "IndexColumns", za0003, za0004)
+					return
+				}
+			}
+		}
+		if (zb0001Mask & 0x40) == 0 { // if not omitted
+			// write "index-column-lengths"
+			err = en.Append(0xb4, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x2d, 0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68, 0x73)
+			if err != nil {
+				return
+			}
+			err = en.WriteArrayHeader(uint32(len(z.IndexColumnLengths)))
+			if err != nil {
+				err = msgp.WrapError(err, "IndexColumnLengths")
+				return
+			}
+			for za0005 := range z.IndexColumnLengths {
+				err = en.WriteArrayHeader(uint32(len(z.IndexColumnLengths[za0005])))
+				if err != nil {
+					err = msgp.WrapError(err, "IndexColumnLengths", za0005)
+					return
+				}
+				for za0006 := range z.IndexColumnLengths[za0005] {
+					err = en.WriteInt(z.IndexColumnLengths[za0005][za0006])
+					if err != nil {
+						err = msgp.WrapError(err, "IndexColumnLengths", za0005, za0006)
+						return
+					}
+				}
 			}
 		}
 	}
@@ -995,59 +1069,83 @@ func (z *DMLEventInRedoLog) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *DMLEventInRedoLog) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 6
-	// string "start-ts"
-	o = append(o, 0x86, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
-	o = msgp.AppendUint64(o, z.StartTs)
-	// string "commit-ts"
-	o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
-	o = msgp.AppendUint64(o, z.CommitTs)
-	// string "table"
-	o = append(o, 0xa5, 0x74, 0x61, 0x62, 0x6c, 0x65)
-	if z.Table == nil {
-		o = msgp.AppendNil(o)
-	} else {
-		o, err = z.Table.MarshalMsg(o)
-		if err != nil {
-			err = msgp.WrapError(err, "Table")
-			return
-		}
+	// check for omitted fields
+	zb0001Len := uint32(7)
+	var zb0001Mask uint8 /* 7 bits */
+	_ = zb0001Mask
+	if z.IndexColumnLengths == nil {
+		zb0001Len--
+		zb0001Mask |= 0x40
 	}
-	// string "columns"
-	o = append(o, 0xa7, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	o = msgp.AppendArrayHeader(o, uint32(len(z.Columns)))
-	for za0001 := range z.Columns {
-		if z.Columns[za0001] == nil {
+	// variable map header, size zb0001Len
+	o = append(o, 0x80|uint8(zb0001Len))
+
+	// skip if no fields are to be emitted
+	if zb0001Len != 0 {
+		// string "start-ts"
+		o = append(o, 0xa8, 0x73, 0x74, 0x61, 0x72, 0x74, 0x2d, 0x74, 0x73)
+		o = msgp.AppendUint64(o, z.StartTs)
+		// string "commit-ts"
+		o = append(o, 0xa9, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x2d, 0x74, 0x73)
+		o = msgp.AppendUint64(o, z.CommitTs)
+		// string "table"
+		o = append(o, 0xa5, 0x74, 0x61, 0x62, 0x6c, 0x65)
+		if z.Table == nil {
 			o = msgp.AppendNil(o)
 		} else {
-			o, err = z.Columns[za0001].MarshalMsg(o)
+			o, err = z.Table.MarshalMsg(o)
 			if err != nil {
-				err = msgp.WrapError(err, "Columns", za0001)
+				err = msgp.WrapError(err, "Table")
 				return
 			}
 		}
-	}
-	// string "pre-columns"
-	o = append(o, 0xab, 0x70, 0x72, 0x65, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	o = msgp.AppendArrayHeader(o, uint32(len(z.PreColumns)))
-	for za0002 := range z.PreColumns {
-		if z.PreColumns[za0002] == nil {
-			o = msgp.AppendNil(o)
-		} else {
-			o, err = z.PreColumns[za0002].MarshalMsg(o)
-			if err != nil {
-				err = msgp.WrapError(err, "PreColumns", za0002)
-				return
+		// string "columns"
+		o = append(o, 0xa7, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
+		o = msgp.AppendArrayHeader(o, uint32(len(z.Columns)))
+		for za0001 := range z.Columns {
+			if z.Columns[za0001] == nil {
+				o = msgp.AppendNil(o)
+			} else {
+				o, err = z.Columns[za0001].MarshalMsg(o)
+				if err != nil {
+					err = msgp.WrapError(err, "Columns", za0001)
+					return
+				}
 			}
 		}
-	}
-	// string "index-columns"
-	o = append(o, 0xad, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
-	o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumns)))
-	for za0003 := range z.IndexColumns {
-		o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumns[za0003])))
-		for za0004 := range z.IndexColumns[za0003] {
-			o = msgp.AppendInt(o, z.IndexColumns[za0003][za0004])
+		// string "pre-columns"
+		o = append(o, 0xab, 0x70, 0x72, 0x65, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
+		o = msgp.AppendArrayHeader(o, uint32(len(z.PreColumns)))
+		for za0002 := range z.PreColumns {
+			if z.PreColumns[za0002] == nil {
+				o = msgp.AppendNil(o)
+			} else {
+				o, err = z.PreColumns[za0002].MarshalMsg(o)
+				if err != nil {
+					err = msgp.WrapError(err, "PreColumns", za0002)
+					return
+				}
+			}
+		}
+		// string "index-columns"
+		o = append(o, 0xad, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x73)
+		o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumns)))
+		for za0003 := range z.IndexColumns {
+			o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumns[za0003])))
+			for za0004 := range z.IndexColumns[za0003] {
+				o = msgp.AppendInt(o, z.IndexColumns[za0003][za0004])
+			}
+		}
+		if (zb0001Mask & 0x40) == 0 { // if not omitted
+			// string "index-column-lengths"
+			o = append(o, 0xb4, 0x69, 0x6e, 0x64, 0x65, 0x78, 0x2d, 0x63, 0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x2d, 0x6c, 0x65, 0x6e, 0x67, 0x74, 0x68, 0x73)
+			o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumnLengths)))
+			for za0005 := range z.IndexColumnLengths {
+				o = msgp.AppendArrayHeader(o, uint32(len(z.IndexColumnLengths[za0005])))
+				for za0006 := range z.IndexColumnLengths[za0005] {
+					o = msgp.AppendInt(o, z.IndexColumnLengths[za0005][za0006])
+				}
+			}
 		}
 	}
 	return
@@ -1192,6 +1290,38 @@ func (z *DMLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					}
 				}
 			}
+		case "index-column-lengths":
+			var zb0006 uint32
+			zb0006, bts, err = msgp.ReadArrayHeaderBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "IndexColumnLengths")
+				return
+			}
+			if cap(z.IndexColumnLengths) >= int(zb0006) {
+				z.IndexColumnLengths = (z.IndexColumnLengths)[:zb0006]
+			} else {
+				z.IndexColumnLengths = make([][]int, zb0006)
+			}
+			for za0005 := range z.IndexColumnLengths {
+				var zb0007 uint32
+				zb0007, bts, err = msgp.ReadArrayHeaderBytes(bts)
+				if err != nil {
+					err = msgp.WrapError(err, "IndexColumnLengths", za0005)
+					return
+				}
+				if cap(z.IndexColumnLengths[za0005]) >= int(zb0007) {
+					z.IndexColumnLengths[za0005] = (z.IndexColumnLengths[za0005])[:zb0007]
+				} else {
+					z.IndexColumnLengths[za0005] = make([]int, zb0007)
+				}
+				for za0006 := range z.IndexColumnLengths[za0005] {
+					z.IndexColumnLengths[za0005][za0006], bts, err = msgp.ReadIntBytes(bts)
+					if err != nil {
+						err = msgp.WrapError(err, "IndexColumnLengths", za0005, za0006)
+						return
+					}
+				}
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -1231,6 +1361,10 @@ func (z *DMLEventInRedoLog) Msgsize() (s int) {
 	s += 14 + msgp.ArrayHeaderSize
 	for za0003 := range z.IndexColumns {
 		s += msgp.ArrayHeaderSize + (len(z.IndexColumns[za0003]) * (msgp.IntSize))
+	}
+	s += 21 + msgp.ArrayHeaderSize
+	for za0005 := range z.IndexColumnLengths {
+		s += msgp.ArrayHeaderSize + (len(z.IndexColumnLengths[za0005]) * (msgp.IntSize))
 	}
 	return
 }
@@ -1277,6 +1411,12 @@ func (z *RedoColumn) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Collation")
 				return
 			}
+		case "virtual":
+			z.Virtual, err = dc.ReadBool()
+			if err != nil {
+				err = msgp.WrapError(err, "Virtual")
+				return
+			}
 		default:
 			err = dc.Skip()
 			if err != nil {
@@ -1290,46 +1430,74 @@ func (z *RedoColumn) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *RedoColumn) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 4
-	// write "name"
-	err = en.Append(0x84, 0xa4, 0x6e, 0x61, 0x6d, 0x65)
+	// check for omitted fields
+	zb0001Len := uint32(5)
+	var zb0001Mask uint8 /* 5 bits */
+	_ = zb0001Mask
+	if z.Virtual == false {
+		zb0001Len--
+		zb0001Mask |= 0x10
+	}
+	// variable map header, size zb0001Len
+	err = en.Append(0x80 | uint8(zb0001Len))
 	if err != nil {
 		return
 	}
-	err = en.WriteString(z.Name)
-	if err != nil {
-		err = msgp.WrapError(err, "Name")
-		return
-	}
-	// write "type"
-	err = en.Append(0xa4, 0x74, 0x79, 0x70, 0x65)
-	if err != nil {
-		return
-	}
-	err = en.WriteByte(z.Type)
-	if err != nil {
-		err = msgp.WrapError(err, "Type")
-		return
-	}
-	// write "charset"
-	err = en.Append(0xa7, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74)
-	if err != nil {
-		return
-	}
-	err = en.WriteString(z.Charset)
-	if err != nil {
-		err = msgp.WrapError(err, "Charset")
-		return
-	}
-	// write "collation"
-	err = en.Append(0xa9, 0x63, 0x6f, 0x6c, 0x6c, 0x61, 0x74, 0x69, 0x6f, 0x6e)
-	if err != nil {
-		return
-	}
-	err = en.WriteString(z.Collation)
-	if err != nil {
-		err = msgp.WrapError(err, "Collation")
-		return
+
+	// skip if no fields are to be emitted
+	if zb0001Len != 0 {
+		// write "name"
+		err = en.Append(0xa4, 0x6e, 0x61, 0x6d, 0x65)
+		if err != nil {
+			return
+		}
+		err = en.WriteString(z.Name)
+		if err != nil {
+			err = msgp.WrapError(err, "Name")
+			return
+		}
+		// write "type"
+		err = en.Append(0xa4, 0x74, 0x79, 0x70, 0x65)
+		if err != nil {
+			return
+		}
+		err = en.WriteByte(z.Type)
+		if err != nil {
+			err = msgp.WrapError(err, "Type")
+			return
+		}
+		// write "charset"
+		err = en.Append(0xa7, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74)
+		if err != nil {
+			return
+		}
+		err = en.WriteString(z.Charset)
+		if err != nil {
+			err = msgp.WrapError(err, "Charset")
+			return
+		}
+		// write "collation"
+		err = en.Append(0xa9, 0x63, 0x6f, 0x6c, 0x6c, 0x61, 0x74, 0x69, 0x6f, 0x6e)
+		if err != nil {
+			return
+		}
+		err = en.WriteString(z.Collation)
+		if err != nil {
+			err = msgp.WrapError(err, "Collation")
+			return
+		}
+		if (zb0001Mask & 0x10) == 0 { // if not omitted
+			// write "virtual"
+			err = en.Append(0xa7, 0x76, 0x69, 0x72, 0x74, 0x75, 0x61, 0x6c)
+			if err != nil {
+				return
+			}
+			err = en.WriteBool(z.Virtual)
+			if err != nil {
+				err = msgp.WrapError(err, "Virtual")
+				return
+			}
+		}
 	}
 	return
 }
@@ -1337,19 +1505,37 @@ func (z *RedoColumn) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *RedoColumn) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 4
-	// string "name"
-	o = append(o, 0x84, 0xa4, 0x6e, 0x61, 0x6d, 0x65)
-	o = msgp.AppendString(o, z.Name)
-	// string "type"
-	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
-	o = msgp.AppendByte(o, z.Type)
-	// string "charset"
-	o = append(o, 0xa7, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74)
-	o = msgp.AppendString(o, z.Charset)
-	// string "collation"
-	o = append(o, 0xa9, 0x63, 0x6f, 0x6c, 0x6c, 0x61, 0x74, 0x69, 0x6f, 0x6e)
-	o = msgp.AppendString(o, z.Collation)
+	// check for omitted fields
+	zb0001Len := uint32(5)
+	var zb0001Mask uint8 /* 5 bits */
+	_ = zb0001Mask
+	if z.Virtual == false {
+		zb0001Len--
+		zb0001Mask |= 0x10
+	}
+	// variable map header, size zb0001Len
+	o = append(o, 0x80|uint8(zb0001Len))
+
+	// skip if no fields are to be emitted
+	if zb0001Len != 0 {
+		// string "name"
+		o = append(o, 0xa4, 0x6e, 0x61, 0x6d, 0x65)
+		o = msgp.AppendString(o, z.Name)
+		// string "type"
+		o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
+		o = msgp.AppendByte(o, z.Type)
+		// string "charset"
+		o = append(o, 0xa7, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74)
+		o = msgp.AppendString(o, z.Charset)
+		// string "collation"
+		o = append(o, 0xa9, 0x63, 0x6f, 0x6c, 0x6c, 0x61, 0x74, 0x69, 0x6f, 0x6e)
+		o = msgp.AppendString(o, z.Collation)
+		if (zb0001Mask & 0x10) == 0 { // if not omitted
+			// string "virtual"
+			o = append(o, 0xa7, 0x76, 0x69, 0x72, 0x74, 0x75, 0x61, 0x6c)
+			o = msgp.AppendBool(o, z.Virtual)
+		}
+	}
 	return
 }
 
@@ -1395,6 +1581,12 @@ func (z *RedoColumn) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "Collation")
 				return
 			}
+		case "virtual":
+			z.Virtual, bts, err = msgp.ReadBoolBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "Virtual")
+				return
+			}
 		default:
 			bts, err = msgp.Skip(bts)
 			if err != nil {
@@ -1409,7 +1601,7 @@ func (z *RedoColumn) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *RedoColumn) Msgsize() (s int) {
-	s = 1 + 5 + msgp.StringPrefixSize + len(z.Name) + 5 + msgp.ByteSize + 8 + msgp.StringPrefixSize + len(z.Charset) + 10 + msgp.StringPrefixSize + len(z.Collation)
+	s = 1 + 5 + msgp.StringPrefixSize + len(z.Name) + 5 + msgp.ByteSize + 8 + msgp.StringPrefixSize + len(z.Charset) + 10 + msgp.StringPrefixSize + len(z.Collation) + 8 + msgp.BoolSize
 	return
 }
 
