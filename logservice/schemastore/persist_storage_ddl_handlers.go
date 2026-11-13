@@ -642,13 +642,16 @@ func loadRecoverSchemaTableInfos(p *persistentStorage, job *model.Job, recoverIn
 // =======
 // buildPersistedDDLEventFunc start
 // =======
+// buildPersistedDDLEventCommon captures job metadata and prepares SQL for the DDL handler.
 func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	var query string
 	job := args.job
 	// TODO: for ActionAddFullTextIndex and ActionCreateHybridIndex,
 	// the parser cannot recogonize the query now, so we keep the original query in job.Query.
 	// only in unit test job.Query may be empty
-	if job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex && job.Query != "" {
+	// CREATE batches are normalized per statement by their handler.
+	if job.Query != "" && job.Type != model.ActionCreateTables &&
+		job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex {
 		var err error
 		query, err = transformDDLJobQuery(job)
 		if err != nil {
@@ -668,6 +671,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		SchemaID:       job.SchemaID,
 		TableID:        job.TableID,
 		Query:          query,
+		OriginalQuery:  job.Query,
 		SchemaVersion:  job.BinlogInfo.SchemaVersion,
 		DBInfo:         job.BinlogInfo.DBInfo,
 		TableInfo:      job.BinlogInfo.TableInfo,
@@ -1291,10 +1295,34 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	return event, nil
 }
 
+// buildPersistedDDLEventForCreateTables preserves each upstream CREATE for filtering after replay.
 func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) (PersistedDDLEvent, error) {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	if args.job.Query != "" {
+		stmts, err := parseCreateTableQueries(args.job)
+		if err != nil {
+			return PersistedDDLEvent{}, err
+		}
+		if len(stmts) != len(event.MultipleTableInfos) {
+			return PersistedDDLEvent{}, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack(
+				"batch CREATE query count %d does not match table count %d", len(stmts), len(event.MultipleTableInfos))
+		}
+		event.OriginalQueries = make([]string, 0, len(stmts))
+		queries := make([]string, 0, len(stmts))
+		for _, stmt := range stmts {
+			// TiDB adds separators when it batches independent CREATE jobs.
+			query := strings.TrimSpace(stmt.OriginalText())
+			event.OriginalQueries = append(event.OriginalQueries, strings.TrimSpace(strings.TrimSuffix(query, ";")))
+			query, err = commonEvent.Restore(stmt)
+			if err != nil {
+				return PersistedDDLEvent{}, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+			}
+			queries = append(queries, query)
+		}
+		event.Query = strings.Join(queries, ";")
+	}
 	return event, nil
 }
 
@@ -2245,7 +2273,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionType(rawEvent.Type),
 			filterTableInfo,
 			rawEvent.StartTs,
@@ -2259,7 +2287,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 				tableFilter,
 				rawEvent.ExtraSchemaName,
 				rawEvent.ExtraTableName,
-				rawEvent.Query,
+				rawEvent.queryForFilter(),
 				model.ActionType(rawEvent.Type),
 				rawEvent.TableInfo,
 				rawEvent.StartTs,
@@ -2290,6 +2318,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 			zap.String("table", rawEvent.TableName),
 			zap.String("extraTable", rawEvent.ExtraTableName),
 			zap.String("query", rawEvent.Query),
+			zap.String("queryForFilter", rawEvent.queryForFilter()),
 			zap.Any("ddlType", model.ActionType(rawEvent.Type)),
 			zap.Uint64("startTs", rawEvent.StartTs),
 		)
@@ -2319,6 +2348,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	}, !filtered, nil
 }
 
+// filterDDL returns whether to discard a table's DDL or skip its SQL downstream.
 func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
 	filtered, notSync := false, false
 	if tableFilter != nil {
@@ -2381,7 +2411,7 @@ func buildDDLEventForRecoverSchema(rawEvent *PersistedDDLEvent, tableFilter filt
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{}
 	for _, tableInfo := range rawEvent.MultipleTableInfos {
 		filtered, notSync, err := filterDDL(
-			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.Query,
+			tableFilter, rawEvent.SchemaName, tableInfo.Name.O, rawEvent.queryForFilter(),
 			model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 		if err != nil {
 			return commonEvent.DDLEvent{}, false, err
@@ -2776,7 +2806,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -2788,7 +2818,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionRenameTable,
 			rawEvent.TableInfo,
 			rawEvent.StartTs,
@@ -3077,7 +3107,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.SchemaName,
 			rawEvent.TableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionExchangeTablePartition,
 			// rawEvent.ExtraTableInfo is the normal table info before exchange.
 			rawEvent.ExtraTableInfo.ToTiDBTableInfo(),
@@ -3090,7 +3120,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			tableFilter,
 			rawEvent.ExtraSchemaName,
 			rawEvent.ExtraTableName,
-			rawEvent.Query,
+			rawEvent.queryForFilter(),
 			model.ActionExchangeTablePartition,
 			// rawEvent.TableInfo is the partition table info after exchange,
 			// typically, we should use the table info before exchange to do filtering,
@@ -3215,12 +3245,14 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		notSyncPrevTable := false
 		if tableInfo != nil {
 			ignorePrevTable, notSyncPrevTable, err = filterDDL(
-				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.ExtraSchemaNames[i], rawEvent.ExtraTableNames[i], rawEvent.queryForFilter(),
+				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
 			ignoreCurrentTable, _, err = filterDDL(
-				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaNames[i], tableInfo.Name.O, rawEvent.queryForFilter(),
+				model.ActionType(rawEvent.Type), tableInfo, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}
@@ -3401,8 +3433,10 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	return ddlEvent, true, err
 }
 
+// buildDDLEventForCreateTables filters each CREATE while preserving table lifecycle changes.
 func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	ddlEvent, _, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	// Each independent CREATE is filtered below with its own upstream SQL.
+	ddlEvent, _, err := buildDDLEventCommon(rawEvent, nil, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
 	}
@@ -3439,6 +3473,10 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
 			zap.String("query", rawEvent.Query))
 	}
+	if len(rawEvent.OriginalQueries) > 0 && len(rawEvent.OriginalQueries) != len(querys) {
+		return commonEvent.DDLEvent{}, false, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack(
+			"batch CREATE original query count %d does not match query count %d", len(rawEvent.OriginalQueries), len(querys))
+	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
@@ -3446,8 +3484,13 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	for i, info := range rawEvent.MultipleTableInfos {
 		filtered, notSync := false, false
 		if tableFilter != nil {
+			query := rawEvent.queryForFilter()
+			if len(rawEvent.OriginalQueries) > 0 {
+				query = rawEvent.OriginalQueries[i]
+			}
 			filtered, notSync, err = filterDDL(
-				tableFilter, rawEvent.SchemaName, info.Name.O, rawEvent.Query, model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
+				tableFilter, rawEvent.SchemaName, info.Name.O, query,
+				model.ActionType(rawEvent.Type), info, rawEvent.StartTs)
 			if err != nil {
 				return commonEvent.DDLEvent{}, false, err
 			}

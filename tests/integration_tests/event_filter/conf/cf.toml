@@ -1,5 +1,5 @@
 [filter]
-rules = ["event_filter.*", "filter.t1"] # replicate all tables in the event_filter database
+rules = ["event_filter.*", "filter.t1", "filter.sql_*"] # replicate all tables in the event_filter database
 # This event filter rules will apply to table t1 only.
 [[filter.event-filters]]
 matcher = ["event_filter.t1"]
@@ -37,3 +37,101 @@ ignore-event = ["rename table"]
 [[filter.event-filters]]
 matcher = ["event_filter.t_fk_child"]
 ignore-event = ["delete"]
+
+# Match ordinary DDLs before identifier, keyword, and whitespace normalization.
+# https://github.com/pingcap/ticdc/issues/6774
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_original"]
+ignore-sql = ["^ALTER TABLE t_ignore_sql_original ADD COLUMN"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_quoted"]
+ignore-sql = ["^ALTER TABLE `t_ignore_sql_quoted` ADD COLUMN"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_keyword"]
+ignore-sql = ["add column"]
+
+[[filter.event-filters]]
+matcher = ["event_filter.t_ignore_sql_whitespace"]
+ignore-sql = ["^ALTER TABLE"]
+
+# Single-table renames use the original query, including its SQL spelling.
+[[filter.event-filters]]
+matcher = ["event_filter.sql_rename_raw"]
+ignore-sql = ['^RENAME TABLE sql_rename_raw TO sql_rename_raw_done$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_rename_restored"]
+ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_rename_restored` TO `event_filter`\.`sql_rename_restored_done`$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_alter_rename_raw"]
+ignore-sql = ['^ALTER TABLE sql_alter_rename_raw RENAME TO sql_alter_rename_raw_done$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_alter_rename_restored"]
+ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_alter_rename_restored` TO ']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_view_rename_raw"]
+ignore-sql = ['^RENAME TABLE sql_view_rename_raw TO sql_view_rename_raw_done$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_view_rename_restored"]
+ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_view_rename_restored` TO `event_filter`\.`sql_view_rename_restored_done`$']
+
+# Multi-table DDLs match the upstream query with per-table matchers.
+[[filter.event-filters]]
+matcher = ["event_filter.sql_multi_ignored"]
+ignore-sql = ['^RENAME TABLE sql_multi_ignored TO sql_multi_ignored_done, sql_multi_kept TO sql_multi_kept_done$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_drop_ignored"]
+ignore-sql = ['^DROP TABLE sql_drop_ignored, sql_drop_kept$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_drop_view_ignored"]
+ignore-sql = ['^DROP VIEW sql_drop_view_ignored, sql_drop_view_kept$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_exchange_ignored"]
+ignore-sql = ['^ALTER TABLE sql_exchange_ignored EXCHANGE PARTITION p0 WITH TABLE sql_exchange_ignored_normal WITHOUT VALIDATION$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_exchange_kept"]
+ignore-sql = ['^ALTER TABLE `event_filter`\.`sql_exchange_kept` .* WITHOUT VALIDATION$']
+
+# CREATE LIKE and CREATE VIEW use the original SQL before qualifying references.
+[[filter.event-filters]]
+matcher = ["filter.sql_like_ignored"]
+ignore-sql = ['^CREATE TABLE filter\.sql_like_ignored LIKE sql_like_source$']
+
+[[filter.event-filters]]
+matcher = ["filter.sql_like_kept"]
+ignore-sql = ['^CREATE TABLE `filter`\.`sql_like_kept` LIKE `event_filter`\.`sql_like_source`$']
+
+[[filter.event-filters]]
+matcher = ["filter.sql_view_ignored"]
+ignore-sql = ['^CREATE VIEW filter\.sql_view_ignored AS SELECT id FROM sql_like_source$']
+
+[[filter.event-filters]]
+matcher = ["filter.sql_view_kept"]
+ignore-sql = ['^CREATE.*VIEW `filter`\.`sql_view_kept`']
+
+[[filter.event-filters]]
+matcher = ["filter.sql_view_replace_ignored"]
+ignore-sql = ['^CREATE OR REPLACE VIEW filter\.sql_view_replace_ignored AS SELECT']
+
+[[filter.event-filters]]
+matcher = ["filter.sql_view_replace_kept"]
+ignore-sql = ['^CREATE OR REPLACE.*VIEW `filter`\.`sql_view_replace_kept`']
+
+# Fast CREATE TABLE matches each upstream statement independently when batched.
+[[filter.event-filters]]
+matcher = ["event_filter.sql_batch_*"]
+ignore-sql = ['^CREATE TABLE sql_batch_ignored_[0-9]+ \(id INT PRIMARY KEY\)$']
+
+[[filter.event-filters]]
+matcher = ["event_filter.sql_batch_kept_*"]
+ignore-sql = ['CREATE TABLE `sql_batch_kept_[0-9]+`']

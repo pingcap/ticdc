@@ -65,10 +65,16 @@ type PersistedDDLEvent struct {
 	// It records the physical partition IDs of the referenced table.
 	ReferTablePartitionIDs []int64 `msg:"refer_table_partitions"`
 
+	// Query is normalized for downstream execution. OriginalQuery preserves the
+	// DDL job query for ignore-sql matching before normalization.
 	Query         string `msg:"query"`
-	SchemaVersion int64  `msg:"schema_version"`
-	FinishedTs    uint64 `msg:"finished_ts"`
-	StartTs       uint64 `msg:"start_ts"`
+	OriginalQuery string `msg:"original_query"`
+	// OriginalQueries holds the upstream CREATE statements without batch separators,
+	// in MultipleTableInfos order. Older records fall back to the job query.
+	OriginalQueries []string `msg:"original_queries"`
+	SchemaVersion   int64    `msg:"schema_version"`
+	FinishedTs      uint64   `msg:"finished_ts"`
+	StartTs         uint64   `msg:"start_ts"`
 
 	DBInfo *model.DBInfo `msg:"-"`
 	// it is from upstream job.TableInfo
@@ -101,6 +107,15 @@ type PersistedDDLEvent struct {
 	// TableLostReplicationKey records loss of the last usable replication key.
 	// ExtraTableInfo holds the pre-DDL schema for filtering the removal event.
 	TableLostReplicationKey bool `msg:"table_lost_replication_key"`
+}
+
+// queryForFilter returns the upstream DDL query, falling back for older persisted events.
+func (e *PersistedDDLEvent) queryForFilter() string {
+	if e.OriginalQuery != "" {
+		return e.OriginalQuery
+	}
+	// Events persisted before OriginalQuery was added only have Query.
+	return e.Query
 }
 
 // TODO: use msgp.Raw to do version management
