@@ -292,7 +292,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		if err := json.Unmarshal(data, &schema); err != nil {
 			return false, errors.WrapError(errors.ErrUnmarshalFailed, err)
 		}
-		return schema.Query != "", nil
+		// Query is empty when the DDL is replayed from another table's schema,
+		// as with EXCHANGE PARTITION. Its type still marks a DDL boundary.
+		return schema.Type != 0 || schema.Query != "", nil
 	}
 	// A newer snapshot may be shared by idle spans, but a future DDL must never
 	// move older DML into that DDL's directory or a later snapshot's directory.
