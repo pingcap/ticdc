@@ -96,8 +96,8 @@ type snapshotLostSnapshot struct {
 	err error
 }
 
-func (s *snapshotLostSnapshot) Get(context.Context, kv.Key, ...kv.GetOption) (kv.ValueEntry, error) {
-	return kv.ValueEntry{}, s.err
+func (s *snapshotLostSnapshot) Get(context.Context, kv.Key) ([]byte, error) {
+	return nil, s.err
 }
 
 func (s *snapshotLostSnapshot) Iter(kv.Key, kv.Key) (kv.Iterator, error) {
@@ -108,7 +108,7 @@ func (s *snapshotLostSnapshot) IterReverse(kv.Key, kv.Key) (kv.Iterator, error) 
 	return nil, s.err
 }
 
-func (s *snapshotLostSnapshot) BatchGet(context.Context, []kv.Key, ...kv.BatchGetOption) (map[string]kv.ValueEntry, error) {
+func (s *snapshotLostSnapshot) BatchGet(context.Context, []kv.Key) (map[string][]byte, error) {
 	return nil, s.err
 }
 

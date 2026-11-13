@@ -1645,3 +1645,109 @@ func TestAddTableCheckpointBlockerControlsTryClose(t *testing.T) {
 	require.Equal(t, uint64(99), watermark.CheckpointTs)
 	require.Equal(t, uint64(200), watermark.ResolvedTs)
 }
+
+func TestMaterializedViewDDLOnlyWritesToKafka(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sinkType         common.SinkType
+		materializedView bool
+		wantWrite        bool
+	}{
+		{name: "mysql", sinkType: common.MysqlSinkType, materializedView: true, wantWrite: false},
+		{name: "kafka", sinkType: common.KafkaSinkType, materializedView: true, wantWrite: true},
+		{name: "pulsar", sinkType: common.PulsarSinkType, materializedView: true, wantWrite: false},
+		{name: "cloud storage", sinkType: common.CloudStorageSinkType, materializedView: true, wantWrite: false},
+		{name: "blackhole", sinkType: common.BlackHoleSinkType, materializedView: true, wantWrite: false},
+		{name: "redo", sinkType: common.RedoSinkType, materializedView: true, wantWrite: false},
+		{name: "ordinary ddl to redo", sinkType: common.RedoSinkType, materializedView: false, wantWrite: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			testSink := newDispatcherTestSink(t, tc.sinkType)
+			var written atomic.Bool
+			testSink.SetWriteBlockEventHook(func(event commonEvent.BlockEvent) error {
+				written.Store(true)
+				event.PostFlush()
+				return nil
+			})
+
+			tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+			require.NoError(t, err)
+			dispatcher := newDispatcherForTest(testSink.Sink(), tableSpan)
+
+			var flushed atomic.Bool
+			ddl := &commonEvent.DDLEvent{
+				FinishedTs: 100,
+				TableInfo: &common.TableInfo{
+					MaterializedView: tc.materializedView,
+				},
+			}
+			ddl.AddPostFlushFunc(func() {
+				flushed.Store(true)
+			})
+
+			require.NoError(t, dispatcher.AddBlockEventToSink(ddl))
+			require.Equal(t, tc.wantWrite, written.Load())
+			require.True(t, flushed.Load())
+		})
+	}
+}
+
+func TestMaterializedViewDMLOnlyWritesToKafka(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sinkType         common.SinkType
+		materializedView bool
+		wantWrite        bool
+	}{
+		{name: "mysql", sinkType: common.MysqlSinkType, materializedView: true, wantWrite: false},
+		{name: "kafka", sinkType: common.KafkaSinkType, materializedView: true, wantWrite: true},
+		{name: "pulsar", sinkType: common.PulsarSinkType, materializedView: true, wantWrite: false},
+		{name: "cloud storage", sinkType: common.CloudStorageSinkType, materializedView: true, wantWrite: false},
+		{name: "blackhole", sinkType: common.BlackHoleSinkType, materializedView: true, wantWrite: false},
+		{name: "redo", sinkType: common.RedoSinkType, materializedView: true, wantWrite: false},
+		{name: "ordinary dml to mysql", sinkType: common.MysqlSinkType, materializedView: false, wantWrite: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			testSink := newDispatcherTestSink(t, tc.sinkType)
+			tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+			require.NoError(t, err)
+			dispatcher := newDispatcherForTest(testSink.Sink(), tableSpan)
+
+			var flushed atomic.Bool
+			dml := &commonEvent.DMLEvent{
+				CommitTs: 100,
+				TableInfo: &common.TableInfo{
+					MaterializedView: tc.materializedView,
+				},
+			}
+			dml.AddPostFlushFunc(func() {
+				flushed.Store(true)
+			})
+
+			var woken atomic.Bool
+			dispatcher.AddDMLEventsToSink([]*commonEvent.DMLEvent{dml}, func() {
+				woken.Store(true)
+			})
+
+			if tc.wantWrite {
+				require.Len(t, testSink.GetDMLs(), 1)
+				require.False(t, flushed.Load())
+				require.False(t, woken.Load())
+				require.False(t, dispatcher.tableProgress.Empty())
+
+				testSink.FlushDMLs()
+			} else {
+				require.Empty(t, testSink.GetDMLs())
+			}
+			require.True(t, flushed.Load())
+			require.True(t, woken.Load())
+			require.True(t, dispatcher.tableProgress.Empty())
+			require.Equal(t, uint64(100), dispatcher.tableProgress.MaxCommitTs())
+			require.Equal(t, uint64(100), dispatcher.tableProgress.GetLastSyncedTs())
+		})
+	}
+}
