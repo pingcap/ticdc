@@ -108,11 +108,6 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 			dmls.rowTypes = append(dmls.rowTypes, rowTypesList...)
 		}
 	}
-	// Pre-check log level to avoid dmls.String() being called unnecessarily
-	// This method is expensive, so we only log it when the log level is debug.
-
-	dmls.LogDebug(events, w.id)
-
 	return dmls, nil
 }
 

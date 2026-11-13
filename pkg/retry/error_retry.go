@@ -88,10 +88,6 @@ func (r *ErrorRetry) GetRetryBackoff(err error) (time.Duration, error) {
 
 	// return an unretryable error if retry time is exhausted
 	if time.Since(r.firstRetryTime) >= r.maxRetryDuration {
-		log.Debug("error retry exhausted",
-			zap.Time("firstRetryTime", r.firstRetryTime),
-			zap.Time("lastErrorRetryTime", r.lastErrorRetryTime),
-			zap.Time("now", time.Now()))
 		return 0, cerror.WrapChangefeedUnretryableErr(err)
 	}
 

@@ -11,8 +11,7 @@ SINK_TYPE=$1
 function run_changefeed() {
 	local changefeed_id=$1
 	local start_ts=$2
-	local expected_split_count=$3
-	local should_pass_check=$4
+	local should_pass_check=$3
 	SINK_URI="file://$WORK_DIR/storage_test/$changefeed_id?flush-interval=5s"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config=$CUR/conf/$changefeed_id.toml -c "$changefeed_id"
 
@@ -32,11 +31,6 @@ function run_changefeed() {
 		check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 30 && exit 1 || echo "check_sync_diff failed as expected for $changefeed_id"
 	fi
 
-	real_split_count=$(grep "split update event" $WORK_DIR/cdc.log | wc -l)
-	if [[ $real_split_count -ne $expected_split_count ]]; then
-		echo "expected split count $expected_split_count, real split count $real_split_count"
-		exit 1
-	fi
 	run_sql "drop database if exists test" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 }
 
@@ -54,12 +48,12 @@ function run() {
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/run.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	run_changefeed "changefeed1" $start_ts 10 true
+	run_changefeed "changefeed1" $start_ts true
 	# Raw updates with old values must replay consistently.
-	run_changefeed "changefeed2" $start_ts 10 true
+	run_changefeed "changefeed2" $start_ts true
 	# changefeed3 fail since update pk/uk events are not split
-	run_changefeed "changefeed3" $start_ts 10 false
-	run_changefeed "changefeed4" $start_ts 20 true
+	run_changefeed "changefeed3" $start_ts false
+	run_changefeed "changefeed4" $start_ts true
 }
 
 trap 'stop_test $WORK_DIR' EXIT

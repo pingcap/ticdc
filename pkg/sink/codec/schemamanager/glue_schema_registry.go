@@ -128,9 +128,6 @@ func (m *glueSchemaManager) Lookup(
 	cacheKey := newDecodeCacheKey(schemaName)
 	entry, exists := m.cache.load(cacheKey)
 	if exists && entry.schemaID.glueSchemaID == schemaID.glueSchemaID {
-		log.Debug("Avro schema lookup cache hit",
-			zap.String("key", schemaName),
-			zap.String("schemaID", entry.schemaID.glueSchemaID))
 		return entry.schemaDefinition, nil
 	}
 

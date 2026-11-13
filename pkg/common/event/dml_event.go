@@ -578,7 +578,6 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	// Just ignore these row changed events
 	// See https://github.com/pingcap/tiflow/issues/2612 for more details.
 	if len(raw.Value) == 0 && len(raw.OldValue) == 0 {
-		log.Debug("the value and old_value of the raw kv entry are both nil, skip it", zap.String("raw", raw.String()))
 		return nil
 	}
 

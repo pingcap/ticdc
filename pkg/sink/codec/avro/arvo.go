@@ -26,61 +26,40 @@ import (
 	"strings"
 
 	"github.com/linkedin/goavro/v2"
-	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/schemamanager"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/tikv/client-go/v2/oracle"
-	"go.uber.org/zap"
 )
 
 func (a *BatchEncoder) getValueSchemaCodec(
 	ctx context.Context, topic string, tableName *commonType.TableName, tableVersion uint64, input *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
-		schema, err := a.value2AvroSchema(tableName, input)
-		if err != nil {
-			log.Error("avro: generating value schema failed", zap.Error(err))
-			return "", errors.Trace(err)
-		}
-		return schema, nil
+		return a.value2AvroSchema(tableName, input)
 	}
 
 	subject := topicName2SchemaSubjects(topic, valueSchemaSuffix)
-	avroCodec, header, err := a.codecCache.GetOrRegister(
+	return a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
-	if err != nil {
-		return nil, nil, errors.Trace(err)
-	}
-	return avroCodec, header, nil
 }
 
 func (a *BatchEncoder) getKeySchemaCodec(
 	ctx context.Context, topic string, tableName *commonType.TableName, tableVersion uint64, keyColumns *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
-		schema, err := a.key2AvroSchema(tableName, keyColumns)
-		if err != nil {
-			log.Error("AvroEventBatchEncoder: generating key schema failed", zap.Error(err))
-			return "", errors.Trace(err)
-		}
-		return schema, nil
+		return a.key2AvroSchema(tableName, keyColumns)
 	}
 
 	subject := topicName2SchemaSubjects(topic, keySchemaSuffix)
-	avroCodec, header, err := a.codecCache.GetOrRegister(
+	return a.codecCache.GetOrRegister(
 		ctx, subject, tableName.String(), tableVersion, schemaGen)
-	if err != nil {
-		return nil, nil, errors.Trace(err)
-	}
-	return avroCodec, header, nil
 }
 
 func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
@@ -103,18 +82,16 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.Row
 	targetTableName := routedTableName(e.TableInfo)
 	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &targetTableName, e.TableInfo.GetUpdateTS(), keyColumns)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	native, err := a.columns2AvroData(keyColumns)
 	if err != nil {
-		log.Error("avro: key converting to native failed", zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	bin, err := avroCodec.BinaryFromNative(nil, native)
 	if err != nil {
-		log.Error("avro: key converting to Avro binary failed", zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroEncodeToBinary, err)
 	}
 
@@ -122,11 +99,7 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.Row
 		data:   bin,
 		header: header,
 	}
-	data, err := result.toEnvelope()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return data, nil
+	return result.toEnvelope()
 }
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
@@ -164,19 +137,18 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 	targetTableName := routedTableName(e.TableInfo)
 	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &targetTableName, e.TableInfo.GetUpdateTS(), input)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	native, err := a.columns2AvroData(input)
 	if err != nil {
-		log.Error("avro: converting input to native failed", zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	if a.config.AvroIncludeBeforeValue {
 		native[ticdcBefore] = goavro.Union("null", nil)
 		if e.IsUpdate() || e.IsDelete() {
 			native, err = a.nativeValueWithBeforeValue(native, &targetTableName, e)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, err
 			}
 		}
 	}
@@ -188,7 +160,6 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 
 	bin, err := avroCodec.BinaryFromNative(nil, native)
 	if err != nil {
-		log.Error("avro: converting native to Avro binary failed", zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroEncodeToBinary, err)
 	}
 
@@ -196,11 +167,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 		data:   bin,
 		header: header,
 	}
-	data, err := result.toEnvelope()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return data, nil
+	return result.toEnvelope()
 }
 
 func (a *BatchEncoder) nativeValueWithExtension(
@@ -254,8 +221,7 @@ func (a *BatchEncoder) nativeValueWithBeforeValue(
 	}
 	before, err := a.columns2AvroData(input)
 	if err != nil {
-		log.Error("avro: converting before value to native failed", zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	native[ticdcBefore] = goavro.Union(a.beforeValueRecordFullName(tableName), before)
 	return native, nil
@@ -344,7 +310,6 @@ func (a *BatchEncoder) getDefaultValue(col *model.ColumnInfo) (any, error) {
 	// see https://github.com/pingcap/tidb/blob/72b1b7c564c301de33a4bd335a05770c78528db4/pkg/ddl/add_column.go#L791
 	v, ok := defaultVal.(string)
 	if !ok {
-		log.Debug("default value is not string", zap.Any("defaultValue", defaultVal))
 		return defaultVal, nil
 	}
 
@@ -424,13 +389,12 @@ func (a *BatchEncoder) getDefaultValue(col *model.ColumnInfo) (any, error) {
 	case mysql.TypeYear:
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil {
-			log.Info("avro encoder parse year value failed", zap.String("value", util.RedactAny(v)), zap.Error(err))
 			return nil, errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return int32(n), nil
 	default:
-		log.Error("unknown mysql type", zap.String("value", util.RedactAny(defaultVal)), zap.Any("mysqlType", col.GetType()))
-		return nil, errors.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
+		return nil, errors.ErrAvroEncodeFailed.GenWithStack(
+			"unknown mysql type, columnName: %s, columnID: %d, mysqlType: %d", col.Name.O, col.ID, col.GetType())
 	}
 }
 
@@ -457,8 +421,7 @@ func (a *BatchEncoder) columns2AvroSchema(
 
 		defaultValue, err := a.getDefaultValue(info)
 		if err != nil {
-			log.Error("fail to get default value for avro schema")
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		// goavro doesn't support set default value for logical type
 		// https://github.com/linkedin/goavro/issues/202
@@ -522,10 +485,6 @@ func (a *BatchEncoder) value2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: row to schema",
-		zap.ByteString("schema", str),
-		zap.Bool("enableTiDBExtension", a.config.EnableRowChecksum),
-		zap.Bool("enableRowLevelChecksum", a.config.EnableRowChecksum))
 	return string(str), nil
 }
 
@@ -542,7 +501,6 @@ func (a *BatchEncoder) key2AvroSchema(
 	if err != nil {
 		return "", errors.WrapError(errors.ErrAvroMarshalFailed, err)
 	}
-	log.Info("avro: key to schema", zap.ByteString("schema", str))
 	return string(str), nil
 }
 
@@ -567,7 +525,6 @@ func (a *BatchEncoder) columns2AvroData(
 		}
 	}
 
-	log.Debug("rowToAvroData", zap.String("data", util.RedactAny(ret)))
 	return ret, nil
 }
 
@@ -700,8 +657,8 @@ func (a *BatchEncoder) columnToAvroSchema(col *model.ColumnInfo) (any, error) {
 			Parameters: map[string]string{tidbType: tt},
 		}, nil
 	default:
-		log.Error("unknown mysql type", zap.Any("mysqlType", col.GetType()))
-		return nil, errors.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
+		return nil, errors.ErrAvroEncodeFailed.GenWithStack(
+			"unknown mysql type, columnName: %s, columnID: %d, mysqlType: %d", col.Name.O, col.ID, col.GetType())
 	}
 }
 
@@ -768,7 +725,6 @@ func (a *BatchEncoder) columnToAvroData(
 		number := d.GetMysqlEnum().Value
 		enumVar, err := types.ParseEnumValue(elements, number)
 		if err != nil {
-			log.Info("avro encoder parse enum value failed", zap.Strings("elements", elements), zap.Uint64("number", number))
 			return nil, "", errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return enumVar.Name, "string", nil
@@ -777,8 +733,6 @@ func (a *BatchEncoder) columnToAvroData(
 		number := d.GetMysqlSet().Value
 		setVar, err := types.ParseSetValue(elements, number)
 		if err != nil {
-			log.Info("avro encoder parse set value failed",
-				zap.Strings("elements", elements), zap.Uint64("number", number), zap.Error(err))
 			return nil, "", errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return setVar.Name, "string", nil
@@ -789,8 +743,8 @@ func (a *BatchEncoder) columnToAvroData(
 	case mysql.TypeYear:
 		return int32(d.GetInt64()), "int", nil
 	default:
-		log.Error("unknown mysql type", zap.String("value", util.RedactAny(d.GetValue())), zap.Any("mysqlType", col.GetType()))
-		return nil, "", errors.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
+		return nil, "", errors.ErrAvroEncodeFailed.GenWithStack(
+			"unknown mysql type, columnName: %s, columnID: %d, mysqlType: %d", col.Name.O, col.ID, col.GetType())
 	}
 }
 

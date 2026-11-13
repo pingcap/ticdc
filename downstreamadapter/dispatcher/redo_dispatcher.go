@@ -122,7 +122,6 @@ func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.Consisten
 // only for table trigger redo dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if rd.redoMeta != nil && rd.redoMeta.Running() {
-		log.Debug("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs))
 		rd.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 }

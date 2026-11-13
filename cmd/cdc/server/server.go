@@ -315,24 +315,13 @@ func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
 }
 
 func isNewArchEnabled(o *options) bool {
-	newarch := o.serverConfig.Newarch
-	if newarch {
-		log.Debug("Set newarch from command line")
-		return newarch
+	if o.serverConfig.Newarch {
+		return true
 	}
-
-	newarch = os.Getenv("TICDC_NEWARCH") == "true"
-	if newarch {
-		log.Debug("Set newarch from environment variable")
-		return newarch
+	if os.Getenv("TICDC_NEWARCH") == "true" {
+		return true
 	}
-
-	serverConfigFilePath := parseConfigFlagFromOSArgs()
-	newarch = isNewArchEnabledByConfig(serverConfigFilePath)
-	if newarch {
-		log.Debug("Set newarch from config file")
-	}
-	return newarch
+	return isNewArchEnabledByConfig(parseConfigFlagFromOSArgs())
 }
 
 func buildTiFlowServerOptions(o *options) (*tiflowServer.Options, error) {

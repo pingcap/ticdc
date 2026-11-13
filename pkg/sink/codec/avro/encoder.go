@@ -62,14 +62,42 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 
 	key, err := a.encodeKey(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding key failed", zap.Error(err), zap.Any("event", e))
-		return errors.Trace(err)
+		log.Error("avro encoding key failed",
+			zap.String("protocol", "avro"),
+			zap.String("part", "key"),
+			zap.Stringer("changefeedID", a.config.ChangefeedID),
+			zap.String("topic", topic),
+			zap.String("schemaSubject", topicName2SchemaSubjects(topic, keySchemaSuffix)),
+			zap.String("schema", e.TableInfo.TableName.Schema),
+			zap.String("table", e.TableInfo.TableName.Table),
+			zap.String("targetSchema", e.TableInfo.GetTargetSchemaName()),
+			zap.String("targetTable", e.TableInfo.GetTargetTableName()),
+			zap.Int64("tableID", e.PhysicalTableID),
+			zap.Uint64("schemaVersion", e.TableInfo.GetUpdateTS()),
+			zap.Uint64("startTs", e.StartTs),
+			zap.Uint64("commitTs", e.CommitTs),
+			zap.Error(err))
+		return err
 	}
 
 	value, err := a.encodeValue(ctx, topic, e)
 	if err != nil {
-		log.Error("avro encoding value failed", zap.Error(err), zap.Any("event", e))
-		return errors.Trace(err)
+		log.Error("avro encoding value failed",
+			zap.String("protocol", "avro"),
+			zap.String("part", "value"),
+			zap.Stringer("changefeedID", a.config.ChangefeedID),
+			zap.String("topic", topic),
+			zap.String("schemaSubject", topicName2SchemaSubjects(topic, valueSchemaSuffix)),
+			zap.String("schema", e.TableInfo.TableName.Schema),
+			zap.String("table", e.TableInfo.TableName.Table),
+			zap.String("targetSchema", e.TableInfo.GetTargetSchemaName()),
+			zap.String("targetTable", e.TableInfo.GetTargetTableName()),
+			zap.Int64("tableID", e.PhysicalTableID),
+			zap.Uint64("schemaVersion", e.TableInfo.GetUpdateTS()),
+			zap.Uint64("startTs", e.StartTs),
+			zap.Uint64("commitTs", e.CommitTs),
+			zap.Error(err))
+		return err
 	}
 
 	message := common.NewMsg(key, value)
@@ -78,10 +106,11 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 
 	length := a.config.MessageLength(message)
 	if length > a.config.MaxMessageBytes {
-		log.Warn("Single message is too large for avro",
+		log.Warn("single message is too large for avro",
+			zap.String("protocol", "avro"),
 			zap.Int("maxMessageBytes", a.config.MaxMessageBytes),
 			zap.Int("length", length),
-			zap.Any("table", e.TableInfo.TableName))
+			zap.Stringer("table", e.TableInfo.TableName))
 		return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, a.config.MaxMessageBytes)
 	}
 

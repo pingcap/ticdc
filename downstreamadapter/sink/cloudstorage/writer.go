@@ -202,14 +202,6 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 				tableTask.entries = nil
-
-				log.Debug("write file to storage success",
-					zap.String("keyspace", keyspace),
-					zap.String("changefeed", changefeed),
-					zap.String("path", dataFilePath),
-					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-					zap.String("table", table.TableNameWithPhysicTableID.Table),
-					zap.Int("shardID", d.shardID))
 			}
 
 			flushDuration := time.Since(start)

@@ -129,23 +129,16 @@ func (c *MockTiKVClient) initDefaultMockData() {
 func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
 	// Check if this keyspace should return not found error
 	if c.notFoundKeyspaces[keyspaceID] {
-		log.Debug("mock TiKV client: encryption meta not found",
-			zap.Uint32("keyspaceID", keyspaceID))
 		return nil, cerrors.ErrEncryptionMetaNotFound
 	}
 
 	// Return mock metadata if available
 	if meta, ok := c.metaMap[keyspaceID]; ok {
-		log.Debug("mock TiKV client: returning encryption meta",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Bool("enabled", meta != nil))
 		return meta, nil
 	}
 
 	// Default behavior: return not found for unknown keyspaces
 	// This simulates classic architecture or unconfigured encryption
-	log.Debug("mock TiKV client: encryption meta not found (unknown keyspace)",
-		zap.Uint32("keyspaceID", keyspaceID))
 	return nil, cerrors.ErrEncryptionMetaNotFound
 }
 
