@@ -86,6 +86,8 @@ const (
 	SASLTypeGSSAPI = "GSSAPI"
 	// SASLTypeOAuth represents the SASL/OAUTHBEARER mechanism (Kafka 2.0.0+)
 	SASLTypeOAuth = "OAUTHBEARER"
+	// SASLOAuthProviderAWSMSKIAM uses AWS IAM credentials to authenticate with Amazon MSK.
+	SASLOAuthProviderAWSMSKIAM = "AWS_MSK_IAM"
 )
 
 // RequiredAcks is used in Produce Requests to tell the broker how many replica acknowledgements
@@ -367,6 +369,10 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if err != nil {
 		return err
 	}
+	if o.sasl.oauthProvider == SASLOAuthProviderAWSMSKIAM && !o.EnableTLS {
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
+			"AWS MSK IAM authentication requires TLS to be enabled")
+	}
 	if o.Client == KafkaClientFranz {
 		// Store the effective timeouts so the configuration log matches franz-go.
 		o.WriteTimeout = normalizeTimeout(o.WriteTimeout)
@@ -517,6 +523,29 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	}
 
 	if sinkConfig != nil && sinkConfig.KafkaConfig != nil {
+		kafkaConfig := sinkConfig.KafkaConfig
+		if kafkaConfig.SASLOAuthProvider != nil {
+			o.sasl.oauthProvider = strings.TrimSpace(*kafkaConfig.SASLOAuthProvider)
+			if o.sasl.oauthProvider == "" {
+				return errors.ErrKafkaInvalidConfig.GenWithStack("SASL OAuth provider cannot be empty")
+			}
+		}
+		if kafkaConfig.AWSMSKIAM != nil {
+			o.sasl.awsMSKIAM.Region = strings.TrimSpace(kafkaConfig.AWSMSKIAM.Region)
+			o.sasl.awsMSKIAM.RoleARN = strings.TrimSpace(kafkaConfig.AWSMSKIAM.RoleARN)
+			o.sasl.awsMSKIAM.RoleSessionName = strings.TrimSpace(kafkaConfig.AWSMSKIAM.RoleSessionName)
+			o.sasl.awsMSKIAM.ExternalID = strings.TrimSpace(kafkaConfig.AWSMSKIAM.ExternalID)
+		}
+		standardOAuthConfigPresent := kafkaConfig.SASLOAuthClientID != nil ||
+			kafkaConfig.SASLOAuthClientSecret != nil || kafkaConfig.SASLOAuthTokenURL != nil ||
+			kafkaConfig.SASLOAuthScopes != nil || kafkaConfig.SASLOAuthGrantType != nil ||
+			kafkaConfig.SASLOAuthAudience != nil || kafkaConfig.SASLOAuthCA != nil
+		if o.sasl.oauthProvider != "" && standardOAuthConfigPresent {
+			return errors.ErrKafkaInvalidConfig.GenWithStack(
+				"SASL OAuth provider %s cannot be used with standard OAuth2 configuration",
+				o.sasl.oauthProvider)
+		}
+
 		if sinkConfig.KafkaConfig.SASLOAuthClientID != nil {
 			clientID := *sinkConfig.KafkaConfig.SASLOAuthClientID
 			if clientID == "" {
@@ -583,6 +612,29 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 
 		if sinkConfig.KafkaConfig.SASLOAuthAudience != nil {
 			o.sasl.oauth2.audience = *sinkConfig.KafkaConfig.SASLOAuthAudience
+		}
+
+		awsMSKIAM := o.sasl.awsMSKIAM
+		awsConfigPresent := o.sasl.oauthProvider != "" || kafkaConfig.AWSMSKIAM != nil
+		if awsConfigPresent {
+			if o.sasl.oauthProvider != SASLOAuthProviderAWSMSKIAM {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"unsupported SASL OAuth provider %q", o.sasl.oauthProvider)
+			}
+			if o.sasl.mechanism != oauthMechanism {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"AWS MSK IAM is only supported with SASL mechanism type OAUTHBEARER, but got %s",
+					o.sasl.mechanism)
+			}
+			if awsMSKIAM.Region == "" {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"AWS region cannot be empty for AWS MSK IAM authentication")
+			}
+			if awsMSKIAM.RoleARN == "" &&
+				(awsMSKIAM.RoleSessionName != "" || awsMSKIAM.ExternalID != "") {
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
+					"AWS role ARN is required when role session name or external ID is configured")
+			}
 		}
 	}
 

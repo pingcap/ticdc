@@ -171,7 +171,15 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *opt
 			}
 
 		case oauthMechanism:
-			p, err := newTokenProvider(ctx, o)
+			var (
+				p   sarama.AccessTokenProvider
+				err error
+			)
+			if o.sasl.oauthProvider == SASLOAuthProviderAWSMSKIAM {
+				p, err = newAWSMSKIAMTokenProvider(ctx, o.sasl.awsMSKIAM)
+			} else {
+				p, err = newTokenProvider(ctx, o)
+			}
 			if err != nil {
 				return err
 			}
