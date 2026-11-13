@@ -2518,7 +2518,7 @@ func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) strin
 		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
 	}
 
-	definitions := make([]string, 0, len(rawEvent.TableInfo.Columns)+1)
+	definitions := make([]string, 0, len(rawEvent.TableInfo.Columns)+len(rawEvent.TableInfo.Indices))
 	for _, col := range rawEvent.TableInfo.Columns {
 		if col.Hidden {
 			continue
@@ -2532,7 +2532,38 @@ func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) strin
 	if pkColumns := getPrimaryKeyColumnNames(rawEvent.TableInfo); len(pkColumns) > 0 {
 		definitions = append(definitions, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(pkColumns, ", ")))
 	}
+	for _, index := range rawEvent.TableInfo.Indices {
+		if index == nil || index.Primary || !index.Unique {
+			continue
+		}
+		indexColumns, ok := getIndexColumnDefinitions(rawEvent.TableInfo, index)
+		if !ok {
+			continue
+		}
+		definitions = append(definitions, fmt.Sprintf("UNIQUE KEY %s (%s)",
+			common.QuoteName(index.Name.O), strings.Join(indexColumns, ", ")))
+	}
 	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(definitions, ", "))
+}
+
+func getIndexColumnDefinitions(tableInfo *model.TableInfo, index *model.IndexInfo) ([]string, bool) {
+	if len(index.Columns) == 0 {
+		return nil, false
+	}
+
+	definitions := make([]string, 0, len(index.Columns))
+	for _, indexColumn := range index.Columns {
+		if indexColumn == nil || indexColumn.Offset < 0 || indexColumn.Offset >= len(tableInfo.Columns) ||
+			tableInfo.Columns[indexColumn.Offset].Hidden {
+			return nil, false
+		}
+		definition := common.QuoteName(indexColumn.Name.O)
+		if indexColumn.Length > 0 {
+			definition += fmt.Sprintf("(%d)", indexColumn.Length)
+		}
+		definitions = append(definitions, definition)
+	}
+	return definitions, true
 }
 
 func getPrimaryKeyColumnNames(tableInfo *model.TableInfo) []string {

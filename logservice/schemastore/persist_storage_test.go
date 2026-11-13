@@ -2654,7 +2654,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		baseTableID              int64  = 150
 		mviewID                  int64  = 200
 		mviewName                string = "mv1"
-		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) NOT NULL, `b` int(11), PRIMARY KEY (`a`))"
+		expectedCreateTableQuery string = "CREATE TABLE `test`.`mv1` (`a` int(11) NOT NULL, `b` int(11), PRIMARY KEY (`a`), UNIQUE KEY `uk_a_b` (`a`, `b`))"
 		expectedDropTableQuery   string = "DROP TABLE `test`.`mv1`"
 	)
 
@@ -2805,10 +2805,23 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.True(t, triggerEvents[2].TableInfo.IsMaterializedView())
 	}
 
+	createMVJob := buildCreateMaterializedViewJobForTest(
+		schemaID, mviewID, mviewName, []int64{baseTableID}, "select * from t_base", 1010)
+	createMVArgs, err := model.GetCreateMaterializedViewArgs(createMVJob)
+	require.NoError(t, err)
+	createMVArgs.TableInfo.Indices = append(createMVArgs.TableInfo.Indices, &model.IndexInfo{
+		Name:   parser_model.NewCIStr("uk_a_b"),
+		Unique: true,
+		Columns: []*model.IndexColumn{
+			{Name: parser_model.NewCIStr("a"), Offset: 0},
+			{Name: parser_model.NewCIStr("b"), Offset: 1},
+		},
+	})
+
 	pStorage := newPersistentStorageForTest(dbPath, nil)
 	for _, job := range []*model.Job{
 		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
-		buildCreateMaterializedViewJobForTest(schemaID, mviewID, mviewName, []int64{baseTableID}, "select * from t_base", 1010),
+		createMVJob,
 	} {
 		require.NoError(t, pStorage.handleDDLJob(job))
 	}
