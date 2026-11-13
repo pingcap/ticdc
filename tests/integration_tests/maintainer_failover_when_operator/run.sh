@@ -210,66 +210,6 @@ function wait_for_table_scheduled() {
 	return 1
 }
 
-function wait_for_add_operator_inflight_in_logs() {
-	local work_dir=$1
-	local table_id=$2
-	local retry=$3
-
-	# We rely on debug logs (run_cdc_server default loglevel=debug) from dispatcher manager:
-	#   "store current working add operator" is emitted after the Create request is stored in
-	#   currentOperatorMap (i.e., the add operator is in-flight) and before dispatcher creation.
-	# This is the most direct, sink-independent confirmation that the corner case is covered.
-	local pattern="store current working add operator"
-	for ((i = 0; i < retry; i++)); do
-		if grep -Eqs "${pattern}.*TableID[^0-9]*${table_id}([^0-9]|$)" "$work_dir"/cdc*.log 2>/dev/null; then
-			return 0
-		fi
-		sleep 2
-	done
-	echo "add operator for table $table_id not observed in logs" >&2
-	return 1
-}
-
-function get_merge_dispatcher_created_log_count() {
-	local work_dir=$1
-	local table_id=$2
-	local pattern='new (redo )?dispatcher created\(merge dispatcher\)'
-
-	grep -Ehs "${pattern}.*\\[tableID=${table_id}\\]" "$work_dir"/cdc*.log 2>/dev/null | wc -l
-}
-
-function wait_for_new_merge_dispatcher_created_in_logs() {
-	local work_dir=$1
-	local table_id=$2
-	local initial_count=$3
-	local retry=$4
-
-	for ((i = 0; i < retry; i++)); do
-		local current_count
-		current_count=$(get_merge_dispatcher_created_log_count "$work_dir" "$table_id")
-		if [ "$current_count" -gt "$initial_count" ]; then
-			return 0
-		fi
-		sleep 2
-	done
-	echo "new merge dispatcher for table $table_id not observed in logs" >&2
-	return 1
-}
-
-function wait_for_restored_merge_operator_in_logs() {
-	local work_dir=$1
-	local retry=$2
-
-	for ((i = 0; i < retry; i++)); do
-		if grep -qs "restore merge operator" "$work_dir"/cdc*.log 2>/dev/null; then
-			return 0
-		fi
-		sleep 2
-	done
-	echo "restored merge operator not observed in logs" >&2
-	return 1
-}
-
 function wait_for_maintainer_move() {
 	local api_addr=$1
 	local changefeed_id=$2
@@ -479,15 +419,12 @@ function run_impl() {
 
 	enable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER" --expr "return(true)"
 
-	# Merge operator: persist the merge request before BlockCreateDispatcher starts holding the dispatcher manager's
-	# maintainer fence. The merged-dispatcher log is emitted after TrackMergeOperator, so waiting for a new occurrence
-	# proves the merge request will be included in the bootstrap response after maintainer failover.
-	merge_dispatcher_log_count=$(get_merge_dispatcher_created_log_count "$work_dir" "$table_id_6")
+	# Wait for the additional merged replication before blocking further creates.
+	# Unit tests cover the merge journal and bootstrap restoration explicitly.
 	set +e
 	merge_table_with_retry "$table_id_6" "$changefeed_id" 1 "$mode" &
 	merge_pid=$!
 	set -e
-	wait_for_new_merge_dispatcher_created_in_logs "$work_dir" "$table_id_6" "$merge_dispatcher_log_count" 60
 	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before + 1))" ge "$mode" 60
 
 	enable_failpoint_on_all_addrs "$FAILPOINT_BLOCK_CREATE_DISPATCHER" "pause"
@@ -500,19 +437,14 @@ function run_impl() {
 	table_id_4=$(get_table_id "maintainer_failover_when_operator" "t4")
 	table_id_5=$(get_table_id "maintainer_failover_when_operator" "t5")
 
-	# Sink-independent barrier before killing maintainer:
-	# Ensure the maintainer has observed the new tables and started scheduling them,
-	# so the corresponding Create requests are in-flight (and will be restored after failover).
-	#
-	# Note: For MQ sinks (kafka/pulsar/storage), downstream table existence may be gated by watermarks which can be
-	# blocked by in-flight Add operators (BlockTsForward). Therefore, do NOT check downstream table existence here.
+	# Wait until both tables are scheduled before killing the maintainer.
+	# Package tests verify that requests are journaled before dispatcher creation;
+	# this case checks scheduling and replication converge across process failure.
 	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "$mode"
 	scheduled_node_id_4=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_4" "$mode")
 	scheduled_node_id_5=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_5" "$mode")
 	echo "table $table_id_4 scheduled on node $scheduled_node_id_4"
 	echo "table $table_id_5 scheduled on node $scheduled_node_id_5"
-	wait_for_add_operator_inflight_in_logs "$work_dir" "$table_id_4" 60
-	wait_for_add_operator_inflight_in_logs "$work_dir" "$table_id_5" 60
 
 	# Split operator: issue split and keep it in-progress due to NotReadyToCloseDispatcher.
 	set +e
@@ -538,10 +470,8 @@ function run_impl() {
 	new_maintainer_addr=$(wait_for_maintainer_move "$api_addr" "$changefeed_id" "$maintainer_addr")
 	echo "maintainer moved to $new_maintainer_addr"
 
-	# Let dispatcher managers answer bootstrap, but keep the merge unfinished
-	# until the new maintainer has restored its operator from that snapshot.
+	# Let the new maintainer bootstrap and finish the pending operations.
 	disable_failpoint_on_all_addrs_best_effort "$FAILPOINT_BLOCK_CREATE_DISPATCHER"
-	wait_for_restored_merge_operator_in_logs "$work_dir" 60
 	disable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER"
 	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before - 1))" eq "$mode" 60
 

@@ -371,7 +371,6 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 // Execute resends the original protobuf object without rebuilding payload so
 // WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Stringer("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.offerBlockStatus(t.message)
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)

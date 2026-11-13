@@ -68,15 +68,6 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 	// Only events committed strictly after ReplicatingTs can leave replay safe mode.
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs <= event.ReplicatingTs
 
-	log.Debug("inSafeMode",
-		zap.Bool("inSafeMode", inSafeMode),
-		zap.Uint64("firstRowCommitTs", event.CommitTs),
-		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
-		zap.Bool("cfgSafeMode", w.cfg.SafeMode),
-		zap.Bool("isInErrorCausedSafeMode", w.isInErrorCausedSafeMode),
-		zap.Int("writerID", w.id),
-	)
-
 	var (
 		queries      []string
 		argsList     [][]interface{}
