@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -524,6 +525,81 @@ func TestCheckOrWriteSchema(t *testing.T) {
 			files, err = os.ReadDir(dir)
 			require.NoError(t, err)
 			require.Equal(t, 2, len(files))
+		})
+	}
+}
+
+func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
+	t.Parallel()
+
+	type storedSchema struct {
+		version uint64
+		query   string
+		altered bool
+	}
+	for _, tc := range []struct {
+		name     string
+		version  uint64
+		schemas  []storedSchema
+		expected uint64
+	}{
+		{
+			name: "pendingDrop", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}},
+		},
+		{
+			name: "pendingDropWithoutEarlierSchema", version: 150, expected: 150,
+			schemas: []storedSchema{{200, "DROP TABLE table1", false}},
+		},
+		{
+			name: "newerSnapshotBeforeDrop", version: 90, expected: 100,
+			schemas: []storedSchema{{100, "", false}, {200, "DROP TABLE table1", false}, {300, "", false}},
+		},
+		{
+			name: "pendingRecreate", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}, {300, "CREATE TABLE table1 (id INT)", false}},
+		},
+		{
+			name: "afterRecreate", version: 350, expected: 300,
+			schemas: []storedSchema{{100, "CREATE TABLE table1 (id INT)", false}, {200, "DROP TABLE table1", false}, {300, "CREATE TABLE table1 (id INT)", false}},
+		},
+		{
+			name: "differentChecksumBoundary", version: 150, expected: 100,
+			schemas: []storedSchema{{100, "", false}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true}, {300, "", false}},
+		},
+		{
+			name: "noMatchingSchemaAfterDDL", version: 250, expected: 250,
+			schemas: []storedSchema{{100, "", false}, {200, "ALTER TABLE table1 ADD COLUMN extra INT", true}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			f := testFilePathGenerator(ctx, t, t.TempDir())
+			tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+				ID: 20, Name: ast.NewCIStr("table1"),
+				Columns: []*timodel.ColumnInfo{{Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}},
+			})
+			for _, stored := range tc.schemas {
+				var schema SchemaFile
+				schema.Build(&commonEvent.DDLEvent{
+					TableInfo: tableInfo, FinishedTs: stored.version, Query: stored.query,
+				}, false)
+				if stored.altered {
+					schema.Columns = append(schema.Columns, TableCol{Name: "extra", Tp: "INT"})
+					schema.TotalColumns++
+				}
+				require.NoError(t, f.storage.WriteFile(ctx, schema.Path(false, 20), schema.Marshal()))
+			}
+			table := VersionedTableName{
+				TableNameWithPhysicTableID: tableInfo.TableName,
+				TableInfoVersion:           tc.version,
+			}
+			version, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, version)
+			version, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, version, "cached versions must respect the same DDL boundary")
 		})
 	}
 }
