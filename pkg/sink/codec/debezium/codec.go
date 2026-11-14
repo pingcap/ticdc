@@ -628,7 +628,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 	datum := row.GetDatum(idx, ft)
 	if datum.IsNull() {
 		defaultVal := colInfo.GetDefaultValue()
-		if defaultVal == nil {
+		if defaultVal == nil || !c.config.DebeziumReplaceNullWithDefault {
 			writer.WriteNullField(colName)
 			return nil
 		}
