@@ -38,20 +38,25 @@ func TestDebeziumReplaceNullWithDefault(t *testing.T) {
 		id int primary key,
 		v int default 7,
 		s varchar(16) default 'fallback',
-		n int
+		n int,
+		required_value int not null default 11
 	)`)
 	defer helper.Close()
-	insertNull := helper.helper.DML2Event("test", "null_defaults", "insert into null_defaults values (1, null, null, null)")
+	insertNull := helper.helper.DML2Event("test", "null_defaults", "insert into null_defaults values (1, null, null, null, default)")
 	insertDefault := helper.helper.DML2Event("test", "null_defaults", "insert into null_defaults (id) values (2)")
 	fromNull, _ := helper.helper.DML2UpdateEvent("test", "null_defaults",
-		"insert into null_defaults values (3, null, null, null)",
+		"insert into null_defaults values (3, null, null, null, default)",
 		"update null_defaults set v = 9 where id = 3")
 	toNull, _ := helper.helper.DML2UpdateEvent("test", "null_defaults",
-		"insert into null_defaults values (4, 9, null, null)",
+		"insert into null_defaults values (4, 9, null, null, default)",
 		"update null_defaults set v = null where id = 4")
 	deleteNull := helper.helper.DML2DeleteEvent("test", "null_defaults",
-		"insert into null_defaults values (5, null, null, null)",
+		"insert into null_defaults values (5, null, null, null, default)",
 		"delete from null_defaults where id = 5")
+	defaultValues := make([]any, len(helper.tableInfo.GetColumns()))
+	for idx, column := range helper.tableInfo.GetColumns() {
+		defaultValues[idx] = column.GetDefaultValue()
+	}
 
 	for _, protocol := range []config.Protocol{config.ProtocolDebezium, config.ProtocolDebeziumAvro} {
 		for _, mode := range []struct {
@@ -126,7 +131,7 @@ func TestDebeziumReplaceNullWithDefault(t *testing.T) {
 								}
 								data, ok := payload[image].(map[string]any)
 								require.True(t, ok, image)
-								for _, column := range []string{"v", "s", "n"} {
+								for _, column := range []string{"v", "s", "n", "required_value"} {
 									require.Contains(t, data, column, image)
 								}
 								expected := tc.after
@@ -143,15 +148,31 @@ func TestDebeziumReplaceNullWithDefault(t *testing.T) {
 									require.Nil(t, data["s"], image)
 								}
 								require.Nil(t, data["n"], image)
+								require.Equal(t, float64(11), data["required_value"], image)
 							}
 							if protocol == config.ProtocolDebezium && !disableSchema {
-								afterSchema := schemaFieldsByName(t, message["schema"].(map[string]any), "after")
-								require.Equal(t, float64(7), schemaFieldsByName(t, afterSchema, "v")["default"])
+								for _, image := range []string{"before", "after"} {
+									rowSchema := schemaFieldsByName(t, message["schema"].(map[string]any), image)
+									if mode.replace {
+										require.Equal(t, float64(7), schemaFieldsByName(t, rowSchema, "v")["default"])
+										require.Equal(t, "fallback", schemaFieldsByName(t, rowSchema, "s")["default"])
+									} else {
+										for _, column := range []string{"v", "s"} {
+											fieldSchema := schemaFieldsByName(t, rowSchema, column)
+											require.NotNil(t, fieldSchema, column)
+											require.NotContains(t, fieldSchema, "default")
+										}
+									}
+									require.Equal(t, float64(11), schemaFieldsByName(t, rowSchema, "required_value")["default"])
+								}
 							}
 						})
 					}
 				})
 			}
 		}
+	}
+	for idx, column := range helper.tableInfo.GetColumns() {
+		require.Equal(t, defaultValues[idx], column.GetDefaultValue(), column.Name.O)
 	}
 }

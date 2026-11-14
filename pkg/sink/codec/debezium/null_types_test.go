@@ -190,6 +190,16 @@ func TestDebeziumReplaceNullWithDefaultTypes(t *testing.T) {
 					} else {
 						require.NotNil(t, schema)
 					}
+					if format.protocol == config.ProtocolDebezium && !format.disableSchema {
+						for _, image := range []string{"before", "after"} {
+							rowSchema := schemaFieldsByName(t, schema.(map[string]any), image)
+							for _, column := range columns {
+								fieldSchema := schemaFieldsByName(t, rowSchema, column.name)
+								require.NotNil(t, fieldSchema, image+"."+column.name)
+								require.NotContains(t, fieldSchema, "default", image+"."+column.name)
+							}
+						}
+					}
 					after := data["after"].(map[string]any)
 					for _, column := range columns {
 						require.Contains(t, after, column.name)
@@ -212,6 +222,15 @@ func TestDebeziumReplaceNullWithDefaultTypes(t *testing.T) {
 						cfg.DebeziumReplaceNullWithDefault = true
 						legacy, legacySchema := decodeNullTypesMessage(t, format.protocol, encodeNullTypesEvent(t, cfg, helper, events[i]))
 						require.Equal(t, legacy, data)
+						if format.protocol == config.ProtocolDebezium && !format.disableSchema {
+							// Only nullable column defaults differ between the JSON schemas.
+							for _, image := range []string{"before", "after"} {
+								rowSchema := schemaFieldsByName(t, legacySchema.(map[string]any), image)
+								for _, column := range columns {
+									delete(schemaFieldsByName(t, rowSchema, column.name), "default")
+								}
+							}
+						}
 						require.Equal(t, legacySchema, schema)
 					}
 				})
