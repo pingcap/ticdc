@@ -101,6 +101,8 @@ type Config struct {
 	DebeziumDisableSchema bool
 	// Debezium only. Whether before value should be included in the output.
 	DebeziumOutputOldValue bool
+	// Debezium JSON and Avro only. Whether NULL values use column defaults.
+	DebeziumReplaceNullWithDefault bool
 	// Debezium only. Whether the transaction start_ts should be included in
 	// the source block of the output. JSON protocol only.
 	DebeziumIncludeStartTs bool
@@ -156,6 +158,7 @@ func NewConfig(protocol config.Protocol) *Config {
 
 		// default value is true
 		DebeziumOutputOldValue:             true,
+		DebeziumReplaceNullWithDefault:     true,
 		OpenOutputOldValue:                 true,
 		DebeziumDisableSchema:              false,
 		DebeziumIncludeStartTs:             false,
@@ -212,6 +215,7 @@ type urlConfig struct {
 	ContentCompatible        *bool  `form:"content-compatible"`
 
 	DebeziumDisableSchema              *bool   `form:"debezium-disable-schema"`
+	DebeziumReplaceNullWithDefault     *bool   `form:"debezium-replace-null-with-default"`
 	DebeziumIncludeStartTs             *bool   `form:"debezium-include-start-ts"`
 	DebeziumDecimalHandlingMode        *string `form:"debezium-decimal-handling-mode"`
 	DebeziumBigintUnsignedHandlingMode *string `form:"debezium-bigint-unsigned-handling-mode"`
@@ -348,6 +352,11 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if urlParameter.DebeziumDisableSchema != nil {
 		c.DebeziumDisableSchema = *urlParameter.DebeziumDisableSchema
 	}
+	if rawURLParameter.DebeziumReplaceNullWithDefault != nil {
+		c.DebeziumReplaceNullWithDefault = *rawURLParameter.DebeziumReplaceNullWithDefault
+	} else if urlParameter.DebeziumReplaceNullWithDefault != nil {
+		c.DebeziumReplaceNullWithDefault = *urlParameter.DebeziumReplaceNullWithDefault
+	}
 	if urlParameter.DebeziumIncludeStartTs != nil {
 		c.DebeziumIncludeStartTs = *urlParameter.DebeziumIncludeStartTs
 	}
@@ -408,6 +417,7 @@ func mergeConfig(
 			dest.DebeziumDisableSchema = sinkConfig.DebeziumDisableSchema
 		}
 		if sinkConfig.Debezium != nil {
+			dest.DebeziumReplaceNullWithDefault = sinkConfig.Debezium.ReplaceNullWithDefault
 			dest.DebeziumIncludeStartTs = sinkConfig.Debezium.IncludeStartTs
 			dest.DebeziumDecimalHandlingMode = sinkConfig.Debezium.DecimalHandlingMode
 			dest.DebeziumBigintUnsignedHandlingMode = sinkConfig.Debezium.BigintUnsignedHandlingMode
@@ -483,6 +493,12 @@ func (c *Config) Validate() error {
 		)
 	}
 
+	if !c.DebeziumReplaceNullWithDefault &&
+		c.Protocol != config.ProtocolDebezium && c.Protocol != config.ProtocolDebeziumAvro {
+		return errors.ErrCodecInvalidConfig.GenWithStack(
+			`debezium-replace-null-with-default only takes effect with protocol "debezium" or "debezium-avro"`,
+		)
+	}
 	if c.DebeziumIncludeStartTs && c.Protocol != config.ProtocolDebezium {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`debezium-include-start-ts only takes effect with protocol "debezium"`,

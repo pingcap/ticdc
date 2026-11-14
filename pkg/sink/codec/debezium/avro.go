@@ -481,7 +481,7 @@ func (c *dbzCodec) debeziumAvroFieldValue(
 	datum := row.GetDatum(idx, ft)
 	if datum.IsNull() {
 		defaultVal := colInfo.GetDefaultValue()
-		if defaultVal == nil {
+		if defaultVal == nil || !c.config.DebeziumReplaceNullWithDefault {
 			return nil, nil
 		}
 		val := getValueFromDefault(defaultVal, ft)

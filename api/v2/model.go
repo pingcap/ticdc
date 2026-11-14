@@ -569,6 +569,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			debeziumConfig = &config.DebeziumConfig{
 				OutputOldValue: outputOldValue,
 			}
+			if c.Sink.DebeziumConfig.ReplaceNullWithDefault != nil {
+				debeziumConfig.ReplaceNullWithDefault = util.AddressOf(*c.Sink.DebeziumConfig.ReplaceNullWithDefault)
+			}
 			if c.Sink.DebeziumConfig.IncludeStartTs != nil {
 				debeziumConfig.IncludeStartTs = util.AddressOf(*c.Sink.DebeziumConfig.IncludeStartTs)
 			}
@@ -962,6 +965,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Sink.Debezium != nil {
 			debeziumConfig = &DebeziumConfig{
 				OutputOldValue: util.AddressOf(cloned.Sink.Debezium.OutputOldValue),
+			}
+			if cloned.Sink.Debezium.ReplaceNullWithDefault != nil {
+				debeziumConfig.ReplaceNullWithDefault = util.AddressOf(*cloned.Sink.Debezium.ReplaceNullWithDefault)
 			}
 			if cloned.Sink.Debezium.IncludeStartTs != nil {
 				debeziumConfig.IncludeStartTs = util.AddressOf(*cloned.Sink.Debezium.IncludeStartTs)
@@ -1773,6 +1779,7 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue             *bool   `json:"output_old_value,omitempty" toml:"output-old-value,omitempty"`
+	ReplaceNullWithDefault     *bool   `json:"replace_null_with_default,omitempty" toml:"replace-null-with-default,omitempty"`
 	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 	DecimalHandlingMode        *string `json:"decimal_handling_mode,omitempty" toml:"decimal-handling-mode,omitempty"`
 	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`

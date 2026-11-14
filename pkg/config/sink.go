@@ -1198,6 +1198,9 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// ReplaceNullWithDefault controls whether NULL values use column defaults in
+	// Debezium JSON and Avro output. Unset preserves the default behavior (true).
+	ReplaceNullWithDefault *bool `toml:"replace-null-with-default" json:"replace-null-with-default,omitempty"`
 	// IncludeStartTs controls whether the transaction start_ts is included in
 	// the source block of Debezium JSON output.
 	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`

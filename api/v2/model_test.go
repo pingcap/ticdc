@@ -240,6 +240,37 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Nil(t, internalDebezium.Sink.Debezium.BigintUnsignedHandlingMode)
 	require.Nil(t, internalDebezium.Sink.Debezium.BinaryHandlingMode)
 
+	for _, tc := range []struct {
+		name      string
+		value     *bool
+		jsonField string
+	}{
+		{name: "omitted"},
+		{name: "false", value: util.AddressOf(false), jsonField: `"replace_null_with_default":false`},
+		{name: "true", value: util.AddressOf(true), jsonField: `"replace_null_with_default":true`},
+	} {
+		t.Run("Debezium NULL replacement/"+tc.name, func(t *testing.T) {
+			apiCfg := &ReplicaConfig{Sink: &SinkConfig{DebeziumConfig: &DebeziumConfig{
+				ReplaceNullWithDefault: tc.value,
+			}}}
+			internal := apiCfg.ToInternalReplicaConfig()
+			require.Equal(t, tc.value, internal.Sink.Debezium.ReplaceNullWithDefault)
+			roundTrip := ToAPIReplicaConfig(internal).Sink.DebeziumConfig
+			require.Equal(t, tc.value, roundTrip.ReplaceNullWithDefault)
+			body, err := json.Marshal(roundTrip)
+			require.NoError(t, err)
+			if tc.value == nil {
+				require.Nil(t, internal.Sink.Debezium.ReplaceNullWithDefault)
+				require.Nil(t, roundTrip.ReplaceNullWithDefault)
+				require.NotContains(t, string(body), "replace_null_with_default")
+			} else {
+				require.NotSame(t, tc.value, internal.Sink.Debezium.ReplaceNullWithDefault)
+				require.NotSame(t, internal.Sink.Debezium.ReplaceNullWithDefault, roundTrip.ReplaceNullWithDefault)
+				require.Contains(t, string(body), tc.jsonField)
+			}
+		})
+	}
+
 	// Test case 2: Nil fields (should use defaults or be nil)
 	apiCfgNil := &ReplicaConfig{}
 	internalCfgNil := apiCfgNil.ToInternalReplicaConfig()
