@@ -140,7 +140,6 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	for partitionID := range topicMetadata.Partitions {
 		partitions[partitionID] = &kafkaPartition{}
 	}
-	log.Info("kafka reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return &kafkaReader{
 		protocol:        codecConfig.Protocol,
 		router:          router,

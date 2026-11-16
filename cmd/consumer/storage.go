@@ -115,7 +115,6 @@ func newStorageReader(ctx context.Context, opts sourceOptions) *storageReader {
 		ddlWatermarks:  make(map[string]uint64),
 		tableIDs:       make(map[storageTableKey]int64),
 	}
-	log.Info("storage reader initialized", zap.String("protocol", protocol.String()))
 	return c
 }
 

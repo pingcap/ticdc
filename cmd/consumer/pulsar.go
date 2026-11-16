@@ -158,7 +158,6 @@ func newPulsarReader(opts sourceOptions) *pulsarReader {
 		memory:     memory,
 		partitions: partitions,
 	}
-	log.Info("pulsar reader initialized", zap.String("topic", topic), zap.Int("partitionCount", len(partitions)))
 	return c
 }
 
