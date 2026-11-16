@@ -55,8 +55,10 @@ func newCommand() *cobra.Command {
 		Args:          cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			ctx := command.Context()
-			c := newConsumer(ctx, options)
-			return c.start(ctx)
+			if options.enableProfiling {
+				startProfileServer()
+			}
+			return newConsumer(ctx, options).start(ctx)
 		},
 	}
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {

@@ -15,37 +15,24 @@
 package main
 
 import (
-	"context"
 	"net/http"
+	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
-func newProfileServer(enabled bool) *http.Server {
-	if !enabled {
-		return nil
-	}
-	return &http.Server{
+// startProfileServer serves pprof on the loopback address until the process
+// exits.
+func startProfileServer() {
+	server := &http.Server{
 		Addr:              profileAddress,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-}
-
-func (c *consumer) serveProfile() error {
-	if err := c.profileServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Error("consumer profiling server failed", zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-func (c *consumer) stopProfile(ctx context.Context) error {
-	<-ctx.Done()
-	if err := c.profileServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Warn("consumer profiling server close failed", zap.Error(err))
-	}
-	return nil
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Warn("consumer profiling server failed", zap.Error(err))
+		}
+	}()
 }

@@ -16,8 +16,6 @@ package main
 
 import (
 	"context"
-	"net/http"
-	_ "net/http/pprof" //nolint:gosec // pprof is served on 127.0.0.1 only and gated by --enable-profiling.
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,11 +27,10 @@ import (
 )
 
 type consumer struct {
-	reader        sourceReader
-	decoder       *decodeGroup
-	conductor     *conductor
-	writer        *writer
-	profileServer *http.Server
+	reader    sourceReader
+	decoder   *decodeGroup
+	conductor *conductor
+	writer    *writer
 }
 
 func newConsumer(ctx context.Context, options *options) *consumer {
@@ -74,7 +71,6 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 			CodecConfig:   codecConfig,
 			Budget:        memory,
 		}),
-		profileServer: newProfileServer(options.enableProfiling),
 	}
 	c.conductor.OnCheckpoint(c.decoder.ReleaseSchemas)
 	return c
@@ -82,12 +78,6 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 
 func (c *consumer) start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
-	if c.profileServer != nil {
-		g.Go(c.serveProfile)
-		g.Go(func() error {
-			return c.stopProfile(ctx)
-		})
-	}
 	g.Go(func() error {
 		return c.readInputs(ctx)
 	})
