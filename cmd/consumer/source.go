@@ -15,8 +15,8 @@
 // The source stage reads encoded changes from an upstream system.
 //
 // A source owns transport concerns: connections, offsets, acknowledgements,
-// partition routing, memory admission and which streams must be read to cover
-// a dependency. The scheduler only asks for a dependency and receives coverage.
+// partition routing and which streams must be read to cover a dependency. The
+// scheduler only asks for a dependency and receives coverage.
 package main
 
 import (
@@ -186,7 +186,6 @@ type sourceOptions struct {
 	ConsumerID    string
 	ReplicaConfig *config.ReplicaConfig
 	CodecConfig   *common.Config
-	Budget        *budget
 }
 
 // newSourceReader builds the reader for the upstream URI.

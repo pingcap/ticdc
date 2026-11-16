@@ -53,9 +53,7 @@ type kafkaReader struct {
 	maxBatchSize    int
 	client          *kgo.Client
 	topic           string
-	memory          *budget
 	continuing      bool
-	prefetchedBytes int64 // SDK bytes already included in the shared budget.
 	partitions      map[int32]*kafkaPartition
 	tables          []event.SchemaTableName
 	selected        []int32 // Cached routing for tables; nil selects every partition.
@@ -66,7 +64,6 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
 	codecConfig := opts.CodecConfig
-	memory := opts.Budget
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Kafka topic", zap.String("topic", topic))
@@ -147,7 +144,6 @@ func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 		maxBatchSize:    maxBatchSize,
 		client:          client,
 		topic:           topic,
-		memory:          memory,
 		continuing:      true,
 		partitions:      partitions,
 	}
@@ -173,29 +169,13 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourceInput, error) {
 			return nil, context.Cause(ctx)
 		default:
 		}
-		prefetched := c.client.BufferedFetchBytes()
-		if prefetched > c.prefetchedBytes {
-			c.memory.ForceAcquire(prefetched - c.prefetchedBytes)
-		}
-		if prefetched < c.prefetchedBytes {
-			c.memory.Release(c.prefetchedBytes - prefetched)
-		}
-		c.prefetchedBytes = prefetched
 		fetches := c.client.PollRecords(ctx, readBatchRows)
 		if err := fetches.Err(); err != nil {
-			if cause := context.Cause(ctx); cause != nil {
-				return nil, cause
-			}
-			if fetches.IsClientClosed() {
-				return nil, errors.ErrKafkaSinkClosed.GenWithStackByArgs()
-			}
-			return nil, errors.WrapError(errors.ErrInternalCheckFailed, err, "read Kafka partition")
+			log.Error("read fetches failed", zap.Error(err))
+			return nil, err
 		}
 
-		var (
-			batch []*sourceInput
-			bytes int64
-		)
+		var batch []*sourceInput
 		for iterator := fetches.RecordIter(); !iterator.Done(); {
 			record := iterator.Next()
 			position := kgo.Record{
@@ -214,15 +194,10 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourceInput, error) {
 					return c.confirmPosition(ctx, &position)
 				},
 			})
-			bytes += size
 		}
 		if len(batch) == 0 {
 			continue
 		}
-		// Transfer already-accounted SDK bytes to the returned inputs.
-		accounted := min(bytes, c.prefetchedBytes)
-		c.prefetchedBytes -= accounted
-		c.memory.ForceAcquire(bytes - accounted)
 		return batch, nil
 	}
 }
@@ -274,9 +249,8 @@ func (c *kafkaReader) limitReads() {
 	for _, part := range c.partitions {
 		boundaryPending = boundaryPending || part.targetTs != 0
 	}
-	underPressure := c.memory.Used() >= c.memory.Limit()
 	for partitionID, part := range c.partitions {
-		pause := underPressure && (!c.continuing || (boundaryPending && part.targetTs == 0))
+		pause := !c.continuing || (boundaryPending && part.targetTs == 0)
 		if pause == part.fetchPaused {
 			continue
 		}
@@ -297,7 +271,6 @@ func (c *kafkaReader) limitReads() {
 
 func (c *kafkaReader) Close() {
 	c.client.Close()
-	c.memory.Release(c.prefetchedBytes)
 }
 
 func (c *kafkaReader) confirmPosition(ctx context.Context, position *kgo.Record) error {

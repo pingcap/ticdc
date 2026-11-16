@@ -44,8 +44,7 @@ func (noopMerger) sequential() bool {
 }
 
 type csvMerger struct {
-	memory *budget
-	sort   bool
+	sort bool
 }
 
 func (m *csvMerger) sequential() bool {
@@ -127,8 +126,6 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 			part.Rows = nil
 		}
 		bytes := dml.Rows.MemoryUsage()
-		m.memory.ForceAcquire(bytes)
-		m.memory.Release(retained)
 		prepared = append(prepared, &dmlWrite{
 			dml:        dml,
 			bytes:      bytes,
@@ -140,13 +137,12 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	return prepared
 }
 
-func newRowMerger(cfg *common.Config, memory *budget) rowMerger {
+func newRowMerger(cfg *common.Config) rowMerger {
 	if cfg.Protocol != config.ProtocolCsv {
 		return noopMerger{}
 	}
 	return &csvMerger{
-		memory: memory,
-		sort:   cfg.OutputOldValue && cfg.IncludeCommitTs,
+		sort: cfg.OutputOldValue && cfg.IncludeCommitTs,
 	}
 }
 

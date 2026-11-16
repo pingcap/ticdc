@@ -24,7 +24,6 @@ import (
 	"slices"
 	"sort"
 	"sync"
-	"unsafe"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -57,14 +56,8 @@ func (*ddlTask) pendingTask() {
 
 type ddlTask struct {
 	ddl         *event.DDLEvent
-	memory      *budget
-	bytes       int64
 	boundary    *readBoundary
 	awaitingDDL bool
-}
-
-func (t *ddlTask) release() {
-	t.memory.Release(t.bytes)
 }
 
 // readBoundary is scheduler-owned evidence that input dependencies are covered.
@@ -78,8 +71,6 @@ type sourcePosition struct {
 	through uint64
 	ack     func(context.Context) error
 }
-
-const sourcePositionBytes = int64(unsafe.Sizeof(sourcePosition{}))
 
 const (
 	roundRows  = 1024
@@ -97,10 +88,6 @@ func (c *conductor) Start(ctx context.Context, tasks <-chan []decodedEvent, w *w
 		return c.confirm(ctx)
 	})
 	err := g.Wait()
-	for _, positions := range c.positions {
-		c.memory.Release(int64(len(positions)) * sourcePositionBytes)
-	}
-	clear(c.positions)
 	return err
 }
 
@@ -187,7 +174,7 @@ func (c *conductor) flush(ctx context.Context, w *writer) error {
 		}
 		if control != nil {
 			c.popDDL()
-			w.AddDDL(control.ddl, control.release)
+			w.AddDDL(control.ddl)
 		}
 	}
 }
@@ -211,7 +198,6 @@ type conductor struct {
 	boundaryDDL       *ddlTask
 	checkpoint        *atomic.Uint64
 	cleanedCheckpoint uint64
-	memory            *budget
 	streams           map[int32]*streamReadState
 	watermark         uint64
 	pendingDML        map[int64]map[int32][]*dmlTask
@@ -228,7 +214,7 @@ type ddlInput struct {
 	streams []int32  // Inputs that have crossed this exact DDL.
 }
 
-// queueDML takes ownership of the decoded row's memory quota.
+// queueDML records a decoded row until the writer can accept it.
 func (c *conductor) queueDML(item *dmlTask) {
 	if c.pendingDML == nil {
 		c.pendingDML = make(map[int64]map[int32][]*dmlTask)
@@ -309,12 +295,8 @@ func appendDDLTableNames(names []event.SchemaTableName, defaultSchema string, ta
 }
 
 func (c *conductor) queueDDL(block *event.DDLEvent) *ddlInput {
-	bytes := int64(len(block.Query) + len(block.SchemaName) + len(block.TableName))
-	c.memory.ForceAcquire(bytes)
 	task := &ddlTask{
-		ddl:    block,
-		memory: c.memory,
-		bytes:  bytes,
+		ddl: block,
 	}
 	c.pendingDDL = append(c.pendingDDL, task)
 	if c.reorderDDL && len(c.pendingDDL) > 1 && task.ddl.GetCommitTs() < c.pendingDDL[len(c.pendingDDL)-2].ddl.GetCommitTs() {
@@ -353,7 +335,6 @@ func (c *conductor) nextReady(watermark uint64) pendingTask {
 		// A covering canonical-stream watermark without this DDL means that
 		// its canonical input was confirmed before this run. Retire the replica.
 		head.awaitingDDL = false
-		head.release()
 		c.popDDL()
 		head = nil
 	}
@@ -484,7 +465,7 @@ func (c *conductor) popDML(row *dmlTask) *dmlTask {
 	return row
 }
 
-func newConductor(memory *budget, reader sourceReader) *conductor {
+func newConductor(reader sourceReader) *conductor {
 	specs := reader.Streams()
 	streams := make(map[int32]*streamReadState, len(specs))
 	for _, stream := range specs {
@@ -495,7 +476,6 @@ func newConductor(memory *budget, reader sourceReader) *conductor {
 		confirmable: make(chan struct{}, 1),
 		checkpoint:  new(atomic.Uint64),
 		positions:   make(map[int32][]sourcePosition),
-		memory:      memory,
 		streams:     streams,
 	}
 	semantics := reader.Semantics()
@@ -641,9 +621,9 @@ func (c *conductor) needsMoreInput(w *writer) bool {
 			return true
 		}
 	}
-	// Let decoding and writes release memory before reading solely to catch
-	// up global progress. An empty conductor must still drain source buffers and
-	// reach markers that release retained transport positions.
+	// Reading only when nothing is pending keeps progress-only reads from
+	// competing with pending work. An empty conductor must still drain source
+	// buffers and reach markers that release retained transport positions.
 	return len(c.pendingDML) == 0 && len(c.pendingDDL) == 0 && w.Idle()
 }
 
@@ -801,7 +781,6 @@ func (c *conductor) accept(work decodedEvent) error {
 		// have been decoded and registered.
 		if origin.Ack != nil && c.hasInputMarker {
 			c.positionsMu.Lock()
-			c.memory.ForceAcquire(sourcePositionBytes)
 			c.positions[origin.Stream] = append(c.positions[origin.Stream], sourcePosition{through: c.inputMarker, ack: origin.Ack})
 			c.positionsMu.Unlock()
 			notifyConfirmation(c.confirmable)
@@ -924,7 +903,6 @@ func (c *conductor) dropPositions(stream int32, count int) {
 	clear(current[:count])
 	c.positions[stream] = current[count:]
 	c.positionsMu.Unlock()
-	c.memory.Release(int64(count) * sourcePositionBytes)
 }
 
 // Equal timestamps precede the DDL; search for the first strictly later row.

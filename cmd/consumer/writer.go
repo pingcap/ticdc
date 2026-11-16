@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The writer stage owns sink delivery: admission, batching, merging,
-// de-duplication, checkpoints, and conductor memory release.
+// de-duplication and checkpoints.
 package main
 
 import (
@@ -49,7 +49,6 @@ type writerOptions struct {
 	DownstreamURI string
 	ReplicaConfig *config.ReplicaConfig
 	CodecConfig   *codecCommon.Config
-	Budget        *budget
 }
 
 // newWriter creates a writer targeting the configured downstream sink.
@@ -67,8 +66,7 @@ func newWriter(ctx context.Context, opts writerOptions) *writer {
 	}
 	return &writer{
 		target:    target,
-		memory:    opts.Budget,
-		merger:    newRowMerger(opts.CodecConfig, opts.Budget),
+		merger:    newRowMerger(opts.CodecConfig),
 		completed: make(chan struct{}, 1),
 		mutations: make(map[mutationKey]*writeBatch),
 	}
@@ -99,7 +97,6 @@ func (w *writer) Start(ctx context.Context) error {
 // bookkeeping.
 type writer struct {
 	target            sink.Sink
-	memory            *budget
 	merger            rowMerger
 	completed         chan struct{}
 	pendingDML        []*dmlWrite
@@ -141,16 +138,10 @@ type dmlWrite struct {
 	dml        *event.DMLEvent
 	bytes      int64
 	sequential bool
-	memory     *budget
-}
-
-func (r *dmlWrite) release() {
-	r.memory.Release(r.bytes)
 }
 
 type ddlWrite struct {
-	ddl     *event.DDLEvent
-	release func()
+	ddl *event.DDLEvent
 }
 
 // AddDML queues one decoded row when the in-flight limits and the per-table
@@ -168,7 +159,6 @@ func (w *writer) AddDML(dml *event.DMLEvent) bool {
 		dml:        dml,
 		bytes:      bytes,
 		sequential: sequential,
-		memory:     w.memory,
 	}
 	if len(w.pendingDML) == 0 {
 		w.pendingPrepared = false
@@ -178,10 +168,9 @@ func (w *writer) AddDML(dml *event.DMLEvent) bool {
 	return true
 }
 
-// AddDDL queues a block event. release is called once the event is written or
-// proven unnecessary.
-func (w *writer) AddDDL(block *event.DDLEvent, release func()) {
-	w.pendingDDL = append(w.pendingDDL, &ddlWrite{ddl: block, release: release})
+// AddDDL queues a block event.
+func (w *writer) AddDDL(block *event.DDLEvent) {
+	w.pendingDDL = append(w.pendingDDL, &ddlWrite{ddl: block})
 	w.progressChanged = true
 }
 
@@ -291,9 +280,6 @@ func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := w.target.WriteBlockEvent(result.ddl); err != nil {
 		return err
 	}
-	if result.release != nil {
-		result.release()
-	}
 	return nil
 }
 
@@ -308,9 +294,6 @@ func (w *writer) flushDDL(ctx context.Context) error {
 		// the in-process write record can prove it was applied.
 		key := ddlKeyOf(block)
 		if w.ddlWrites[key] {
-			if result.release != nil {
-				result.release()
-			}
 			w.pendingDDL[0] = nil
 			w.pendingDDL = w.pendingDDL[1:]
 			w.progressChanged = true
@@ -342,10 +325,6 @@ func (w *writer) mergePendingDML() {
 		return
 	}
 	w.pendingDML = w.merger.merge(w.pendingDML)
-	for _, item := range w.pendingDML {
-		item.memory = w.memory
-		item.dml.AddPostFlushFunc(item.release)
-	}
 	w.pendingPrepared = true
 }
 
@@ -459,12 +438,7 @@ func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 		}
 		if filtered != item.dml {
 			// The original chunk stays alive through its decoder callbacks.
-			copyBytes := filtered.Rows.MemoryUsage()
-			w.memory.ForceAcquire(copyBytes)
-			filtered.AddPostFlushFunc(func() {
-				w.memory.Release(copyBytes)
-			})
-			batch.bytes += copyBytes
+			batch.bytes += filtered.Rows.MemoryUsage()
 		}
 		batch.events = append(batch.events, filtered)
 	}

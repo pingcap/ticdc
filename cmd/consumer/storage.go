@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -78,8 +77,6 @@ type storageReader struct {
 	tableIDs         map[storageTableKey]int64
 	nextTableID      int64
 	storage          storeapi.Storage
-	memory           *budget
-	continuing       atomic.Bool
 	dateSeparator    config.DateSeparator
 	fileExtension    string
 	fileIndexWidth   int
@@ -99,14 +96,12 @@ func newStorageReader(ctx context.Context, opts sourceOptions) *storageReader {
 	upstreamURI := opts.UpstreamURI
 	replicaConfig := opts.ReplicaConfig
 	protocol := opts.CodecConfig.Protocol
-	memory := opts.Budget
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, upstreamURI.String())
 	if err != nil {
 		log.Panic("Storage client initialization failed", zap.Error(err))
 	}
 	c := &storageReader{
 		storage:        storage,
-		memory:         memory,
 		dateSeparator:  util.GetOrZero(replicaConfig.Sink.DateSeparator),
 		fileExtension:  helper.GetFileExtension(protocol),
 		fileIndexWidth: util.GetOrZero(replicaConfig.Sink.FileIndexWidth),
@@ -405,15 +400,6 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
-	continuing := c.continuing.Load()
-	if continuing {
-		c.memory.ForceAcquire(size)
-	}
-	if !continuing {
-		if err := c.memory.Acquire(ctx, size); err != nil {
-			return nil, err
-		}
-	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
 	return &sourceInput{
 		Value: data,
@@ -422,9 +408,8 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 	}, nil
 }
 
-func (c *storageReader) ContinueReading(enabled bool) {
-	c.continuing.Store(enabled)
-}
+// ContinueReading has no effect: Read returns bounded work on every call.
+func (*storageReader) ContinueReading(bool) {}
 
 func (c *storageReader) Semantics() semantics {
 	return semantics{}

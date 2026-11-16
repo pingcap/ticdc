@@ -53,23 +53,20 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
 	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
 
-	memory := newBudget()
 	reader := newSourceReader(ctx, sourceOptions{
 		UpstreamURI:   upstreamURI,
 		ConsumerID:    consumerID,
 		ReplicaConfig: replicaConfig,
 		CodecConfig:   codecConfig,
-		Budget:        memory,
 	})
 	c := &consumer{
 		reader:    reader,
-		decoder:   newDecodeGroup(ctx, decodeOptions{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Streams: reader.Streams(), UpstreamURI: upstreamURI, Budget: memory}),
-		conductor: newConductor(memory, reader),
+		decoder:   newDecodeGroup(ctx, decodeOptions{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Streams: reader.Streams(), UpstreamURI: upstreamURI}),
+		conductor: newConductor(reader),
 		writer: newWriter(ctx, writerOptions{
 			DownstreamURI: options.downstreamURI,
 			ReplicaConfig: replicaConfig,
 			CodecConfig:   codecConfig,
-			Budget:        memory,
 		}),
 	}
 	c.conductor.OnCheckpoint(c.decoder.ReleaseSchemas)

@@ -80,7 +80,6 @@ type decodeGroup struct {
 	input       chan *decodeFuture
 	ordered     chan *decodeFuture
 	output      chan []decodedEvent
-	memory      *budget
 }
 
 // decodeOptions configures a decode group.
@@ -89,7 +88,6 @@ type decodeOptions struct {
 	ReplicaConfig *config.ReplicaConfig
 	Streams       []stream
 	UpstreamURI   *url.URL
-	Budget        *budget
 }
 
 // newDecodeGroup builds a decode group for the source streams.
@@ -97,7 +95,6 @@ func newDecodeGroup(ctx context.Context, opts decodeOptions) *decodeGroup {
 	codecConfig := opts.CodecConfig
 	replicaConfig := opts.ReplicaConfig
 	streams := opts.Streams
-	memory := opts.Budget
 	var selectors *columnselector.ColumnSelectors
 	if codecConfig.Protocol == config.ProtocolCsv {
 		var err error
@@ -115,7 +112,6 @@ func newDecodeGroup(ctx context.Context, opts decodeOptions) *decodeGroup {
 		input:       make(chan *decodeFuture, decoderQueueSize),
 		ordered:     make(chan *decodeFuture, decoderQueueSize),
 		output:      make(chan []decodedEvent, 1),
-		memory:      memory,
 	}
 	// Storage constructs a decoder for each file using that file's schema.
 	if len(streams) == 0 {
@@ -315,8 +311,6 @@ func (d *decodeGroup) addRow(ctx context.Context, future *decodeFuture, message 
 			dml.TableInfo.UpdateTS = input.File.Schema.TableVersion
 		}
 	}
-	d.memory.ForceAcquire(dml.Rows.MemoryUsage())
-	d.memory.Release(message.ApproximateSize)
 	return future.addEvent(ctx, dml)
 }
 
@@ -343,7 +337,6 @@ func (d *decodeGroup) drainCached(ctx context.Context, decoder decoder, pending 
 
 func (d *decodeGroup) decodeInput(ctx context.Context, decoder decoder, future *decodeFuture) (*common.DMLMessage, error) {
 	input := future.input
-	defer d.memory.Release(input.Bytes)
 	if input.File != nil {
 		return nil, d.decodeStorage(ctx, future)
 	}
@@ -366,10 +359,8 @@ func (d *decodeGroup) decodeInput(ctx context.Context, decoder decoder, future *
 				// Simple has one event per input. Keep its original output slot
 				// while this decoder continues with subsequent messages.
 				message = decoder.schema.PendingDMLMessage
-				d.memory.ForceAcquire(message.ApproximateSize)
 				return message, nil
 			}
-			d.memory.ForceAcquire(message.ApproximateSize)
 			if err := d.addRow(ctx, future, message); err != nil {
 				return nil, err
 			}
@@ -438,7 +429,6 @@ func (d *decodeGroup) decodeStorage(ctx context.Context, future *decodeFuture) e
 			continue
 		}
 		message := decoder.NextDMLMessage()
-		d.memory.ForceAcquire(message.ApproximateSize)
 		if err := d.addRow(ctx, future, message); err != nil {
 			return err
 		}

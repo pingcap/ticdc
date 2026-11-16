@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/util"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -35,8 +34,6 @@ type pulsarReader struct {
 	client     pulsar.Client
 	consumer   pulsar.Consumer
 	topic      string
-	memory     *budget
-	continuing atomic.Bool
 	partitions map[string]int32
 }
 
@@ -44,7 +41,6 @@ func newPulsarReader(opts sourceOptions) *pulsarReader {
 	upstreamURI := opts.UpstreamURI
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
-	memory := opts.Budget
 	topic := strings.Trim(upstreamURI.Path, "/")
 	if strings.Contains(topic, ",") {
 		log.Panic("consumer accepts one Pulsar topic", zap.String("topic", topic))
@@ -155,7 +151,6 @@ func newPulsarReader(opts sourceOptions) *pulsarReader {
 		client:     client,
 		consumer:   consumer,
 		topic:      topic,
-		memory:     memory,
 		partitions: partitions,
 	}
 	return c
@@ -189,15 +184,6 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*sourceInput, error) {
 			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 		}
 		size := int64(len(message.Key()) + len(message.Payload()))
-		continuing := c.continuing.Load()
-		if continuing {
-			c.memory.ForceAcquire(size)
-		}
-		if !continuing {
-			if err := c.memory.Acquire(ctx, size); err != nil {
-				return nil, err
-			}
-		}
 		id := message.ID()
 		batch = append(batch, &sourceInput{
 			Stream: partition,
@@ -209,7 +195,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*sourceInput, error) {
 			},
 		})
 		bytes += size
-		if len(batch) >= readBatchRows || bytes >= readBatchBytes || c.memory.Used() >= c.memory.Limit() {
+		if len(batch) >= readBatchRows || bytes >= readBatchBytes {
 			return batch, nil
 		}
 		select {
@@ -222,9 +208,8 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*sourceInput, error) {
 	}
 }
 
-func (c *pulsarReader) ContinueReading(enabled bool) {
-	c.continuing.Store(enabled)
-}
+// ContinueReading has no effect: Read returns bounded work on every call.
+func (*pulsarReader) ContinueReading(bool) {}
 
 func (c *pulsarReader) Semantics() semantics {
 	// Pulsar preserves per-partition order but DDLs can be decoded out of order.
