@@ -316,6 +316,16 @@ func TestCongestionControlHeaderValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "data too short")
 }
 
+func TestCongestionControlRejectsUntrustedCount(t *testing.T) {
+	for _, version := range []int{CongestionControlVersion1, CongestionControlVersion2} {
+		payload := make([]byte, 12)
+		binary.BigEndian.PutUint32(payload[8:12], ^uint32(0))
+		data, err := MarshalEventWithHeader(TypeCongestionControl, version, payload)
+		require.NoError(t, err)
+		require.Error(t, (&CongestionControl{}).Unmarshal(data))
+	}
+}
+
 func TestCongestionControlVersionCompatibility(t *testing.T) {
 	t.Parallel()
 

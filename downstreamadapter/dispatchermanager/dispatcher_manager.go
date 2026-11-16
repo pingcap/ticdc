@@ -688,6 +688,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			zap.String("keyspace", e.changefeedID.Keyspace()),
 			zap.String("changefeedID", e.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
+			zap.Int64("tableID", tableSpans[idx].TableID),
 			zap.Int64("startTs", newStartTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
@@ -1289,11 +1290,6 @@ func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaI
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	e.currentOperatorMap.Delete(id)
-	log.Debug("delete current working remove operator",
-		zap.String("keyspace", e.changefeedID.Keyspace()),
-		zap.String("changefeedID", e.changefeedID.Name()),
-		zap.String("dispatcherID", id.String()),
-	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)

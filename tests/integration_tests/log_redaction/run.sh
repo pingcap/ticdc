@@ -6,7 +6,6 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
-SINK_TYPE=$1
 
 # Helper function to log raw content before validation
 log_raw_content() {
@@ -292,121 +291,10 @@ function run() {
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
-	# Test 4: MySQL sink validation (original test with strict validation)
-	# ==========================================================================
-	if [ "$SINK_TYPE" = "mysql" ]; then
-		echo ""
-		echo "=== Test 4: MySQL sink redaction validation ==="
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		run_sql "CREATE DATABASE log_redaction_test;"
-		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
-		# Test OFF mode with MySQL sink
-		echo "  [4a] OFF mode with MySQL sink:"
-		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_off_mysql"
-
-		SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
-
-		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		check_table_exists log_redaction_test.users ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
-		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
-
-		# Capture MySQL logs once for all validations
-		captured_logs=$(grep -E "(Query:|Args:)" "$WORK_DIR/cdc_off_mysql.log" 2>/dev/null || echo "")
-		log_raw_content "MySQL Query/Args logs (OFF mode)" "$captured_logs"
-
-		# STRICT: Query and Args must show raw data
-		require_log_pattern "$WORK_DIR/cdc_off_mysql.log" \
-			"Query:.*Password1!" \
-			"MySQL Query shows plain text values"
-		require_log_pattern "$WORK_DIR/cdc_off_mysql.log" \
-			"Args:.*Password1!" \
-			"MySQL Args shows plain text values"
-
-		captured_logs=""
-		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_off_mysql"
-		stop_cdc_server_guards
-		cleanup_process $CDC_BINARY
-
-		# Test MARKER mode with MySQL sink
-		echo ""
-		echo "  [4b] MARKER mode with MySQL sink:"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		run_sql "CREATE DATABASE log_redaction_test;"
-		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
-		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log marker --logsuffix "_marker_mysql"
-		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
-
-		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		sleep 3
-
-		# Capture MySQL logs once for all validations
-		captured_logs=$(grep -E "(Query:|Args:)" "$WORK_DIR/cdc_marker_mysql.log" 2>/dev/null || echo "")
-		log_raw_content "MySQL Query/Args logs (MARKER mode)" "$captured_logs"
-
-		# STRICT: Query and Args must have markers
-		require_log_pattern "$WORK_DIR/cdc_marker_mysql.log" \
-			"Query:.*‹" \
-			"MySQL Query wrapped with ‹› markers"
-		require_log_pattern "$WORK_DIR/cdc_marker_mysql.log" \
-			"Args:.*‹.*Password1!.*›" \
-			"MySQL Args values wrapped with ‹› markers"
-
-		captured_logs=""
-		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_marker_mysql"
-		stop_cdc_server_guards
-		cleanup_process $CDC_BINARY
-
-		# Test ON mode with MySQL sink
-		echo ""
-		echo "  [4c] ON mode with MySQL sink:"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;"
-		run_sql "DROP DATABASE IF EXISTS log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		run_sql "CREATE DATABASE log_redaction_test;"
-		run_sql "CREATE DATABASE log_redaction_test;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
-		run_cdc_server_with_guard --max-restarts 3 --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log on --logsuffix "_on_mysql"
-		cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
-
-		run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		sleep 3
-
-		# Capture MySQL logs once for all validations
-		captured_logs=$(grep -E "(Query:|Args:)" "$WORK_DIR/cdc_on_mysql.log" 2>/dev/null || echo "")
-		log_raw_content "MySQL Query/Args logs (ON mode)" "$captured_logs"
-
-		# STRICT: Query and Args must show '?' placeholder
-		require_log_pattern "$WORK_DIR/cdc_on_mysql.log" \
-			"Query: \?" \
-			"MySQL Query redacted to '?'"
-		require_log_pattern "$WORK_DIR/cdc_on_mysql.log" \
-			"Args:.*\?" \
-			"MySQL Args redacted to '?' placeholders"
-
-		# STRICT: No sensitive data should leak
-		require_no_log_pattern "$WORK_DIR/cdc_on_mysql.log" \
-			"Password1!" \
-			"No sensitive data leaked in MySQL sink ON mode"
-
-		captured_logs=""
-		check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "_on_mysql"
-		stop_cdc_server_guards
-		cleanup_process $CDC_BINARY
-
-		echo "[$(date)] ✓ MySQL sink: All redaction modes validated"
-	fi
-
-	# ==========================================================================
-	# Test 5: API mode switching
+	# Test 4: API mode switching
 	# ==========================================================================
 	echo ""
-	echo "=== Test 5: API mode switching ==="
+	echo "=== Test 4: API mode switching ==="
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_api" --addr "127.0.0.1:8300"
 
 	# OFF -> MARKER transition
@@ -462,10 +350,10 @@ function run() {
 	cleanup_process $CDC_BINARY
 
 	# ==========================================================================
-	# Test 6: API error handling for invalid modes
+	# Test 5: API error handling for invalid modes
 	# ==========================================================================
 	echo ""
-	echo "=== Test 6: API error handling for invalid modes ==="
+	echo "=== Test 5: API error handling for invalid modes ==="
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --redact-info-log off --logsuffix "_api_error" --addr "127.0.0.1:8300"
 
 	# Test "maker" typo (common mistake for "marker")

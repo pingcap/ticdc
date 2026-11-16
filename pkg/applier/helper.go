@@ -17,13 +17,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"go.uber.org/zap"
 )
 
 func isNonEmptyUniqueOrHandleCol(col commonEvent.RedoColumnValue) bool {
@@ -133,13 +131,6 @@ func splitUpdateEvent(
 			IndexColumns: updateEvent.Row.IndexColumns,
 		},
 	}
-
-	log.Debug("split update event", zap.Uint64("startTs", updateEvent.Row.StartTs),
-		zap.Uint64("commitTs", updateEvent.Row.CommitTs),
-		zap.String("schema", updateEvent.Row.Table.Schema),
-		zap.String("table", updateEvent.Row.Table.Table),
-		zap.Any("preCols", updateEvent.PreColumns),
-		zap.Any("cols", updateEvent.Columns))
 
 	return deleteEvent, insertEvent, nil
 }

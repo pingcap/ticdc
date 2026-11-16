@@ -2045,7 +2045,7 @@ func TestLocalHeartbeatRemovedReregisterReadySendsReset(t *testing.T) {
 	msg := messaging.NewSingleTargetMessage(localServerID, messaging.EventCollectorTopic, response)
 	msg.From = localServerID
 
-	mockEventCollector.handleDispatcherHeartbeatResponse(msg)
+	mockEventCollector.handleDispatcherHeartbeatResponse(msg.From, response)
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),

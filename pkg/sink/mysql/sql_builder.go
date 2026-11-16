@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type tsPair struct {
@@ -55,50 +54,6 @@ func (d *preparedDMLs) LogWithoutValues() string {
 	logBuilder.WriteString("End")
 
 	return logBuilder.String()
-}
-
-func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
-	if log.GetLevel() != zapcore.DebugLevel {
-		return
-	}
-
-	// Calculate total count
-	totalCount := len(d.sqls)
-
-	if len(d.sqls) == 0 {
-		log.Debug("No SQL statements to log")
-		return
-	}
-
-	// Build complete log content in a single string
-	var logBuilder strings.Builder
-	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID)
-
-	// Build SQL statements and arguments section
-	for i, sql := range d.sqls {
-		var args []interface{}
-		if i < len(d.values) {
-			args = d.values[i]
-		}
-
-		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
-		fmt.Fprintf(&logBuilder, "      Args: %s,", util.RedactArgs(args))
-	}
-
-	// Build timestamp information
-	commitTsList := make([]uint64, len(events))
-	startTsList := make([]uint64, len(events))
-	for i, event := range events {
-		commitTsList[i] = event.GetCommitTs()
-		startTsList[i] = event.GetStartTs()
-	}
-
-	fmt.Fprintf(&logBuilder, "CommitTs: %v,", commitTsList)
-	fmt.Fprintf(&logBuilder, "StartTs:  %v,", startTsList)
-	logBuilder.WriteString("End")
-
-	// Output the complete log content in a single call
-	log.Debug(logBuilder.String())
 }
 
 func (d *preparedDMLs) String() string {

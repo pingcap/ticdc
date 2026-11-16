@@ -91,12 +91,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 			zap.Int64("mode", b.mode))
 		return nil
 	}
-	log.Debug("handle block status",
-		zap.String("keyspace", request.ChangefeedID.GetKeyspace()),
-		zap.String("changefeedID", request.ChangefeedID.GetName()),
-		zap.String("from", from.String()),
-		zap.Any("detail", request),
-		zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus

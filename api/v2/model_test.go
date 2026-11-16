@@ -146,7 +146,15 @@ func TestReplicaConfigConversion(t *testing.T) {
 				IncludeStartTs: util.AddressOf(true),
 			},
 			KafkaConfig: &KafkaConfig{
-				SASLOAuthCA: util.AddressOf("/etc/ssl/oauth-ca.pem"),
+				SASLOAuthCA:       util.AddressOf("/etc/ssl/oauth-ca.pem"),
+				SASLMechanism:     util.AddressOf("OAUTHBEARER"),
+				SASLOAuthProvider: util.AddressOf("AWS_MSK_IAM"),
+				AWSMSKIAM: &AWSMSKIAMConfig{
+					Region:          "us-west-2",
+					RoleARN:         "arn:aws:iam::123456789012:role/ticdc-msk",
+					RoleSessionName: "ticdc",
+					ExternalID:      "external-id",
+				},
 			},
 			DispatchRules: []*DispatchRule{
 				nil,
@@ -201,6 +209,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "hex", util.GetOrZero(internalCfg.Sink.Debezium.BinaryHandlingMode))
 	require.True(t, util.GetOrZero(internalCfg.Sink.Simple.IncludeStartTs))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, "AWS_MSK_IAM", util.GetOrZero(internalCfg.Sink.KafkaConfig.SASLOAuthProvider))
+	require.Equal(t, "us-west-2", internalCfg.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", internalCfg.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", internalCfg.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, []*config.DispatchRule{
 		{
 			Matcher:      []string{"src.orders"},
@@ -269,6 +282,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.SimpleConfig.IncludeStartTs))
 	require.True(t, util.GetOrZero(apiCfgBack.Sink.DebeziumConfig.OutputOldValue))
 	require.Equal(t, "/etc/ssl/oauth-ca.pem", util.GetOrZero(apiCfgBack.Sink.KafkaConfig.SASLOAuthCA))
+	require.Equal(t, "AWS_MSK_IAM", *apiCfgBack.Sink.KafkaConfig.SASLOAuthProvider)
+	require.Equal(t, "us-west-2", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.Region)
+	require.Equal(t, "arn:aws:iam::123456789012:role/ticdc-msk", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleARN)
+	require.Equal(t, "ticdc", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.RoleSessionName)
+	require.Equal(t, "external-id", apiCfgBack.Sink.KafkaConfig.AWSMSKIAM.ExternalID)
 	require.Equal(t, []*DispatchRule{
 		{
 			Matcher:      []string{"src.orders"},

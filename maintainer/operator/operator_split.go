@@ -113,7 +113,7 @@ func (m *SplitDispatcherOperator) OnNodeRemove(n node.ID) {
 
 	if n == m.originNode {
 		log.Info("origin node is removed",
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 		m.finished.Store(true)
 		m.removed.Store(true)
 	}
@@ -142,7 +142,7 @@ func (m *SplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableS
 		}
 		log.Info("replica set removed from origin node",
 			zap.Uint64("checkpointTs", m.checkpointTs),
-			zap.String("replicaSet", m.replicaSet.ID.String()))
+			zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 		m.finished.Store(true)
 	}
@@ -160,7 +160,7 @@ func (m *SplitDispatcherOperator) OnTaskRemoved() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("task removed", zap.String("replicaSet", m.replicaSet.ID.String()))
+	log.Info("task removed", zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.finished.Store(true)
 	m.removed.Store(true)
 }
@@ -169,7 +169,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("split dispatcher operator begin post finish", zap.String("id", m.replicaSet.ID.String()))
+	log.Info("split dispatcher operator begin post finish", zap.String("dispatcherID", m.replicaSet.ID.String()))
 
 	if m.removed.Load() {
 		m.spanController.MarkSpanAbsent(m.replicaSet)
@@ -199,7 +199,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 		}
 	} else if m.postFinish != nil && !replicasInScheduling {
 		log.Warn("skip post finish because split target nodes are not aligned with actual split result",
-			zap.String("id", m.replicaSet.ID.String()),
+			zap.String("dispatcherID", m.replicaSet.ID.String()),
 			zap.Int("targetNodeCount", len(m.splitTargetNodes)),
 			zap.Int("newReplicaCount", len(newReplicaSets)),
 			zap.String("splitSpans", formatTableSpans(m.splitSpans)))
@@ -209,8 +209,8 @@ func (m *SplitDispatcherOperator) PostFinish() {
 }
 
 func (m *SplitDispatcherOperator) String() string {
-	return fmt.Sprintf("split dispatcher operator: %s, splitSpans:%s",
-		m.replicaSet.ID, formatTableSpans(m.splitSpans))
+	return fmt.Sprintf("split dispatcher operator: %s, splitSpanCount: %d",
+		m.replicaSet.ID, len(m.splitSpans))
 }
 
 func (m *SplitDispatcherOperator) Type() string {

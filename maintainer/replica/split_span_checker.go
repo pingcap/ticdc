@@ -247,14 +247,6 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore = 0
 		} else {
 			status.trafficScore++
-			log.Debug("update traffic score",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeedID", s.changefeedID.Name()),
-				zap.Int64("group", s.groupID),
-				zap.String("span", status.ID.String()),
-				zap.Any("trafficScore", status.trafficScore),
-				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
-			)
 		}
 
 		status.lastThreeTraffic[2] = status.lastThreeTraffic[1]
@@ -267,17 +259,6 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	}
 
 	s.balanceCondition.statusUpdated = true
-
-	log.Debug("split span checker update status",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID),
-		zap.Any("replica", replica.ID),
-		zap.Any("status", status.GetStatus()),
-		zap.Int("status.regionCount", status.regionCount),
-		zap.Int("status.trafficScore", status.trafficScore),
-		zap.Any("status.lastThreeTraffic", status.lastThreeTraffic),
-	)
 }
 
 type SplitSpanCheckResult struct {
@@ -316,11 +297,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		}
 		s.splitSpanCheckDuration.Observe(time.Since(start).Seconds())
 	}()
-	log.Debug("SplitSpanChecker try to check",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID),
-		zap.Any("batch", batch))
 	results := make([]SplitSpanCheckResult, 0)
 
 	if !s.checkAllTaskAvailableLocked() {
@@ -408,16 +384,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	upperSpanCount = max(upperSpanCount, len(aliveNodeIDs)) * 2
 
 	if upperSpanCount >= len(s.allTasks) {
-		log.Debug("the span count is proper, so we don't need merge spans",
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeedID", s.changefeedID.Name()),
-			zap.Int64("groupID", s.groupID),
-			zap.Float64("totalTraffic", lastThreeTrafficSum[0]),
-			zap.Int("totalRegionCount", totalRegionCount),
-			zap.Int("regionThreshold", s.regionThreshold),
-			zap.Float32("writeThreshold", float32(s.writeThreshold)),
-			zap.Int("spanCount", len(s.allTasks)),
-		)
 		return results
 	}
 
@@ -443,14 +409,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 // 3. Priority 3: Pure traffic balance moves
 // Returns multiple move plans sorted by priority and effectiveness
 func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficNodeID node.ID, sortedSpanByStartKey []*splitSpanStatus, lastThreeTrafficPerNode map[node.ID][]float64, taskMap map[node.ID][]*splitSpanStatus) []SplitSpanCheckResult {
-	log.Debug("chooseMoveSpans try to choose move spans",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID),
-		zap.Any("minTrafficNodeID", minTrafficNodeID),
-		zap.Any("maxTrafficNodeID", maxTrafficNodeID),
-		zap.Int("totalSpans", len(sortedSpanByStartKey)))
-
 	results := make([]SplitSpanCheckResult, 0)
 
 	// If no any span in minTrafficNodeID, we random select one span from maxTrafficNodeID for it.
@@ -477,7 +435,8 @@ func (s *SplitSpanChecker) chooseMoveSpans(minTrafficNodeID node.ID, maxTrafficN
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Any("groupID", s.groupID),
 			zap.Int("moveCount", len(result)),
-			zap.Any("moves", result))
+			zap.Stringer("minTrafficNodeID", minTrafficNodeID),
+			zap.Stringer("maxTrafficNodeID", maxTrafficNodeID))
 		return results
 	}
 
@@ -778,10 +737,6 @@ func (s *SplitSpanChecker) isTrafficBalanceMaintained(
 // 1. the spans are continuous and in the same node
 // 2. the total region count and traffic are less then threshold/4*3 and threshold/4*3
 func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckResult, []*splitSpanStatus) {
-	log.Debug("chooseMergedSpans try to choose merge spans",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID))
 	results := make([]SplitSpanCheckResult, 0)
 	mergeBatchSize := min(batchSize, maxMergeOperatorsPerGroup)
 
@@ -812,7 +767,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("group", s.groupID),
-			zap.Any("mergeSpans", mergeSpans),
+			zap.Int("mergeSpanCount", len(mergeSpans)),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
 		results = append(results, SplitSpanCheckResult{
@@ -892,13 +847,6 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 // only when all spans' total region count and traffic are less then threshold/2, we can merge them together
 // consider we only support to merge the spans in the same node, we first do move, then merge
 func (s *SplitSpanChecker) checkMergeWhole(totalRegionCount int, lastThreeTrafficSum []float64, lastThreeTrafficPerNode map[node.ID][]float64) []SplitSpanCheckResult {
-	log.Debug("checkMergeWhole try to merge whole spans",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID),
-		zap.Any("totalRegionCount", totalRegionCount),
-		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum),
-		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode))
 	results := make([]SplitSpanCheckResult, 0)
 
 	// check whether satisfy the threshold
@@ -964,10 +912,6 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	lastThreeTrafficSum []float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) ([]SplitSpanCheckResult, int) {
-	log.Debug("SplitSpanChecker try to choose split spans",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID))
 	totalRegionCount := 0
 	results := make([]SplitSpanCheckResult, 0)
 	for _, status := range s.allTasks {
@@ -1002,7 +946,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 					zap.String("keyspace", s.changefeedID.Keyspace()),
 					zap.String("changefeedID", s.changefeedID.Name()),
 					zap.Int64("group", s.groupID),
-					zap.String("splitSpan", status.ID.String()),
+					zap.String("dispatcherID", status.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -1061,16 +1005,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	lastThreeTrafficPerNode map[node.ID][]float64,
 	taskMap map[node.ID][]*splitSpanStatus,
 ) (results []SplitSpanCheckResult, minTrafficNodeID node.ID, maxTrafficNodeID node.ID) {
-	log.Debug("checkBalanceTraffic try to balance traffic",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeedID", s.changefeedID.Name()),
-		zap.Any("groupID", s.groupID),
-		zap.Any("aliveNodeIDs", aliveNodeIDs),
-		zap.Any("lastThreeTrafficSum", lastThreeTrafficSum),
-		zap.Any("lastThreeTrafficPerNode", lastThreeTrafficPerNode),
-		zap.Any("balanceConditionScore", s.balanceCondition.balanceScore),
-		zap.Any("balanceConditionStatusUpdated", s.balanceCondition.statusUpdated))
-
 	nodeCount := len(aliveNodeIDs)
 
 	// check whether the traffic is balance for each nodes
@@ -1099,8 +1033,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	minTrafficNodeID = aliveNodeIDs[0]
 	maxTrafficNodeID = aliveNodeIDs[nodeCount-1]
-
-	log.Debug("traffic node info", zap.Any("minTrafficNodeID", minTrafficNodeID), zap.Any("maxTrafficNodeID", maxTrafficNodeID))
 
 	// no status updated, no need to do check balance
 	if !s.balanceCondition.statusUpdated {
@@ -1159,16 +1091,6 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 		return
 	} else {
 		s.balanceCondition.updateScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
-		log.Debug("should balance, thus update score",
-			zap.Any("minTrafficNodeID", minTrafficNodeID),
-			zap.Any("maxTrafficNodeID", maxTrafficNodeID),
-			zap.Any("balanceCauseByMinNode", balanceCauseByMinNode),
-			zap.Any("balanceCauseByMaxNode", balanceCauseByMaxNode),
-			zap.Any("balanceScore", s.balanceCondition.balanceScore),
-			zap.Any("groupID", s.groupID),
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeedID", s.changefeedID.Name()),
-		)
 		if s.balanceCondition.balanceScore < s.balanceScoreThreshold {
 			// now is unbalanced, but we want to check more times to avoid balance too frequently
 			return
@@ -1220,7 +1142,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Int64("group", s.groupID),
-			zap.Any("moveSpans", moveSpans),
+			zap.Int("moveSpanCount", len(moveSpans)),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 		)
 		results = append(results, SplitSpanCheckResult{

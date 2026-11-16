@@ -1025,9 +1025,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter, p.filterContext)
 	}
 
-	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
-		zap.Uint64("commitTs", rawEvent.CRTs),
-		zap.String("table", p.currentTxn.CurrentDMLEvent.TableInfo.TableName.String()))
 	deleteRow, insertRow, err := rawEvent.SplitUpdate()
 	if err != nil {
 		return err

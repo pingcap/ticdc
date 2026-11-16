@@ -687,6 +687,58 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "incomplete data")
 }
 
+func TestEventDecodersRejectUntrustedLengths(t *testing.T) {
+	t.Run("overflowing header payload length", func(t *testing.T) {
+		data := make([]byte, GetEventHeaderSize())
+		binary.BigEndian.PutUint32(data[0:4], eventMagic)
+		binary.BigEndian.PutUint16(data[4:6], uint16(TypeBatchDMLEvent))
+		binary.BigEndian.PutUint16(data[6:8], uint16(BatchDMLEventVersion1))
+		binary.BigEndian.PutUint64(data[8:16], ^uint64(0))
+		_, _, err := ValidateAndExtractPayload(data, TypeBatchDMLEvent)
+		require.Error(t, err)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		payload := make([]byte, 8)
+		data, err := MarshalEventWithHeader(TypeBatchDMLEvent, BatchDMLEventVersion1, payload)
+		require.NoError(t, err)
+		require.Error(t, (&BatchDMLEvent{}).Unmarshal(data))
+	})
+
+	t.Run("unbounded batch count", func(t *testing.T) {
+		payload := make([]byte, 8)
+		binary.BigEndian.PutUint64(payload, ^uint64(0))
+		data, err := MarshalEventWithHeader(TypeBatchDMLEvent, BatchDMLEventVersion1, payload)
+		require.NoError(t, err)
+		require.Error(t, (&BatchDMLEvent{}).Unmarshal(data))
+	})
+
+	t.Run("invalid nested event size", func(t *testing.T) {
+		payload := make([]byte, 16)
+		binary.BigEndian.PutUint64(payload[0:8], 1)
+		binary.BigEndian.PutUint64(payload[8:16], ^uint64(0))
+		data, err := MarshalEventWithHeader(TypeBatchDMLEvent, BatchDMLEventVersion1, payload)
+		require.NoError(t, err)
+		require.Error(t, (&BatchDMLEvent{}).Unmarshal(data))
+	})
+
+	t.Run("unbounded DML row type count", func(t *testing.T) {
+		payload := make([]byte, 80)
+		binary.BigEndian.PutUint32(payload[72:76], ^uint32(0))
+		data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload)
+		require.NoError(t, err)
+		require.Error(t, (&DMLEvent{}).Unmarshal(data))
+	})
+
+	t.Run("unbounded DML row key count", func(t *testing.T) {
+		payload := make([]byte, 80)
+		binary.BigEndian.PutUint32(payload[76:80], ^uint32(0))
+		data, err := MarshalEventWithHeader(TypeDMLEvent, DMLEventVersion1, payload)
+		require.NoError(t, err)
+		require.Error(t, (&DMLEvent{}).Unmarshal(data))
+	})
+}
+
 func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Parallel()
 

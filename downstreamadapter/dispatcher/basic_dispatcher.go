@@ -28,14 +28,12 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
@@ -310,7 +308,6 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 		filteredEvents = append(filteredEvents, filtered)
 	}
 	if len(filteredEvents) == 0 {
-		log.Debug("all events filtered")
 		// Nothing left to flush. Caller will treat this batch as non-blocking.
 		return false
 	}
@@ -592,7 +589,7 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher is removing", zap.Any("id", d.id))
+		log.Warn("dispatcher is removing", zap.Any("dispatcherID", d.id))
 		return true
 	}
 
@@ -605,13 +602,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		if log.GetLevel() == zapcore.DebugLevel {
-			log.Debug("dispatcher receive all event",
-				zap.Stringer("dispatcherID", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
-				zap.Any("event", dispatcherEvent.Event))
-		}
-
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
 			log.Warn("handle events slowly", zap.Duration("lag", lag))
@@ -714,8 +704,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				wakeCallback()
 				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
-				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("duration", cost), zap.String("ddlQuery", util.RedactValue(ddl.Query)))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
@@ -780,14 +768,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	if logger.IsDebugEnabled() {
-		log.Debug("dispatcher handle dispatcher status",
-			zap.Stringer("dispatcherID", d.id),
-			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
-			zap.Any("action", dispatcherStatus.GetAction()),
-			zap.Any("ack", dispatcherStatus.GetAck()))
-	}
-
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -866,6 +846,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			default:
 				log.Error("unsupported action type",
 					zap.Stringer("dispatcherID", d.id),
+					zap.Int("action", int(action.Action)),
 					zap.Uint64("commitTs", action.CommitTs),
 					zap.Int("action", int(action.Action)),
 					zap.Bool("isSyncPoint", action.IsSyncPoint))
@@ -1386,6 +1367,19 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
+	addTableCheckpointBlockerLen := 0
+	if d.addTableCheckpointBlocker != nil {
+		addTableCheckpointBlockerLen = d.addTableCheckpointBlocker.len()
+	}
+	log.Info("dispatcher is not ready to close",
+		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Int64("mode", d.mode),
+		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+		zap.Int("addTableCheckpointBlockerLen", addTableCheckpointBlockerLen),
+		zap.Int("tableProgressLen", d.tableProgress.Len()),
+		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false
 }
 

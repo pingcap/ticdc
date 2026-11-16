@@ -107,6 +107,12 @@ func (m *regionCountSplitter) split(
 	for {
 		startKey := regions[start].StartKey()
 		endKey := regions[end-1].EndKey()
+		newSpan := &heartbeatpb.TableSpan{
+			TableID:    span.TableID,
+			StartKey:   startKey,
+			EndKey:     endKey,
+			KeyspaceID: m.keyspaceID,
+		}
 		if len(spans) > 0 &&
 			bytes.Compare(spans[len(spans)-1].EndKey, startKey) > 0 {
 			log.Warn("schedulerv3: list region out of order detected",
@@ -118,13 +124,7 @@ func (m *regionCountSplitter) split(
 				zap.String("endKey", util.RedactKey(endKey)))
 			return []*heartbeatpb.TableSpan{span}
 		}
-		spans = append(spans, &heartbeatpb.TableSpan{
-			TableID:    span.TableID,
-			StartKey:   startKey,
-			EndKey:     endKey,
-			KeyspaceID: m.keyspaceID,
-		},
-		)
+		spans = append(spans, newSpan)
 
 		if end == len(regions) {
 			break

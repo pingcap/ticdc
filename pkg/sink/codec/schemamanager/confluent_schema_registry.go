@@ -198,10 +198,6 @@ func (m *confluentSchemaManager) Register(
 		)
 	}
 
-	log.Info("Registered schema successfully",
-		zap.String("schemaName", schemaName),
-		zap.Int("schemaID", jsonResp.SchemaID))
-
 	id.confluentSchemaID = jsonResp.SchemaID
 	return id, nil
 }
@@ -292,14 +288,9 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	schemaVersion uint64,
 	schemaDefinition string,
 ) ([]byte, error) {
-	entry, cached, err := m.cache.getOrCreate(
+	entry, _, err := m.cache.getOrCreate(
 		schemaSubject, schemaIdentity, schemaVersion,
 		func() (*schemaCacheEntry, error) {
-			log.Info("Schema lookup cache miss",
-				zap.String("key", schemaSubject),
-				zap.String("schemaIdentity", schemaIdentity),
-				zap.Uint64("schemaVersion", schemaVersion))
-
 			id, err := m.Register(ctx, schemaSubject, schemaDefinition)
 			if err != nil {
 				log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
@@ -321,19 +312,6 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	if cached {
-		log.Debug("Avro schema GetCachedOrRegister cache hit",
-			zap.String("key", schemaSubject),
-			zap.String("schemaIdentity", schemaIdentity),
-			zap.Uint64("schemaVersion", schemaVersion),
-			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
-	} else {
-		log.Info("Avro schema GetCachedOrRegister successful with cache miss",
-			zap.Uint64("schemaVersion", entry.schemaVersion),
-			zap.Int("schemaID", entry.schemaID.confluentSchemaID),
-			zap.String("schema", entry.schemaDefinition))
 	}
 
 	return entry.header, nil

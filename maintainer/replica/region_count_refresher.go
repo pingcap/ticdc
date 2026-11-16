@@ -60,7 +60,6 @@ func (r *RegionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 			zap.String("keyspace", r.changefeedID.Keyspace()),
 			zap.String("changefeedID", r.changefeedID.Name()),
 			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
 	}
 	r.counts.Store(id, len(regions))
@@ -114,7 +113,6 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 				zap.String("keyspace", r.changefeedID.Keyspace()),
 				zap.String("changefeedID", r.changefeedID.Name()),
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return true
 		}

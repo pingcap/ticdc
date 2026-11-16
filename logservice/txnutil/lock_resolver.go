@@ -95,8 +95,8 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			}
 			sampleLocks := make([]string, 0, len(locks))
 			for _, lock := range locks {
-				sampleLocks = append(sampleLocks, fmt.Sprintf("key: %s, txnStartTs: %d",
-					util.RedactKey(lock.Key), lock.TxnID))
+				sampleLocks = append(sampleLocks, fmt.Sprintf("key: %s, primary: %s, txnID: %d, ttl: %d",
+					util.RedactKey(lock.Key), util.RedactKey(lock.Primary), lock.TxnID, lock.TTL))
 			}
 			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),

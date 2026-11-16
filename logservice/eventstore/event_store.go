@@ -731,6 +731,10 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.config.bdrMode,
 		logpuller.ScanPriorityLow,
 	)
+	log.Info("new subscription created",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("startTs", startTs),
+		zap.Uint64("subscriptionID", uint64(subStat.subID)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(subStat.subID),
@@ -1025,6 +1029,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, request ScanR
 	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
+		dispatcherID:      dispatcherID,
 		tableSpan:         stat.tableSpan,
 		needCheckSpan:     needCheckSpan,
 		innerIter:         iter,
@@ -1334,6 +1339,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
 							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
@@ -1345,7 +1351,6 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
 						LastAdvanceTime:    lastAdvanceTime.String(),
 						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-						TableID:            subStat.tableSpan.TableID,
 					}
 					slowestInitialized.AddOrUpdate(entry)
 					if slowestInitialized.Len() > logEntryLimit {
@@ -1599,7 +1604,8 @@ func encodeDeferredEventKey(
 }
 
 type eventStoreIter struct {
-	tableSpan *heartbeatpb.TableSpan
+	dispatcherID common.DispatcherID
+	tableSpan    *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
 	needCheckSpan bool

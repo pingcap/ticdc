@@ -16,6 +16,8 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -112,14 +114,14 @@ func ValidateAndExtractPayload(data []byte, expectedType int) (payload []byte, v
 
 	// 3. Validate total data length
 	headerSize := GetEventHeaderSize()
-	expectedLen := uint64(headerSize) + payloadLen
-	if uint64(len(data)) < expectedLen {
-		return nil, 0, fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
-			expectedLen, headerSize, payloadLen, len(data))
+	availablePayloadLen := uint64(len(data) - headerSize)
+	if payloadLen > availablePayloadLen {
+		return nil, 0, errors.ErrDecodeFailed.FastGenByArgs(fmt.Sprintf(
+			"incomplete data: expected %d payload bytes, got %d", payloadLen, availablePayloadLen))
 	}
 
 	// 4. Extract payload
-	payload = data[headerSize:expectedLen]
+	payload = data[headerSize : headerSize+int(payloadLen)]
 
 	return payload, ver, nil
 }

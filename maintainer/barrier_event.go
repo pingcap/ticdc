@@ -130,7 +130,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	log.Info("new block event is created",
 		zap.String("keyspace", cfID.Keyspace()),
 		zap.String("changefeedID", cfID.Name()),
-		zap.String("dispatcher", dispatcherID.String()),
+		zap.String("dispatcherID", dispatcherID.String()),
 		zap.Uint64("blockTs", event.commitTs),
 		zap.Bool("syncPoint", event.isSyncPoint),
 		zap.Bool("needSchedule", event.needSchedule),
@@ -605,7 +605,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 						zap.Uint64("commitTs", be.commitTs),
 						zap.Int64("tableId", tableId),
 						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-						zap.String("dispatcher", replication.ID.String()),
+						zap.String("dispatcherID", replication.ID.String()),
 						zap.Int64("mode", be.mode),
 					)
 					return
@@ -626,7 +626,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Int64("schemaID", schemaID),
 					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-					zap.String("dispatcher", replication.ID.String()),
+					zap.String("dispatcherID", replication.ID.String()),
 					zap.Int64("mode", be.mode),
 				)
 				return
@@ -644,7 +644,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					zap.String("changefeedID", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-					zap.String("dispatcher", replication.ID.String()),
+					zap.String("dispatcherID", replication.ID.String()),
 					zap.Int64("mode", be.mode),
 				)
 				return

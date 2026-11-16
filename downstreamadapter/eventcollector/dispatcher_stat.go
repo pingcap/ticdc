@@ -171,24 +171,12 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
-	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		if debugEnabled {
-			log.Debug("check event sequence",
-				zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
-				zap.String("changefeedID", d.target.GetChangefeedID().Name()),
-				zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Uint64("receivedSeq", event.GetSeq()),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()))
-		}
-
 		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
 
@@ -215,25 +203,16 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			if debugEnabled {
-				log.Debug("check batch DML event sequence",
-					zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
-					zap.String("changefeedID", d.target.GetChangefeedID().Name()),
-					zap.Uint64("commitTs", e.CommitTs),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Uint64("receivedSeq", e.Seq),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()))
-			}
-
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
-					zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
-					zap.String("changefeedID", d.target.GetChangefeedID().Name()),
-					zap.Uint64("commitTs", e.CommitTs),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcherID", d.getDispatcherID()),
+					zap.Stringer("eventServiceID", event.From),
+					zap.Uint64("eventEpoch", e.Epoch),
+					zap.Uint64("dispatcherEpoch", state.epoch),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+					zap.Uint64("lastEventSeq", expectedSeq-1),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 					zap.Uint64("receivedSeq", e.Seq),
 					zap.Uint64("expectedSeq", expectedSeq))
@@ -267,7 +246,7 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 			zap.String("keyspace", d.target.GetChangefeedID().Keyspace()),
 			zap.String("changefeedID", d.target.GetChangefeedID().Name()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
 			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false

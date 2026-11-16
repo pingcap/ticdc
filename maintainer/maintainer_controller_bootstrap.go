@@ -254,11 +254,15 @@ func (c *Controller) buildWorkingTaskMap(
 	spanController := c.getSpanController(mode)
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
-			if spanInfo == nil || spanInfo.ID == nil || spanInfo.Span == nil || spanInfo.Mode != mode {
+			if !validBootstrapSpanInfo(spanInfo, tableSplitMap, mode, c.GetKeyspaceID()) {
+				log.Warn("ignore invalid bootstrap span",
+					zap.Stringer("changefeed", c.changefeedID),
+					zap.Stringer("nodeID", node),
+					zap.Int64("mode", mode))
 				continue
 			}
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
-			if dispatcherID.IsZero() || spanController.IsDDLDispatcher(dispatcherID) {
+			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
 			if _, added := c.bootstrapAddedTables[mode][spanInfo.Span.TableID]; added &&
@@ -273,6 +277,34 @@ func (c *Controller) buildWorkingTaskMap(
 		}
 	}
 	return workingTaskMap
+}
+
+func validBootstrapSpanInfo(
+	spanInfo *heartbeatpb.BootstrapTableSpan,
+	tableSplitMap map[int64]bool,
+	mode int64,
+	keyspaceID uint32,
+) bool {
+	if spanInfo == nil || spanInfo.ID == nil || spanInfo.Span == nil ||
+		spanInfo.Mode != mode || spanInfo.CheckpointTs == 0 {
+		return false
+	}
+	if common.NewDispatcherIDFromPB(spanInfo.ID).IsZero() {
+		return false
+	}
+	span := spanInfo.Span
+	if span.KeyspaceID != keyspaceID {
+		return false
+	}
+	if _, ok := tableSplitMap[span.TableID]; !ok {
+		return false
+	}
+	if bytes.Compare(span.StartKey, span.EndKey) >= 0 {
+		return false
+	}
+	totalSpan := common.TableIDToComparableSpan(keyspaceID, span.TableID)
+	return common.StartCompare(totalSpan.StartKey, span.StartKey) <= 0 &&
+		common.EndCompare(span.EndKey, totalSpan.EndKey) <= 0
 }
 
 func (c *Controller) processTablesAndBuildSchemaInfo(
@@ -864,9 +896,7 @@ func (c *Controller) removeUnexpectedBootstrapOverlaps(
 					zap.String("changefeedID", c.changefeedID.Name()),
 					zap.Int64("tableID", tableID),
 					zap.String("keptDispatcherID", existing.ID.String()),
-					zap.String("removedDispatcherID", candidate.ID.String()),
-					zap.String("keptSpan", common.FormatTableSpan(existing.Span)),
-					zap.String("removedSpan", common.FormatTableSpan(candidate.Span)),
+					zap.String("dispatcherID", candidate.ID.String()),
 					zap.Int64("mode", mode))
 				c.addBootstrapCleanupOperator(candidate)
 				rejected = true
@@ -1354,7 +1384,6 @@ func (c *Controller) handleCurrentWorkingAdd(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1407,7 +1436,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1436,7 +1464,6 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.String("dispatcher", op.ID().String()),
 				zap.String("originOperatorType", req.OperatorType.String()),
 				zap.Any("operator", op),
-				zap.Any("replicaSet", replicaSet),
 			)
 			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
@@ -1619,7 +1646,7 @@ func (c *Controller) restoreCurrentMergeOperators(
 					zap.String("nodeID", nodeID.String()),
 					zap.String("dispatcher", conflictingDispatcherID.String()),
 					zap.String("operatorType", conflictingOperatorType),
-					zap.String("mergedDispatcher", mergedDispatcherID.String()),
+					zap.String("mergedDispatcherID", mergedDispatcherID.String()),
 					zap.Int64("mode", mergeReq.Mode))
 				c.reconcileUnrestorableBootstrapMerge(
 					mergedReplicaSet,

@@ -527,11 +527,6 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 		case <-ticker.C:
 			newTs := c.changefeedDB.GetLogCoordinatorResolvedTsByName(changefeedDisplayName)
 			if newTs != oldTs {
-				log.Debug("received log coordinator resolved ts",
-					zap.String("keyspace", changefeedDisplayName.Keyspace),
-					zap.String("changefeedID", changefeedDisplayName.Name),
-					zap.Uint64("oldTs", oldTs),
-					zap.Uint64("newTs", newTs))
 				return
 			}
 		case <-ctx.Done():
