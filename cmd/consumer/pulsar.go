@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package source
+package main
 
 import (
 	"cmp"
@@ -23,7 +23,6 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pulsarutil "github.com/pingcap/ticdc/pkg/sink/pulsar"
@@ -36,12 +35,12 @@ type pulsarReader struct {
 	client     pulsar.Client
 	consumer   pulsar.Consumer
 	topic      string
-	memory     *budget.Budget
+	memory     *budget
 	continuing atomic.Bool
 	partitions map[string]int32
 }
 
-func newPulsarReader(opts Options) *pulsarReader {
+func newPulsarReader(opts sourceOptions) *pulsarReader {
 	upstreamURI := opts.UpstreamURI
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
@@ -163,10 +162,10 @@ func newPulsarReader(opts Options) *pulsarReader {
 	return c
 }
 
-func (c *pulsarReader) Streams() []Stream {
-	streams := make([]Stream, 0, len(c.partitions))
+func (c *pulsarReader) Streams() []stream {
+	streams := make([]stream, 0, len(c.partitions))
 	for _, partition := range c.partitions {
-		streams = append(streams, Stream{
+		streams = append(streams, stream{
 			ID:    partition,
 			Topic: c.topic,
 		})
@@ -174,7 +173,7 @@ func (c *pulsarReader) Streams() []Stream {
 	return streams
 }
 
-func (c *pulsarReader) Read(ctx context.Context) ([]*Input, error) {
+func (c *pulsarReader) Read(ctx context.Context) ([]*sourceInput, error) {
 	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
@@ -182,7 +181,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*Input, error) {
 	case message = <-c.consumer.Chan():
 	}
 	var (
-		batch []*Input
+		batch []*sourceInput
 		bytes int64
 	)
 	for {
@@ -201,7 +200,7 @@ func (c *pulsarReader) Read(ctx context.Context) ([]*Input, error) {
 			}
 		}
 		id := message.ID()
-		batch = append(batch, &Input{
+		batch = append(batch, &sourceInput{
 			Stream: partition,
 			Key:    []byte(message.Key()),
 			Value:  message.Payload(),
@@ -228,12 +227,12 @@ func (c *pulsarReader) ContinueReading(enabled bool) {
 	c.continuing.Store(enabled)
 }
 
-func (c *pulsarReader) Semantics() Semantics {
+func (c *pulsarReader) Semantics() semantics {
 	// Pulsar preserves per-partition order but DDLs can be decoded out of order.
-	return Semantics{DDLsCanReorder: true}
+	return semantics{DDLsCanReorder: true}
 }
 
-func (c *pulsarReader) Advance(Progress) bool {
+func (c *pulsarReader) Advance(sourceProgress) bool {
 	// Pulsar uses global watermarks and has no selective reading boundary.
 	return true
 }

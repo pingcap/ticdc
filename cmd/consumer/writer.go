@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package writer owns sink delivery: admission, batching, merging,
+// The writer stage owns sink delivery: admission, batching, merging,
 // de-duplication, checkpoints, and conductor memory release.
-package writer
+package main
 
 import (
 	"context"
@@ -25,8 +25,6 @@ import (
 	"slices"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
-	"github.com/pingcap/ticdc/cmd/consumer/ddl"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -46,16 +44,16 @@ const (
 	maxInFlightBytes  = 32 << 20
 )
 
-// Options configures a Writer.
-type Options struct {
+// writerOptions configures a writer.
+type writerOptions struct {
 	DownstreamURI string
 	ReplicaConfig *config.ReplicaConfig
 	CodecConfig   *codecCommon.Config
-	Budget        *budget.Budget
+	Budget        *budget
 }
 
-// New creates a Writer targeting the configured downstream sink.
-func New(ctx context.Context, opts Options) *Writer {
+// newWriter creates a writer targeting the configured downstream sink.
+func newWriter(ctx context.Context, opts writerOptions) *writer {
 	changefeedID := common.NewChangeFeedIDWithName("consumer", common.DefaultKeyspaceName)
 	target, err := sink.New(ctx, &config.ChangefeedConfig{
 		ChangefeedID:           changefeedID,
@@ -67,7 +65,7 @@ func New(ctx context.Context, opts Options) *Writer {
 	if err != nil {
 		log.Panic("consumer downstream sink initialization failed", zap.Error(err))
 	}
-	return &Writer{
+	return &writer{
 		target:    target,
 		memory:    opts.Budget,
 		merger:    newRowMerger(opts.CodecConfig, opts.Budget),
@@ -77,7 +75,7 @@ func New(ctx context.Context, opts Options) *Writer {
 }
 
 // Start runs the downstream sink until ctx is cancelled.
-func (w *Writer) Start(ctx context.Context) error {
+func (w *writer) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		err := w.target.Run(ctx)
@@ -97,18 +95,18 @@ func (w *Writer) Start(ctx context.Context) error {
 	return g.Wait()
 }
 
-// Writer owns the downstream sink, admission, batching and checkpoint
+// writer owns the downstream sink, admission, batching and checkpoint
 // bookkeeping.
-type Writer struct {
+type writer struct {
 	target            sink.Sink
-	memory            *budget.Budget
+	memory            *budget
 	merger            rowMerger
 	completed         chan struct{}
 	pendingDML        []*dmlWrite
 	pendingDDL        []*ddlWrite
 	inFlight          []*writeBatch
 	mutations         map[mutationKey]*writeBatch // nil batches mark durable mutations awaiting checkpoint advancement.
-	ddlWrites         map[ddl.Key]bool
+	ddlWrites         map[ddlKey]bool
 	checkpoint        uint64
 	tableCheckpoints  map[int64]uint64 // Inclusive DML checkpoints ahead of the global checkpoint.
 	unsubmitted       uint64
@@ -143,7 +141,7 @@ type dmlWrite struct {
 	dml        *event.DMLEvent
 	bytes      int64
 	sequential bool
-	memory     *budget.Budget
+	memory     *budget
 }
 
 func (r *dmlWrite) release() {
@@ -157,7 +155,7 @@ type ddlWrite struct {
 
 // AddDML queues one decoded row when the in-flight limits and the per-table
 // ordering rules allow it. The caller keeps ownership when it returns false.
-func (w *Writer) AddDML(dml *event.DMLEvent) bool {
+func (w *writer) AddDML(dml *event.DMLEvent) bool {
 	bytes := dml.Rows.MemoryUsage()
 	if w.inFlightEvents != 0 && (w.inFlightEvents+1 > maxInFlightEvents || w.inFlightBytes+bytes > maxInFlightBytes) {
 		return false
@@ -182,14 +180,14 @@ func (w *Writer) AddDML(dml *event.DMLEvent) bool {
 
 // AddDDL queues a block event. release is called once the event is written or
 // proven unnecessary.
-func (w *Writer) AddDDL(block *event.DDLEvent, release func()) {
+func (w *writer) AddDDL(block *event.DDLEvent, release func()) {
 	w.pendingDDL = append(w.pendingDDL, &ddlWrite{ddl: block, release: release})
 	w.progressChanged = true
 }
 
 // lastInFlight returns the newest in-flight write for tableID. Admission only
 // needs that write, so scanning avoids building a per-table map for every row.
-func (w *Writer) lastInFlight(tableID int64) *dmlWrite {
+func (w *writer) lastInFlight(tableID int64) *dmlWrite {
 	for _, batch := range slices.Backward(w.inFlight) {
 		for _, item := range slices.Backward(batch.items) {
 			if item.dml.PhysicalTableID == tableID {
@@ -201,7 +199,7 @@ func (w *Writer) lastInFlight(tableID int64) *dmlWrite {
 }
 
 // lastPending returns the newest pending write for tableID.
-func (w *Writer) lastPending(tableID int64) *dmlWrite {
+func (w *writer) lastPending(tableID int64) *dmlWrite {
 	for _, item := range slices.Backward(w.pendingDML) {
 		if item.dml.PhysicalTableID == tableID {
 			return item
@@ -210,16 +208,16 @@ func (w *Writer) lastPending(tableID int64) *dmlWrite {
 	return nil
 }
 
-// Progress reports the input watermark and the earliest decoded work that has
+// writerProgress reports the input watermark and the earliest decoded work that has
 // not reached the writer yet.
-type Progress struct {
+type writerProgress struct {
 	Watermark     uint64
 	PendingTables map[int64]uint64
 	PendingDDL    uint64
 }
 
 // Advance records scheduler progress used to compute safe checkpoints.
-func (w *Writer) Advance(progress Progress) {
+func (w *writer) Advance(progress writerProgress) {
 	w.watermark = max(w.watermark, progress.Watermark)
 	w.resetUnsubmitted()
 	for table, ts := range progress.PendingTables {
@@ -237,35 +235,35 @@ func (w *Writer) Advance(progress Progress) {
 }
 
 // Checkpoint returns the last durable checkpoint.
-func (w *Writer) Checkpoint() uint64 {
+func (w *writer) Checkpoint() uint64 {
 	return w.checkpoint
 }
 
 // Done signals that a batch has finished flushing.
-func (w *Writer) Done() <-chan struct{} {
+func (w *writer) Done() <-chan struct{} {
 	return w.completed
 }
 
 // Idle reports that no decoded work is waiting for the sink.
-func (w *Writer) Idle() bool {
+func (w *writer) Idle() bool {
 	return len(w.pendingDML) == 0 && len(w.pendingDDL) == 0 && len(w.inFlight) == 0
 }
 
 // HasPendingDML reports whether decoded rows are still waiting for the sink.
-func (w *Writer) HasPendingDML() bool {
+func (w *writer) HasPendingDML() bool {
 	return len(w.pendingDML) != 0
 }
 
-func (w *Writer) pendingDMLBlocks(block *event.DDLEvent) bool {
+func (w *writer) pendingDMLBlocks(block *event.DDLEvent) bool {
 	for _, item := range w.pendingDML {
-		if item.dml.CommitTs <= block.GetCommitTs() && ddl.BlocksTable(block, item.dml) {
+		if item.dml.CommitTs <= block.GetCommitTs() && blocksTable(block, item.dml) {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *Writer) inFlightBlocks(block *event.DDLEvent) bool {
+func (w *writer) inFlightBlocks(block *event.DDLEvent) bool {
 	for _, batch := range w.inFlight {
 		if batchBlocks(batch, block) {
 			return true
@@ -276,14 +274,14 @@ func (w *Writer) inFlightBlocks(block *event.DDLEvent) bool {
 
 func batchBlocks(batch *writeBatch, block *event.DDLEvent) bool {
 	for _, item := range batch.items {
-		if ddl.BlocksTable(block, item.dml) {
+		if blocksTable(block, item.dml) {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *Writer) writeDDL(ctx context.Context, result *ddlWrite) error {
+func (w *writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -299,7 +297,7 @@ func (w *Writer) writeDDL(ctx context.Context, result *ddlWrite) error {
 	return nil
 }
 
-func (w *Writer) flushDDL(ctx context.Context) error {
+func (w *writer) flushDDL(ctx context.Context) error {
 	for len(w.pendingDDL) != 0 {
 		result := w.pendingDDL[0]
 		block := result.ddl
@@ -308,7 +306,7 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 		// The global checkpoint covers rows, not DDL visibility: a schema file
 		// or Kafka DDL can become visible after progress has passed it, so only
 		// the in-process write record can prove it was applied.
-		key := ddl.KeyOf(block)
+		key := ddlKeyOf(block)
 		if w.ddlWrites[key] {
 			if result.release != nil {
 				result.release()
@@ -325,7 +323,7 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 		w.pendingDDL = w.pendingDDL[1:]
 		w.progressChanged = true
 		if w.ddlWrites == nil {
-			w.ddlWrites = make(map[ddl.Key]bool)
+			w.ddlWrites = make(map[ddlKey]bool)
 		}
 		w.ddlWrites[key] = true
 		if err := w.writeDDL(ctx, result); err != nil {
@@ -339,7 +337,7 @@ func (w *Writer) flushDDL(ctx context.Context) error {
 	return nil
 }
 
-func (w *Writer) mergePendingDML() {
+func (w *writer) mergePendingDML() {
 	if len(w.pendingDML) == 0 || w.pendingPrepared {
 		return
 	}
@@ -351,7 +349,7 @@ func (w *Writer) mergePendingDML() {
 	w.pendingPrepared = true
 }
 
-func (w *Writer) Flush(ctx context.Context) error {
+func (w *writer) Flush(ctx context.Context) error {
 	w.finishBatches()
 	w.mergePendingDML()
 	// Retire replayed DDLs before they can fence later rows of the table.
@@ -384,7 +382,7 @@ func (w *Writer) Flush(ctx context.Context) error {
 	return w.flushDDL(ctx)
 }
 
-func (w *Writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool, tables map[int64]*dmlWrite) (*writeBatch, int) {
+func (w *writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool, tables map[int64]*dmlWrite) (*writeBatch, int) {
 	clear(active)
 	clear(blocked)
 	clear(tables)
@@ -428,9 +426,9 @@ func (w *Writer) selectBatch(active map[int64]*dmlWrite, blocked map[int64]bool,
 	}, end
 }
 
-func (w *Writer) canWrite(dml *event.DMLEvent, sequential bool, earlier, previous *dmlWrite) bool {
+func (w *writer) canWrite(dml *event.DMLEvent, sequential bool, earlier, previous *dmlWrite) bool {
 	for _, control := range w.pendingDDL {
-		if dml.CommitTs > control.ddl.GetCommitTs() && ddl.BlocksTable(control.ddl, dml) {
+		if dml.CommitTs > control.ddl.GetCommitTs() && blocksTable(control.ddl, dml) {
 			return false
 		}
 	}
@@ -444,7 +442,7 @@ func (w *Writer) canWrite(dml *event.DMLEvent, sequential bool, earlier, previou
 	return true
 }
 
-func (w *Writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
+func (w *writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 	for len(w.inFlight) != 0 && (w.inFlightEvents+len(batch.items) > maxInFlightEvents || w.inFlightBytes+batch.bytes > maxInFlightBytes) {
 		if err := w.waitBatch(ctx, w.inFlight[0]); err != nil {
 			return err
@@ -478,7 +476,7 @@ func (w *Writer) prepareBatch(ctx context.Context, batch *writeBatch) error {
 	return nil
 }
 
-func (w *Writer) submitBatch(ctx context.Context, batch *writeBatch, end int) error {
+func (w *writer) submitBatch(ctx context.Context, batch *writeBatch, end int) error {
 	batch.finished = make([]atomic.Bool, len(batch.events))
 	w.inFlight = append(w.inFlight, batch)
 	w.inFlightBytes += batch.bytes
@@ -499,7 +497,7 @@ func (w *Writer) submitBatch(ctx context.Context, batch *writeBatch, end int) er
 	return nil
 }
 
-func (w *Writer) completeEvent(batch *writeBatch, index int) {
+func (w *writer) completeEvent(batch *writeBatch, index int) {
 	if !batch.finished[index].CAS(false, true) {
 		return
 	}
@@ -512,7 +510,7 @@ func (w *Writer) completeEvent(batch *writeBatch, index int) {
 	}
 }
 
-func (w *Writer) removeDML(items []*dmlWrite, end int) {
+func (w *writer) removeDML(items []*dmlWrite, end int) {
 	if end == len(items) {
 		// The common case consumes a prefix without moving the backlog.
 		clear(w.pendingDML[:end])
@@ -538,7 +536,7 @@ func sameTableSchema(a, b *common.TableInfo) bool {
 		reflect.DeepEqual(a.GetColumns(), b.GetColumns()) && reflect.DeepEqual(a.GetIndices(), b.GetIndices()))
 }
 
-func (w *Writer) waitBatch(ctx context.Context, batch *writeBatch) error {
+func (w *writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -548,7 +546,7 @@ func (w *Writer) waitBatch(ctx context.Context, batch *writeBatch) error {
 	}
 }
 
-func (w *Writer) finishBatches() {
+func (w *writer) finishBatches() {
 	remaining := w.inFlight[:0]
 	for _, batch := range w.inFlight {
 		select {
@@ -574,12 +572,12 @@ func (w *Writer) finishBatches() {
 	w.advanceCheckpoint()
 }
 
-func (w *Writer) resetUnsubmitted() {
+func (w *writer) resetUnsubmitted() {
 	w.unsubmitted, w.hasUnsubmitted = math.MaxUint64, false
 	clear(w.unsubmittedTables)
 }
 
-func (w *Writer) trackUnsubmitted(ts uint64) {
+func (w *writer) trackUnsubmitted(ts uint64) {
 	w.unsubmitted, w.hasUnsubmitted = min(w.unsubmitted, ts), true
 }
 
@@ -592,7 +590,7 @@ func trackUnfinishedTable(tables map[int64]uint64, dml *event.DMLEvent) {
 	}
 }
 
-func (w *Writer) advanceCheckpoint() {
+func (w *writer) advanceCheckpoint() {
 	if !w.progressChanged {
 		return
 	}
@@ -670,7 +668,7 @@ func (w *Writer) advanceCheckpoint() {
 	}
 }
 
-func (w *Writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
+func (w *writer) filterRows(ctx context.Context, dml *event.DMLEvent, batch *writeBatch) (*event.DMLEvent, error) {
 	// The global checkpoint can pass a row that is still in another Kafka
 	// partition or storage table file. Only the table checkpoint proves that
 	// this table's rows through that timestamp were already written.

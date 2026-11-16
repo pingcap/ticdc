@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/source"
 	cmdutil "github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -44,7 +43,7 @@ func parseRequiredURI(rawURI string) *url.URL {
 }
 
 func logConsumerConfig(
-	sourceType source.Type,
+	sourceType sourceType,
 	consumerID string,
 	upstreamURI *url.URL,
 	downstreamURI string,
@@ -67,14 +66,14 @@ func logConsumerConfig(
 			zap.String("schemaRegistry", util.MaskSensitiveDataInURI(codecConfig.AvroConfluentSchemaRegistry)))
 	}
 	switch sourceType {
-	case source.Kafka:
+	case sourceKafka:
 		fields = append(fields,
 			zap.String("topic", strings.Trim(upstreamURI.Path, "/")),
 			zap.Int("maxMessageBytes", codecConfig.MaxMessageBytes),
 			zap.Int("maxBatchSize", codecConfig.MaxBatchSize))
-	case source.Pulsar:
+	case sourcePulsar:
 		fields = append(fields, zap.String("topic", strings.Trim(upstreamURI.Path, "/")))
-	case source.Storage:
+	case sourceStorage:
 		fields = append(fields,
 			zap.Int("fileIndexWidth", util.GetOrZero(replicaConfig.Sink.FileIndexWidth)),
 			zap.Any("dateSeparator", util.GetOrZero(replicaConfig.Sink.DateSeparator)))

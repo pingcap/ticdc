@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package writer
+package main
 
 import (
 	"cmp"
 	"slices"
 
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -45,7 +44,7 @@ func (noopMerger) sequential() bool {
 }
 
 type csvMerger struct {
-	memory *budget.Budget
+	memory *budget
 	sort   bool
 }
 
@@ -141,7 +140,7 @@ func (m *csvMerger) merge(items []*dmlWrite) []*dmlWrite {
 	return prepared
 }
 
-func newRowMerger(cfg *common.Config, memory *budget.Budget) rowMerger {
+func newRowMerger(cfg *common.Config, memory *budget) rowMerger {
 	if cfg.Protocol != config.ProtocolCsv {
 		return noopMerger{}
 	}

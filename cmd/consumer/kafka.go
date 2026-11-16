@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package source
+package main
 
 import (
 	"cmp"
@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
@@ -54,7 +53,7 @@ type kafkaReader struct {
 	maxBatchSize    int
 	client          *kgo.Client
 	topic           string
-	memory          *budget.Budget
+	memory          *budget
 	continuing      bool
 	prefetchedBytes int64 // SDK bytes already included in the shared budget.
 	partitions      map[int32]*kafkaPartition
@@ -62,7 +61,7 @@ type kafkaReader struct {
 	selected        []int32 // Cached routing for tables; nil selects every partition.
 }
 
-func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
+func newKafkaReader(ctx context.Context, opts sourceOptions) *kafkaReader {
 	upstreamURI := opts.UpstreamURI
 	consumerID := opts.ConsumerID
 	replicaConfig := opts.ReplicaConfig
@@ -155,10 +154,10 @@ func newKafkaReader(ctx context.Context, opts Options) *kafkaReader {
 	}
 }
 
-func (c *kafkaReader) Streams() []Stream {
-	streams := make([]Stream, 0, len(c.partitions))
+func (c *kafkaReader) Streams() []stream {
+	streams := make([]stream, 0, len(c.partitions))
 	for partitionID := range c.partitions {
-		streams = append(streams, Stream{
+		streams = append(streams, stream{
 			ID:           partitionID,
 			Control:      partitionID == 0,
 			Topic:        c.topic,
@@ -168,7 +167,7 @@ func (c *kafkaReader) Streams() []Stream {
 	return streams
 }
 
-func (c *kafkaReader) Read(ctx context.Context) ([]*Input, error) {
+func (c *kafkaReader) Read(ctx context.Context) ([]*sourceInput, error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -195,7 +194,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Input, error) {
 		}
 
 		var (
-			batch []*Input
+			batch []*sourceInput
 			bytes int64
 		)
 		for iterator := fetches.RecordIter(); !iterator.Done(); {
@@ -206,7 +205,7 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Input, error) {
 				Offset:    record.Offset,
 			}
 			size := int64(len(record.Key) + len(record.Value))
-			batch = append(batch, &Input{
+			batch = append(batch, &sourceInput{
 				Stream: record.Partition,
 				Key:    record.Key,
 				Value:  record.Value,
@@ -229,11 +228,11 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*Input, error) {
 	}
 }
 
-func (c *kafkaReader) Semantics() Semantics {
-	return Semantics{CommitOrdered: true}
+func (c *kafkaReader) Semantics() semantics {
+	return semantics{CommitOrdered: true}
 }
 
-func (c *kafkaReader) Advance(progress Progress) bool {
+func (c *kafkaReader) Advance(progress sourceProgress) bool {
 	if (progress.Scope == nil) != (c.tables == nil) || !slices.Equal(progress.Scope, c.tables) {
 		c.selected = c.tablePartitions(progress.Scope)
 		c.tables = slices.Clone(progress.Scope)
@@ -311,7 +310,7 @@ func (c *kafkaReader) confirmPosition(ctx context.Context, position *kgo.Record)
 
 // CheckMessage validates an input after decoding has revealed its DML count.
 // A single oversized row is allowed by the Kafka encoder.
-func (c *kafkaReader) CheckInput(origin Origin, rows int) {
+func (c *kafkaReader) CheckInput(origin origin, rows int) {
 	if rows > c.maxBatchSize {
 		log.Panic("Kafka message batch size limit exceeded", zap.String("topic", c.topic), zap.Int32("partition", origin.Stream), zap.Int64("offset", origin.Offset), zap.Int("maxBatchSize", c.maxBatchSize), zap.Int("actualBatchSize", rows))
 	}

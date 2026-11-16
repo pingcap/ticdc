@@ -12,18 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package source reads encoded changes from an upstream system.
+// The source stage reads encoded changes from an upstream system.
 //
 // A source owns transport concerns: connections, offsets, acknowledgements,
 // partition routing, memory admission and which streams must be read to cover
 // a dependency. The scheduler only asks for a dependency and receives coverage.
-package source
+package main
 
 import (
 	"context"
+	"net/url"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
 )
 
 const (
@@ -33,17 +38,17 @@ const (
 	readBatchBytes = 2 << 20
 )
 
-// Input is one unit of encoded source data and its transport acknowledgement.
+// sourceInput is one unit of encoded source data and its transport acknowledgement.
 // Exactly one of Value, File, or Watermark is set. A File without a Value is a
 // storage schema record.
-type Input struct {
+type sourceInput struct {
 	Stream int32
 	Key    []byte
 	Value  []byte
 	Bytes  int64
 	Offset int64
 	// File is set for storage inputs that decode one file with its schema.
-	File *File
+	File *file
 	// Watermark marks a completed storage scan.
 	Watermark uint64
 	// Ack confirms this input and all preceding inputs on its stream. It runs
@@ -51,9 +56,9 @@ type Input struct {
 	Ack func(context.Context) error
 }
 
-// Origin identifies an input after its encoded payload has been released. The
+// origin identifies an input after its encoded payload has been released. The
 // scheduler uses it to validate delivery and to acknowledge transport progress.
-type Origin struct {
+type origin struct {
 	Stream int32
 	Offset int64
 	Bytes  int64
@@ -61,8 +66,8 @@ type Origin struct {
 }
 
 // Origin returns the transport identity of this input.
-func (i *Input) Origin() Origin {
-	return Origin{
+func (i *sourceInput) Origin() origin {
+	return origin{
 		Stream: i.Stream,
 		Offset: i.Offset,
 		Bytes:  i.Bytes,
@@ -70,14 +75,14 @@ func (i *Input) Origin() Origin {
 	}
 }
 
-// File is the storage file context needed to decode its rows.
-type File struct {
+// file is the storage file context needed to decode its rows.
+type file struct {
 	Schema  *cloudstorage.SchemaFile
 	TableID int64
 }
 
-// Stream describes one independently read source stream.
-type Stream struct {
+// stream describes one independently read source stream.
+type stream struct {
 	ID    int32
 	Topic string
 	// DDLBroadcast reports that every stream carries the same DDLs.
@@ -87,8 +92,8 @@ type Stream struct {
 	Control bool
 }
 
-// Semantics describes the ordering guarantees a source provides.
-type Semantics struct {
+// semantics describes the ordering guarantees a source provides.
+type semantics struct {
 	// CommitOrdered reports that a stream delivers rows and DDLs in commit
 	// order, so the scheduler need not sort them.
 	CommitOrdered bool
@@ -97,16 +102,16 @@ type Semantics struct {
 	DDLsCanReorder bool
 }
 
-// StreamWatermark is decoded progress on one stream.
-type StreamWatermark struct {
+// streamWatermark is decoded progress on one stream.
+type streamWatermark struct {
 	Stream    int32
 	Timestamp uint64
 }
 
-// Progress is the scheduler's view of decoded input progress and read intent.
-type Progress struct {
+// sourceProgress is the scheduler's view of decoded input progress and read intent.
+type sourceProgress struct {
 	// Watermarks contains the latest decoded resolved timestamp per stream.
-	Watermarks []StreamWatermark
+	Watermarks []streamWatermark
 	// Scope narrows the streams that must be read. Nil means every stream; an
 	// empty non-nil slice means control streams only.
 	Scope []event.SchemaTableName
@@ -120,32 +125,78 @@ type Progress struct {
 	Proven []int32
 }
 
-// Reader reads source data. Read is called by one goroutine; Advance and
+// sourceReader reads source data. Read is called by one goroutine; Advance and
 // ContinueReading are called serially by the scheduler; Close runs after all
 // callers stop.
-type Reader interface {
-	Read(context.Context) ([]*Input, error)
-	Streams() []Stream
-	Semantics() Semantics
+type sourceReader interface {
+	Read(context.Context) ([]*sourceInput, error)
+	Streams() []stream
+	Semantics() semantics
 	// Advance publishes decoded progress and the outstanding dependency. It
 	// returns true when the dependency is covered.
-	Advance(Progress) bool
+	Advance(sourceProgress) bool
 	ContinueReading(bool)
 	Close()
 }
 
-// Validator is implemented by sources that can verify encoded inputs against
+// validator is implemented by sources that can verify encoded inputs against
 // their own routing and size limits.
-type Validator interface {
+type validator interface {
 	// CheckInput validates the decoded row count of one input.
-	CheckInput(origin Origin, rows int)
+	CheckInput(origin origin, rows int)
 	// CheckDML validates that a dispatched row batch was read from the stream
 	// its routing selects.
 	CheckDML(dml *event.DMLEvent, stream int32, offset int64)
 }
 
-// SchemaNotifier is implemented by sources that retire schema files once the
+// schemaNotifier is implemented by sources that retire schema files once the
 // scheduler has delivered their DDL.
-type SchemaNotifier interface {
+type schemaNotifier interface {
 	MarkProcessed(tables []event.SchemaTableName, timestamp uint64)
+}
+
+// sourceType identifies the upstream transport.
+type sourceType string
+
+const (
+	sourceKafka   sourceType = "kafka"
+	sourcePulsar  sourceType = "pulsar"
+	sourceStorage sourceType = "storage"
+)
+
+// parseSourceType classifies an upstream URI. It panics on an unsupported scheme
+// because the consumer cannot start without a known source.
+func parseSourceType(uri *url.URL) sourceType {
+	switch uri.Scheme {
+	case config.KafkaScheme, config.KafkaSSLScheme:
+		return sourceKafka
+	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
+		return sourcePulsar
+	case config.FileScheme, config.S3Scheme, config.GCSScheme, config.GSScheme,
+		config.AzblobScheme, config.AzureScheme:
+		return sourceStorage
+	}
+	log.Panic("consumer upstream scheme is unsupported", zap.String("scheme", uri.Scheme))
+	return ""
+}
+
+// sourceOptions configures a source reader.
+type sourceOptions struct {
+	UpstreamURI   *url.URL
+	ConsumerID    string
+	ReplicaConfig *config.ReplicaConfig
+	CodecConfig   *common.Config
+	Budget        *budget
+}
+
+// newSourceReader builds the reader for the upstream URI.
+func newSourceReader(ctx context.Context, opts sourceOptions) sourceReader {
+	switch parseSourceType(opts.UpstreamURI) {
+	case sourceKafka:
+		return newKafkaReader(ctx, opts)
+	case sourcePulsar:
+		return newPulsarReader(opts)
+	default:
+		return newStorageReader(ctx, opts)
+	}
 }

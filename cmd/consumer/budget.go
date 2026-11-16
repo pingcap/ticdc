@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package budget accounts for the memory owned by the consumer conductor.
-package budget
+// budget accounts for the memory owned by the consumer conductor.
+package main
 
 import (
 	"context"
@@ -37,11 +37,11 @@ const (
 	goMemoryLimitRatio = 0.9
 )
 
-// Budget is a soft budget for raw input, captured data, decoded rows and
+// budget is a soft budget for raw input, captured data, decoded rows and
 // pending transport positions. Each owner releases its own allocation.
 // The limit scales with the process memory limit; it does not model process or
 // object overhead.
-type Budget struct {
+type budget struct {
 	limit     int64
 	bytes     atomic.Int64
 	waiting   atomic.Bool
@@ -51,11 +51,11 @@ type Budget struct {
 }
 
 // New builds a budget from the process memory limit.
-func New() *Budget {
+func newBudget() *budget {
 	limit, err := util.GetMemoryLimit()
 	if err != nil || limit == 0 {
 		log.Info("consumer memory quota", zap.Int64("quotaBytes", defaultMemoryBudget))
-		return &Budget{
+		return &budget{
 			limit: defaultMemoryBudget,
 		}
 	}
@@ -69,25 +69,25 @@ func New() *Budget {
 		zap.Uint64("processLimitBytes", limit),
 		zap.Int64("goMemoryLimitBytes", goLimit),
 		zap.Int64("quotaBytes", quota))
-	return &Budget{
+	return &budget{
 		limit: quota,
 	}
 }
 
 // Limit is the maximum number of accounted bytes.
-func (b *Budget) Limit() int64 {
+func (b *budget) Limit() int64 {
 	return b.limit
 }
 
 // Used is the number of currently accounted bytes.
-func (b *Budget) Used() int64 {
+func (b *budget) Used() int64 {
 	return b.bytes.Load()
 }
 
 // Acquire blocks until the budget can admit n bytes. Read callers use it after
 // reading an input so a full budget stops the read loop without blocking owners
 // that already hold data.
-func (b *Budget) Acquire(ctx context.Context, n int64) error {
+func (b *budget) Acquire(ctx context.Context, n int64) error {
 	if n < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", n))
 	}
@@ -105,7 +105,7 @@ func (b *Budget) Acquire(ctx context.Context, n int64) error {
 	}
 }
 
-func (b *Budget) wait(ctx context.Context, n int64) error {
+func (b *budget) wait(ctx context.Context, n int64) error {
 	// There is one source read loop. Store n+1 so a blocked Acquire(0)
 	// can be distinguished from having no pending admission.
 	b.requested.Store(n + 1)
@@ -126,7 +126,7 @@ func (b *Budget) wait(ctx context.Context, n int64) error {
 
 // ForceAcquire records memory that is already allocated or must be admitted for
 // a dependency. It never blocks.
-func (b *Budget) ForceAcquire(bytes int64) {
+func (b *budget) ForceAcquire(bytes int64) {
 	if bytes < 0 {
 		log.Panic("consumer allocation has a negative size", zap.Int64("bytes", bytes))
 	}
@@ -136,7 +136,7 @@ func (b *Budget) ForceAcquire(bytes int64) {
 // changes subscribes before checking an admission condition to avoid missing a
 // release. A release wakes every subscriber; callers decide whether to wait
 // again.
-func (b *Budget) changes() <-chan struct{} {
+func (b *budget) changes() <-chan struct{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.changed == nil {
@@ -147,7 +147,7 @@ func (b *Budget) changes() <-chan struct{} {
 }
 
 // Release returns previously acquired bytes to the budget.
-func (b *Budget) Release(bytes int64) {
+func (b *budget) Release(bytes int64) {
 	if bytes == 0 {
 		return
 	}
@@ -155,7 +155,7 @@ func (b *Budget) Release(bytes int64) {
 	b.notify()
 }
 
-func (b *Budget) notify() {
+func (b *budget) notify() {
 	if !b.waiting.Load() {
 		return
 	}

@@ -22,11 +22,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
-	"github.com/pingcap/ticdc/cmd/consumer/conductor"
-	"github.com/pingcap/ticdc/cmd/consumer/decode"
-	"github.com/pingcap/ticdc/cmd/consumer/source"
-	"github.com/pingcap/ticdc/cmd/consumer/writer"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -34,10 +29,10 @@ import (
 )
 
 type consumer struct {
-	reader        source.Reader
-	decoder       *decode.Group
-	conductor     *conductor.Conductor
-	writer        *writer.Writer
+	reader        sourceReader
+	decoder       *decodeGroup
+	conductor     *conductor
+	writer        *writer
 	profileServer *http.Server
 }
 
@@ -51,7 +46,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	version.LogVersionInfo("consumer")
 
 	upstreamURI := parseRequiredURI(options.upstreamURI)
-	sourceType := source.TypeOf(upstreamURI)
+	sourceType := parseSourceType(upstreamURI)
 
 	consumerID := options.consumerID
 	if strings.TrimSpace(consumerID) == "" {
@@ -61,8 +56,8 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	codecConfig := newCodecConfig(upstreamURI, replicaConfig)
 	logConsumerConfig(sourceType, consumerID, upstreamURI, options.downstreamURI, replicaConfig, codecConfig)
 
-	memory := budget.New()
-	reader := source.Open(ctx, source.Options{
+	memory := newBudget()
+	reader := newSourceReader(ctx, sourceOptions{
 		UpstreamURI:   upstreamURI,
 		ConsumerID:    consumerID,
 		ReplicaConfig: replicaConfig,
@@ -71,9 +66,9 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 	})
 	c := &consumer{
 		reader:    reader,
-		decoder:   decode.NewGroup(ctx, decode.Options{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Streams: reader.Streams(), UpstreamURI: upstreamURI, Budget: memory}),
-		conductor: conductor.New(memory, reader),
-		writer: writer.New(ctx, writer.Options{
+		decoder:   newDecodeGroup(ctx, decodeOptions{CodecConfig: codecConfig, ReplicaConfig: replicaConfig, Streams: reader.Streams(), UpstreamURI: upstreamURI, Budget: memory}),
+		conductor: newConductor(memory, reader),
+		writer: newWriter(ctx, writerOptions{
 			DownstreamURI: options.downstreamURI,
 			ReplicaConfig: replicaConfig,
 			CodecConfig:   codecConfig,

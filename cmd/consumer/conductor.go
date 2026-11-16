@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package conductor orders decoded events, resolves DDL dependencies, tracks
+// The conductor orders decoded events, resolves DDL dependencies, tracks
 // source progress, and turns both into sink work.
-package conductor
+package main
 
 import (
 	"cmp"
@@ -27,11 +27,6 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
-	"github.com/pingcap/ticdc/cmd/consumer/ddl"
-	"github.com/pingcap/ticdc/cmd/consumer/decode"
-	"github.com/pingcap/ticdc/cmd/consumer/source"
-	"github.com/pingcap/ticdc/cmd/consumer/writer"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -62,7 +57,7 @@ func (*ddlTask) pendingTask() {
 
 type ddlTask struct {
 	ddl         *event.DDLEvent
-	memory      *budget.Budget
+	memory      *budget
 	bytes       int64
 	boundary    *readBoundary
 	awaitingDDL bool
@@ -93,7 +88,7 @@ const (
 
 // One loop owns dependency selection, decoded work and writer queues.
 // Protocol decoding and sink execution run independently of that state.
-func (c *Conductor) Start(ctx context.Context, tasks <-chan []decode.Event, w *writer.Writer) error {
+func (c *conductor) Start(ctx context.Context, tasks <-chan []decodedEvent, w *writer) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.run(ctx, tasks, w)
@@ -109,7 +104,7 @@ func (c *Conductor) Start(ctx context.Context, tasks <-chan []decode.Event, w *w
 	return err
 }
 
-func (c *Conductor) run(ctx context.Context, tasks <-chan []decode.Event, w *writer.Writer) error {
+func (c *conductor) run(ctx context.Context, tasks <-chan []decodedEvent, w *writer) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,7 +135,7 @@ func (c *Conductor) run(ctx context.Context, tasks <-chan []decode.Event, w *wri
 	}
 }
 
-func (c *Conductor) acceptBatch(batch []decode.Event) error {
+func (c *conductor) acceptBatch(batch []decodedEvent) error {
 	for _, work := range batch {
 		if err := c.accept(work); err != nil {
 			return err
@@ -151,7 +146,7 @@ func (c *Conductor) acceptBatch(batch []decode.Event) error {
 
 // Resolve only a bounded, decoded prefix into the writer. Unselected work
 // stays in its input/table group and contributes its head to progress.
-func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
+func (c *conductor) flush(ctx context.Context, w *writer) error {
 	for {
 		c.advanceWriter(w)
 		if err := w.Flush(ctx); err != nil {
@@ -197,27 +192,27 @@ func (c *Conductor) flush(ctx context.Context, w *writer.Writer) error {
 	}
 }
 
-// Conductor coordinates write ordering and completion progress.
-type Conductor struct {
+// conductor coordinates write ordering and completion progress.
+type conductor struct {
 	control           *readBoundary
 	inputRows         int
 	inputMarker       uint64
 	hasInputMarker    bool
 	positions         map[int32][]sourcePosition
 	positionsMu       sync.Mutex
-	reader            source.Reader
-	validator         source.Validator
-	notifier          source.SchemaNotifier
+	reader            sourceReader
+	validator         validator
+	notifier          schemaNotifier
 	confirmable       chan struct{}
 	readThrough       uint64 // Largest observed source marker still needing global coverage.
-	ddlInputs         map[ddl.Key]*ddlInput
+	ddlInputs         map[ddlKey]*ddlInput
 	boundary          *readBoundary
 	boundaryTs        uint64
 	boundaryDDL       *ddlTask
 	checkpoint        *atomic.Uint64
 	cleanedCheckpoint uint64
-	memory            *budget.Budget
-	streams           map[int32]*streamWatermark
+	memory            *budget
+	streams           map[int32]*streamReadState
 	watermark         uint64
 	pendingDML        map[int64]map[int32][]*dmlTask
 	orderedDML        bool
@@ -229,12 +224,12 @@ type Conductor struct {
 }
 
 type ddlInput struct {
-	event   *ddlTask // Nil once the Conductor emits or retires the canonical effect.
+	event   *ddlTask // Nil once the conductor emits or retires the canonical effect.
 	streams []int32  // Inputs that have crossed this exact DDL.
 }
 
 // queueDML takes ownership of the decoded row's memory quota.
-func (c *Conductor) queueDML(item *dmlTask) {
+func (c *conductor) queueDML(item *dmlTask) {
 	if c.pendingDML == nil {
 		c.pendingDML = make(map[int64]map[int32][]*dmlTask)
 	}
@@ -313,7 +308,7 @@ func appendDDLTableNames(names []event.SchemaTableName, defaultSchema string, ta
 	return names
 }
 
-func (c *Conductor) queueDDL(block *event.DDLEvent) *ddlInput {
+func (c *conductor) queueDDL(block *event.DDLEvent) *ddlInput {
 	bytes := int64(len(block.Query) + len(block.SchemaName) + len(block.TableName))
 	c.memory.ForceAcquire(bytes)
 	task := &ddlTask{
@@ -330,9 +325,9 @@ func (c *Conductor) queueDDL(block *event.DDLEvent) *ddlInput {
 		c.pendingDDL = slices.Insert(c.pendingDDL, index, task)
 	}
 	if c.ddlInputs == nil {
-		c.ddlInputs = make(map[ddl.Key]*ddlInput)
+		c.ddlInputs = make(map[ddlKey]*ddlInput)
 	}
-	key := ddl.KeyOf(block)
+	key := ddlKeyOf(block)
 	input := &ddlInput{
 		event: task,
 	}
@@ -340,7 +335,7 @@ func (c *Conductor) queueDDL(block *event.DDLEvent) *ddlInput {
 	return input
 }
 
-func (c *Conductor) nextReady(watermark uint64) pendingTask {
+func (c *conductor) nextReady(watermark uint64) pendingTask {
 	c.controlTs = 0
 	var head *ddlTask
 	for len(c.pendingDDL) != 0 {
@@ -396,11 +391,11 @@ func ddlReady(item *ddlTask, watermark uint64) bool {
 
 // Select a ready preceding row from the DDL scope, or the DDL itself once all
 // such rows have moved to the writer. The caller pops the selected task.
-func (c *Conductor) drainDDL(head *ddlTask, watermark uint64) pendingTask {
+func (c *conductor) drainDDL(head *ddlTask, watermark uint64) pendingTask {
 	preceding := false
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
-		if row.dml.CommitTs > head.ddl.GetCommitTs() || !ddl.BlocksTable(head.ddl, row.dml) {
+		if row.dml.CommitTs > head.ddl.GetCommitTs() || !blocksTable(head.ddl, row.dml) {
 			continue
 		}
 		preceding = true
@@ -415,18 +410,18 @@ func (c *Conductor) drainDDL(head *ddlTask, watermark uint64) pendingTask {
 	return head
 }
 
-func (c *Conductor) popDDL() *ddlTask {
+func (c *conductor) popDDL() *ddlTask {
 	item := c.pendingDDL[0]
 	c.pendingDDL[0] = nil
 	c.pendingDDL = c.pendingDDL[1:]
-	key := ddl.KeyOf(item.ddl)
+	key := ddlKeyOf(item.ddl)
 	if input, exists := c.ddlInputs[key]; exists && input.event == item {
 		input.event, input.streams = nil, nil
 	}
 	return item
 }
 
-func (c *Conductor) nextDML(watermark uint64) *dmlTask {
+func (c *conductor) nextDML(watermark uint64) *dmlTask {
 	for _, groups := range c.pendingDML {
 		row := firstDML(groups)
 		if c.rowReady(row, watermark) {
@@ -437,19 +432,19 @@ func (c *Conductor) nextDML(watermark uint64) *dmlTask {
 	return nil
 }
 
-func (c *Conductor) rowReady(row *dmlTask, watermark uint64) bool {
+func (c *conductor) rowReady(row *dmlTask, watermark uint64) bool {
 	if !c.dmlReady(row, watermark) {
 		return false
 	}
 	for _, block := range c.pendingDDL {
-		if row.dml.CommitTs > block.ddl.GetCommitTs() && ddl.BlocksTable(block.ddl, row.dml) {
+		if row.dml.CommitTs > block.ddl.GetCommitTs() && blocksTable(block.ddl, row.dml) {
 			return false
 		}
 	}
 	return true
 }
 
-func (c *Conductor) trackDMLWait(row *dmlTask, watermark uint64) {
+func (c *conductor) trackDMLWait(row *dmlTask, watermark uint64) {
 	if c.dmlReady(row, watermark) {
 		return
 	}
@@ -458,7 +453,7 @@ func (c *Conductor) trackDMLWait(row *dmlTask, watermark uint64) {
 	}
 }
 
-func (c *Conductor) dmlReady(item *dmlTask, watermark uint64) bool {
+func (c *conductor) dmlReady(item *dmlTask, watermark uint64) bool {
 	if item.dml.CommitTs <= watermark || c.control == nil || c.streams[item.stream].control {
 		return true
 	}
@@ -467,14 +462,14 @@ func (c *Conductor) dmlReady(item *dmlTask, watermark uint64) bool {
 	}
 	// A later control in this row's scope proves its preceding DDLs are known.
 	for _, block := range c.pendingDDL {
-		if item.dml.CommitTs <= block.ddl.GetCommitTs() && ddl.BlocksTable(block.ddl, item.dml) {
+		if item.dml.CommitTs <= block.ddl.GetCommitTs() && blocksTable(block.ddl, item.dml) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *Conductor) popDML(row *dmlTask) *dmlTask {
+func (c *conductor) popDML(row *dmlTask) *dmlTask {
 	groups := c.pendingDML[row.dml.PhysicalTableID]
 	rows := groups[row.stream]
 	rows[0] = nil
@@ -489,13 +484,13 @@ func (c *Conductor) popDML(row *dmlTask) *dmlTask {
 	return row
 }
 
-func New(memory *budget.Budget, reader source.Reader) *Conductor {
+func newConductor(memory *budget, reader sourceReader) *conductor {
 	specs := reader.Streams()
-	streams := make(map[int32]*streamWatermark, len(specs))
+	streams := make(map[int32]*streamReadState, len(specs))
 	for _, stream := range specs {
-		streams[stream.ID] = &streamWatermark{control: stream.Control}
+		streams[stream.ID] = &streamReadState{control: stream.Control}
 	}
-	c := &Conductor{
+	c := &conductor{
 		reader:      reader,
 		confirmable: make(chan struct{}, 1),
 		checkpoint:  new(atomic.Uint64),
@@ -506,10 +501,10 @@ func New(memory *budget.Budget, reader source.Reader) *Conductor {
 	semantics := reader.Semantics()
 	c.orderedDML = semantics.CommitOrdered
 	c.reorderDDL = semantics.DDLsCanReorder
-	if validator, ok := reader.(source.Validator); ok {
+	if validator, ok := reader.(validator); ok {
 		c.validator = validator
 	}
-	if notifier, ok := reader.(source.SchemaNotifier); ok {
+	if notifier, ok := reader.(schemaNotifier); ok {
 		c.notifier = notifier
 	}
 	for _, spec := range specs {
@@ -552,7 +547,7 @@ func ddlScope(ddl *event.DDLEvent) []event.SchemaTableName {
 	return names
 }
 
-func (c *Conductor) advanceReading(w *writer.Writer) {
+func (c *conductor) advanceReading(w *writer) {
 	var (
 		pending *ddlTask
 		through uint64
@@ -606,8 +601,8 @@ func (c *Conductor) advanceReading(w *writer.Writer) {
 
 // markProven records streams whose read target must not move past block: those
 // that already delivered it and those with later rows still blocked by it.
-func (c *Conductor) markProven(block *ddlTask) {
-	if input := c.ddlInputs[ddl.KeyOf(block.ddl)]; input != nil {
+func (c *conductor) markProven(block *ddlTask) {
+	if input := c.ddlInputs[ddlKeyOf(block.ddl)]; input != nil {
 		c.proven = append(c.proven, input.streams...)
 	}
 	for _, groups := range c.pendingDML {
@@ -628,14 +623,14 @@ func blockedStreams(groups map[int32][]*dmlTask, block *event.DDLEvent) []int32 
 func rowsBlockedAfter(rows []*dmlTask, block *event.DDLEvent) bool {
 	index, _ := slices.BinarySearchFunc(rows, block.GetCommitTs(), compareDMLToDDL)
 	for _, item := range rows[index:] {
-		if ddl.BlocksTable(block, item.dml) {
+		if blocksTable(block, item.dml) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *Conductor) needsMoreInput(w *writer.Writer) bool {
+func (c *conductor) needsMoreInput(w *writer) bool {
 	for _, groups := range c.pendingDML {
 		if !c.dmlReady(firstDML(groups), c.watermark) {
 			return true
@@ -652,9 +647,9 @@ func (c *Conductor) needsMoreInput(w *writer.Writer) bool {
 	return len(c.pendingDML) == 0 && len(c.pendingDDL) == 0 && w.Idle()
 }
 
-// Stream markers establish a global watermark when every input is covered.
+// stream markers establish a global watermark when every input is covered.
 // Sources can also publish a global boundary after proving complete input.
-func (c *Conductor) collectWatermarks() {
+func (c *conductor) collectWatermarks() {
 	watermark := uint64(math.MaxUint64)
 	for _, stream := range c.streams {
 		if !stream.hasWatermark {
@@ -668,9 +663,9 @@ func (c *Conductor) collectWatermarks() {
 	}
 }
 
-// Input progress can pass decoded work still awaiting delivery. Register its
+// sourceInput progress can pass decoded work still awaiting delivery. Register its
 // earliest timestamps before letting the writer advance checkpoints.
-func (c *Conductor) advanceWriter(w *writer.Writer) {
+func (c *conductor) advanceWriter(w *writer) {
 	pendingTables := make(map[int64]uint64, len(c.pendingDML))
 	for table, groups := range c.pendingDML {
 		pendingTables[table] = firstDML(groups).dml.CommitTs
@@ -682,7 +677,7 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 			pendingDDL = ts
 		}
 	}
-	w.Advance(writer.Progress{
+	w.Advance(writerProgress{
 		Watermark:     c.watermark,
 		PendingTables: pendingTables,
 		PendingDDL:    pendingDDL,
@@ -690,12 +685,12 @@ func (c *Conductor) advanceWriter(w *writer.Writer) {
 }
 
 // OnCheckpoint registers a callback for durable checkpoint advances.
-func (c *Conductor) OnCheckpoint(fn func(uint64)) {
+func (c *conductor) OnCheckpoint(fn func(uint64)) {
 	c.onCheckpoint = fn
 }
 
 // observeCheckpoint publishes a durable checkpoint and wakes the confirm loop.
-func (c *Conductor) observeCheckpoint(checkpoint uint64) {
+func (c *conductor) observeCheckpoint(checkpoint uint64) {
 	previous := c.checkpoint.Swap(checkpoint)
 	if previous == checkpoint {
 		return
@@ -707,11 +702,11 @@ func (c *Conductor) observeCheckpoint(checkpoint uint64) {
 }
 
 // Reclaim history only through the inclusive downstream checkpoint.
-func (c *Conductor) Checkpoint() uint64 {
+func (c *conductor) Checkpoint() uint64 {
 	return c.checkpoint.Load()
 }
 
-func (c *Conductor) cleanHistory() {
+func (c *conductor) cleanHistory() {
 	checkpoint := c.checkpoint.Load()
 	if checkpoint <= c.cleanedCheckpoint {
 		return
@@ -724,13 +719,13 @@ func (c *Conductor) cleanHistory() {
 	}
 }
 
-type streamWatermark struct {
+type streamReadState struct {
 	control      bool
 	watermark    uint64
 	hasWatermark bool
 }
 
-func (c *Conductor) accept(work decode.Event) error {
+func (c *conductor) accept(work decodedEvent) error {
 	origin := work.Origin
 	switch value := work.Event.(type) {
 	case *event.DMLEvent:
@@ -783,7 +778,7 @@ func (c *Conductor) accept(work decode.Event) error {
 		if len(c.streams) == 0 || (c.control != nil && len(c.streams) == 1) {
 			boundary = &readBoundary{reached: true}
 		}
-		key := ddl.KeyOf(block)
+		key := ddlKeyOf(block)
 		input, exists := c.ddlInputs[key]
 		if !exists {
 			input = c.queueDDL(block)
@@ -816,13 +811,13 @@ func (c *Conductor) accept(work decode.Event) error {
 	return nil
 }
 
-func (c *Conductor) crossBoundary(stream int32, commitTs uint64, effect *event.DDLEvent, row *dmlTask) {
+func (c *conductor) crossBoundary(stream int32, commitTs uint64, effect *event.DDLEvent, row *dmlTask) {
 	block := c.boundaryDDL
 	if block == nil || block.boundary.reached {
 		return
 	}
 	crossed := effect != nil && effect.GetCommitTs() == block.ddl.GetCommitTs() && effect.SchemaName == block.ddl.SchemaName && effect.TableName == block.ddl.TableName && effect.Query == block.ddl.Query
-	crossed = crossed || (row != nil && commitTs > block.ddl.GetCommitTs() && ddl.BlocksTable(block.ddl, row.dml))
+	crossed = crossed || (row != nil && commitTs > block.ddl.GetCommitTs() && blocksTable(block.ddl, row.dml))
 	if crossed {
 		c.proven = append(c.proven, stream)
 		c.advanceBoundary(false, 0)
@@ -830,7 +825,7 @@ func (c *Conductor) crossBoundary(stream int32, commitTs uint64, effect *event.D
 }
 
 // Request coverage without knowing which source inputs carry the table scope.
-func (c *Conductor) requestBoundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary {
+func (c *conductor) requestBoundary(tables []event.SchemaTableName, commitTs uint64) *readBoundary {
 	if c.control == nil {
 		return nil
 	}
@@ -845,16 +840,16 @@ func (c *Conductor) requestBoundary(tables []event.SchemaTableName, commitTs uin
 }
 
 // Publish a snapshot of read priorities; reader never sees the shared boundary.
-func (c *Conductor) advanceBoundary(retarget bool, target uint64) {
-	watermarks := make([]source.StreamWatermark, 0, len(c.streams))
+func (c *conductor) advanceBoundary(retarget bool, target uint64) {
+	watermarks := make([]streamWatermark, 0, len(c.streams))
 	for id, stream := range c.streams {
-		watermarks = append(watermarks, source.StreamWatermark{Stream: id, Timestamp: stream.watermark})
+		watermarks = append(watermarks, streamWatermark{Stream: id, Timestamp: stream.watermark})
 	}
 	var tables []event.SchemaTableName
 	if c.boundary != nil {
 		tables = c.boundary.tables
 	}
-	progress := source.Progress{
+	progress := sourceProgress{
 		Watermarks: watermarks,
 		Scope:      tables,
 		Target:     target,
@@ -875,7 +870,7 @@ func notifyConfirmation(ch chan<- struct{}) {
 	}
 }
 
-func (c *Conductor) confirm(ctx context.Context) error {
+func (c *conductor) confirm(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -892,7 +887,7 @@ func (c *Conductor) confirm(ctx context.Context) error {
 	}
 }
 
-func (c *Conductor) confirmPositions(ctx context.Context, checkpoint uint64) error {
+func (c *conductor) confirmPositions(ctx context.Context, checkpoint uint64) error {
 	c.positionsMu.Lock()
 	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
@@ -923,7 +918,7 @@ func confirmablePrefix(pending []sourcePosition, checkpoint uint64) int {
 	return count
 }
 
-func (c *Conductor) dropPositions(stream int32, count int) {
+func (c *conductor) dropPositions(stream int32, count int) {
 	c.positionsMu.Lock()
 	current := c.positions[stream]
 	clear(current[:count])

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package decode turns encoded source inputs into TiCDC events.
+// The decode stage turns encoded source inputs into TiCDC events.
 //
 // The group preserves source submission order and keeps undecoded inputs in
 // their original slots, so the scheduler can build dependencies without knowing
 // the codec protocol.
-package decode
+package main
 
 import (
 	"context"
@@ -26,8 +26,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
-	"github.com/pingcap/ticdc/cmd/consumer/source"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -43,10 +41,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Event carries a fully decoded event and its source position. A nil event
+// decodedEvent carries a fully decoded event and its source position. A nil event
 // marks the end of an input, including inputs that produce no events.
-type Event struct {
-	Origin source.Origin
+type decodedEvent struct {
+	Origin origin
 	Event  event.Event
 }
 
@@ -59,10 +57,10 @@ const (
 // decodeFuture keeps one input's output in submission order. Large inputs stream
 // bounded batches; the conductor only receives completed events.
 type decodeFuture struct {
-	input  *source.Input
-	origin source.Origin
-	output chan []Event
-	events []Event
+	input  *sourceInput
+	origin origin
+	output chan []decodedEvent
+	events []decodedEvent
 }
 
 // decoder pairs a generic codec decoder with the simple-protocol decoder when
@@ -72,8 +70,8 @@ type decoder struct {
 	schema *simple.Decoder
 }
 
-// Group decodes inputs with a bounded pool while preserving submission order.
-type Group struct {
+// decodeGroup decodes inputs with a bounded pool while preserving submission order.
+type decodeGroup struct {
 	codecConfig *common.Config
 	upstreamDB  *sql.DB
 	selectors   *columnselector.ColumnSelectors
@@ -81,21 +79,21 @@ type Group struct {
 	schemas     *simple.TableInfoCache
 	input       chan *decodeFuture
 	ordered     chan *decodeFuture
-	output      chan []Event
-	memory      *budget.Budget
+	output      chan []decodedEvent
+	memory      *budget
 }
 
-// Options configures a decode group.
-type Options struct {
+// decodeOptions configures a decode group.
+type decodeOptions struct {
 	CodecConfig   *common.Config
 	ReplicaConfig *config.ReplicaConfig
-	Streams       []source.Stream
+	Streams       []stream
 	UpstreamURI   *url.URL
-	Budget        *budget.Budget
+	Budget        *budget
 }
 
-// NewGroup builds a decode group for the source streams.
-func NewGroup(ctx context.Context, opts Options) *Group {
+// newDecodeGroup builds a decode group for the source streams.
+func newDecodeGroup(ctx context.Context, opts decodeOptions) *decodeGroup {
 	codecConfig := opts.CodecConfig
 	replicaConfig := opts.ReplicaConfig
 	streams := opts.Streams
@@ -109,14 +107,14 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 		}
 	}
 	upstreamDB := newUpstreamDB(ctx, opts.UpstreamURI)
-	group := &Group{
+	group := &decodeGroup{
 		codecConfig: codecConfig,
 		upstreamDB:  upstreamDB,
 		selectors:   selectors,
 		decoders:    make([]decoder, decoderConcurrency),
 		input:       make(chan *decodeFuture, decoderQueueSize),
 		ordered:     make(chan *decodeFuture, decoderQueueSize),
-		output:      make(chan []Event, 1),
+		output:      make(chan []decodedEvent, 1),
 		memory:      memory,
 	}
 	// Storage constructs a decoder for each file using that file's schema.
@@ -155,14 +153,14 @@ func NewGroup(ctx context.Context, opts Options) *Group {
 
 // ReleaseSchemas drops schema history that is no longer reachable from the
 // durable checkpoint.
-func (d *Group) ReleaseSchemas(checkpoint uint64) {
+func (d *decodeGroup) ReleaseSchemas(checkpoint uint64) {
 	if d.schemas != nil && checkpoint != 0 {
 		d.schemas.ReleaseBefore(checkpoint)
 	}
 }
 
 // Close releases the upstream metadata connection.
-func (d *Group) Close() {
+func (d *decodeGroup) Close() {
 	if d.upstreamDB == nil {
 		return
 	}
@@ -173,12 +171,12 @@ func (d *Group) Close() {
 
 // AddEvents transfers ownership of the inputs to the group. The reader calls
 // it serially, so the ordered queue has exactly the source's submission order.
-func (d *Group) AddEvents(ctx context.Context, inputs []*source.Input) error {
+func (d *decodeGroup) AddEvents(ctx context.Context, inputs []*sourceInput) error {
 	for i, input := range inputs {
 		future := &decodeFuture{
 			input:  input,
 			origin: input.Origin(),
-			output: make(chan []Event, 1),
+			output: make(chan []decodedEvent, 1),
 		}
 		select {
 		case <-ctx.Done():
@@ -195,11 +193,11 @@ func (d *Group) AddEvents(ctx context.Context, inputs []*source.Input) error {
 	return nil
 }
 
-func (d *Group) Output() <-chan []Event {
+func (d *decodeGroup) Output() <-chan []decodedEvent {
 	return d.output
 }
 
-func (d *Group) Run(ctx context.Context) error {
+func (d *decodeGroup) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return d.emit(ctx)
@@ -212,7 +210,7 @@ func (d *Group) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (d *Group) emit(ctx context.Context) error {
+func (d *decodeGroup) emit(ctx context.Context) error {
 	defer close(d.output)
 	for {
 		select {
@@ -226,7 +224,7 @@ func (d *Group) emit(ctx context.Context) error {
 	}
 }
 
-func (d *Group) emitInput(ctx context.Context, future *decodeFuture) error {
+func (d *decodeGroup) emitInput(ctx context.Context, future *decodeFuture) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -244,7 +242,7 @@ func (d *Group) emitInput(ctx context.Context, future *decodeFuture) error {
 	}
 }
 
-func (d *Group) runDecoder(ctx context.Context, decoder decoder) error {
+func (d *decodeGroup) runDecoder(ctx context.Context, decoder decoder) error {
 	var pending map[*common.DMLMessage]*decodeFuture
 	if decoder.schema != nil {
 		pending = make(map[*common.DMLMessage]*decodeFuture)
@@ -275,7 +273,7 @@ func (d *Group) runDecoder(ctx context.Context, decoder decoder) error {
 }
 
 func (f *decodeFuture) addEvent(ctx context.Context, value event.Event) error {
-	f.events = append(f.events, Event{Origin: f.origin, Event: value})
+	f.events = append(f.events, decodedEvent{Origin: f.origin, Event: value})
 	if len(f.events) == eventBatchSize {
 		return f.flush(ctx)
 	}
@@ -305,7 +303,7 @@ func (f *decodeFuture) finish(ctx context.Context) error {
 	return nil
 }
 
-func (d *Group) addRow(ctx context.Context, future *decodeFuture, message *common.DMLMessage) error {
+func (d *decodeGroup) addRow(ctx context.Context, future *decodeFuture, message *common.DMLMessage) error {
 	dml := message.ToDMLEvent()
 	if dml == nil {
 		log.Panic("consumer DML decoding failed", zap.String("schema", message.Schema), zap.String("table", message.Table), zap.Uint64("commitTs", message.GetCommitTs()))
@@ -325,7 +323,7 @@ func (d *Group) addRow(ctx context.Context, future *decodeFuture, message *commo
 // drainCached emits rows that were decoded before their schema arrived. The
 // schema change channel is read before the pending rows to avoid missing a
 // write between that check and the select below.
-func (d *Group) drainCached(ctx context.Context, decoder decoder, pending map[*common.DMLMessage]*decodeFuture) (<-chan struct{}, error) {
+func (d *decodeGroup) drainCached(ctx context.Context, decoder decoder, pending map[*common.DMLMessage]*decodeFuture) (<-chan struct{}, error) {
 	if decoder.schema == nil {
 		return nil, nil
 	}
@@ -343,7 +341,7 @@ func (d *Group) drainCached(ctx context.Context, decoder decoder, pending map[*c
 	return changed, nil
 }
 
-func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *decodeFuture) (*common.DMLMessage, error) {
+func (d *decodeGroup) decodeInput(ctx context.Context, decoder decoder, future *decodeFuture) (*common.DMLMessage, error) {
 	input := future.input
 	defer d.memory.Release(input.Bytes)
 	if input.File != nil {
@@ -391,7 +389,7 @@ func (d *Group) decodeInput(ctx context.Context, decoder decoder, future *decode
 	}
 }
 
-func (d *Group) decodeStorage(ctx context.Context, future *decodeFuture) error {
+func (d *decodeGroup) decodeStorage(ctx context.Context, future *decodeFuture) error {
 	input := future.input
 	schema := input.File.Schema
 	table := schema.TableInfo()

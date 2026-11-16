@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package source
+package main
 
 import (
 	"context"
@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/consumer/budget"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -79,7 +78,7 @@ type storageReader struct {
 	tableIDs         map[storageTableKey]int64
 	nextTableID      int64
 	storage          storeapi.Storage
-	memory           *budget.Budget
+	memory           *budget
 	continuing       atomic.Bool
 	dateSeparator    config.DateSeparator
 	fileExtension    string
@@ -96,7 +95,7 @@ type storageReader struct {
 }
 
 // newStorageReader opens the storage described by the upstream URI.
-func newStorageReader(ctx context.Context, opts Options) *storageReader {
+func newStorageReader(ctx context.Context, opts sourceOptions) *storageReader {
 	upstreamURI := opts.UpstreamURI
 	replicaConfig := opts.ReplicaConfig
 	protocol := opts.CodecConfig.Protocol
@@ -261,11 +260,11 @@ func (c *storageReader) readSchema(ctx context.Context, path string) (cloudstora
 	return key, true, nil
 }
 
-func (*storageReader) Streams() []Stream {
+func (*storageReader) Streams() []stream {
 	return nil
 }
 
-func (c *storageReader) Read(ctx context.Context) ([]*Input, error) {
+func (c *storageReader) Read(ctx context.Context) ([]*sourceInput, error) {
 	for {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -289,7 +288,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Input, error) {
 			if c.scanned && c.sourceCheckpoint > c.watermark {
 				c.watermark = c.sourceCheckpoint
 				// The metadata checkpoint covers every file in the completed scan.
-				return []*Input{{Watermark: c.sourceCheckpoint}}, nil
+				return []*sourceInput{{Watermark: c.sourceCheckpoint}}, nil
 			}
 			if err := c.scanInputs(ctx); err != nil {
 				return nil, err
@@ -323,7 +322,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Input, error) {
 			c.mu.Lock()
 			c.pendingSchema = pendingSchema
 			c.mu.Unlock()
-			return []*Input{{File: &File{Schema: schema}}}, nil
+			return []*sourceInput{{File: &file{Schema: schema}}}, nil
 		}
 		idKey := storageTableKey{
 			schema:    key.Schema,
@@ -340,7 +339,7 @@ func (c *storageReader) Read(ctx context.Context) ([]*Input, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []*Input{data}, nil
+		return []*sourceInput{data}, nil
 	}
 }
 
@@ -392,19 +391,19 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*Input, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*sourceInput, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
-	file, err := c.storage.Open(ctx, path, nil)
+	f, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "open Storage DML file")
 	}
-	defer closeStorageFile(file, path)
-	size, err := file.GetFileSize()
+	defer closeStorageFile(f, path)
+	size, err := f.GetFileSize()
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "get Storage DML file size")
 	}
 	data := make([]byte, size)
-	if _, err := io.ReadFull(file, data); err != nil {
+	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	continuing := c.continuing.Load()
@@ -417,10 +416,10 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 		}
 	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &Input{
+	return &sourceInput{
 		Value: data,
 		Bytes: size,
-		File:  &File{Schema: schema, TableID: tableID},
+		File:  &file{Schema: schema, TableID: tableID},
 	}, nil
 }
 
@@ -428,11 +427,11 @@ func (c *storageReader) ContinueReading(enabled bool) {
 	c.continuing.Store(enabled)
 }
 
-func (c *storageReader) Semantics() Semantics {
-	return Semantics{}
+func (c *storageReader) Semantics() semantics {
+	return semantics{}
 }
 
-func (*storageReader) Advance(Progress) bool {
+func (*storageReader) Advance(sourceProgress) bool {
 	return true
 }
 

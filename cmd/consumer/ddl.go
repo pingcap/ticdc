@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ddl contains the DDL identity and blocking rules shared by the
-// scheduler and the writer.
-package ddl
+// DDL identity and blocking rules shared by the scheduler and the writer.
+package main
 
 import (
 	"slices"
@@ -23,18 +22,18 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
-// Key identifies one DDL independently of the connection that delivered it.
+// ddlKey identifies one DDL independently of the connection that delivered it.
 // Split DDLs can share a timestamp and table, so Query is part of the identity.
-type Key struct {
+type ddlKey struct {
 	CommitTs uint64
 	Schema   string
 	Table    string
 	Query    string
 }
 
-// KeyOf returns the replay identity of a DDL event.
-func KeyOf(ddl *event.DDLEvent) Key {
-	return Key{
+// ddlKeyOf returns the replay identity of a DDL event.
+func ddlKeyOf(ddl *event.DDLEvent) ddlKey {
+	return ddlKey{
 		CommitTs: ddl.GetCommitTs(),
 		Schema:   ddl.SchemaName,
 		Table:    ddl.TableName,
@@ -42,16 +41,16 @@ func KeyOf(ddl *event.DDLEvent) Key {
 	}
 }
 
-// BlocksTable reports whether ddl must be written before dml.
-func BlocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
+// blocksTable reports whether ddl must be written before dml.
+func blocksTable(ddl *event.DDLEvent, dml *event.DMLEvent) bool {
 	if dml.TableInfo == nil {
 		return true
 	}
-	return BlocksIdentity(ddl, dml.PhysicalTableID, dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName())
+	return blocksIdentity(ddl, dml.PhysicalTableID, dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName())
 }
 
-// BlocksIdentity reports whether ddl changes the given table identity.
-func BlocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string) bool {
+// blocksIdentity reports whether ddl changes the given table identity.
+func blocksIdentity(ddl *event.DDLEvent, tableID int64, schema, table string) bool {
 	// Incomplete multi-table metadata must retain a global barrier.
 	if ddl.SchemaName == "" || (ddl.BlockedTables != nil && ddl.BlockedTables.InfluenceType == event.InfluenceTypeAll) {
 		return true
