@@ -163,6 +163,24 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	}
 }
 
+// tryAddEvent is used for retryable reclamation requests. A saturated owner
+// queue must not prevent the feedback consumer from observing cancellation.
+func (s *stream[A, P, T, D, H]) tryAddEvent(event eventWrap[A, P, T, D, H]) bool {
+	if s.closed.Load() {
+		return false
+	}
+	eventChan := s.eventChan
+	if s.option.UseBuffer {
+		eventChan = s.inChan
+	}
+	select {
+	case eventChan <- event:
+		return true
+	default:
+		return false
+	}
+}
+
 // Start the stream.
 func (s *stream[A, P, T, D, H]) start() {
 	if s.closed.Load() {
@@ -402,6 +420,10 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+
+	// Reclamation has visited the pending queue since the last data append.
+	// Skip repeated requests for a queue containing only retained markers.
+	reclaimed atomic.Bool
 
 	lastHandleEventTs atomic.Uint64
 }

@@ -554,6 +554,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				OutputOldValue: c.Sink.OpenProtocolConfig.OutputOldValue,
 			}
 		}
+		var simpleConfig *config.SimpleConfig
+		if c.Sink.SimpleConfig != nil && c.Sink.SimpleConfig.IncludeStartTs != nil {
+			simpleConfig = &config.SimpleConfig{
+				IncludeStartTs: util.AddressOf(*c.Sink.SimpleConfig.IncludeStartTs),
+			}
+		}
 
 		res.Sink = &config.SinkConfig{
 			DispatchRules:                    dispatchRules,
@@ -576,6 +582,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			Simple:                           simpleConfig,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -924,6 +931,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				OutputOldValue: cloned.Sink.OpenProtocol.OutputOldValue,
 			}
 		}
+		var simpleConfig *SimpleConfig
+		if cloned.Sink.Simple != nil && cloned.Sink.Simple.IncludeStartTs != nil {
+			simpleConfig = &SimpleConfig{
+				IncludeStartTs: util.AddressOf(*cloned.Sink.Simple.IncludeStartTs),
+			}
+		}
 		res.Sink = &SinkConfig{
 			Protocol:                         cloned.Sink.Protocol,
 			SchemaRegistry:                   cloned.Sink.SchemaRegistry,
@@ -945,6 +958,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			SimpleConfig:                     simpleConfig,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1211,6 +1225,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
+	SimpleConfig                     *SimpleConfig       `json:"simple,omitempty" toml:"simple,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1714,6 +1729,11 @@ type DebeziumConfig struct {
 	BigintUnsignedHandlingMode *string `json:"bigint_unsigned_handling_mode,omitempty" toml:"bigint-unsigned-handling-mode,omitempty"`
 	BinaryHandlingMode         *string `json:"binary_handling_mode,omitempty" toml:"binary-handling-mode,omitempty"`
 	IncludeStartTs             *bool   `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	IncludeStartTs *bool `json:"include_start_ts,omitempty" toml:"include-start-ts,omitempty"`
 }
 
 type DispatcherCount struct {

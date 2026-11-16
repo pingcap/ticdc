@@ -96,7 +96,7 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 // only for table trigger redo dispatcher
 func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.ConsistentConfig) {
 	if !rd.IsTableTriggerDispatcher() {
-		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
+		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("dispatcherID", rd.GetId()))
 	}
 	ctx, rd.cancel = context.WithCancel(ctx)
 	rd.redoMeta = redo.NewRedoMeta(rd.sharedInfo.changefeedID, rd.startTs, cfg)

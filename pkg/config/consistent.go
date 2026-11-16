@@ -15,6 +15,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -158,5 +159,18 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig
 func (c *ConsistentConfig) MaskSensitiveData() {
-	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(util.GetOrZero(c.Storage)))
+	redactedStorage := storage.RedactURL(util.GetOrZero(c.Storage))
+	parsed, err := url.Parse(redactedStorage)
+	if err == nil {
+		query := parsed.Query()
+		for _, endpoint := range query["endpoint"] {
+			if storage.RedactURL(endpoint) != endpoint {
+				query.Set("endpoint", "xxxxxx")
+				parsed.RawQuery = query.Encode()
+				redactedStorage = parsed.String()
+				break
+			}
+		}
+	}
+	c.Storage = util.AddressOf(util.MaskSensitiveDataInURI(redactedStorage))
 }

@@ -109,6 +109,9 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 		SinkURI: "blackhole://",
 		StartTs: 449999999999999999,
 		Config: &ReplicaConfig{
+			Sink: &SinkConfig{
+				SimpleConfig: &SimpleConfig{IncludeStartTs: util.AddressOf(true)},
+			},
 			MemoryQuota:       util.AddressOf(uint64(1024)),
 			CaseSensitive:     util.AddressOf(true),
 			ForceReplicate:    util.AddressOf(true),
@@ -150,6 +153,8 @@ func TestChangeFeedInfoTOMLRoundTripToInternal(t *testing.T) {
 	require.Equal(t, 10*time.Minute, *wrapper.Config.SyncPointInterval)
 	require.Equal(t, "correctness", util.GetOrZero(wrapper.Config.Integrity.IntegrityCheckLevel))
 	require.Equal(t, "eventual", util.GetOrZero(wrapper.Config.Consistent.Level))
+	require.NotNil(t, wrapper.Config.Sink.Simple)
+	require.True(t, util.GetOrZero(wrapper.Config.Sink.Simple.IncludeStartTs))
 }
 
 // TestDefaultConfigTOMLRoundTripToInternal encodes the full default replica

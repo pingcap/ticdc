@@ -197,6 +197,23 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	closedEpoch, closed := m.closedMaintainerEpochs[cfId]
 	m.mutex.Unlock()
 
+	if exists && manager.IsClosingOrClosed() {
+		manager.MaintainerFenceMu.Lock()
+		if !manager.CanUpdateMaintainer(from, maintainerEpoch) || !manager.TryClose(false) {
+			manager.MaintainerFenceMu.Unlock()
+			// Leave bootstrap pending until the old manager has released its resources.
+			return nil
+		}
+		m.mutex.Lock()
+		delete(m.dispatcherManagers, cfId)
+		m.recordClosedMaintainerEpochLocked(cfId, manager.GetMaintainerEpoch(), false)
+		closedEpoch, closed = m.closedMaintainerEpochs[cfId]
+		m.mutex.Unlock()
+		manager.MaintainerFenceMu.Unlock()
+		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+		exists = false
+	}
+
 	var err error
 	if !exists {
 		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
@@ -470,7 +487,7 @@ func validateBootstrapNoTableTriggerDispatcher(
 	log.Error("table trigger dispatcher present during nil trigger bootstrap",
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " present during nil trigger bootstrap")
 }
@@ -489,7 +506,7 @@ func validateBootstrapTableTriggerDispatcherID(
 		zap.Stringer("changefeedID", cfID),
 		zap.String("triggerName", triggerName),
 		zap.Stringer("expectedDispatcherID", expectedID),
-		zap.Stringer("actualDispatcherID", currentID))
+		zap.Stringer("dispatcherID", currentID))
 	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 		GenWithStackByArgs(triggerName + " id mismatch during bootstrap")
 }
@@ -567,7 +584,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID", expectedDispatcherID.String()),
-			zap.String("actualDispatcherID", actualDispatcherID.String()))
+			zap.String("dispatcherID", actualDispatcherID.String()))
 
 		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
@@ -666,10 +683,13 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		decGauge := false
 		manager.MaintainerFenceMu.Lock()
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
+			// Preserve removal tombstones if bootstrap later retires this manager.
+			m.mutex.Lock()
+			m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
+			m.mutex.Unlock()
 			if closed := manager.TryClose(req.Removed); closed {
 				m.mutex.Lock()
 				delete(m.dispatcherManagers, cfId)
-				m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 				m.mutex.Unlock()
 				decGauge = true
 				response.Success = true

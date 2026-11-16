@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -28,11 +29,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/notifyqueue"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -103,7 +104,7 @@ type eventBroker struct {
 	// eventStore is the source of the events, eventBroker get the events from the eventStore.
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
-	mounter     event.Mounter
+	tz          *time.Location
 	timezone    string
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
@@ -155,7 +156,6 @@ func newEventBroker(
 	schemaStore schemastore.SchemaStore,
 	mc messaging.MessageSender,
 	tz *time.Location,
-	integrity *integrity.Config,
 ) *eventBroker {
 	// These numbers are define by real test result.
 	// We noted that:
@@ -180,7 +180,7 @@ func newEventBroker(
 		tidbClusterID:           id,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
-		mounter:                 event.NewMounter(tz, integrity),
+		tz:                      tz,
 		timezone:                tz.String(),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
@@ -493,6 +493,16 @@ func (c *eventBroker) getScanTaskRequest(task scanTask) (bool, eventstore.ScanRe
 // It also reports when the applied SchemaStore frontier is the effective range
 // cap, so low-latency mode can retry the dispatcher after that frontier advances.
 func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestResult {
+	failpoint.Inject("DelayCursorRoundsUntil", func(value failpoint.Value) {
+		if testShouldDelayCursorRound(task, value.(string)) {
+			failpoint.Return(scanTaskRequestResult{})
+		}
+	})
+	failpoint.Inject("DelayChangefeedScanUntil", func(value failpoint.Value) {
+		if testShouldDelayChangefeedScan(task, value.(string)) {
+			failpoint.Return(scanTaskRequestResult{})
+		}
+	})
 	// 1. Get the range and resume cursor of the dispatcher.
 	request, needScan := task.getScanRequest()
 	if !needScan {
@@ -753,6 +763,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
+	failpoint.Inject("DelayTableScanUntil", func(value failpoint.Value) {
+		if testShouldDelayTableScan(task, value.(string)) {
+			time.Sleep(10 * time.Millisecond)
+			failpoint.Return()
+		}
+	})
+
 	requestResult := c.getScanTaskRequestResult(task)
 	if !requestResult.needScan {
 		schemaBlocked = requestResult.schemaBlocked
@@ -761,6 +778,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 	request := requestResult.request
 
+	// A consumer waiting for a syncpoint or redo watermark needs no more DML
+	// scans. Keep ready, handshake and no-data progress above this gate, without
+	// spending scan tokens or reserving shared memory needed by lagging dispatchers.
+	if task.availableMemoryQuota.Load() == 0 {
+		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
+		return
+	}
+
 	// TODO: Currently, this rate limit does not take into account the priority of each task, which may lead to situations where certain tasks are starved and cannot be scheduled for a long time.
 	// For example, there are 10 dispatchers in the incremental scanning phase, with a large amount of traffic and a continuous stream of tasks, which occupy all the rate limits.
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
@@ -768,7 +794,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
 	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		log.Debug("scan rate limit exceeded",
-			zap.Stringer("dispatcher", task.id),
+			zap.Stringer("dispatcherID", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
 		return
@@ -811,13 +837,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcherID", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", sl.maxDMLBytes))
 		c.sendSignalResolvedTs(task)
 		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
-	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
+	scanner := newEventScanner(c.eventStore, c.schemaStore, task.changefeedStat.mounter, task.info.GetMode())
 	scanCtx, finishActiveScan := task.beginActiveScan(ctx)
 	defer finishActiveScan()
 	scannedBytes, events, progress, interrupted, err := scanner.scan(scanCtx, task, request, sl)
@@ -833,7 +859,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
-			zap.Any("scanRequest", request), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+			zap.Uint64("commitTsStart", request.Range.CommitTsStart),
+			zap.Uint64("commitTsEnd", request.Range.CommitTsEnd),
+			zap.Uint64("cursorTxnStartTs", request.Cursor.TxnStartTs),
+			zap.String("cursorPosition", util.RedactKey(request.Cursor.Position)),
+			zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
@@ -844,7 +874,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
+		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcherID", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
 		scannedBytes = int64(c.scanLimitInBytes)
 	}
 	task.lastScanBytes.Store(scannedBytes)
@@ -1345,7 +1375,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()))
 		return nil
 	}
@@ -1374,7 +1403,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
+				zap.Uint64("startTs", info.GetStartTs()))
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -1393,7 +1422,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
 			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", info.GetStartTs()),
 			zap.Error(err),
 		)
 		// Mark removed to avoid processing notifications before unregister completes.
@@ -1413,7 +1442,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Stringer("dispatcherID", id),
 		zap.Int64("mode", info.GetMode()),
 		zap.Int64("tableID", span.GetTableID()),
-		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
 		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
@@ -1472,7 +1500,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
 }
 
@@ -1499,7 +1526,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
@@ -1540,7 +1566,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
-				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return err
 		}
@@ -1559,7 +1584,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", span.GetTableID()),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
 			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 			zap.Uint64("oldEpoch", oldStat.epoch),
@@ -1583,7 +1607,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
 		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),
@@ -1651,6 +1674,7 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	status.lowLatencyMode = info.IsLowLatencyMode()
 	status.filter = changefeedFilter
+	status.mounter = event.NewMounter(c.tz, info.GetIntegrity())
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)

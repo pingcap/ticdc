@@ -206,7 +206,7 @@ func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 // IsSubSpan returns true if the sub span is parents spans
 func IsSubSpan(sub heartbeatpb.TableSpan, parents ...heartbeatpb.TableSpan) bool {
 	if bytes.Compare(sub.StartKey, sub.EndKey) >= 0 {
-		log.Panic("the sub span is invalid", zap.Reflect("subSpan", sub))
+		log.Panic("the sub span is invalid", zap.String("subSpan", FormatTableSpan(&sub)))
 	}
 	for _, parent := range parents {
 		if StartCompare(parent.StartKey, sub.StartKey) <= 0 &&

@@ -336,6 +336,147 @@ func TestGenerateBatchSQL(t *testing.T) {
 	require.Equal(t, 2000, len(args[0]), "Should have 2000 arguments (1000 rows * 2 columns)")
 }
 
+func TestSQLGenerationSafeModeBoundary(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t (id int primary key, name varchar(32))")
+	events := []*commonEvent.DMLEvent{
+		helper.DML2Event("test", "t", "insert into t values (1, 'first')"),
+		helper.DML2Event("test", "t", "insert into t values (2, 'second')"),
+	}
+
+	for _, generator := range []struct {
+		name     string
+		generate func([]*commonEvent.DMLEvent) ([]string, [][]any, []common.RowType)
+	}{
+		{name: "normal", generate: writer.generateNormalSQLs},
+		{name: "per-event batch", generate: writer.generateBatchSQLsPerEvent},
+		{name: "cross-event batch", generate: writer.generateBatchSQL},
+	} {
+		for _, tc := range []struct {
+			name     string
+			commitTs uint64
+			verb     string
+		}{
+			{name: "before replicating ts", commitTs: 90, verb: "REPLACE"},
+			{name: "at replicating ts", commitTs: 100, verb: "REPLACE"},
+			{name: "after replicating ts", commitTs: 110, verb: "INSERT"},
+		} {
+			t.Run(generator.name+"/"+tc.name, func(t *testing.T) {
+				for _, event := range events {
+					event.Rewind()
+					event.CommitTs = tc.commitTs
+					event.StartTs = tc.commitTs - 1
+					event.ReplicatingTs = 100
+				}
+				queries, args, rowTypes := generator.generate(events)
+				require.NotEmpty(t, queries)
+				require.Len(t, args, len(queries))
+				require.Len(t, rowTypes, len(queries))
+				var rows [][]any
+				for i, query := range queries {
+					require.True(t, strings.HasPrefix(query, tc.verb+" INTO `test`.`t` "), query)
+					require.Equal(t, common.RowTypeInsert, rowTypes[i])
+					for j := 0; j < len(args[i]); j += 2 {
+						rows = append(rows, args[i][j:j+2])
+					}
+				}
+				require.ElementsMatch(t, [][]any{{int64(1), "first"}, {int64(2), "second"}}, rows)
+			})
+		}
+	}
+}
+
+func TestPrepareDMLsSafeModeBoundary(t *testing.T) {
+	writer, db, _ := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.SafeMode = false
+	writer.cfg.MaxTxnRow = 1
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t (id int primary key, name varchar(32))")
+	events := []*commonEvent.DMLEvent{
+		helper.DML2Event("test", "t", "insert into t values (1, 'first')"),
+		helper.DML2Event("test", "t", "insert into t values (2, 'second')"),
+	}
+	events[0].CommitTs = 100
+	events[0].StartTs = 99
+	events[1].CommitTs = 110
+	events[1].StartTs = 109
+
+	for _, batchDML := range []bool{false, true} {
+		writer.cfg.BatchDMLEnable = batchDML
+		for _, tc := range []struct {
+			name          string
+			replicatingTs [2]uint64
+			verbs         [2]string
+			canBatch      bool
+		}{
+			{name: "equal then replay", replicatingTs: [2]uint64{100, 120}, verbs: [2]string{"REPLACE", "REPLACE"}, canBatch: true},
+			{name: "replay then equal", replicatingTs: [2]uint64{110, 110}, verbs: [2]string{"REPLACE", "REPLACE"}, canBatch: true},
+			{name: "equal then new", replicatingTs: [2]uint64{100, 100}, verbs: [2]string{"REPLACE", "INSERT"}},
+			{name: "replay then new", replicatingTs: [2]uint64{110, 100}, verbs: [2]string{"REPLACE", "INSERT"}},
+		} {
+			t.Run(fmt.Sprintf("batchDML=%t/%s", batchDML, tc.name), func(t *testing.T) {
+				for i, event := range events {
+					event.Rewind()
+					event.ReplicatingTs = tc.replicatingTs[i]
+				}
+				require.Equal(t, batchDML && tc.canBatch, writer.shouldGenBatchSQL(events[0].TableInfo, events))
+				dmls, err := writer.prepareDMLs(events)
+				require.NoError(t, err)
+				defer dmlsPool.Put(dmls)
+				require.Len(t, dmls.sqls, 2)
+				require.Len(t, dmls.values, 2)
+				require.Equal(t, []common.RowType{common.RowTypeInsert, common.RowTypeInsert}, dmls.rowTypes)
+				var ids []int64
+				for i, query := range dmls.sqls {
+					id := dmls.values[i][0].(int64)
+					ids = append(ids, id)
+					require.Equal(t, tc.verbs[id-1]+" INTO `test`.`t` (`id`,`name`) VALUES (?,?)", query)
+				}
+				require.ElementsMatch(t, []int64{1, 2}, ids)
+			})
+		}
+	}
+
+	// Keep both events in one batch to exercise cross-event safe-mode updates.
+	writer.cfg.MaxTxnRow = 2
+	update, _ := helper.DML2UpdateEvent("test", "t", "insert into t values (3, 'old')", "update t set name = 'new' where id = 3")
+	update.CommitTs = 100
+	update.StartTs = 99
+	update.ReplicatingTs = update.CommitTs
+	for _, batchDML := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batchDML=%t/update at replicating ts", batchDML), func(t *testing.T) {
+			writer.cfg.BatchDMLEnable = batchDML
+			update.Rewind()
+			events[1].Rewind()
+			events[1].ReplicatingTs = events[1].CommitTs
+			dmls, err := writer.prepareDMLs([]*commonEvent.DMLEvent{update, events[1]})
+			require.NoError(t, err)
+			defer dmlsPool.Put(dmls)
+			var rows [][]any
+			for i, query := range dmls.sqls {
+				require.NotEqual(t, common.RowTypeUpdate, dmls.rowTypes[i], query)
+				if dmls.rowTypes[i] == common.RowTypeInsert {
+					require.True(t, strings.HasPrefix(query, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES "), query)
+					for j := 0; j < len(dmls.values[i]); j += 2 {
+						rows = append(rows, dmls.values[i][j:j+2])
+					}
+				}
+			}
+			require.ElementsMatch(t, [][]any{{int64(3), "new"}, {int64(2), "second"}}, rows)
+		})
+	}
+}
+
 func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
@@ -1003,6 +1144,86 @@ func TestGroupEventsByTable(t *testing.T) {
 		// Second group should contain events 3 and 4 (new table version)
 		require.Equal(t, 2, len(tableGroups[1]), "Second group should have 2 events")
 	})
+}
+
+func TestPrepareDMLsMaxMultiUpdateRowSize(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("CREATE TABLE t (id INT PRIMARY KEY, payload TEXT)")
+	tableInfo := helper.GetTableInfo(job)
+
+	testCases := []struct {
+		name                  string
+		prePayloadSize        int
+		payloadSize           int
+		maxMultiUpdateRowSize int
+		isTiDB                bool
+		expectedStatements    int
+	}{
+		{"large rows default threshold", 16384, 16384, 1024, true, 2},
+		{"large rows maximum threshold", 16384, 16384, 8192, true, 2},
+		{"small rows", 16, 16, 1024, true, 1},
+		{"batch updates disabled", 16, 16, 0, true, 2},
+		// Each row image also contains an eight-byte primary key.
+		{"below threshold", 503, 503, 1024, true, 1},
+		{"at threshold", 504, 504, 1024, true, 2},
+		{"large previous row", 16384, 16, 1024, true, 2},
+		{"large current row", 16, 16384, 1024, true, 2},
+		{"mysql downstream", 16, 16, 1024, false, 2},
+	}
+	for _, rowsPerEvent := range []int{1, 2} {
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("rowsPerEvent=%d/%s", rowsPerEvent, tc.name), func(t *testing.T) {
+				writer, db, _ := newTestMysqlWriter(t)
+				defer db.Close()
+				writer.cfg.BatchDMLEnable = true
+				writer.cfg.SafeMode = false
+				writer.cfg.IsTiDB = tc.isTiDB
+				writer.cfg.MaxMultiUpdateRowCount = 40
+				writer.cfg.MaxMultiUpdateRowSize = tc.maxMultiUpdateRowSize
+
+				prePayload := strings.Repeat("a", tc.prePayloadSize)
+				payload := strings.Repeat("b", tc.payloadSize)
+				dispatcherID := common.NewDispatcherID()
+				var events []*commonEvent.DMLEvent
+				for startID := 1; startID <= 2; startID += rowsPerEvent {
+					commitTs := uint64(100 + startID)
+					event := commonEvent.NewDMLEvent(dispatcherID, tableInfo.TableName.TableID, commitTs-1, commitTs, tableInfo)
+					event.ReplicatingTs = 1
+					event.Length = int32(rowsPerEvent)
+					event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2*rowsPerEvent)
+					for id := startID; id < startID+rowsPerEvent; id++ {
+						event.RowTypes = append(event.RowTypes, common.RowTypeUpdate, common.RowTypeUpdate)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, prePayload)
+						event.Rows.AppendInt64(0, int64(id))
+						event.Rows.AppendString(1, payload)
+					}
+					events = append(events, event)
+				}
+
+				require.True(t, writer.shouldGenBatchSQL(tableInfo, events))
+				dmls, err := writer.prepareDMLs(events)
+				require.NoError(t, err)
+				defer dmlsPool.Put(dmls)
+				require.Len(t, dmls.sqls, tc.expectedStatements)
+				require.Len(t, dmls.values, tc.expectedStatements)
+				require.Len(t, dmls.rowTypes, tc.expectedStatements)
+				for i, sql := range dmls.sqls {
+					require.Equal(t, common.RowTypeUpdate, dmls.rowTypes[i])
+					if tc.expectedStatements == 1 {
+						require.Contains(t, sql, "CASE WHEN")
+						require.Equal(t, []any{int64(1), int64(1), int64(2), int64(2), int64(1), payload, int64(2), payload, int64(1), int64(2)}, dmls.values[i])
+					} else {
+						require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `payload` = ? WHERE `id` = ? LIMIT 1", sql)
+						id := int64(i + 1)
+						require.Equal(t, []any{id, payload, id}, dmls.values[i])
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
