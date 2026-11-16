@@ -21,12 +21,8 @@ require (
 	github.com/IBM/sarama v1.61.1
 	github.com/KimMachineGun/automemlimit v0.2.4
 	github.com/agiledragon/gomonkey/v2 v2.11.0
-<<<<<<< HEAD
 	github.com/apache/pulsar-client-go v0.13.0
-=======
-	github.com/apache/pulsar-client-go v0.21.0
 	github.com/aws/aws-msk-iam-sasl-signer-go v1.0.4
->>>>>>> a4bd803d8 (sink: support AWS IAM authentication for Amazon MSK (#5874))
 	github.com/aws/aws-sdk-go v1.55.7
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.2
