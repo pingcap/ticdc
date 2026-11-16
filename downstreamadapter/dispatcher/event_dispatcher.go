@@ -112,7 +112,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	d.cacheEvents.Lock()
 	defer d.cacheEvents.Unlock()
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher has removed", zap.Any("dispatcherID", d.id))
+		log.Warn("dispatcher has removed", zap.Stringer("dispatcherID", d.id))
 		return
 	}
 	// Here we have to create a new event slice, because dispatcherEvents will be cleaned up in dynamic stream

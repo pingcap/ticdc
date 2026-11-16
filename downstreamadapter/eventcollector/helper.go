@@ -73,7 +73,7 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
 	if logger.IsDebugEnabled() {
-		log.Debug("handle events", zap.Any("dispatcherID", stat.target.GetId()), zap.Int("eventLen", len(events)))
+		log.Debug("handle events", zap.Stringer("dispatcherID", stat.target.GetId()), zap.Int("eventLen", len(events)))
 	}
 	if len(events) == 0 {
 		return false

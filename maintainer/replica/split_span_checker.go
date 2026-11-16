@@ -266,7 +266,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	log.Debug("split span checker update status",
 		zap.Any("changefeedID", s.changefeedID),
 		zap.Any("groupID", s.groupID),
-		zap.Any("dispatcherID", replica.ID),
+		zap.Stringer("dispatcherID", replica.ID),
 		zap.Any("status", status.GetStatus()),
 		zap.Int("status.regionCount", status.regionCount),
 		zap.Int("status.trafficScore", status.trafficScore),
@@ -824,7 +824,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 			log.Panic("unexpected error: span is not continuous",
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Any("previousDispatcherID", prev.ID),
-				zap.Any("dispatcherID", cur.ID),
+				zap.Stringer("dispatcherID", cur.ID),
 			)
 		}
 		// not in the same node, can't merge

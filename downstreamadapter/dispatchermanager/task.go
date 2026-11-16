@@ -196,7 +196,7 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 		zap.String("reason", reason),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 
 	// Stop retrying and cleanup best-effort.
@@ -235,7 +235,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
-		zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
+		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 	)
 	sinkType := getSinkType(t.mergedDispatcher, t.manager)
 
@@ -284,7 +284,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			zap.Int("total", len(t.dispatcherIDs)),
 			zap.Int("count", count),
 			zap.Int64("mode", t.mergedDispatcher.GetMode()),
-			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
+			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		)
 	}
 
@@ -466,11 +466,11 @@ func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, p
 			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Uint64("minCheckpointTs", minCheckpointTs),
-				zap.Any("dispatcherID", t.mergedDispatcher.GetId()))
+				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()))
 		}
 		log.Info("merge dispatcher uses pending block event to calculate start ts",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
-			zap.Any("dispatcherID", t.mergedDispatcher.GetId()),
+			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
 			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),
 			zap.Uint64("startTs", candidate.startTs),

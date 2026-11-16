@@ -343,7 +343,7 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.IsTableTriggerDispatcher() {
-		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Any("dispatcherID", d.id))
+		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Stringer("dispatcherID", d.id))
 		return false, errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger dispatcher")
 	}
@@ -589,7 +589,7 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher is removing", zap.Any("dispatcherID", d.id))
+		log.Warn("dispatcher is removing", zap.Stringer("dispatcherID", d.id))
 		return true
 	}
 

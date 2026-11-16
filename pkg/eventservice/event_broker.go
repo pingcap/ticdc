@@ -459,7 +459,7 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 				if isUninitialized(dispatcher) {
 					log.Info("dispatcher not reset",
 						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
-						zap.Any("dispatcherID", dispatcher.id))
+						zap.Stringer("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
@@ -468,7 +468,7 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 				if isUninitialized(dispatcher) {
 					log.Info("table trigger dispatcher not reset",
 						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
-						zap.Any("dispatcherID", dispatcher.id))
+						zap.Stringer("dispatcherID", dispatcher.id))
 				}
 				return true
 			})

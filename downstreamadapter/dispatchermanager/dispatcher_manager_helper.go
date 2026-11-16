@@ -151,13 +151,13 @@ func createMergedSpan[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 		if !ok {
 			log.Error("merge dispatcher failed, the dispatcher is not found",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.Any("dispatcherID", id))
+				zap.Stringer("dispatcherID", id))
 			return nil, 0, 0
 		}
 		if dispatcherItem.GetComponentStatus() != heartbeatpb.ComponentState_Working {
 			log.Error("merge dispatcher failed, the dispatcher is not working",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.Any("dispatcherID", id),
+				zap.Stringer("dispatcherID", id),
 				zap.Int64("mode", dispatcherItem.GetMode()),
 				zap.Any("componentStatus", dispatcherItem.GetComponentStatus()))
 			return nil, 0, 0

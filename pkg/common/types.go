@@ -48,8 +48,7 @@ func NewDispatcherID() DispatcherID {
 }
 
 func NewDispatcherIDFromPB(pb *heartbeatpb.DispatcherID) DispatcherID {
-	d := DispatcherID{Low: pb.Low, High: pb.High}
-	return d
+	return DispatcherID{Low: pb.GetLow(), High: pb.GetHigh()}
 }
 
 func (d DispatcherID) ToPB() *heartbeatpb.DispatcherID {

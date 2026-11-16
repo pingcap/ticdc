@@ -78,7 +78,7 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 	if len(keys) == 0 {
 		// use dispatcherID as key if no key generated (no PK/UK),
 		// no concurrence for rows in the same dispatcher.
-		log.Debug("Use dispatcherID as the key", zap.Any("dispatcherID", dispatcherID))
+		log.Debug("Use dispatcherID as the key", zap.Stringer("dispatcherID", dispatcherID))
 		tableKey := make([]byte, 8)
 		binary.BigEndian.PutUint64(tableKey, uint64(dispatcherID.GetLow()))
 		keys = [][]byte{tableKey}

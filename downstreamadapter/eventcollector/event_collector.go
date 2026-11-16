@@ -451,7 +451,7 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
 					v.(*changefeedStat).memoryReleaseCount.Add(1)
 				}
-				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
+				log.Info("release dispatcher memory in DS", zap.Stringer("dispatcherID", feedback.Path))
 				c.ds.Release(feedback.Path)
 			}
 		case feedback := <-c.redoDs.Feedback():
@@ -459,7 +459,7 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
 					v.(*changefeedStat).memoryReleaseCount.Add(1)
 				}
-				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
+				log.Info("release dispatcher memory in redo DS", zap.Stringer("dispatcherID", feedback.Path))
 				c.redoDs.Release(feedback.Path)
 			}
 		}

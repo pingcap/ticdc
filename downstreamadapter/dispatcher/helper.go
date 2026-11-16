@@ -47,7 +47,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("dispatcherID", task.dispatcher.GetId()))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Stringer("dispatcherID", task.dispatcher.GetId()))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
@@ -371,13 +371,13 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 // Execute resends the original protobuf object without rebuilding payload so
 // WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
+	log.Debug("resend task", zap.Stringer("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.offerBlockStatus(t.message)
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {
 		log.Info("resend task periodic resend",
-			zap.Any("dispatcherID", t.dispatcher.GetId()),
+			zap.Stringer("dispatcherID", t.dispatcher.GetId()),
 			zap.Uint64("executeCount", executeCount))
 	}
 	return time.Now().Add(resendTimeInterval)

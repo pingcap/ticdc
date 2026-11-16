@@ -541,7 +541,7 @@ func (m *mockEventStore) AppendEvents(dispatcherID common.DispatcherID, resolved
 	if !ok {
 		return fmt.Errorf("span not found: %v", span)
 	}
-	log.Info("append events", zap.Any("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
+	log.Info("append events", zap.Stringer("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
 	spanStats.(*mockSpanStats).update(resolvedTs, events...)
 	return nil
 }
@@ -679,7 +679,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	if m.registerDispatcherHook != nil && !m.registerDispatcherHook() {
 		return false
 	}
-	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
+	log.Info("subscribe table span", zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("startTs", startTS))
 	spanStats := &mockSpanStats{
 		startTs:            startTS,
