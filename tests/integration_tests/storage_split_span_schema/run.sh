@@ -33,7 +33,7 @@ wait_for() {
 
 dispatcher_log() {
 	grep -F '"new dispatcher created"' "$WORK_DIR/cdc$1.log" |
-		grep -F "[tableID=$table_id]" | tail -n 1
+		grep -F -e "[tableID=$table_id]" -e "[tableSpan=\"tableID: $table_id," | tail -n 1
 }
 
 captures_ready() {
