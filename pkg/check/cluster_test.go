@@ -44,6 +44,8 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 	// and verifies we can determine TiDB `cluster_id` and (when available) the keyspace name.
 	oldNewFn := newMySQLConfigAndDBFn
 	defer func() { newMySQLConfigAndDBFn = oldNewFn }()
+	oldCloseFn := closeMySQLConfigTLSFn
+	defer func() { closeMySQLConfigTLSFn = oldCloseFn }()
 
 	changefeedCfg := &config.ChangefeedConfig{
 		ChangefeedID: common.NewChangefeedID4Test("default", "test"),
@@ -176,6 +178,34 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 		require.True(t, isTiDB)
 		require.Equal(t, uint64(12345), id)
 		require.Equal(t, "default", keyspace)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("closes TLS after database", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectQuery("SELECT VARIABLE_VALUE FROM mysql.tidb WHERE VARIABLE_NAME = 'cluster_id'").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectClose()
+
+		cfg := &mysqlsink.Config{IsTiDB: true}
+		newMySQLConfigAndDBFn = func(
+			context.Context, common.ChangeFeedID, *url.URL, *config.ChangefeedConfig,
+		) (*mysqlsink.Config, *sql.DB, error) {
+			return cfg, db, nil
+		}
+		closedTLS := false
+		closeMySQLConfigTLSFn = func(got *mysqlsink.Config) error {
+			require.Same(t, cfg, got)
+			require.Error(t, db.Ping(), "database must close before its TLS source")
+			closedTLS = true
+			return nil
+		}
+
+		_, _, _, err = getClusterIDBySinkURI(
+			context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		require.NoError(t, err)
+		require.True(t, closedTLS)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
