@@ -71,8 +71,6 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	}
 
 	if len(dataKey) == 0 {
-		log.Debug("encryption not enabled for keyspace",
-			zap.Uint32("keyspaceID", keyspaceID))
 		return EncodeUnencryptedData(data), nil
 	}
 
@@ -111,12 +109,6 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Error(err))
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
-
-	log.Debug("data encrypted successfully",
-		zap.Uint32("keyspaceID", keyspaceID),
-		zap.String("dataKeyID", currentDataKeyID),
-		zap.Int("originalSize", len(data)),
-		zap.Int("encryptedSize", len(result)))
 
 	return result, nil
 }
@@ -201,12 +193,6 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Error(err))
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
-
-	log.Debug("data decrypted successfully",
-		zap.Uint32("keyspaceID", keyspaceID),
-		zap.String("dataKeyID", dataKeyID),
-		zap.Int("encryptedSize", len(layerData)),
-		zap.Int("plaintextSize", len(plaintext)))
 
 	return plaintext, nil
 }

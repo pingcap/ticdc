@@ -327,7 +327,8 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_LongTxn_:
 				continue
 			default:
-				log.Panic("unknown event type", zap.Any("event", event))
+				log.Panic("unknown event type",
+					zap.Uint64("regionID", event.RegionId), zap.Uint64("subscriptionID", uint64(subscriptionID)))
 			}
 			s.eventSink.Push(subscriptionID, regionEvent)
 		} else {

@@ -287,8 +287,8 @@ func (r RedoDMLEvent) IsUpdate() bool {
 func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	if len(r.Row.PreColumns) != len(r.PreColumns) || len(r.Row.Columns) != len(r.Columns) {
 		log.Panic("decode redo dmlevent failed",
-			zap.Any("preColumns", r.Row.PreColumns), zap.Any("preColumnsValue", r.PreColumns),
-			zap.Any("columns", r.Row.Columns), zap.Any("columnsValue", r.Columns),
+			zap.Int("preColumnCount", len(r.Row.PreColumns)), zap.Int("preValueCount", len(r.PreColumns)),
+			zap.Int("columnCount", len(r.Row.Columns)), zap.Int("valueCount", len(r.Columns)),
 		)
 	}
 	tidbTableInfo := &model.TableInfo{
@@ -526,7 +526,7 @@ func appendCol2Chunk(idx int, raw any, ft types.FieldType, chk *chunk.Chunk) {
 	var val uint64
 	switch v := raw.(type) {
 	case uint64:
-		val = (v)
+		val = v
 	case int64:
 		val = uint64(v)
 	}

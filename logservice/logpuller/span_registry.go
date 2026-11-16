@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -185,9 +187,25 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Any("ranges", res))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("subscription client finds slow locked ranges",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("lockedRegionCount", res.LockedRegionCount),
+			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+			zap.Any("fastestRegion", res.FastestRegion),
+			zap.Any("slowestRegion", res.SlowestRegion))
+	}
+}
+
+// formatUnlockedRanges formats unlocked ranges for logging. The span keys may
+// contain row handles, so they are redacted according to the log redaction mode.
+func formatUnlockedRanges(ranges []regionlock.UnLockRangeStatistic) []string {
+	res := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		res = append(res, fmt.Sprintf("startKey: %s, endKey: %s, resolvedTs: %d",
+			util.RedactKey(r.Span.StartKey), util.RedactKey(r.Span.EndKey), r.ResolvedTs))
+	}
+	return res
 }
 
 func newSpanRegistry(pd pd.Client, pdClock pdutil.Clock) *spanRegistry {
@@ -343,7 +361,7 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("holes", attr.UnLockedRanges))
+					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}
 		r.RUnlock()
