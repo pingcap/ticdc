@@ -16,6 +16,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -189,6 +191,92 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	o.changefeedID = "abcd"
 	o.keyspace = "ks"
 	require.NotNil(t, o.run(cmd))
+}
+
+func TestSameClusterUpdateConfigs(t *testing.T) {
+	replica := config.GetDefaultReplicaConfig()
+	replica.AllowSameCluster = new(true)
+	replica.Filter.Rules = []string{"src.*"}
+	replica.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_copy"},
+	}
+	original := v2.ToAPIReplicaConfig(replica)
+
+	for _, tc := range []struct {
+		name                 string
+		config               string
+		wantAllowSameCluster bool
+		wantFilterRules      []string
+		wantDispatchRules    []*v2.DispatchRule
+	}{
+		{
+			name: "replace filter and routing",
+			config: `allow-same-cluster = true
+[filter]
+rules = ['new_src.*']
+[[sink.dispatchers]]
+matcher = ['new_src.*']
+target-schema = 'new_dst'
+target-table = '{table}_routed'
+`,
+			wantAllowSameCluster: true,
+			wantFilterRules:      []string{"new_src.*"},
+			wantDispatchRules: []*v2.DispatchRule{
+				{Matcher: []string{"new_src.*"}, TargetSchema: "new_dst", TargetTable: "{table}_routed"},
+			},
+		},
+		{
+			name:                 "preserve omitted same-cluster configuration",
+			config:               "memory-quota = 2097152\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "disable same-cluster replication",
+			config:               "allow-same-cluster = false\n",
+			wantAllowSameCluster: false,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    original.Sink.DispatchRules,
+		},
+		{
+			name:                 "clear routing",
+			config:               "[sink]\ndispatchers = []\n",
+			wantAllowSameCluster: true,
+			wantFilterRules:      original.Filter.Rules,
+			wantDispatchRules:    []*v2.DispatchRule{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldInfo := &v2.ChangeFeedInfo{Config: v2.ToAPIReplicaConfig(replica)}
+			configPath := filepath.Join(t.TempDir(), "cf.toml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tc.config), 0o644))
+			cmd := NewCmdCli()
+			o := newUpdateChangefeedOptions(newChangefeedCommonOptions())
+			o.addFlags(cmd)
+			require.NoError(t, cmd.ParseFlags([]string{"--config=" + configPath}))
+			updated, err := o.applyChanges(oldInfo, cmd)
+			require.NoError(t, err)
+			require.Equal(t, new(tc.wantAllowSameCluster), updated.Config.AllowSameCluster)
+			require.Equal(t, tc.wantFilterRules, updated.Config.Filter.Rules)
+			require.Equal(t, tc.wantDispatchRules, updated.Config.Sink.DispatchRules)
+			require.Equal(t, original, oldInfo.Config)
+
+			body, err := json.Marshal(o.getChangefeedConfig(cmd, updated))
+			require.NoError(t, err)
+			// The API applies the serialized request to the stored configuration.
+			request := &v2.ChangefeedConfig{ReplicaConfig: v2.ToAPIReplicaConfig(replica)}
+			require.NoError(t, json.Unmarshal(body, request))
+			require.Equal(t, tc.wantDispatchRules, request.ReplicaConfig.Sink.DispatchRules)
+			info := &config.ChangeFeedInfo{Config: request.ReplicaConfig.ToInternalReplicaConfig()}
+			err = check.ValidateSameClusterRouting(info.ToChangefeedConfig())
+			if tc.wantAllowSameCluster && len(tc.wantDispatchRules) == 0 {
+				require.True(t, errors.ErrInvalidReplicaConfig.Equal(err), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestChangefeedUpdateReplicaCredentials(t *testing.T) {
