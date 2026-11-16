@@ -24,7 +24,7 @@ import (
 	_ "github.com/AlekSi/gocov-xml"
 	_ "github.com/axw/gocov/gocov"
 	_ "github.com/daixiang0/gci"
-	_ "github.com/deepmap/oapi-codegen/cmd/oapi-codegen"
+	_ "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen"
 	_ "github.com/gogo/protobuf/protoc-gen-gogofaster"
 	_ "github.com/golang/mock/mockgen"
 	_ "github.com/golangci/golangci-lint/v2/cmd/golangci-lint"
