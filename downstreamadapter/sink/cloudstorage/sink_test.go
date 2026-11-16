@@ -725,9 +725,9 @@ func TestSchemaReuseRespectsExchangePartitionBoundary(t *testing.T) {
 
 	newTableInfo := func(id int64, name string) *common.TableInfo {
 		return common.WrapTableInfo("test", &timodel.TableInfo{
-			ID: id, Name: ast.NewCIStr(name),
+			ID: id, Name: parser_model.NewCIStr(name),
 			Columns: []*timodel.ColumnInfo{{
-				ID: 1, Name: ast.NewCIStr("id"),
+				ID: 1, Name: parser_model.NewCIStr("id"),
 				FieldType: *types.NewFieldType(mysql.TypeLong), State: timodel.StatePublic,
 			}},
 		})

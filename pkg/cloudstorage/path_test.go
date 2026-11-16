@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -450,80 +451,9 @@ func TestIsSchemaFile(t *testing.T) {
 	}
 }
 
-// TODO: br WalkDir interface has bug, waiting the cherry-pick of https://github.com/pingcap/tidb/pull/62433
-// func TestCheckOrWriteSchema(t *testing.T) {
-// 	t.Parallel()
+func TestCheckOrWriteSchema(t *testing.T) {
+	t.Parallel()
 
-<<<<<<< HEAD
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	defer cancel()
-// 	dir := t.TempDir()
-// 	f := testFilePathGenerator(ctx, t, dir)
-
-// 	var columns []*timodel.ColumnInfo
-// 	ft := types.NewFieldType(mysql.TypeLong)
-// 	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-// 	col := &timodel.ColumnInfo{
-// 		Name:         parser_model.NewCIStr("Id"),
-// 		FieldType:    *ft,
-// 		DefaultValue: 10,
-// 	}
-// 	columns = append(columns, col)
-// 	tidbInfo := &timodel.TableInfo{
-// 		ID:      20,
-// 		Name:    parser_model.NewCIStr("table1"),
-// 		Columns: columns,
-// 		Version: 100,
-// 	}
-// 	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
-
-// 	table := VersionedTableName{
-// 		TableNameWithPhysicTableID: tableInfo.TableName,
-// 		TableInfoVersion:           100,
-// 	}
-
-// 	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
-
-// 	// test old dml file can be ignored
-// 	table.TableInfoVersion = 99
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.True(t, hasNewerSchemaVersion)
-// 	require.Equal(t, 1, len(f.versionMap))
-
-// 	// test only table version changed, schema file should be reused
-// 	table.TableInfoVersion = 101
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
-
-// 	dir = filepath.Join(dir, "test/table1/meta")
-// 	files, err := os.ReadDir(dir)
-// 	require.NoError(t, err)
-// 	require.Equal(t, 1, len(files))
-
-// 	// test schema file is invalid
-// 	err = os.WriteFile(filepath.Join(dir,
-// 		fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
-// 		[]byte("invalid"), 0o644)
-// 	require.NoError(t, err)
-// 	err = os.Remove(filepath.Join(dir, files[0].Name()))
-// 	require.NoError(t, err)
-// 	delete(f.versionMap, table)
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
-
-// 	files, err = os.ReadDir(dir)
-// 	require.NoError(t, err)
-// 	require.Equal(t, 2, len(files))
-// }
-=======
 	for _, enableTableAcrossNodes := range []bool{false, true} {
 		t.Run(fmt.Sprintf("tableAcrossNodes=%t", enableTableAcrossNodes), func(t *testing.T) {
 			ctx := t.Context()
@@ -535,14 +465,14 @@ func TestIsSchemaFile(t *testing.T) {
 			ft := types.NewFieldType(mysql.TypeLong)
 			ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 			col := &timodel.ColumnInfo{
-				Name:         ast.NewCIStr("Id"),
+				Name:         parser_model.NewCIStr("Id"),
 				FieldType:    *ft,
 				DefaultValue: 10,
 			}
 			columns = append(columns, col)
 			tidbInfo := &timodel.TableInfo{
 				ID:      20,
-				Name:    ast.NewCIStr("table1"),
+				Name:    parser_model.NewCIStr("table1"),
 				Columns: columns,
 				Version: 100,
 			}
@@ -663,8 +593,8 @@ func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
 			ctx := t.Context()
 			f := testFilePathGenerator(ctx, t, t.TempDir())
 			tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
-				ID: 20, Name: ast.NewCIStr("table1"),
-				Columns: []*timodel.ColumnInfo{{Name: ast.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}},
+				ID: 20, Name: parser_model.NewCIStr("table1"),
+				Columns: []*timodel.ColumnInfo{{Name: parser_model.NewCIStr("id"), FieldType: *types.NewFieldType(mysql.TypeLong)}},
 			})
 			for _, stored := range tc.schemas {
 				var schema SchemaFile
@@ -691,7 +621,6 @@ func TestCheckOrWriteSchemaRespectsDDLBoundaries(t *testing.T) {
 		})
 	}
 }
->>>>>>> b108b60c2 (sink: stop discarding DML based on schema versions for storage sink (#6659))
 
 func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 	t.Parallel()

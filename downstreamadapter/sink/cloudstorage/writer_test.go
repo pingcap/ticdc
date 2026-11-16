@@ -193,13 +193,13 @@ func TestWriterSplitSpanSchemaVersions(t *testing.T) {
 
 			fieldType := types.NewFieldType(mysql.TypeLong)
 			fieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-			tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+			tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
 				ID:         100,
-				Name:       ast.NewCIStr("table1"),
+				Name:       model.NewCIStr("table1"),
 				UpdateTS:   50,
 				PKIsHandle: true,
-				Columns: []*model.ColumnInfo{
-					{ID: 1, Name: ast.NewCIStr("id"), FieldType: *fieldType, State: model.StatePublic},
+				Columns: []*timodel.ColumnInfo{
+					{ID: 1, Name: model.NewCIStr("id"), FieldType: *fieldType, State: timodel.StatePublic},
 				},
 			})
 			var callbackCount atomic.Int64

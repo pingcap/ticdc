@@ -266,13 +266,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if f.config.UseTableIDAsPath {
 		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	}
-<<<<<<< HEAD
-	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
-	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
-=======
-	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
->>>>>>> b108b60c2 (sink: stop discarding DML based on schema versions for storage sink (#6659))
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
 		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
