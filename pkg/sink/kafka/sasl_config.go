@@ -16,6 +16,7 @@ package kafka
 import (
 	"strings"
 
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -56,11 +57,13 @@ func saslMechanismFromString(s string) (saslMechanism, error) {
 
 // saslConfig holds the configuration for SASL authentication.
 type saslConfig struct {
-	user      string
-	password  string
-	mechanism saslMechanism
-	gssapi    gssapiConfig
-	oauth2    oauth2Config
+	user          string
+	password      string
+	mechanism     saslMechanism
+	gssapi        gssapiConfig
+	oauth2        oauth2Config
+	oauthProvider string
+	awsMSKIAM     config.AWSMSKIAMConfig
 }
 
 // oauth2Config holds necessary parameters to support sasl-oauth2.
