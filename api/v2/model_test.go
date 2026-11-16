@@ -113,9 +113,9 @@ func TestReplicaConfigConversion(t *testing.T) {
 				IncludeStartTs: util.AddressOf(true),
 			},
 			KafkaConfig: &KafkaConfig{
-				SASLOAuthCA:       util.AddressOf("/etc/ssl/oauth-ca.pem"),
-				SASLMechanism:     util.AddressOf("OAUTHBEARER"),
-				SASLOAuthProvider: util.AddressOf("AWS_MSK_IAM"),
+				SASLOAuthCA:       new("/etc/ssl/oauth-ca.pem"),
+				SASLMechanism:     new("OAUTHBEARER"),
+				SASLOAuthProvider: new("AWS_MSK_IAM"),
 				AWSMSKIAM: &AWSMSKIAMConfig{
 					Region:          "us-west-2",
 					RoleARN:         "arn:aws:iam::123456789012:role/ticdc-msk",
