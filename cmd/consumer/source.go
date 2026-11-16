@@ -34,14 +34,12 @@ import (
 const (
 	// readBatchRows bounds one source read burst.
 	readBatchRows = 1024
-	// readBatchBytes bounds the encoded bytes in one source read burst.
-	readBatchBytes = 2 << 20
 )
 
-// sourceInput is one unit of encoded source data and its transport acknowledgement.
+// sourcePayload is one unit of encoded source data and its transport acknowledgement.
 // Exactly one of Value, File, or Watermark is set. A File without a Value is a
 // storage schema record.
-type sourceInput struct {
+type sourcePayload struct {
 	Stream int32
 	Key    []byte
 	Value  []byte
@@ -66,7 +64,7 @@ type origin struct {
 }
 
 // Origin returns the transport identity of this input.
-func (i *sourceInput) Origin() origin {
+func (i *sourcePayload) Origin() origin {
 	return origin{
 		Stream: i.Stream,
 		Offset: i.Offset,
@@ -129,7 +127,9 @@ type sourceProgress struct {
 // ContinueReading are called serially by the scheduler; Close runs after all
 // callers stop.
 type sourceReader interface {
-	Read(context.Context) ([]*sourceInput, error)
+	// Read returns the next available inputs. It may return no inputs when the
+	// source has nothing available yet.
+	Read(context.Context) ([]*sourcePayload, error)
 	Streams() []stream
 	Semantics() semantics
 	// Advance publishes decoded progress and the outstanding dependency. It

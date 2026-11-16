@@ -643,7 +643,7 @@ func (c *conductor) collectWatermarks() {
 	}
 }
 
-// sourceInput progress can pass decoded work still awaiting delivery. Register its
+// sourcePayload progress can pass decoded work still awaiting delivery. Register its
 // earliest timestamps before letting the writer advance checkpoints.
 func (c *conductor) advanceWriter(w *writer) {
 	pendingTables := make(map[int64]uint64, len(c.pendingDML))

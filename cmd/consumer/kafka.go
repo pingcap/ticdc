@@ -162,44 +162,39 @@ func (c *kafkaReader) Streams() []stream {
 	return streams
 }
 
-func (c *kafkaReader) Read(ctx context.Context) ([]*sourceInput, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		default:
-		}
-		fetches := c.client.PollRecords(ctx, readBatchRows)
-		if err := fetches.Err(); err != nil {
-			log.Error("read fetches failed", zap.Error(err))
-			return nil, err
-		}
-
-		var batch []*sourceInput
-		for iterator := fetches.RecordIter(); !iterator.Done(); {
-			record := iterator.Next()
-			position := kgo.Record{
-				Topic:     c.topic,
-				Partition: record.Partition,
-				Offset:    record.Offset,
-			}
-			size := int64(len(record.Key) + len(record.Value))
-			batch = append(batch, &sourceInput{
-				Stream: record.Partition,
-				Key:    record.Key,
-				Value:  record.Value,
-				Bytes:  size,
-				Offset: record.Offset,
-				Ack: func(ctx context.Context) error {
-					return c.confirmPosition(ctx, &position)
-				},
-			})
-		}
-		if len(batch) == 0 {
-			continue
-		}
-		return batch, nil
+func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	default:
 	}
+	fetches := c.client.PollRecords(ctx, readBatchRows)
+	if err := fetches.Err(); err != nil {
+		log.Error("read fetches failed", zap.Error(err))
+		return nil, err
+	}
+
+	var batch []*sourcePayload
+	for iterator := fetches.RecordIter(); !iterator.Done(); {
+		record := iterator.Next()
+		position := kgo.Record{
+			Topic:     c.topic,
+			Partition: record.Partition,
+			Offset:    record.Offset,
+		}
+		size := int64(len(record.Key) + len(record.Value))
+		batch = append(batch, &sourcePayload{
+			Stream: record.Partition,
+			Key:    record.Key,
+			Value:  record.Value,
+			Bytes:  size,
+			Offset: record.Offset,
+			Ack: func(ctx context.Context) error {
+				return c.confirmPosition(ctx, &position)
+			},
+		})
+	}
+	return batch, nil
 }
 
 func (c *kafkaReader) Semantics() semantics {

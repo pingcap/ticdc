@@ -167,45 +167,28 @@ func (c *pulsarReader) Streams() []stream {
 	return streams
 }
 
-func (c *pulsarReader) Read(ctx context.Context) ([]*sourceInput, error) {
+func (c *pulsarReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	var message pulsar.ConsumerMessage
 	select {
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
 	case message = <-c.consumer.Chan():
 	}
-	var (
-		batch []*sourceInput
-		bytes int64
-	)
-	for {
-		partition, ok := c.partitions[message.Topic()]
-		if !ok {
-			return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
-		}
-		size := int64(len(message.Key()) + len(message.Payload()))
-		id := message.ID()
-		batch = append(batch, &sourceInput{
-			Stream: partition,
-			Key:    []byte(message.Key()),
-			Value:  message.Payload(),
-			Bytes:  size,
-			Ack: func(ctx context.Context) error {
-				return c.confirmPosition(ctx, id)
-			},
-		})
-		bytes += size
-		if len(batch) >= readBatchRows || bytes >= readBatchBytes {
-			return batch, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		case message = <-c.consumer.Chan():
-		default:
-			return batch, nil
-		}
+	partition, ok := c.partitions[message.Topic()]
+	if !ok {
+		return nil, errors.ErrPulsarInvalidConfig.GenWithStackByArgs("Pulsar partitions changed; restart the consumer")
 	}
+	size := int64(len(message.Key()) + len(message.Payload()))
+	id := message.ID()
+	return []*sourcePayload{{
+		Stream: partition,
+		Key:    []byte(message.Key()),
+		Value:  message.Payload(),
+		Bytes:  size,
+		Ack: func(ctx context.Context) error {
+			return c.confirmPosition(ctx, id)
+		},
+	}}, nil
 }
 
 // ContinueReading has no effect: Read returns bounded work on every call.

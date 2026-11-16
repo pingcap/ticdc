@@ -258,83 +258,81 @@ func (*storageReader) Streams() []stream {
 	return nil
 }
 
-func (c *storageReader) Read(ctx context.Context) ([]*sourceInput, error) {
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		pendingSchema := c.pendingSchema
-		c.mu.Unlock()
-		if pendingSchema != nil {
-			select {
-			case <-ctx.Done():
-				return nil, context.Cause(ctx)
-			case <-pendingSchema:
-				c.mu.Lock()
-				if c.pendingSchema == pendingSchema {
-					c.pendingSchema = nil
-				}
-				c.mu.Unlock()
-			}
-		}
-		if len(c.inputs) == 0 {
-			if c.scanned && c.sourceCheckpoint > c.watermark {
-				c.watermark = c.sourceCheckpoint
-				// The metadata checkpoint covers every file in the completed scan.
-				return []*sourceInput{{Watermark: c.sourceCheckpoint}}, nil
-			}
-			if err := c.scanInputs(ctx); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		input := c.inputs[0]
-		key := input.key
-		tableKey := key.GetKey()
-		ddlWatermark := c.ddlWatermark(tableKey)
-		switch {
-		case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
-			c.inputs[0].index.Idx++
-		default:
-			c.inputs[0] = storageInput{}
-			c.inputs = c.inputs[1:]
-		}
-		schema := c.schemas[input.key.SchemaPathKey]
-		if schema == nil {
-			log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
-		}
-		if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
-			continue
-		}
-		if key.TableVersion < ddlWatermark {
-			c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
-			continue
-		}
-		if key.IsSchemaFileDMLPathKey() {
-			pendingSchema = make(chan struct{})
-			c.mu.Lock()
-			c.pendingSchema = pendingSchema
-			c.mu.Unlock()
-			return []*sourceInput{{File: &file{Schema: schema}}}, nil
-		}
-		idKey := storageTableKey{
-			schema:    key.Schema,
-			table:     key.Table,
-			partition: key.PartitionNum,
-		}
-		tableID := c.tableIDs[idKey]
-		if tableID == 0 {
-			c.nextTableID++
-			tableID = c.nextTableID
-			c.tableIDs[idKey] = tableID
-		}
-		data, err := c.readDMLFile(ctx, input, schema, tableID)
-		if err != nil {
-			return nil, err
-		}
-		return []*sourceInput{data}, nil
+func (c *storageReader) Read(ctx context.Context) ([]*sourcePayload, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
 	}
+	c.mu.Lock()
+	pendingSchema := c.pendingSchema
+	c.mu.Unlock()
+	if pendingSchema != nil {
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case <-pendingSchema:
+			c.mu.Lock()
+			if c.pendingSchema == pendingSchema {
+				c.pendingSchema = nil
+			}
+			c.mu.Unlock()
+		}
+	}
+	if len(c.inputs) == 0 {
+		if c.scanned && c.sourceCheckpoint > c.watermark {
+			c.watermark = c.sourceCheckpoint
+			// The metadata checkpoint covers every file in the completed scan.
+			return []*sourcePayload{{Watermark: c.sourceCheckpoint}}, nil
+		}
+		if err := c.scanInputs(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	input := c.inputs[0]
+	key := input.key
+	tableKey := key.GetKey()
+	ddlWatermark := c.ddlWatermark(tableKey)
+	switch {
+	case input.index.Idx < input.end && key.TableVersion >= ddlWatermark:
+		c.inputs[0].index.Idx++
+	default:
+		c.inputs[0] = storageInput{}
+		c.inputs = c.inputs[1:]
+	}
+	schema := c.schemas[input.key.SchemaPathKey]
+	if schema == nil {
+		log.Panic("Storage DML file has no matching schema", zap.String("schema", key.Schema), zap.String("table", key.Table), zap.Uint64("tableVersion", key.TableVersion))
+	}
+	if key.IsSchemaFileDMLPathKey() && (schema.Query == "" || key.TableVersion <= ddlWatermark) {
+		return nil, nil
+	}
+	if key.TableVersion < ddlWatermark {
+		c.fileIndices[key][input.index.FileIndexKey] = max(input.index.Idx, input.end)
+		return nil, nil
+	}
+	if key.IsSchemaFileDMLPathKey() {
+		pendingSchema = make(chan struct{})
+		c.mu.Lock()
+		c.pendingSchema = pendingSchema
+		c.mu.Unlock()
+		return []*sourcePayload{{File: &file{Schema: schema}}}, nil
+	}
+	idKey := storageTableKey{
+		schema:    key.Schema,
+		table:     key.Table,
+		partition: key.PartitionNum,
+	}
+	tableID := c.tableIDs[idKey]
+	if tableID == 0 {
+		c.nextTableID++
+		tableID = c.nextTableID
+		c.tableIDs[idKey] = tableID
+	}
+	data, err := c.readDMLFile(ctx, input, schema, tableID)
+	if err != nil {
+		return nil, err
+	}
+	return []*sourcePayload{data}, nil
 }
 
 func (c *storageReader) scanInputs(ctx context.Context) error {
@@ -385,7 +383,7 @@ func (c *storageReader) scanInputs(ctx context.Context) error {
 	return nil
 }
 
-func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*sourceInput, error) {
+func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, schema *cloudstorage.SchemaFile, tableID int64) (*sourcePayload, error) {
 	path := input.key.GenerateDMLFilePath(&input.index, c.fileExtension, c.fileIndexWidth)
 	f, err := c.storage.Open(ctx, path, nil)
 	if err != nil {
@@ -401,7 +399,7 @@ func (c *storageReader) readDMLFile(ctx context.Context, input storageInput, sch
 		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err, "read Storage DML file")
 	}
 	c.fileIndices[input.key][input.index.FileIndexKey] = input.index.Idx
-	return &sourceInput{
+	return &sourcePayload{
 		Value: data,
 		Bytes: size,
 		File:  &file{Schema: schema, TableID: tableID},

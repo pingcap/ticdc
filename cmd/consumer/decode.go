@@ -57,7 +57,7 @@ const (
 // decodeFuture keeps one input's output in submission order. Large inputs stream
 // bounded batches; the conductor only receives completed events.
 type decodeFuture struct {
-	input  *sourceInput
+	input  *sourcePayload
 	origin origin
 	output chan []decodedEvent
 	events []decodedEvent
@@ -167,7 +167,7 @@ func (d *decodeGroup) Close() {
 
 // AddEvents transfers ownership of the inputs to the group. The reader calls
 // it serially, so the ordered queue has exactly the source's submission order.
-func (d *decodeGroup) AddEvents(ctx context.Context, inputs []*sourceInput) error {
+func (d *decodeGroup) AddEvents(ctx context.Context, inputs []*sourcePayload) error {
 	for i, input := range inputs {
 		future := &decodeFuture{
 			input:  input,
