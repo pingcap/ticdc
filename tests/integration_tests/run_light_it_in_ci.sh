@@ -59,12 +59,7 @@ mysql_groups=(
 	# G11
 	'pause_changefeed_with_long_time_ddl kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-<<<<<<< HEAD
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
-=======
-	# ds_memory_control
-	'update_changefeed_check_config row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
->>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.

@@ -490,7 +490,7 @@ func TestGenerateBatchSQLWithFilteredEvents(t *testing.T) {
 				event.CommitTs = 2
 				event.ReplicatingTs = 1
 			}
-			expectedPanic := "invalid rows when generating batch SQL in unsafe mode"
+			expectedPanic := "Here are two invalid rows with the same row type and keys"
 			if safeMode {
 				expectedPanic = "invalid row changes"
 			}
@@ -602,7 +602,7 @@ func TestGenerateBatchSQLKeyMismatch(t *testing.T) {
 		{updateEvent, insertEvent},
 		{insertEvent, insertEvent, updateEvent},
 	} {
-		require.PanicsWithValue(t, "invalid rows when generating batch SQL in unsafe mode", func() {
+		require.PanicsWithValue(t, "The Update Row have different Row Key", func() {
 			writer.generateBatchSQL(events)
 		})
 	}

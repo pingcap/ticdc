@@ -109,15 +109,10 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-<<<<<<< HEAD
-			if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-				queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
-=======
-			if w.cfg.EnableActiveActive {
-				queryList, argsList, rowTypesList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
-			} else if w.cfg.hasDeleteFilter(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
+			if w.cfg.hasDeleteFilter(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
 				queryList, argsList, rowTypesList = w.generateSQLsWithDeleteFilter(eventsInGroup)
->>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
+			} else if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
+				queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
 			}
@@ -134,8 +129,6 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	return dmls, nil
 }
 
-<<<<<<< HEAD
-=======
 // generateSQLsWithDeleteFilter preserves event order as the legacy MySQL sink
 // does. Deletes removed by filtering must not cause rows from different events
 // to be merged. Batching within each event still follows the configured limits.
@@ -175,14 +168,6 @@ func (w *Writer) generateSQLsWithDeleteFilter(events []*commonEvent.DMLEvent) ([
 	return queries, args, rowTypes
 }
 
-func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
-	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-		return w.generateActiveActiveNormalSQLs(eventsInGroup)
-	}
-	return w.generateActiveActiveBatchSQL(eventsInGroup)
-}
-
->>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
@@ -351,6 +336,27 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
+// generateSafeBatchSQLForSingleEvent rewrites updates as delete/replace pairs
+// so safe mode can recover rows missing downstream without merging events.
+func (w *Writer) generateSafeBatchSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]any, []common.RowType) {
+	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		if row.RowType == common.RowTypeUpdate {
+			rows = append(rows,
+				&commonEvent.RowChange{RowType: common.RowTypeDelete, PreRow: row.PreRow},
+				&commonEvent.RowChange{RowType: common.RowTypeInsert, Row: row.Row})
+		} else {
+			rows = append(rows, &row)
+		}
+	}
+	return w.batchSingleTxnDmls(rows, event.TableInfo, true)
+}
+
 func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	var (
 		queries      []string
@@ -400,6 +406,14 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 		}
 	}
 
+	// Validate all updates before merging so a filtered duplicate cannot hide
+	// an unexpected, unsplit primary-key change later in the batch.
+	for _, row := range rowLists {
+		if row.RowChange.RowType == common.RowTypeUpdate && !compareKeys(row.PreRowKeys, row.RowKeys) {
+			log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
+		}
+	}
+
 	// Step 2 combine the rows until there is no change
 	// Consider we will split the event if PK is changed, so the Update will not change the PK
 	// for the rows comparation, there are six situations:
@@ -445,9 +459,6 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-							log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
-						}
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							// remove insert one, and break the inner loop for row i
 							flagList[i] = false
@@ -467,9 +478,6 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					}
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].RowKeys
-					if !compareKeys(rowKey, rowLists[i].PreRowKeys) {
-						log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
-					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values, rowTypes := w.generateBatchSQLsPerEvent(events)
@@ -495,9 +503,6 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-								log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
-							}
 							// remove the first one, update the second one, then break
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].RowChange.PreRow,
@@ -677,6 +682,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		var (

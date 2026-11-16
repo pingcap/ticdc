@@ -36,12 +36,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/version"
-<<<<<<< HEAD
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-=======
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
->>>>>>> 1d3f0b17e (sink: avoid batch DML panic when DELETE events are filtered (#6506))
 	"go.uber.org/zap"
 )
 
@@ -246,7 +242,7 @@ func buildDeleteEventFilters(cfg *config.ChangefeedConfig) ([]tfilter.Filter, er
 		}
 		tf, err := tfilter.Parse(rule.Matcher)
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, rule.Matcher)
+			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, rule.Matcher)
 		}
 		if filterDeleteExpr {
 			// Expression filtering uses the case-sensitive matcher directly.
