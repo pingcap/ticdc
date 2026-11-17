@@ -71,6 +71,8 @@ type DMLEventInRedoLog struct {
 	PreColumns []*RedoColumn `msg:"pre-columns"`
 
 	IndexColumns [][]int `msg:"index-columns"`
+	// Prefix lengths are aligned with IndexColumns. Older logs omit them.
+	IndexColumnLengths [][]int `msg:"index-column-lengths,omitempty"`
 }
 
 // DDLEventInRedoLog is used to store DDLEvent in redo log v2 format
@@ -99,6 +101,7 @@ type RedoColumn struct {
 	Type      byte   `msg:"type"`
 	Charset   string `msg:"charset"`
 	Collation string `msg:"collation"`
+	Virtual   bool   `msg:"virtual,omitempty"`
 }
 
 // RedoColumnValue stores Column change
@@ -160,7 +163,7 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		TableID:     r.PhysicalTableID,
 		IsPartition: r.TableInfo.TableName.IsPartition,
 	}
-	row.IndexColumns = getIndexColumns(r.TableInfo)
+	row.IndexColumns, row.IndexColumnLengths = getIndexColumns(r.TableInfo)
 
 	columnCount := len(r.TableInfo.GetColumns())
 	var columnsVal, preColumnsVal []RedoColumnValue
@@ -176,14 +179,12 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 	columns := make([]*RedoColumn, 0, columnCount)
 	for i, column := range r.TableInfo.GetColumns() {
-		if !common.IsColCDCVisible(column) {
-			continue
-		}
 		columns = append(columns, &RedoColumn{
 			Name:      column.Name.String(),
 			Type:      column.GetType(),
 			Charset:   column.GetCharset(),
 			Collation: column.GetCollate(),
+			Virtual:   column.IsVirtualGenerated(),
 		})
 		isHandleKey := r.TableInfo.IsHandleKey(column.ID)
 		switch r.Event.RowType {
@@ -303,10 +304,18 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		rawColsValue = r.PreColumns
 	}
 	for idx, col := range rawCols {
+<<<<<<< HEAD
 		colInfo := &timodel.ColumnInfo{
 			ID:    int64(idx),
 			Name:  parser_model.NewCIStr(col.Name),
 			State: timodel.StatePublic,
+=======
+		colInfo := &model.ColumnInfo{
+			ID:     int64(idx),
+			Name:   ast.NewCIStr(col.Name),
+			Offset: idx,
+			State:  model.StatePublic,
+>>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
 		}
 		colInfo.SetType(col.Type)
 		colInfo.SetCharset(col.Charset)
@@ -317,10 +326,10 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		// if flag.IsBinary(){
 		// }
 		if flag.IsGeneratedColumn() {
-			// Redo only includes stored columns and does not retain the expression.
-			// A non-empty marker keeps generated columns out of downstream DML.
-			colInfo.GeneratedExprString = "pass_generated_check"
-			colInfo.GeneratedStored = true
+			// The sink only needs to know whether this is a generated column;
+			// the downstream table evaluates its original expression.
+			colInfo.GeneratedExprString = "holder"
+			colInfo.GeneratedStored = !col.Virtual
 		}
 		if flag.IsPrimaryKey() {
 			colInfo.AddFlag(mysql.PriKeyFlag)
@@ -340,6 +349,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, colInfo)
 	}
 	for i, index := range r.Row.IndexColumns {
+<<<<<<< HEAD
 		indexInfo := &timodel.IndexInfo{
 			Name:  parser_model.NewCIStr(fmt.Sprintf("index_%d", i)),
 			State: timodel.StatePublic,
@@ -347,17 +357,34 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		firstCol := tidbTableInfo.Columns[index[0]]
 		if mysql.HasPriKeyFlag(firstCol.GetFlag()) || mysql.HasUniKeyFlag(firstCol.GetFlag()) {
 			indexInfo.Unique = true
+=======
+		indexInfo := &model.IndexInfo{
+			ID:     int64(i + 1),
+			Name:   ast.NewCIStr(fmt.Sprintf("index_%d", i)),
+			State:  model.StatePublic,
+			Unique: true,
+>>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
 		}
 		isPrimary := true
-		for _, id := range index {
+		for j, id := range index {
 			col := tidbTableInfo.Columns[id]
 			// When only all columns in the index are primary key, then the index is primary key.
-			if col == nil || !mysql.HasPriKeyFlag(firstCol.GetFlag()) {
+			if col == nil || !mysql.HasPriKeyFlag(col.GetFlag()) {
 				isPrimary = false
 			}
+<<<<<<< HEAD
 			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
 				Name:   parser_model.NewCIStr(rawCols[id].Name),
+=======
+			length := types.UnspecifiedLength
+			if i < len(r.Row.IndexColumnLengths) && j < len(r.Row.IndexColumnLengths[i]) {
+				length = r.Row.IndexColumnLengths[i][j]
+			}
+			indexInfo.Columns = append(indexInfo.Columns, &model.IndexColumn{
+				Name:   ast.NewCIStr(rawCols[id].Name),
+>>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
 				Offset: id,
+				Length: length,
 			})
 		}
 		indexInfo.Primary = isPrimary
@@ -497,18 +524,32 @@ func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
 	return uint64(flag)
 }
 
-// For compatibility
-func getIndexColumns(tableInfo *common.TableInfo) [][]int {
-	indexColumns := make([][]int, 0, len(tableInfo.GetIndexColumns()))
-	rowColumnsOffset := tableInfo.GetRowColumnsOffset()
-	for _, index := range tableInfo.GetIndexColumns() {
-		offsets := make([]int, 0, len(index))
-		for _, id := range index {
-			offsets = append(offsets, rowColumnsOffset[id])
+func getIndexColumns(tableInfo *common.TableInfo) ([][]int, [][]int) {
+	var indexColumns, indexLengths [][]int
+	pkIndex := tableInfo.GetPKIndex()
+	if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == model.ExtraHandleID) {
+		indexColumns = append(indexColumns, []int{tableInfo.MustGetColumnOffsetByID(pkIndex[0])})
+		indexLengths = append(indexLengths, []int{types.UnspecifiedLength})
+	}
+	hasPrefix := false
+	for _, index := range tableInfo.GetIndices() {
+		if (!index.Primary && !index.Unique) || (index.Primary && tableInfo.PKIsHandle()) {
+			continue
+		}
+		offsets := make([]int, 0, len(index.Columns))
+		lengths := make([]int, 0, len(index.Columns))
+		for _, column := range index.Columns {
+			offsets = append(offsets, column.Offset)
+			lengths = append(lengths, column.Length)
+			hasPrefix = hasPrefix || column.Length > 0
 		}
 		indexColumns = append(indexColumns, offsets)
+		indexLengths = append(indexLengths, lengths)
 	}
-	return indexColumns
+	if !hasPrefix {
+		indexLengths = nil
+	}
+	return indexColumns, indexLengths
 }
 
 func collectAllColumnsValue(data []RedoColumnValue, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {

@@ -42,7 +42,7 @@ mysql_groups=(
 	# G04
 	'capture_write_lease ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column mysql_conflict_keys wide_table'
 	# G06
 	# NOTE: same_upstream_downstream is temporarily disabled on release-8.5 CI because TiDB 8.5.x
 	# does not write `cluster_id` into `mysql.tidb` (tidb#59511 not cherry-picked). Re-enable it
