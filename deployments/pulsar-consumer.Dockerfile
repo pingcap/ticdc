@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-FROM golang:1.25-alpine AS builder
-=======
 FROM golang:1.27.3-alpine AS builder
->>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
 RUN apk add --no-cache make bash git build-base
 WORKDIR /go/src/github.com/pingcap/ticdc
 COPY . .
