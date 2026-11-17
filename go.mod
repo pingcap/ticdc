@@ -293,12 +293,8 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-<<<<<<< HEAD
-	github.com/mtibben/percent v0.2.1 // indirect
-=======
 	github.com/mozillazg/go-httpheader v0.2.1 // indirect
-	github.com/mschoch/smat v0.2.0 // indirect
->>>>>>> a28f1a2b4 (*: upgrade go version to 1.27.3 (#6672))
+	github.com/mtibben/percent v0.2.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncw/directio v1.0.5 // indirect
 	github.com/ngaut/pools v0.0.0-20180318154953-b7bc8c42aac7 // indirect
