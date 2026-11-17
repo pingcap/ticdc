@@ -16,11 +16,10 @@ package schemastore
 import (
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -68,12 +67,12 @@ func parseCreateTableQueries(job *model.Job) ([]ast.StmtNode, error) {
 			}
 			if end < 0 {
 				if err != nil {
-					return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+					return nil, errors.WrapError(errors.ErrTiDBUnexpectedJobMeta, err)
 				}
 				if len(stmts) == 0 {
 					return result, nil
 				}
-				return nil, cerror.ErrTiDBUnexpectedJobMeta.GenWithStack("cannot separate batch CREATE statements")
+				return nil, errors.ErrTiDBUnexpectedJobMeta.GenWithStack("cannot separate batch CREATE statements")
 			}
 			next := strings.IndexByte(remaining[end+1:], ';')
 			if next < 0 {
