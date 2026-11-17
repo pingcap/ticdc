@@ -28,7 +28,6 @@ func TestTxnOrderTables(t *testing.T) {
 	for _, scheme := range []string{"mysql", "mysql+ssl", "tidb", "tidb+ssl"} {
 		cfg := GetDefaultReplicaConfig()
 		cfg.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"APP.orders", "app.ledger_*", "!app.ledger_skip"}}
-		cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
 		cfg.Scheduler.ForceSplit = util.AddressOf(true)
 		uri, err := url.Parse(scheme + "://127.0.0.1/")
 		require.NoError(t, err)
@@ -45,6 +44,18 @@ func TestTxnOrderTables(t *testing.T) {
 		require.False(t, f.MatchTable("app", "orders"))
 		require.True(t, f.MatchTable("APP", "orders"))
 		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
+		for _, forceSplit := range []bool{false, true} {
+			cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
+			cfg.Scheduler.ForceSplit = util.AddressOf(forceSplit)
+			err := cfg.ValidateAndAdjust(uri)
+			require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
+			require.ErrorContains(t, err, "txn-order-tables")
+			require.ErrorContains(t, err, "enable-table-across-nodes")
+			require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
+		}
+		cfg.Sink.MySQLConfig.TxnOrderTables = nil
+		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
 	}
 	cfg := GetDefaultReplicaConfig()
 	_, err := toml.Decode("[sink.mysql-config]\ntxn-order-tables = [\"app.orders\", \"app.ledger_*\"]", cfg)
@@ -54,10 +65,12 @@ func TestTxnOrderTables(t *testing.T) {
 	uri, err := url.Parse("mysql://127.0.0.1/")
 	require.NoError(t, err)
 	require.ErrorContains(t, cfg.ValidateAndAdjust(uri), "txn-order-tables")
+	cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
 	for _, sinkURI := range []string{"kafka://127.0.0.1/topic?protocol=open-protocol", "blackhole://", "s3://bucket/prefix?protocol=csv"} {
 		uri, err := url.Parse(sinkURI)
 		require.NoError(t, err)
 		require.NoError(t, cfg.ValidateAndAdjust(uri))
+		require.True(t, util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes))
 		require.Nil(t, cfg.Sink.GetTxnOrderTables(uri.Scheme))
 		require.Equal(t, []string{"invalid"}, cfg.Sink.MySQLConfig.TxnOrderTables)
 	}

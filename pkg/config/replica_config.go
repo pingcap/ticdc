@@ -361,9 +361,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return err
 		}
 	}
-	if txnOrderFilter != nil {
+	if txnOrderFilter != nil && util.GetOrZero(c.Scheduler.EnableTableAcrossNodes) {
 		// A table must have one dispatcher to preserve its transaction order.
-		c.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			"sink.mysql-config.txn-order-tables cannot be used with scheduler.enable-table-across-nodes = true")
 	}
 
 	if c.Integrity != nil {
