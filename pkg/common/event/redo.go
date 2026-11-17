@@ -504,7 +504,7 @@ func convertFlag(colInfo *model.ColumnInfo, isHandleKey bool) uint64 {
 func getIndexColumns(tableInfo *common.TableInfo) ([][]int, [][]int) {
 	var indexColumns, indexLengths [][]int
 	pkIndex := tableInfo.GetPKIndex()
-	if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == model.ExtraHandleID) {
+	if len(pkIndex) == 1 && (tableInfo.PKIsHandle() || pkIndex[0] == model.ExtraHandleID) {
 		indexColumns = append(indexColumns, []int{tableInfo.MustGetColumnOffsetByID(pkIndex[0])})
 		indexLengths = append(indexLengths, []int{types.UnspecifiedLength})
 	}

@@ -415,6 +415,81 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 	}
 }
 
+func TestConflictKeysOpenProtocolWithoutPrimaryKey(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.DDL2Job(`create table test.t(
+		a int, b int as (a + 1) virtual not null, c int not null,
+		unique key uk_generated(b), unique key uk_visible(c))`)
+	source := helper.DML2Event("test", "t",
+		"insert into test.t(a, c) values (1, 1)",
+		"insert into test.t(a, c) values (2, 2)",
+		"insert into test.t(a, c) values (3, 3)")
+	cfg := codeccommon.NewConfig(config.ProtocolOpen)
+	encoder, err := open.NewBatchEncoder(cfg, nil)
+	require.NoError(t, err)
+	decoder, err := open.NewDecoder(t.Context(), 0, cfg, nil)
+	require.NoError(t, err)
+	for {
+		row, ok := source.GetNextRow()
+		if !ok {
+			break
+		}
+		require.NoError(t, encoder.AppendRowChangedEvent(t.Context(), "", &commonEvent.RowEvent{
+			TableInfo: source.TableInfo, CommitTs: source.CommitTs, Event: row,
+			ColumnSelector: columnselector.NewDefaultColumnSelector(), Callback: func() {},
+		}))
+	}
+
+	var keys []map[uint64]struct{}
+	for _, message := range encoder.Build() {
+		decoder.AddKeyValue(message.Key, message.Value)
+		for {
+			typ, ok := decoder.HasNext()
+			if !ok {
+				break
+			}
+			require.Equal(t, codeccommon.MessageTypeRow, typ)
+			event := decoder.NextDMLMessage().ToDMLEvent()
+			t.Cleanup(event.PostFlush)
+			event.DispatcherID = common.DispatcherID{Low: 1, High: 2}
+			// The virtual indexed column is absent from the reconstructed schema.
+			require.Empty(t, event.TableInfo.GetPKIndex())
+			require.Len(t, event.TableInfo.GetColumns(), 2)
+			require.Len(t, event.TableInfo.GetIndices(), 1)
+			var conflictKeys map[uint64]struct{}
+			require.NotPanics(t, func() { conflictKeys = ConflictKeys(event) })
+			require.NotEmpty(t, conflictKeys)
+			keys = append(keys, conflictKeys)
+
+			row, ok := event.GetNextRow()
+			require.True(t, ok)
+			var redo *commonEvent.RedoLog
+			require.NotPanics(t, func() {
+				redo = (&commonEvent.RedoRowEvent{
+					TableInfo: event.TableInfo, PhysicalTableID: event.PhysicalTableID, Event: row,
+				}).ToRedoLog()
+			})
+			data, err := redo.MarshalMsg(nil)
+			require.NoError(t, err)
+			var decoded commonEvent.RedoLog
+			remaining, err := decoded.UnmarshalMsg(data)
+			require.NoError(t, err)
+			require.Empty(t, remaining)
+			replayed := decoded.RedoRow.ToDMLEvent()
+			t.Cleanup(replayed.PostFlush)
+			replayed.DispatcherID = event.DispatcherID
+			require.Equal(t, conflictKeys, ConflictKeys(replayed))
+		}
+	}
+	require.Len(t, keys, 3)
+	for i := 1; i < len(keys); i++ {
+		for key := range keys[0] {
+			require.NotContains(t, keys[i], key, "different unique values must remain independent")
+		}
+	}
+}
+
 func TestConflictKeysReconstructedSchemas(t *testing.T) {
 	testCases := []struct {
 		name       string
