@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/priorityqueue"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -69,8 +70,10 @@ func TestRegionRequestSchedulerBroadcastDeregisterUsesWorkerControlQueue(t *test
 	require.Equal(t, 1, worker1.admission.stats().pending)
 }
 
-func TestRegionRequestSchedulerRequestedRegionCountAggregatesStores(t *testing.T) {
-	scheduler := &regionRequestScheduler{}
+func TestRegionRequestSchedulerMetricsIncludePendingAndInflight(t *testing.T) {
+	scheduler := &regionRequestScheduler{
+		taskQueue: priorityqueue.New[*regionPriorityTask](),
+	}
 
 	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
@@ -83,8 +86,19 @@ func TestRegionRequestSchedulerRequestedRegionCountAggregatesStores(t *testing.T
 		prepareRegionForAdmission(createTestRegionInfo(1, 3), 100), 3)))
 	require.True(t, worker2.admission.submit(newRegionPriorityTask(
 		prepareRegionForAdmission(createTestRegionInfo(1, 4), 100), 4)))
+	require.True(t, scheduler.taskQueue.Push(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 5), 100), 5)))
+	require.True(t, scheduler.taskQueue.Push(newRegionPriorityTask(
+		prepareRegionForAdmission(createTestRegionInfo(1, 6), 100), 6)))
 
-	require.Equal(t, 4, scheduler.requestedRegionCount())
+	stats := scheduler.regionRequestStats()
+	require.Equal(t, regionRequestStats{pending: 4, inflight: 2}, stats)
+
+	scheduler.UpdateMetrics()
+	require.Equal(t, float64(4), testutil.ToFloat64(
+		subscriptionClientRequestedRegionCount.WithLabelValues("pending")))
+	require.Equal(t, float64(2), testutil.ToFloat64(
+		subscriptionClientRequestedRegionCount.WithLabelValues("inflight")))
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())

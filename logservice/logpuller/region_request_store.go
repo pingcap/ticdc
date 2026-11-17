@@ -79,11 +79,12 @@ func (s *regionRequestStore) close() {
 	}
 }
 
-func (s *regionRequestStore) requestedRegionCount() int {
-	count := 0
+func (s *regionRequestStore) regionRequestStats() regionRequestStats {
+	result := regionRequestStats{}
 	for _, worker := range s.workers {
 		stats := worker.admission.stats()
-		count += stats.pending + stats.inflight
+		result.pending += stats.pending
+		result.inflight += stats.inflight
 	}
-	return count
+	return result
 }

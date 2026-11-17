@@ -204,18 +204,28 @@ func (s *regionRequestScheduler) BroadcastDeregister(
 	})
 }
 
-func (s *regionRequestScheduler) requestedRegionCount() int {
-	count := 0
+type regionRequestStats struct {
+	pending  int
+	inflight int
+}
+
+func (s *regionRequestScheduler) regionRequestStats() regionRequestStats {
+	stats := regionRequestStats{pending: s.taskQueue.Len()}
 	s.stores.Range(func(_, value any) bool {
-		count += value.(*regionRequestStore).requestedRegionCount()
+		storeStats := value.(*regionRequestStore).regionRequestStats()
+		stats.pending += storeStats.pending
+		stats.inflight += storeStats.inflight
 		return true
 	})
-	return count
+	return stats
 }
 
 func (s *regionRequestScheduler) UpdateMetrics() {
+	stats := s.regionRequestStats()
 	subscriptionClientRequestedRegionCount.WithLabelValues("pending").
-		Set(float64(s.requestedRegionCount()))
+		Set(float64(stats.pending))
+	subscriptionClientRequestedRegionCount.WithLabelValues("inflight").
+		Set(float64(stats.inflight))
 }
 
 func (s *regionRequestScheduler) Close() {

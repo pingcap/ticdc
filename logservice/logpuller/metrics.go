@@ -67,7 +67,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "log_puller",
 			Name:      "resolved_ts_lag",
-			Help:      "The lag of resolved ts",
+			Help:      "The lag of the minimum subscription resolved ts in seconds.",
 		})
 
 	logPullerMemoryQuota = prometheus.NewGaugeVec(
@@ -117,7 +117,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
 			Name:      "requested_region_count",
-			Help:      "The number of region requests by state.",
+			Help:      "The number of region requests by state: pending or inflight.",
 		}, []string{"state"})
 
 	regionRequestFinishScanDuration = prometheus.NewHistogram(

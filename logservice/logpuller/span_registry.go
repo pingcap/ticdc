@@ -256,14 +256,13 @@ func (r *spanRegistry) UpdateMetrics() {
 	r.RUnlock()
 	subscriptionClientSubscribedRegionCount.Set(float64(count))
 
+	resolvedTsLag := float64(0)
 	if pullerMinResolvedTs != 0 {
 		pdTime := r.pdClock.CurrentTime()
 		phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-		resolvedTsLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-		if resolvedTsLag > 0 {
-			logPullerResolvedTsLag.Set(resolvedTsLag)
-		}
+		resolvedTsLag = max(float64(oracle.GetPhysical(pdTime)-phyResolvedTs)/1e3, 0)
 	}
+	logPullerResolvedTsLag.Set(resolvedTsLag)
 }
 
 type spanAndTargetTs struct {

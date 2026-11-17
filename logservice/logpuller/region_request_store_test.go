@@ -38,7 +38,7 @@ func TestRegionRequestStoreDistributesRegionsAcrossWorkers(t *testing.T) {
 	require.Equal(t, 2, worker2.admission.stats().pending)
 }
 
-func TestRegionRequestStoreRequestedRegionCountIncludesPendingAndInflight(t *testing.T) {
+func TestRegionRequestStoreRegionRequestStats(t *testing.T) {
 	worker1 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	worker2 := &regionRequestWorker{admission: newTestRegionAdmissionController(2, 1)}
 	store := &regionRequestStore{
@@ -52,7 +52,7 @@ func TestRegionRequestStoreRequestedRegionCountIncludesPendingAndInflight(t *tes
 	require.True(t, worker2.admission.submit(newRegionPriorityTask(
 		prepareRegionForAdmission(createTestRegionInfo(1, 4), 100), 4)))
 
-	require.Equal(t, 4, store.requestedRegionCount())
+	require.Equal(t, regionRequestStats{pending: 2, inflight: 2}, store.regionRequestStats())
 
 	require.True(t, req1.abort())
 	require.True(t, req2.abort())

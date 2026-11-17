@@ -7828,7 +7828,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "To prevent excessive accumulation of region request tasks on the TiKV side, CDC will implement rate limiting on the number of requests it initiates.",
+          "description": "Region requests waiting in the scheduler or worker queues are pending. Requests sent to TiKV but not finished with the initial scan are inflight.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -7874,7 +7874,7 @@
               "expr": "ticdc_subscription_client_requested_region_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}-count",
+              "legendFormat": "{{instance}}-{{state}}",
               "refId": "A"
             }
           ],
@@ -7882,7 +7882,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Unresolved Region Request Count ",
+          "title": "Region Request Count by State",
           "tooltip": {
             "shared": true,
             "sort": 0,
