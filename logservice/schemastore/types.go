@@ -109,8 +109,13 @@ type PersistedDDLEvent struct {
 	TableLostReplicationKey bool `msg:"table_lost_replication_key"`
 }
 
-// queryForFilter returns the upstream DDL query, falling back for older persisted events.
+// queryForFilter keeps classic filtering semantics for rewritten special DDLs
+// and uses upstream SQL for other DDLs, with a fallback for older records.
 func (e *PersistedDDLEvent) queryForFilter() string {
+	switch model.ActionType(e.Type) {
+	case model.ActionDropTable, model.ActionDropView, model.ActionExchangeTablePartition:
+		return e.Query
+	}
 	if e.OriginalQuery != "" {
 		return e.OriginalQuery
 	}

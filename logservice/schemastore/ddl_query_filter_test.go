@@ -81,7 +81,7 @@ func TestDDLIgnoreSQLUsesOriginalQuery(t *testing.T) {
 	}
 }
 
-// TestDDLIgnoreSQLForRewrittenQueries checks upstream matching when execution SQL is rebuilt.
+// TestDDLIgnoreSQLForRewrittenQueries checks classic filtering inputs for rebuilt SQL.
 func TestDDLIgnoreSQLForRewrittenQueries(t *testing.T) {
 	rename := buildRenameTableJobForTest(1, 100, "t_new", 20, &model.InvolvingSchemaInfo{
 		Database: "test", Table: "t",
@@ -95,14 +95,15 @@ func TestDDLIgnoreSQLForRewrittenQueries(t *testing.T) {
 	exchange.Query = "ALTER TABLE t2 EXCHANGE PARTITION p0 WITH TABLE t"
 
 	for _, tc := range []struct {
-		name          string
-		job           *model.Job
-		expectedQuery string
+		name           string
+		job            *model.Job
+		expectedQuery  string
+		filterOriginal bool
 	}{
-		{"rename table", rename, "RENAME TABLE `test`.`t` TO `test`.`t_new`"},
-		{"drop table", drop, "DROP TABLE `test`.`t`"},
-		{"drop view", dropView, "DROP VIEW `test`.`t`"},
-		{"exchange partition", exchange, "ALTER TABLE `test`.`t2` EXCHANGE PARTITION `p0` WITH TABLE `test`.`t`"},
+		{"rename table", rename, "RENAME TABLE `test`.`t` TO `test`.`t_new`", true},
+		{"drop table", drop, "DROP TABLE `test`.`t`", false},
+		{"drop view", dropView, "DROP VIEW `test`.`t`", false},
+		{"exchange partition", exchange, "ALTER TABLE `test`.`t2` EXCHANGE PARTITION `p0` WITH TABLE `test`.`t`", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := allDDLHandlers[tc.job.Type].buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
@@ -125,8 +126,8 @@ func TestDDLIgnoreSQLForRewrittenQueries(t *testing.T) {
 				query  string
 				ignore bool
 			}{
-				{"upstream SQL", tc.job.Query, true},
-				{"rewritten SQL", raw.Query, false},
+				{"upstream SQL", tc.job.Query, tc.filterOriginal},
+				{"rewritten SQL", raw.Query, !tc.filterOriginal},
 			} {
 				t.Run(match.name, func(t *testing.T) {
 					f, err := filter.NewFilter(&config.FilterConfig{
@@ -148,7 +149,7 @@ func TestDDLIgnoreSQLForRewrittenQueries(t *testing.T) {
 	}
 }
 
-// TestDDLIgnoreSQLForBatchedQueries checks upstream multi-table rename SQL with per-table matching.
+// TestDDLIgnoreSQLForBatchedQueries checks rebuilt renames with per-table matching.
 func TestDDLIgnoreSQLForBatchedQueries(t *testing.T) {
 	jobs := []*model.Job{
 		buildRenameTablesJobForTest(
@@ -182,13 +183,15 @@ func TestDDLIgnoreSQLForBatchedQueries(t *testing.T) {
 				kept    []int
 			}{
 				{"no match", "test.*", "^UNRELATED$", []int{0, 1}},
-				{"upstream batch", "test.*", batchPattern, nil},
-				{"upstream batch scoped to first table", "test.t", batchPattern, []int{1}},
-				{"upstream batch scoped to second table", "test.t2", batchPattern, []int{0}},
+				{"upstream batch", "test.*", batchPattern, []int{0, 1}},
+				{"upstream batch scoped to first table", "test.t", batchPattern, []int{0, 1}},
+				{"upstream batch scoped to second table", "test.t2", batchPattern, []int{0, 1}},
 				{"upstream batch outside matcher", "test.other", batchPattern, []int{0, 1}},
 				{"rewritten batch", "test.*", "^" + regexp.QuoteMeta(raw.Query) + "$", []int{0, 1}},
-				{"first rewritten statement", "test.*", firstPattern, []int{0, 1}},
-				{"second rewritten statement", "test.*", secondPattern, []int{0, 1}},
+				{"first rewritten statement", "test.*", firstPattern, []int{1}},
+				{"second rewritten statement", "test.*", secondPattern, []int{0}},
+				{"first statement outside matcher", "test.t2", firstPattern, []int{0, 1}},
+				{"batch separator", "test.*", ";RENAME TABLE", []int{0, 1}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					f, err := filter.NewFilter(&config.FilterConfig{
@@ -312,6 +315,9 @@ func TestCreateTablesInvalidQueries(t *testing.T) {
 	for _, query := range []string{
 		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY;",
 		"CREATE TABLE t(a INT PRIMARY KEY);",
+		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY); CREATE TABLE t3(a INT PRIMARY KEY);",
+		"CREATE TABLE t(a INT PRIMARY KEY); SELECT 1;",
+		"CREATE TABLE t(a INT PRIMARY KEY); CREATE TABLE t2(a INT PRIMARY KEY, s VARCHAR(8) DEFAULT '\\n');",
 	} {
 		job := buildCreateTablesJobForTest(1, []int64{100, 101}, []string{"t", "t2"}, 20)
 		job.Query = query

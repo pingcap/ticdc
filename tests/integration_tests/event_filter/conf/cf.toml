@@ -81,26 +81,26 @@ ignore-sql = ['^RENAME TABLE sql_view_rename_raw TO sql_view_rename_raw_done$']
 matcher = ["event_filter.sql_view_rename_restored"]
 ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_view_rename_restored` TO `event_filter`\.`sql_view_rename_restored_done`$']
 
-# Multi-table DDLs match the upstream query with per-table matchers.
+# Multi-table renames, drops and exchanges match rebuilt per-table SQL.
 [[filter.event-filters]]
 matcher = ["event_filter.sql_multi_ignored"]
-ignore-sql = ['^RENAME TABLE sql_multi_ignored TO sql_multi_ignored_done, sql_multi_kept TO sql_multi_kept_done$']
+ignore-sql = ['^RENAME TABLE `event_filter`\.`sql_multi_ignored` TO `event_filter`\.`sql_multi_ignored_done`$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_drop_ignored"]
-ignore-sql = ['^DROP TABLE sql_drop_ignored, sql_drop_kept$']
+ignore-sql = ['^DROP TABLE `event_filter`\.`sql_drop_ignored`$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_drop_view_ignored"]
-ignore-sql = ['^DROP VIEW sql_drop_view_ignored, sql_drop_view_kept$']
+ignore-sql = ['^DROP VIEW `event_filter`\.`sql_drop_view_ignored`$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_exchange_ignored"]
-ignore-sql = ['^ALTER TABLE sql_exchange_ignored EXCHANGE PARTITION p0 WITH TABLE sql_exchange_ignored_normal WITHOUT VALIDATION$']
+ignore-sql = ['^ALTER TABLE `event_filter`\.`sql_exchange_ignored` EXCHANGE PARTITION `p0` WITH TABLE `event_filter`\.`sql_exchange_ignored_normal` WITHOUT VALIDATION$']
 
 [[filter.event-filters]]
 matcher = ["event_filter.sql_exchange_kept"]
-ignore-sql = ['^ALTER TABLE `event_filter`\.`sql_exchange_kept` .* WITHOUT VALIDATION$']
+ignore-sql = ['^ALTER TABLE sql_exchange_kept EXCHANGE PARTITION p0 WITH TABLE sql_exchange_kept_normal WITHOUT VALIDATION$']
 
 # CREATE LIKE and CREATE VIEW use the original SQL before qualifying references.
 [[filter.event-filters]]
