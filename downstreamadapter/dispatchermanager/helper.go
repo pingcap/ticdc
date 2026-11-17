@@ -465,6 +465,7 @@ func deleteCreatedOperators[T dispatcher.Dispatcher](
 }
 
 func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) int { return 0 }
+
 func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRequest) bool {
 	return false
 }
