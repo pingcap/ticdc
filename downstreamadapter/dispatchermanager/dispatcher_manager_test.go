@@ -785,8 +785,9 @@ func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClos
 	require.False(t, eventCollector.HasDispatcher(dispatcherID))
 }
 
-func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
+func TestFencedCreateRetainsOperator(t *testing.T) {
 	manager := createTestManager(t)
+	manager.meta.maintainerID = "maintainer"
 	manager.writePathClosed.Store(true)
 	dispatcherID := common.NewDispatcherID()
 	createReq := NewSchedulerDispatcherRequest(node.ID("maintainer"), &heartbeatpb.ScheduleDispatcherRequest{
@@ -802,19 +803,9 @@ func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
 		ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		OperatorType:   heartbeatpb.OperatorType_O_Add,
 	})
-	manager.currentOperatorMap.Store(dispatcherID, createReq)
+	(&SchedulerDispatcherRequestHandler{}).Handle(manager, createReq)
 
-	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
-		dispatcherID: {
-			ID: dispatcherID,
-			TableSpan: &heartbeatpb.TableSpan{
-				TableID: 1,
-			},
-			StartTs:  1,
-			SchemaID: 1,
-		},
-	}, nil)
-
+	// Failed creation must retain the request for the next maintainer's bootstrap.
 	_, dispatcherExists := manager.dispatcherMap.Get(dispatcherID)
 	require.False(t, dispatcherExists)
 	operator, operatorExists := manager.currentOperatorMap.Load(dispatcherID)

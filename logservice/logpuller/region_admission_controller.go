@@ -48,7 +48,7 @@ func (r *regionReq) finish() bool {
 	cost := time.Since(r.createTime).Seconds()
 	if cost > 0 && cost < abnormalRequestDurationInSec {
 		log.Debug("cdc resolve region request",
-			zap.Uint64("subID", uint64(r.regionInfo.subscribedSpan.subID)),
+			zap.Uint64("subscriptionID", uint64(r.regionInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", r.regionInfo.verID.GetID()),
 			zap.Float64("cost", cost),
 			zap.Int("inflightCount", r.controller.stats().inflight))
@@ -160,6 +160,12 @@ func (c *regionAdmissionController) pop(
 	ctx context.Context,
 	interrupt <-chan struct{},
 ) (*regionReq, error) {
+	var memoryWaitStart time.Time
+	defer func() {
+		if !memoryWaitStart.IsZero() {
+			logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(memoryWaitStart).Seconds())
+		}
+	}()
 	for {
 		c.state.Lock()
 		if c.state.closed {
@@ -182,10 +188,9 @@ func (c *regionAdmissionController) pop(
 		waitingForMemory := memoryReady != nil
 		if waitingForMemory {
 			c.memoryQuota.scanWaiters.Add(1)
-		}
-		waitStart := time.Time{}
-		if waitingForMemory {
-			waitStart = time.Now()
+			if memoryWaitStart.IsZero() {
+				memoryWaitStart = time.Now()
+			}
 		}
 		select {
 		case <-c.notify:
@@ -193,19 +198,16 @@ func (c *regionAdmissionController) pop(
 		case <-interrupt:
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, nil
 		case <-ctx.Done():
 			if waitingForMemory {
 				c.memoryQuota.scanWaiters.Add(-1)
-				logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 			}
 			return nil, ctx.Err()
 		}
 		if waitingForMemory {
 			c.memoryQuota.scanWaiters.Add(-1)
-			logPullerMemoryQuotaScanWaitDuration.Observe(time.Since(waitStart).Seconds())
 		}
 	}
 }

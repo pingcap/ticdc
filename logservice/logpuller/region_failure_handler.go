@@ -227,10 +227,17 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 	defer r.cancelRecoveries()
 
 	handleCachedErrors := func() error {
-		for _, span := range r.cache.popDrainedSpans() {
-			r.onTableDrained(span)
-		}
 		for {
+			drainedSpans := r.cache.popDrainedSpans(drainedSpanBatchSize)
+			for _, span := range drainedSpans {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+				r.onTableDrained(span)
+			}
+
 			batch := r.cache.popBatch(errCacheBatchSize)
 			for _, errInfo := range batch {
 				select {
@@ -242,7 +249,7 @@ func (r *regionFailureHandler) Run(ctx context.Context) error {
 					return err
 				}
 			}
-			if len(batch) < errCacheBatchSize {
+			if len(drainedSpans) < drainedSpanBatchSize && len(batch) < errCacheBatchSize {
 				return nil
 			}
 		}
@@ -412,7 +419,12 @@ type errCache struct {
 	notify       chan struct{}
 }
 
-const errCacheBatchSize = 1024
+const (
+	errCacheBatchSize = 1024
+	// Draining a span synchronously removes its dynstream path, so keep this
+	// batch small enough to bound the delay before cached region errors run.
+	drainedSpanBatchSize = 128
+)
 
 func newErrCache() *errCache {
 	return &errCache{
@@ -442,11 +454,23 @@ func (e *errCache) signal() {
 	}
 }
 
-func (e *errCache) popDrainedSpans() []*subscribedSpan {
+func (e *errCache) popDrainedSpans(limit int) []*subscribedSpan {
 	e.Lock()
 	defer e.Unlock()
-	drainedSpans := e.drainedSpans
-	e.drainedSpans = nil
+	if len(e.drainedSpans) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit > len(e.drainedSpans) {
+		limit = len(e.drainedSpans)
+	}
+	drainedSpans := make([]*subscribedSpan, limit)
+	copy(drainedSpans, e.drainedSpans[:limit])
+	clear(e.drainedSpans[:limit])
+	if limit == len(e.drainedSpans) {
+		e.drainedSpans = e.drainedSpans[:0]
+	} else {
+		e.drainedSpans = e.drainedSpans[limit:]
+	}
 	return drainedSpans
 }
 

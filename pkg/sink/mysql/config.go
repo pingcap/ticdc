@@ -27,6 +27,7 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -139,6 +140,9 @@ type Config struct {
 	BatchDMLEnable  bool
 	MultiStmtEnable bool
 	CachePrepStmts  bool
+	// deleteEventFilters select legacy per-event SQL generation for tables whose
+	// deletes can be filtered, invalidating cross-event merging assumptions.
+	deleteEventFilters []tfilter.Filter
 
 	// sync point
 	SyncPointRetention time.Duration
@@ -232,6 +236,50 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 	}
 }
 
+func buildDeleteEventFilters(cfg *config.ChangefeedConfig) ([]tfilter.Filter, error) {
+	if cfg.Filter == nil {
+		return nil, nil
+	}
+	var filters []tfilter.Filter
+	for _, rule := range cfg.Filter.EventFilters {
+		filterDeleteEvent := false
+		for _, eventType := range rule.IgnoreEvent {
+			switch eventType {
+			case bf.DeleteEvent, bf.AllDML, bf.AllEvent:
+				filterDeleteEvent = true
+			}
+		}
+		filterDeleteExpr := util.GetOrZero(rule.IgnoreDeleteValueExpr) != ""
+		if !filterDeleteEvent && !filterDeleteExpr {
+			continue
+		}
+		tf, err := tfilter.Parse(rule.Matcher)
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, rule.Matcher)
+		}
+		if filterDeleteExpr {
+			// Expression filtering uses the case-sensitive matcher directly.
+			filters = append(filters, tf)
+		}
+		if filterDeleteEvent {
+			if !cfg.CaseSensitive {
+				tf = tfilter.CaseInsensitive(tf)
+			}
+			filters = append(filters, tf)
+		}
+	}
+	return filters, nil
+}
+
+func (c *Config) hasDeleteFilter(schema, table string) bool {
+	for _, filter := range c.deleteEventFilters {
+		if filter.MatchTable(schema, table) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) Apply(
 	sinkURI *url.URL,
 	changefeedID common.ChangeFeedID,
@@ -250,6 +298,10 @@ func (c *Config) Apply(
 	if cfg != nil {
 		c.mergeConfig(cfg)
 		c.TxnOrderFilter, err = config.ParseTxnOrderTables(cfg.SinkConfig.GetTxnOrderTables(scheme), cfg.CaseSensitive)
+		if err != nil {
+			return err
+		}
+		c.deleteEventFilters, err = buildDeleteEventFilters(cfg)
 		if err != nil {
 			return err
 		}

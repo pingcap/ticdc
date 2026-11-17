@@ -590,13 +590,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 	if len(events) > 0 && events[len(events)-1].FinishedTs > currentResolvedTs {
 		end = events[len(events)-1].FinishedTs
 	}
-	log.Debug("FetchTableTriggerDDLEvents end",
-		zap.Any("keyspace", keyspaceMeta),
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("start", start),
-		zap.Int("limit", limit),
-		zap.Uint64("end", end),
-		zap.Any("events", events))
 	return events, end, nil
 }
 

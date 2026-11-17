@@ -29,6 +29,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -187,12 +188,14 @@ func (span *subscribedSpan) markRegionInitialized(state *regionFeedState) {
 func (span *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&span.staleLocksTargetTs, targetTs)
 	res := span.rangeLock.IterAll(span.tryResolveLock)
-	log.Debug("subscription client finds slow locked ranges",
-		zap.Uint64("subscriptionID", uint64(span.subID)),
-		zap.Int("lockedRegionCount", res.LockedRegionCount),
-		zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
-		zap.Any("fastestRegion", res.FastestRegion),
-		zap.Any("slowestRegion", res.SlowestRegion))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("subscription client finds slow locked ranges",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Int("lockedRegionCount", res.LockedRegionCount),
+			zap.Strings("holes", formatUnlockedRanges(res.UnLockedRanges)),
+			zap.Any("fastestRegion", res.FastestRegion),
+			zap.Any("slowestRegion", res.SlowestRegion))
+	}
 }
 
 // formatUnlockedRanges formats unlocked ranges for logging. The span keys may
@@ -339,26 +342,46 @@ func (r *spanRegistry) logSlowRegions(ctx context.Context) error {
 		currTime := r.pdClock.CurrentTime()
 		r.RLock()
 		for subscriptionID, rt := range r.spans {
+			if rt == nil || rt.stopped.Load() {
+				continue
+			}
 			attr := rt.rangeLock.IterAll(nil)
-			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
-			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
+			if attr.LockedRegionCount > 0 {
+				ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
+				if attr.SlowestRegion.Initialized {
+					if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
+						log.Info("subscription client finds a initialized slow region",
+							zap.Uint64("subscriptionID", uint64(subscriptionID)),
+							zap.Int64("tableID", rt.span.TableID),
+							zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+							zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+							zap.Any("slowRegion", attr.SlowestRegion),
+							zap.Duration("resolvedTsLag", currTime.Sub(ckptTime)))
+					}
+				} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
+					log.Info("subscription client initializes a region too slow",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
-						zap.Any("slowRegion", attr.SlowestRegion))
+						zap.Int64("tableID", rt.span.TableID),
+						zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+						zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+						zap.Any("slowRegion", attr.SlowestRegion),
+						zap.Duration("initializeDuration", currTime.Sub(attr.SlowestRegion.Created)))
+				} else if currTime.Sub(ckptTime) > 10*time.Minute {
+					log.Info("subscription client finds a uninitialized slow region",
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Int64("tableID", rt.span.TableID),
+						zap.Uint64("regionID", attr.SlowestRegion.RegionID),
+						zap.Uint64("resolvedTs", attr.SlowestRegion.ResolvedTs),
+						zap.Any("slowRegion", attr.SlowestRegion),
+						zap.Duration("resolvedTsLag", currTime.Sub(ckptTime)))
 				}
-			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				log.Info("subscription client initializes a region too slow",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
-			} else if currTime.Sub(ckptTime) > 10*time.Minute {
-				log.Info("subscription client finds a uninitialized slow region",
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Any("slowRegion", attr.SlowestRegion))
 			}
 			if len(attr.UnLockedRanges) > 0 {
 				log.Info("subscription client holes exist",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Int64("tableID", rt.span.TableID),
+					zap.Int("lockedRegionCount", attr.LockedRegionCount),
+					zap.Int("holeCount", len(attr.UnLockedRanges)),
 					zap.Strings("holes", formatUnlockedRanges(attr.UnLockedRanges)))
 			}
 		}

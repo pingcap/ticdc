@@ -56,6 +56,7 @@ function write_data_round2() {
 	run_sql "insert into split_region.test1(id) values (1101),(1102),(1013),(1104),(1015)" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 }
 
+# With ensure's final delay included, 10 attempts sleep at most 110 seconds.
 function check_changefeed_stopped() {
 	local info
 	info=$(cdc_cli_changefeed query -c "$1") || return 1
@@ -92,7 +93,7 @@ function main() {
 
 	# pause, update config (add filter [!test.*] with scheduler), then resume
 	cdc_cli_changefeed pause -c "test"
-	ensure 60 check_changefeed_stopped test
+	ensure 10 check_changefeed_stopped test
 	cdc_cli_changefeed update -c "test" --config="$CUR/conf/changefeed.toml" --no-confirm
 	cdc_cli_changefeed resume -c "test"
 
