@@ -304,18 +304,11 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		rawColsValue = r.PreColumns
 	}
 	for idx, col := range rawCols {
-<<<<<<< HEAD
 		colInfo := &timodel.ColumnInfo{
-			ID:    int64(idx),
-			Name:  parser_model.NewCIStr(col.Name),
-			State: timodel.StatePublic,
-=======
-		colInfo := &model.ColumnInfo{
 			ID:     int64(idx),
-			Name:   ast.NewCIStr(col.Name),
+			Name:   parser_model.NewCIStr(col.Name),
 			Offset: idx,
-			State:  model.StatePublic,
->>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
+			State:  timodel.StatePublic,
 		}
 		colInfo.SetType(col.Type)
 		colInfo.SetCharset(col.Charset)
@@ -349,21 +342,11 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, colInfo)
 	}
 	for i, index := range r.Row.IndexColumns {
-<<<<<<< HEAD
 		indexInfo := &timodel.IndexInfo{
-			Name:  parser_model.NewCIStr(fmt.Sprintf("index_%d", i)),
-			State: timodel.StatePublic,
-		}
-		firstCol := tidbTableInfo.Columns[index[0]]
-		if mysql.HasPriKeyFlag(firstCol.GetFlag()) || mysql.HasUniKeyFlag(firstCol.GetFlag()) {
-			indexInfo.Unique = true
-=======
-		indexInfo := &model.IndexInfo{
 			ID:     int64(i + 1),
-			Name:   ast.NewCIStr(fmt.Sprintf("index_%d", i)),
-			State:  model.StatePublic,
+			Name:   parser_model.NewCIStr(fmt.Sprintf("index_%d", i)),
+			State:  timodel.StatePublic,
 			Unique: true,
->>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
 		}
 		isPrimary := true
 		for j, id := range index {
@@ -372,17 +355,12 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 			if col == nil || !mysql.HasPriKeyFlag(col.GetFlag()) {
 				isPrimary = false
 			}
-<<<<<<< HEAD
-			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
-				Name:   parser_model.NewCIStr(rawCols[id].Name),
-=======
 			length := types.UnspecifiedLength
 			if i < len(r.Row.IndexColumnLengths) && j < len(r.Row.IndexColumnLengths[i]) {
 				length = r.Row.IndexColumnLengths[i][j]
 			}
-			indexInfo.Columns = append(indexInfo.Columns, &model.IndexColumn{
-				Name:   ast.NewCIStr(rawCols[id].Name),
->>>>>>> 5fe98ae87 (mysql: fix missing dependencies for secondary unique keys (#6660))
+			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
+				Name:   parser_model.NewCIStr(rawCols[id].Name),
 				Offset: id,
 				Length: length,
 			})
@@ -527,7 +505,7 @@ func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
 func getIndexColumns(tableInfo *common.TableInfo) ([][]int, [][]int) {
 	var indexColumns, indexLengths [][]int
 	pkIndex := tableInfo.GetPKIndex()
-	if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == model.ExtraHandleID) {
+	if tableInfo.PKIsHandle() || (len(pkIndex) == 1 && pkIndex[0] == timodel.ExtraHandleID) {
 		indexColumns = append(indexColumns, []int{tableInfo.MustGetColumnOffsetByID(pkIndex[0])})
 		indexLengths = append(indexLengths, []int{types.UnspecifiedLength})
 	}

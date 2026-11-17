@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/collate"
 	"github.com/stretchr/testify/require"
 )
@@ -243,43 +242,43 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 			}
 			uType.SetCollate(tc.collation)
 			columns := []*timodel.ColumnInfo{
-				{ID: 1, Offset: 0, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *idType},
-				{ID: 2, Offset: 1, Name: ast.NewCIStr("u"), State: timodel.StatePublic, FieldType: *uType},
+				{ID: 1, Offset: 0, Name: parser_model.NewCIStr("id"), State: timodel.StatePublic, FieldType: *idType},
+				{ID: 2, Offset: 1, Name: parser_model.NewCIStr("u"), State: timodel.StatePublic, FieldType: *uType},
 			}
-			idxCol := &timodel.IndexColumn{Name: ast.NewCIStr("u"), Offset: 1, Length: types.UnspecifiedLength}
+			idxCol := &timodel.IndexColumn{Name: parser_model.NewCIStr("u"), Offset: 1, Length: types.UnspecifiedLength}
 			if tc.prefix > 0 {
 				idxCol.Length = tc.prefix
 			}
 			if tc.generated {
 				columns = append(columns, &timodel.ColumnInfo{
-					ID: 3, Offset: 2, Name: ast.NewCIStr("g"), State: timodel.StatePublic,
+					ID: 3, Offset: 2, Name: parser_model.NewCIStr("g"), State: timodel.StatePublic,
 					FieldType: *types.NewFieldType(mysql.TypeLong), GeneratedExprString: "length(u)", GeneratedStored: tc.stored,
 				})
-				idxCol = &timodel.IndexColumn{Name: ast.NewCIStr("g"), Offset: 2, Length: types.UnspecifiedLength}
+				idxCol = &timodel.IndexColumn{Name: parser_model.NewCIStr("g"), Offset: 2, Length: types.UnspecifiedLength}
 			}
 			indexInfo := &timodel.IndexInfo{
-				ID: 2, Name: ast.NewCIStr("uk"), Unique: true, State: timodel.StatePublic,
+				ID: 2, Name: parser_model.NewCIStr("uk"), Unique: true, State: timodel.StatePublic,
 				Columns: []*timodel.IndexColumn{idxCol},
 			}
 			if tc.composite {
 				columns = append(columns, &timodel.ColumnInfo{
-					ID: 3, Offset: 2, Name: ast.NewCIStr("v"), State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLong),
+					ID: 3, Offset: 2, Name: parser_model.NewCIStr("v"), State: timodel.StatePublic, FieldType: *types.NewFieldType(mysql.TypeLong),
 				})
-				indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{Name: ast.NewCIStr("v"), Offset: 2, Length: types.UnspecifiedLength})
+				indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{Name: parser_model.NewCIStr("v"), Offset: 2, Length: types.UnspecifiedLength})
 			}
 			// A non-unique index before the UK must neither affect its identity
 			// nor introduce dependencies for values that do not conflict.
 			info := &timodel.TableInfo{
-				ID: 100, Name: ast.NewCIStr("t"), PKIsHandle: !tc.nonClustered, Columns: columns,
+				ID: 100, Name: parser_model.NewCIStr("t"), PKIsHandle: !tc.nonClustered, Columns: columns,
 				Indices: []*timodel.IndexInfo{
-					{ID: 1, Name: ast.NewCIStr("idx"), State: timodel.StatePublic, Columns: []*timodel.IndexColumn{idxCol}},
+					{ID: 1, Name: parser_model.NewCIStr("idx"), State: timodel.StatePublic, Columns: []*timodel.IndexColumn{idxCol}},
 					indexInfo,
 				},
 			}
 			if tc.primaryIndex {
 				info.Indices = append(info.Indices, &timodel.IndexInfo{
-					ID: 3, Name: ast.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic,
-					Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0, Length: types.UnspecifiedLength}},
+					ID: 3, Name: parser_model.NewCIStr("PRIMARY"), Primary: true, Unique: true, State: timodel.StatePublic,
+					Columns: []*timodel.IndexColumn{{Name: parser_model.NewCIStr("id"), Offset: 0, Length: types.UnspecifiedLength}},
 				})
 			}
 			tableInfo := common.WrapTableInfo("test", info)
@@ -327,7 +326,10 @@ func TestConflictKeysSecondaryUniqueIndexes(t *testing.T) {
 				if tc.composite {
 					values = append(values, types.NewIntDatum(tc.suffixes[i]))
 				}
-				key, distinct, err := tablecodec.GenIndexKey(codec.NewEncoder(true), time.UTC, info, indexInfo, info.ID, values, nil, nil)
+				// The release-8.5 index encoder reads the global collation switch.
+				collate.SetNewCollationEnabledForTest(true)
+				key, distinct, err := tablecodec.GenIndexKey(time.UTC, info, indexInfo, info.ID, values, nil, nil)
+				collate.SetNewCollationEnabledForTest(false)
 				require.NoError(t, err)
 				require.Equal(t, !tc.null, distinct)
 				dbKeys[i] = key
@@ -428,7 +430,7 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			info := &timodel.TableInfo{ID: 100, Name: ast.NewCIStr("t"), PKIsHandle: tc.idType != mysql.TypeVarchar}
+			info := &timodel.TableInfo{ID: 100, Name: parser_model.NewCIStr("t"), PKIsHandle: tc.idType != mysql.TypeVarchar}
 			for i, tp := range []byte{tc.idType, tc.uniqueType} {
 				if tp == 0 {
 					continue
@@ -447,12 +449,12 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 					ft.SetCollate("utf8mb4_bin")
 				}
 				info.Columns = append(info.Columns, &timodel.ColumnInfo{
-					ID: int64(i + 1), Name: ast.NewCIStr(name), Offset: i, State: timodel.StatePublic, FieldType: *ft,
+					ID: int64(i + 1), Name: parser_model.NewCIStr(name), Offset: i, State: timodel.StatePublic, FieldType: *ft,
 				})
 				if i > 0 || !info.PKIsHandle {
 					info.Indices = append(info.Indices, &timodel.IndexInfo{
-						ID: int64(i + 1), Name: ast.NewCIStr(name), Primary: i == 0, Unique: true, State: timodel.StatePublic,
-						Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr(name), Offset: i, Length: types.UnspecifiedLength}},
+						ID: int64(i + 1), Name: parser_model.NewCIStr(name), Primary: i == 0, Unique: true, State: timodel.StatePublic,
+						Columns: []*timodel.IndexColumn{{Name: parser_model.NewCIStr(name), Offset: i, Length: types.UnspecifiedLength}},
 					})
 				}
 			}

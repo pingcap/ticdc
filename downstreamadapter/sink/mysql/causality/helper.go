@@ -37,7 +37,7 @@ var conflictCollators map[string]collate.Collator
 func init() {
 	conflictCollators = make(map[string]collate.Collator)
 	for _, collation := range collate.GetSupportedCollations() {
-		conflictCollators[collation.Name] = collate.GetCollatorWithCollate(true, collation.Name)
+		conflictCollators[collation.Name] = collate.GetCollator(collation.Name)
 	}
 }
 
@@ -151,7 +151,7 @@ func genKeyList(
 			if indexColumn.Length > 0 {
 				tablecodec.TruncateIndexValue(&datum, indexColumn, info)
 			}
-			key = append(key, collator.ImmutableKey(datum.GetString())...)
+			key = append(key, collator.Key(datum.GetString())...)
 		} else {
 			key = append(key, common.ColumnValueString(value)...)
 		}
