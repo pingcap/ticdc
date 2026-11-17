@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -320,9 +320,9 @@ func TestCreateTablesInvalidQueries(t *testing.T) {
 			databaseMap: map[int64]*BasicDatabaseInfo{1: {Name: "test"}},
 		})
 		require.Error(t, err)
-		code, ok := cerror.RFCCode(err)
+		code, ok := errors.RFCCode(err)
 		require.True(t, ok)
-		require.Equal(t, cerror.ErrTiDBUnexpectedJobMeta.RFCCode(), code)
+		require.Equal(t, errors.ErrTiDBUnexpectedJobMeta.RFCCode(), code)
 	}
 }
 
