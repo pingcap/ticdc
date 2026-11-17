@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
@@ -102,6 +103,111 @@ func TestChangeFeedInfoRmUnusedFieldsKeepsSchemaRegistryForAvroProtocols(t *test
 	}
 }
 
+func TestMaskChangefeedInfoRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	data, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			masked, err := MaskChangefeedInfo([]byte(data))
+			require.NoError(t, err)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(masked)))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+}
+
+func TestChangeFeedInfoStringRedactsErrorMessages(t *testing.T) {
+	originalMode := errors.RedactLogEnabled.Load()
+	t.Cleanup(func() { errors.RedactLogEnabled.Store(originalMode) })
+
+	info := &ChangeFeedInfo{
+		Error:   &RunningError{Message: "error-row-value"},
+		Warning: &RunningError{Message: "warning-row-value"},
+	}
+	original, err := info.Marshal()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		mode            string
+		expectedError   string
+		expectedWarning string
+	}{
+		{
+			name:            "redaction disabled",
+			mode:            errors.RedactLogDisable,
+			expectedError:   "error-row-value",
+			expectedWarning: "warning-row-value",
+		},
+		{
+			name:            "redaction enabled",
+			mode:            errors.RedactLogEnable,
+			expectedError:   "?",
+			expectedWarning: "?",
+		},
+		{
+			name:            "redaction marker",
+			mode:            errors.RedactLogMarker,
+			expectedError:   "‹error-row-value›",
+			expectedWarning: "‹warning-row-value›",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors.RedactLogEnabled.Store(tt.mode)
+
+			var got ChangeFeedInfo
+			require.NoError(t, got.Unmarshal([]byte(info.String())))
+			require.Equal(t, tt.expectedError, got.Error.Message)
+			require.Equal(t, tt.expectedWarning, got.Warning.Message)
+		})
+	}
+
+	after, err := info.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
 func TestChangeFeedInfoStringMasksSensitiveData(t *testing.T) {
 	cfg := GetDefaultReplicaConfig()
 	cfg.Sink.SchemaRegistry = util.AddressOf("https://registry.example.com?access-key=registry-secret-sentinel")
@@ -181,6 +287,54 @@ func TestChangeFeedInfoRmUnusedFieldsEncoderConcurrency(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestChangefeedConfigStringMasksSensitiveData(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.Sink.KafkaConfig = &KafkaConfig{
+		SASLPassword: new("plain-password-sentinel"),
+	}
+	changefeedConfig := &ChangefeedConfig{
+		SinkURI:    "mysql://user:sink-password-sentinel@127.0.0.1:3306/?secret=uri-secret-sentinel",
+		SinkConfig: cfg.Sink,
+		Consistent: &ConsistentConfig{Storage: util.AddressOf("s3://bucket/prefix?secret-access-key=redo-secret-sentinel")},
+	}
+	original, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+
+	output := changefeedConfig.String()
+	for _, secret := range []string{
+		"sink-password-sentinel",
+		"uri-secret-sentinel",
+		"plain-password-sentinel",
+		"redo-secret-sentinel",
+	} {
+		require.NotContains(t, output, secret)
+	}
+	require.Contains(t, output, "mysql://user:xxxxx@127.0.0.1:3306/?secret=xxxxx")
+	require.Contains(t, output, "secret-access-key=xxxxx")
+	after, err := json.Marshal(changefeedConfig)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestChangefeedConfigStringMasksNestedRedoStorageCredential(t *testing.T) {
+	storage := "azblob://container/prefix?account-name=account&endpoint=" +
+		"https%3A%2F%2Faccount.blob.core.windows.net%2F%3Fsv%3D2020%26sig%3Dnested-sas-secret-sentinel"
+	cfg := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &storage}}
+	original, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	output := cfg.String()
+	require.NotContains(t, output, "nested-sas-secret-sentinel")
+	require.Contains(t, output, "endpoint=xxxxxx")
+	after, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+
+	plainStorage := "azblob://container/prefix?endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F"
+	plainConfig := &ChangefeedConfig{Consistent: &ConsistentConfig{Storage: &plainStorage}}
+	require.Contains(t, plainConfig.String(), "endpoint=https%3A%2F%2Faccount.blob.core.windows.net%2F")
 }
 
 func TestChangeFeedInfoRmUnusedFieldsKeepsTableRouting(t *testing.T) {

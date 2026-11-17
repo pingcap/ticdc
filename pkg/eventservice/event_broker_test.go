@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
+	"golang.org/x/time/rate"
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
@@ -49,15 +50,40 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, c
 	ss := NewMockSchemaStore()
 	mc := messaging.NewMockMessageCenter()
 	outputCh := mc.GetMessageChannel()
-	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
-		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
-		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
-	}), es, ss, outputCh
+	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC), es, ss, outputCh
 }
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	did := common.NewDispatcherID()
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
+}
+
+func TestChangefeedStatusUsesOwnMounter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	first := newMockDispatcherInfoForTest(t)
+	first.changefeedID = common.NewChangefeedID4Test("default", "first")
+	first.integrity = &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
+	}
+	firstStatus := broker.getOrSetChangefeedStatus(first)
+
+	firstReplica := newMockDispatcherInfoForTest(t)
+	firstReplica.changefeedID = first.changefeedID
+	firstReplica.integrity = first.integrity
+	require.Same(t, firstStatus, broker.getOrSetChangefeedStatus(firstReplica))
+
+	second := newMockDispatcherInfoForTest(t)
+	second.changefeedID = common.NewChangefeedID4Test("default", "second")
+	second.integrity = &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelCorrectness),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelError),
+	}
+	secondStatus := broker.getOrSetChangefeedStatus(second)
+
+	require.NotSame(t, firstStatus.mounter, secondStatus.mounter)
 }
 
 func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
@@ -1824,4 +1850,26 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+func TestZeroDispatcherQuotaDoesNotSpendScanTokens(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	status := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.receivedResolvedTs.Store(102)
+	disp.eventStoreCommitTs.Store(101)
+	disp.availableMemoryQuota.Store(0)
+	shared := atomic.NewUint64(minScanLimitInBytes * 2)
+	status.availableMemoryQuota.Store(node.ID(info.GetServerID()), shared)
+	broker.scanRateLimiter = rate.NewLimiter(0, minScanLimitInBytes*2)
+	before := broker.scanRateLimiter.Tokens()
+	cursor := disp.sentResolvedTs.Load()
+	disp.scanState = dispatcherScanQueued
+	broker.doScan(context.Background(), disp)
+	require.Equal(t, before, broker.scanRateLimiter.Tokens())
+	require.Equal(t, uint64(minScanLimitInBytes*2), shared.Load())
+	require.Equal(t, cursor, disp.sentResolvedTs.Load(), "unsent DML must not be bypassed by a resolved signal")
 }

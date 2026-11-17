@@ -27,6 +27,8 @@
   - Variables: use lowerCamelCase (e.g. `flushInterval`, not `flush_interval`).
 - Logging: structured logs via `github.com/pingcap/log` + `zap` fields; message strings should **not** include function names and should avoid `-` (use spaces instead).
 - Errors: when an error comes from a third party/library call, wrap it immediately with `errors.Trace(err)` or `errors.WrapError(...)` to attach a stack trace; upstream callers should propagate wrapped errors without wrapping again.
+- Never expose physical credentials or key material in production logs, debug logs, errors, configuration displays, or API responses. This includes passwords, tokens, authorization values, access or secret keys, private keys, credential-bearing URLs or DSNs, and nested third-party errors.
+- Apply masking at logging and display boundaries while preserving useful non-sensitive diagnostics. Do not redact CDC payloads or test-only consumer output unless the task explicitly requires it.
 
 ## Testing Guidelines
 

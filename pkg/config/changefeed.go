@@ -236,7 +236,13 @@ func (cfg *ChangefeedConfig) String() string {
 		log.Error("failed to unmarshal changefeed config", zap.Error(err))
 		return ""
 	}
-	cloned.SinkConfig.MaskSensitiveData()
+	cloned.SinkURI = util.MaskSensitiveDataInURI(cloned.SinkURI)
+	if cloned.SinkConfig != nil {
+		cloned.SinkConfig.MaskSensitiveData()
+	}
+	if cloned.Consistent != nil {
+		cloned.Consistent.MaskSensitiveData()
+	}
 	res, err := json.Marshal(cloned)
 	if err != nil {
 		log.Error("failed to marshal changefeed config", zap.Error(err))
@@ -351,10 +357,7 @@ func (info *ChangeFeedInfo) String() (str string) {
 		return str
 	}
 
-	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
-	if clone.Config != nil {
-		clone.Config.MaskSensitiveData()
-	}
+	clone.maskSensitiveData()
 
 	str, err = clone.Marshal()
 	if err != nil {
@@ -369,11 +372,21 @@ func MaskChangefeedInfo(data []byte) (string, error) {
 	if err := info.Unmarshal(data); err != nil {
 		return "", err
 	}
+	info.maskSensitiveData()
+	return info.Marshal()
+}
+
+func (info *ChangeFeedInfo) maskSensitiveData() {
 	info.SinkURI = util.MaskSensitiveDataInURI(info.SinkURI)
 	if info.Config != nil {
 		info.Config.MaskSensitiveData()
 	}
-	return info.Marshal()
+	if info.Error != nil {
+		info.Error.Message = util.RedactValue(info.Error.Message)
+	}
+	if info.Warning != nil {
+		info.Warning.Message = util.RedactValue(info.Warning.Message)
+	}
 }
 
 // GetStartTs returns StartTs if it's specified or using the

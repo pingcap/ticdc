@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
@@ -48,8 +49,8 @@ func (m *mounter) verifyChecksum(
 		expected, matched, err := verifyRawBytesChecksum(columnInfos, row, decoder, key, handle, m.tz)
 		if err != nil {
 			log.Error("calculate raw checksum failed",
-				zap.Int("version", version), zap.Any("tz", m.tz), zap.Any("handle", handle.String()),
-				zap.Any("key", key), zap.Any("columns", columnInfos), zap.Error(err))
+				zap.Int("version", version), zap.Any("tz", m.tz), zap.String("handle", util.RedactValue(handle.String())),
+				zap.String("key", util.RedactKey(key)), zap.Any("columns", columnInfos), zap.Error(err))
 			return 0, false, errors.Trace(err)
 		}
 		if !matched {

@@ -211,6 +211,8 @@ type SinkConfig struct {
 	OpenProtocol *OpenProtocolConfig `toml:"open" json:"open,omitempty"`
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
+	// Simple protocol related configurations
+	Simple *SimpleConfig `toml:"simple" json:"simple,omitempty"`
 
 	// Integrity is only available when the downstream is MQ.
 	Integrity      *IntegrityConfig `toml:"integrity" json:"integrity"`
@@ -1075,7 +1077,7 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 ) error {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return cerror.WrapError(cerror.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err))
 	}
 
 	var useTableIDAsPathFromURI *bool
@@ -1186,12 +1188,22 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// the source block of Debezium JSON output.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 	// DecimalHandlingMode selects double (default) or string for Debezium JSON decimals.
 	DecimalHandlingMode *string `toml:"decimal-handling-mode" json:"decimal-handling-mode,omitempty"`
 	// BigintUnsignedHandlingMode selects long (default) or string for Debezium JSON unsigned bigints.
 	BigintUnsignedHandlingMode *string `toml:"bigint-unsigned-handling-mode" json:"bigint-unsigned-handling-mode,omitempty"`
 	// BinaryHandlingMode selects bytes, base64 (default), base64-url-safe, or hex for Debezium JSON binary columns.
 	BinaryHandlingMode *string `toml:"binary-handling-mode" json:"binary-handling-mode,omitempty"`
+}
+
+// SimpleConfig represents the configurations for simple protocol encoding
+type SimpleConfig struct {
+	// IncludeStartTs controls whether the transaction start_ts is included in
+	// Simple JSON DML messages. Encoding-format=avro rejects this option.
+	IncludeStartTs *bool `toml:"include-start-ts" json:"include-start-ts,omitempty"`
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text

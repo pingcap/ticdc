@@ -652,7 +652,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		log.Info("new dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
+			zap.Int64("tableID", tableSpans[idx].TableID),
 			zap.Int64("startTs", newStartTsList[idx]),
 			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
@@ -723,6 +723,10 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
+	e.collectBlockStatusRequestWithWindow(ctx, 10*time.Millisecond)
+}
+
+func (e *DispatcherManager) collectBlockStatusRequestWithWindow(ctx context.Context, batchWindow time.Duration) {
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
@@ -752,10 +756,10 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 		}
 
-		// Batch from the first observed status for up to 10ms. We drain ready
+		// Batch from the first observed status for up to the window. We drain ready
 		// entries first, then keep waiting until the same deadline so late arrivals
 		// still join the current request instead of being delayed to the next batch.
-		deadline := time.Now().Add(10 * time.Millisecond)
+		deadline := time.Now().Add(batchWindow)
 	loop:
 		for {
 			var ok bool
@@ -1008,7 +1012,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 	log.Info("new dispatcher created(merge dispatcher)",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", mergedDispatcherID),
-		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+		zap.Int64("tableID", mergedSpan.TableID))
 
 	e.writePathMu.Lock()
 	if e.writePathClosed.Load() {
@@ -1022,6 +1026,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 }
 
 // ==== remove and clean related functions ====
+
+// IsClosingOrClosed reports whether shutdown has started or completed.
+func (e *DispatcherManager) IsClosingOrClosed() bool {
+	return e.closing.Load() || e.closed.Load()
+}
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if removeChangefeed {

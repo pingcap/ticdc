@@ -371,6 +371,18 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if len(changefeeds) == 0 {
+		c.JSON(http.StatusOK, toListResponse(c, []ChangefeedCommonInfo{}))
+		return
+	}
+	info := changefeeds[0]
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Id:   info.KeyspaceID,
+		Name: info.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 	state := c.Query(api.APIOpVarChangefeedState)
 	commonInfos := make([]ChangefeedCommonInfo, 0)
 	for idx, changefeed := range changefeeds {
@@ -449,6 +461,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+	// VerifyTable is a preflight API. Keep configuration validation free of
+	// storage side effects; CreateChangefeed performs the actual accessibility
+	// check before persisting the changefeed.
+	replicaCfg.EnableRedoIOCheck = new(false)
 
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
@@ -529,10 +545,17 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	middleware.SetKeyspaceInContext(c, &keyspacepb.KeyspaceMeta{
+		Id:   cfInfo.KeyspaceID,
+		Name: cfInfo.ChangefeedID.Keyspace(),
+	})
+	if !middleware.AuthenticateRequest(c, h.server) {
+		return
+	}
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
-	c.JSON(http.StatusOK, detail)
+	respondWithFormat(c, http.StatusOK, detail)
 }
 
 func shouldShowRunningError(state config.FeedState) bool {

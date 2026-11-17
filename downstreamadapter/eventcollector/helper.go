@@ -73,7 +73,7 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
 	if logger.IsDebugEnabled() {
-		log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Int("eventLen", len(events)))
+		log.Debug("handle events", zap.Any("dispatcherID", stat.target.GetId()), zap.Int("eventLen", len(events)))
 	}
 	if len(events) == 0 {
 		return false
@@ -171,13 +171,13 @@ func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent, commonEvent.TypeSyncPointEvent:
 		if logger.IsDebugEnabled() {
-			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Uint64("seq", event.GetSeq()), zap.String("type", commonEvent.TypeToString(event.GetType())), zap.Uint64("epoch", event.GetEpoch()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()))
+			log.Debug("Drop event", zap.String("dispatcherID", event.GetDispatcherID().String()), zap.Uint64("seq", event.GetSeq()), zap.String("type", commonEvent.TypeToString(event.GetType())), zap.Uint64("epoch", event.GetEpoch()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	default:
 		if logger.IsDebugEnabled() {
-			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
+			log.Debug("Drop event", zap.String("dispatcherID", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
 		}
 	}
 	return nil
