@@ -369,7 +369,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		prepareJobFunc:             prepareRecoverSchemaJob,
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRecoverSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
-		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForRecoverSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRecoverSchema,
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
 		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
@@ -1626,6 +1626,13 @@ func updateFullTableInfoForMultiTablesDDL(args updateFullTableInfoFuncArgs) {
 	}
 }
 
+func updateFullTableInfoForRecoverSchema(args updateFullTableInfoFuncArgs) {
+	if len(args.event.MultipleTableInfos) == 0 {
+		return
+	}
+	updateFullTableInfoForMultiTablesDDL(args)
+}
+
 // =======
 // updateDatabaseInfoAndTableInfoFunc begin
 // =======
@@ -1821,6 +1828,9 @@ func updateSchemaMetadataForRecoverSchema(args updateSchemaMetadataFuncArgs) {
 	args.databaseMap[schemaID] = &BasicDatabaseInfo{
 		Name:   args.event.SchemaName,
 		Tables: make(map[int64]bool),
+	}
+	if len(args.event.MultipleTableInfos) == 0 {
+		return
 	}
 	updateSchemaMetadataForCreateTables(args)
 }
