@@ -181,8 +181,8 @@ func newDispatcherStat(
 	dispStat := &dispatcherStat{
 		id:                 id,
 		changefeedStat:     changefeedStatus,
-		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
-		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
+		scanWorkerIndex:    common.GID(id).Hash(scanWorkerCount),
+		messageWorkerIndex: common.GID(id).Hash(messageWorkerCount),
 		info:               info,
 		filter:             changefeedStatus.filter,
 		startTs:            info.GetStartTs(),
