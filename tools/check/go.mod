@@ -1,6 +1,6 @@
 module github.com/pingcap/tidb-cdc/_tools
 
-go 1.25.8
+go 1.27.3
 
 require (
 	github.com/AlekSi/gocov-xml v1.1.0
@@ -17,11 +17,11 @@ require (
 	github.com/tinylib/msgp v1.5.0
 	github.com/vektra/mockery/v2 v2.53.4
 	github.com/zhouqiang-cl/gocovmerge v0.0.0-20190125174600-5256314471af
-	golang.org/x/tools v0.48.0
+	golang.org/x/tools v0.49.0
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.1.0
 	google.golang.org/protobuf v1.36.1
 	gotest.tools/gotestsum v1.13.0
-	mvdan.cc/gofumpt v0.7.0
+	mvdan.cc/gofumpt v0.12.0
 	mvdan.cc/sh/v3 v3.3.1
 )
 
@@ -217,10 +217,10 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e // indirect
 	golang.org/x/exp/typeparams v0.0.0-20240314144324-c7f7c6466f7f // indirect
-	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
+	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
