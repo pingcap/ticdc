@@ -282,6 +282,15 @@ func (c *logCoordinator) sendEventBrokerDispatcherCount(target node.ID, req *log
 }
 
 func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservicepb.ChangefeedStates) {
+	// Hold the membership lock through the update so node removal cannot
+	// clean up a report and then have an in-flight report recreate it.
+	// Keep the same lock order as handleNodeChange: nodes, then changefeedStates.
+	c.nodes.Lock()
+	defer c.nodes.Unlock()
+	if _, alive := c.nodes.m[from]; !alive {
+		return
+	}
+
 	c.changefeedStates.Lock()
 	defer c.changefeedStates.Unlock()
 	pdPhyTs := oracle.GetPhysical(c.pdClock.CurrentTime())
