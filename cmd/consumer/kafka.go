@@ -177,10 +177,13 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 	var batch []*sourcePayload
 	for iterator := fetches.RecordIter(); !iterator.Done(); {
 		record := iterator.Next()
+		// CommitRecords reads only these fields. Copying them keeps the fetch
+		// buffer, which Key and Value alias, out of the acknowledgement closure.
 		position := kgo.Record{
-			Topic:     c.topic,
-			Partition: record.Partition,
-			Offset:    record.Offset,
+			Topic:       c.topic,
+			Partition:   record.Partition,
+			Offset:      record.Offset,
+			LeaderEpoch: record.LeaderEpoch,
 		}
 		size := int64(len(record.Key) + len(record.Value))
 		batch = append(batch, &sourcePayload{
@@ -190,7 +193,10 @@ func (c *kafkaReader) Read(ctx context.Context) ([]*sourcePayload, error) {
 			Bytes:  size,
 			Offset: record.Offset,
 			Ack: func(ctx context.Context) error {
-				return c.confirmPosition(ctx, &position)
+				if err := c.client.CommitRecords(ctx, &position); err != nil {
+					return errors.WrapError(errors.ErrInternalCheckFailed, err, "commit Kafka offsets")
+				}
+				return nil
 			},
 		})
 	}
@@ -266,13 +272,6 @@ func (c *kafkaReader) limitReads() {
 
 func (c *kafkaReader) Close() {
 	c.client.Close()
-}
-
-func (c *kafkaReader) confirmPosition(ctx context.Context, position *kgo.Record) error {
-	if err := c.client.CommitRecords(ctx, position); err != nil {
-		return errors.WrapError(errors.ErrInternalCheckFailed, err, "commit Kafka offsets")
-	}
-	return nil
 }
 
 // CheckMessage validates an input after decoding has revealed its DML count.

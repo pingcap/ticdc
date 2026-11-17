@@ -859,14 +859,15 @@ func (c *conductor) confirm(ctx context.Context) error {
 			if checkpoint == 0 {
 				continue
 			}
-			if err := c.confirmPositions(ctx, checkpoint); err != nil {
-				return err
-			}
+			c.confirmPositions(ctx, checkpoint)
 		}
 	}
 }
 
-func (c *conductor) confirmPositions(ctx context.Context, checkpoint uint64) error {
+// confirmPositions acknowledges the checkpoint-covered prefix of every stream.
+// Offsets are committed cumulatively, so a failed acknowledgement is logged and
+// dropped: the next acknowledgement on that stream commits a higher offset.
+func (c *conductor) confirmPositions(ctx context.Context, checkpoint uint64) {
 	c.positionsMu.Lock()
 	positions := maps.Clone(c.positions)
 	c.positionsMu.Unlock()
@@ -875,15 +876,11 @@ func (c *conductor) confirmPositions(ctx context.Context, checkpoint uint64) err
 		if count == 0 {
 			continue
 		}
-		if err := pending[count-1].ack(ctx); err != nil {
-			if ctx.Err() == nil {
-				log.Error("consumer input confirmation failed", zap.Error(err))
-			}
-			return err
+		if err := pending[count-1].ack(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("consumer input confirmation failed", zap.Error(err))
 		}
 		c.dropPositions(stream, count)
 	}
-	return nil
 }
 
 func confirmablePrefix(pending []sourcePosition, checkpoint uint64) int {
