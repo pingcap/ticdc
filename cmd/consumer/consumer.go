@@ -76,7 +76,7 @@ func newConsumer(ctx context.Context, options *options) *consumer {
 func (c *consumer) start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return c.readInputs(ctx)
+		return c.readSource(ctx)
 	})
 	g.Go(func() error {
 		return c.decoder.Run(ctx)
@@ -93,7 +93,7 @@ func (c *consumer) start(ctx context.Context) error {
 	return err
 }
 
-func (c *consumer) readInputs(ctx context.Context) error {
+func (c *consumer) readSource(ctx context.Context) error {
 	for {
 		inputs, err := c.reader.Read(ctx)
 		if err != nil {
