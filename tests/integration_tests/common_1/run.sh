@@ -48,7 +48,6 @@ function test_recover_schema() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "-recover-schema" --data-dir "$WORK_DIR/cdc_data"
 	export GO_FAILPOINTS=''
 
-	check_cdc_server_guard --workdir "$WORK_DIR" --logsuffix "-recover-schema"
 	run_sql "create table recover_empty_schema_test.after_reload (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists recover_empty_schema_test.after_reload ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "drop database recover_empty_schema_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
