@@ -60,21 +60,11 @@ type Decoder struct {
 	cachedMessages *list.List
 	// CachedDMLMessages are messages just released from the cachedMessages.
 	CachedDMLMessages []*common.DMLMessage
-	// PendingDMLMessage identifies the input just cached by NextDMLMessage.
-	// The same object is returned by GetCachedMessages once its schema is known.
-	// It cannot be materialized until it is returned by GetCachedMessages.
-	PendingDMLMessage *common.DMLMessage
-}
-
-type cachedDMLMessage struct {
-	message *message
-	decoded *common.DMLMessage
 }
 
 // NewDecoder returns a new Decoder
 func NewDecoder(
-	ctx context.Context, config *common.Config, db *sql.DB,
-	provider *TableInfoCache,
+	ctx context.Context, config *common.Config, db *sql.DB, provider *TableInfoCache,
 ) (common.Decoder, error) {
 	var (
 		externalStorage storeapi.Storage
@@ -166,7 +156,6 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 	msg := d.msg
 	d.msg = nil
-	d.PendingDMLMessage = nil
 
 	tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 	if tableInfo == nil {
@@ -175,9 +164,7 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 			zap.String("schema", msg.Schema),
 			zap.String("table", msg.Table),
 			zap.Uint64("version", msg.SchemaVersion))
-		pending := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), nil)
-		d.cachedMessages.PushBack(&cachedDMLMessage{message: msg, decoded: pending})
-		d.PendingDMLMessage = pending
+		d.cachedMessages.PushBack(msg)
 		return nil
 	}
 
@@ -317,27 +304,22 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 	d.memo.Write(ddl.TableInfo)
 	d.memo.Write(ddl.MultipleTableInfos[1])
-	return ddl
-}
 
-// GetCachedMessages also checks the shared schema cache, so metadata received
-// by another protocol cursor can release this cursor's pending messages.
-func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	for ele := d.cachedMessages.Front(); ele != nil; {
-		cached := ele.Value.(*cachedDMLMessage)
-		msg := cached.message
+		msg := ele.Value.(*message)
 		next := ele.Next()
 		tableInfo := d.memo.Read(msg.Schema, msg.Table, msg.SchemaVersion)
 		if tableInfo != nil {
-			if d.PendingDMLMessage == cached.decoded {
-				d.PendingDMLMessage = nil
-			}
-			*cached.decoded = *d.newDMLMessage(msg, tableInfo)
-			d.CachedDMLMessages = append(d.CachedDMLMessages, cached.decoded)
+			d.CachedDMLMessages = append(d.CachedDMLMessages, d.newDMLMessage(msg, tableInfo))
 			d.cachedMessages.Remove(ele)
 		}
 		ele = next
 	}
+	return ddl
+}
+
+// GetCachedMessages returns the cached messages.
+func (d *Decoder) GetCachedMessages() []*common.DMLMessage {
 	result := d.CachedDMLMessages
 	d.CachedDMLMessages = nil
 	return result

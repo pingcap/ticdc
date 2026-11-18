@@ -194,26 +194,26 @@ func (d *decoderGroup) Run(ctx context.Context) error {
 }
 
 func (d *decoderGroup) runDecoder(ctx context.Context, decoder decoder) error {
-	var pending map[*common.DMLMessage]*future
-	if decoder.schema != nil {
-		pending = make(map[*common.DMLMessage]*future)
-	}
+	// Inputs whose message the decoder cached until the table info arrives, in
+	// the order the decoder cached them.
+	var waiting []*future
 	for {
-		changed := d.drainCached(decoder, pending)
+		var changed <-chan struct{}
+		waiting, changed = d.drainCached(decoder, waiting)
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-changed:
 		case future := <-d.input:
-			message, err := d.decodeInput(ctx, decoder, future)
+			cached, err := d.decodeInput(ctx, decoder, future)
 			if err != nil {
 				return err
 			}
-			if message == nil {
-				future.finish()
+			if cached {
+				waiting = append(waiting, future)
 				continue
 			}
-			pending[message] = future
+			future.finish()
 		}
 	}
 }
@@ -255,46 +255,47 @@ func (d *decoderGroup) addRow(future *future, message *common.DMLMessage) {
 // drainCached emits rows that were decoded before their schema arrived. The
 // schema change channel is read before the pending rows to avoid missing a
 // write between that check and the select below.
-func (d *decoderGroup) drainCached(decoder decoder, pending map[*common.DMLMessage]*future) <-chan struct{} {
+func (d *decoderGroup) drainCached(decoder decoder, waiting []*future) ([]*future, <-chan struct{}) {
 	if decoder.schema == nil {
-		return nil
+		return waiting, nil
 	}
 	changed := d.schemas.Changes()
 	for _, message := range decoder.schema.GetCachedMessages() {
-		future := pending[message]
+		future := waiting[0]
+		waiting = waiting[1:]
 		d.addRow(future, message)
 		future.finish()
-		delete(pending, message)
 	}
-	return changed
+	return waiting, changed
 }
 
-func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future *future) (*common.DMLMessage, error) {
+// decodeInput decodes the input, reporting whether the decoder cached the
+// message until its table info arrives.
+func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future *future) (bool, error) {
 	input := future.payload
 	if input.File != nil {
-		return nil, d.decodeStorage(ctx, future)
+		return false, d.decodeStorage(ctx, future)
 	}
 	if input.Watermark != 0 {
 		future.addEvent(&event.ResolvedEvent{ResolvedTs: input.Watermark})
-		return nil, nil
+		return false, nil
 	}
 	decoder.AddKeyValue(input.Key, input.Value)
 	for {
 		if err := context.Cause(ctx); err != nil {
-			return nil, err
+			return false, err
 		}
 		kind, more := decoder.HasNext()
 		if !more {
-			return nil, nil
+			return false, nil
 		}
 		switch kind {
 		case common.MessageTypeRow:
 			message := decoder.NextDMLMessage()
 			if message == nil {
-				// Simple has one event per input. Keep its original output slot
-				// while this decoder continues with subsequent messages.
-				message = decoder.schema.PendingDMLMessage
-				return message, nil
+				// Simple has one message per input; the decoder keeps it cached
+				// until the table info arrives.
+				return true, nil
 			}
 			d.addRow(future, message)
 		case common.MessageTypeDDL:
