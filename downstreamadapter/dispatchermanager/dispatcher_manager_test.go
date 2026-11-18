@@ -195,6 +195,10 @@ func (s *bootstrapSchemaStoreForTest) GetTableInfo(
 	}, nil
 }
 
+func (s *bootstrapSchemaStoreForTest) GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	return s.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
+}
+
 func (s *bootstrapSchemaStoreForTest) GetTableDDLEventState(
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,

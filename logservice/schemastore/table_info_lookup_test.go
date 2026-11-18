@@ -97,7 +97,12 @@ func TestGetTableInfoAtTs(t *testing.T) {
 				require.NoError(t, writePersistedDDLEvent(storage.db, &event))
 				storage.tablesDDLHistory[tc.tableID] = append(storage.tablesDDLHistory[tc.tableID], event.FinishedTs)
 			}
-			actual, err := storage.getTableInfoAtTs(tc.tableID, tc.ts)
+			keyspace := &keyspaceSchemaStore{dataStorage: storage}
+			keyspace.resolvedTs.Store(tc.ts)
+			schemas := &schemaStore{keyspaceSchemaStoreMap: map[uint32]*keyspaceSchemaStore{
+				common.DefaultKeyspaceID: keyspace,
+			}}
+			actual, err := schemas.GetTableInfoAtTs(t.Context(), common.DefaultKeyspace, tc.tableID, tc.ts)
 			if tc.deleted {
 				require.ErrorAs(t, err, new(*TableDeletedError))
 				require.Nil(t, actual)

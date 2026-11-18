@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -119,6 +120,14 @@ func (m *mockSchemaStore) GetTableInfo(_ context.Context, _ common.KeyspaceMeta,
 		return infos[idx-1], nil
 	}
 	return nil, nil
+}
+
+func (m *mockSchemaStore) GetTableInfoAtTs(ctx context.Context, keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	info, err := m.GetTableInfo(ctx, keyspaceMeta, tableID, ts)
+	if info == nil && err == nil {
+		return nil, errors.ErrSchemaStorageTableMiss.GenWithStackByArgs(tableID)
+	}
+	return info, err
 }
 
 func (m *mockSchemaStore) GetAllPhysicalTables(_ context.Context, _ common.KeyspaceMeta, _ uint64, _ filter.Filter, _ *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {

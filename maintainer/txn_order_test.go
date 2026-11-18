@@ -19,45 +19,76 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/ordering"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTxnOrderBootstrapSpans(t *testing.T) {
-	f, err := ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
-	require.NoError(t, err)
-	tables := []commonEvent.Table{{TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "ordered"}}}
-	whole := common.TableIDToComparableSpan(0, 1)
-	partial := whole
-	partial.EndKey = append(append([]byte{}, whole.StartKey...), 1)
+func TestFinishBootstrapTxnOrderUsesSpanCheckpoint(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		span      *heartbeatpb.TableSpan
-		operator  bool
-		tableName string
-		wantError bool
+		name       string
+		checkpoint uint64
+		pending    bool
+		whole      bool
+		wantError  bool
 	}{
-		{"whole table", &whole, false, "ordered", false},
-		{"split table", &partial, false, "ordered", true},
-		{"pending split", &partial, true, "ordered", true},
-		{"unmatched table", &partial, false, "unordered", false},
+		{name: "span before rename", checkpoint: 19},
+		{name: "span at rename", checkpoint: 20, wantError: true},
+		{name: "pending create after rename", checkpoint: 21, pending: true, wantError: true},
+		{name: "whole span after rename", checkpoint: 21, whole: true},
+		{name: "span after leaving ordered set", checkpoint: 30},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tables[0].TableName = tc.tableName
-			response := &heartbeatpb.MaintainerBootstrapResponse{}
-			if tc.operator {
-				response.Operators = []*heartbeatpb.ScheduleDispatcherRequest{{Config: &heartbeatpb.DispatcherConfig{Span: tc.span}}}
+			env := newMergeBootstrapTestEnv(t)
+			env.controller.replicaConfig.Sink.MySQLConfig = &config.MySQLConfig{TxnOrderTables: []string{"test.ordered"}}
+			store := eventservice.NewMockSchemaStore()
+			store.SetTables([]commonEvent.Table{{
+				TableID: 1, SchemaID: 1, Splitable: true,
+				SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
+			}})
+			store.AppendDDLEvent(1,
+				commonEvent.DDLEvent{FinishedTs: 10, TableInfo: &common.TableInfo{
+					TableName: common.TableName{Schema: "test", Table: "t1", TableID: 1}, UpdateTS: 10,
+				}},
+				commonEvent.DDLEvent{FinishedTs: 20, TableInfo: &common.TableInfo{
+					TableName: common.TableName{Schema: "test", Table: "ordered", TableID: 1}, UpdateTS: 20,
+				}},
+				commonEvent.DDLEvent{FinishedTs: 30, TableInfo: &common.TableInfo{
+					TableName: common.TableName{Schema: "test", Table: "ordinary", TableID: 1}, UpdateTS: 30,
+				}},
+			)
+			appcontext.SetService(appcontext.SchemaStore, store)
+
+			responses := env.bootstrapResponses(nil)
+			if tc.pending {
+				responses[env.nodeID].Operators = []*heartbeatpb.ScheduleDispatcherRequest{{
+					ScheduleAction: heartbeatpb.ScheduleAction_Create,
+					Config: &heartbeatpb.DispatcherConfig{
+						DispatcherID: env.sourceDispatcherID1.ToPB(), Span: env.sourceSpan1,
+						SchemaID: 1, StartTs: tc.checkpoint,
+					},
+				}}
 			} else {
-				response.Spans = []*heartbeatpb.BootstrapTableSpan{{Span: tc.span}}
+				tableSpan := env.sourceSpan1
+				if tc.whole {
+					tableSpan = env.mergedSpan
+				}
+				span := env.bootstrapSpan(env.sourceDispatcherID1, tableSpan, heartbeatpb.ComponentState_Working)
+				span.CheckpointTs = tc.checkpoint
+				responses[env.nodeID].Spans = []*heartbeatpb.BootstrapTableSpan{span}
 			}
-			err := verifyTxnOrderBootstrapSpans(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{"node": response}, tables, nil, common.DefaultMode, f)
+			_, err := env.controller.FinishBootstrap(t.Context(), responses, true)
 			if tc.wantError {
 				require.ErrorContains(t, err, "does not support split spans")
-			} else {
-				require.NoError(t, err)
+				require.True(t, errors.ShouldFailChangefeed(err))
+				require.False(t, env.controller.bootstrapped)
+				return
 			}
+			require.NoError(t, err)
+			require.NotNil(t, env.controller.spanController.GetTaskByID(env.sourceDispatcherID1))
 		})
 	}
 }
