@@ -127,7 +127,7 @@ func TestCachedDMLReturnsMessage(t *testing.T) {
 
 	decoder := &Decoder{
 		config:         common.NewConfig(config.ProtocolSimple),
-		memo:           newMemoryTableInfoProvider(),
+		memo:           NewTableInfoCache(),
 		cachedMessages: list.New(),
 	}
 	decoder.msg = &message{
