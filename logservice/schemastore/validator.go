@@ -149,10 +149,10 @@ func (v *tableVerifier) worker() {
 			if tbInfo.Sequence != nil {
 				continue
 			}
-			// Materialized view logs are internal tables maintained by TiDB. Their
-			// DDL and row events are not replicated, so they must not participate in
-			// changefeed eligibility checks either.
-			if isMaterializedViewLogTable(tbInfo) {
+			// Materialized view logs and shadows are internal tables maintained by
+			// TiDB. Their DDL and row events are not replicated, so they must not
+			// participate in changefeed eligibility checks either.
+			if isMaterializedViewLogTable(tbInfo) || tbInfo.MaterializedViewShadow != nil {
 				continue
 			}
 

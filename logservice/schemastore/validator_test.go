@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVerifyTablesSkipsMaterializedViewLog(t *testing.T) {
+func TestVerifyTablesSkipsInternalMaterializedViewTables(t *testing.T) {
 	store, err := mockstore.NewMockStore()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
@@ -45,12 +45,16 @@ func TestVerifyTablesSkipsMaterializedViewLog(t *testing.T) {
 	mlogTable.ID = 202
 	mlogTable.Name = parser_model.NewCIStr("$mlog$eligible")
 	mlogTable.MaterializedViewLog = &model.MaterializedViewLogInfo{BaseTableID: eligibleTable.ID}
+	shadowTable := eligibleTable.Clone()
+	shadowTable.ID = 203
+	shadowTable.Name = parser_model.NewCIStr("__mv_shadow_200_1")
+	shadowTable.MaterializedViewShadow = &model.MaterializedViewShadowInfo{SourceMViewID: eligibleTable.ID}
 
 	txn, err := store.Begin()
 	require.NoError(t, err)
 	metaMutator := meta.NewMutator(txn)
 	require.NoError(t, metaMutator.CreateDatabase(dbInfo))
-	for _, tableInfo := range []*model.TableInfo{eligibleTable, ineligibleTable, mlogTable} {
+	for _, tableInfo := range []*model.TableInfo{eligibleTable, ineligibleTable, mlogTable, shadowTable} {
 		require.NoError(t, metaMutator.CreateTableOrView(dbInfo.ID, tableInfo))
 	}
 	require.NoError(t, txn.Commit(context.Background()))
@@ -75,5 +79,6 @@ func TestVerifyTablesSkipsMaterializedViewLog(t *testing.T) {
 		{Schema: "test", Table: "eligible", TableID: 200},
 		{Schema: "test", Table: "ineligible", TableID: 201},
 		{Schema: "test", Table: "$mlog$eligible", TableID: 202},
+		{Schema: "test", Table: "__mv_shadow_200_1", TableID: 203},
 	}, allTables)
 }
