@@ -15,6 +15,7 @@ package v2
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/api"
@@ -928,7 +929,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				ReadTimeout:                  cloned.Sink.MySQLConfig.ReadTimeout,
 				Timeout:                      cloned.Sink.MySQLConfig.Timeout,
 				AsyncDDLTimeout:              cloned.Sink.MySQLConfig.AsyncDDLTimeout,
-				TxnOrderTables:               cloned.Sink.MySQLConfig.TxnOrderTables,
+				TxnOrderTables:               slices.Clone(c.Sink.MySQLConfig.TxnOrderTables),
 				EnableBatchDML:               cloned.Sink.MySQLConfig.EnableBatchDML,
 				EnableMultiStatement:         cloned.Sink.MySQLConfig.EnableMultiStatement,
 				EnableCachePreparedStatement: cloned.Sink.MySQLConfig.EnableCachePreparedStatement,
@@ -1734,7 +1735,8 @@ type KafkaConfig struct {
 	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty" toml:"output-raw-change-event,omitempty"`
 }
 
-// MySQLConfig represents a MySQL sink configuration
+// MySQLConfig represents a MySQL sink configuration.
+// Nil TxnOrderTables preserves stored rules on update. An empty list disables ordering.
 type MySQLConfig struct {
 	WorkerCount                  *int     `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
 	MaxTxnRow                    *int     `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
@@ -1752,7 +1754,7 @@ type MySQLConfig struct {
 	EnableBatchDML               *bool    `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool    `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool    `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
-	TxnOrderTables               []string `json:"txn_order_tables,omitempty" toml:"txn-order-tables,omitempty"`
+	TxnOrderTables               []string `json:"txn_order_tables,omitzero" toml:"txn-order-tables,omitempty"`
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration

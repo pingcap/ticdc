@@ -86,6 +86,8 @@ func (ra *RedoApplier) verifyLegacyMultiTableDDL(ctx context.Context, ddl *commo
 		return commonEvent.SchemaTableName{SchemaName: strings.ToLower(table.Schema), TableName: strings.ToLower(table.Table)}
 	}
 	createdPartitions := make(map[commonEvent.SchemaTableName]bool)
+	origins := make(map[commonEvent.SchemaTableName]common.TableName)
+	var targets []common.TableName
 	for _, stmt := range stmts {
 		switch stmt := stmt.(type) {
 		case *ast.CreateTableStmt:
@@ -109,8 +111,6 @@ func (ra *RedoApplier) verifyLegacyMultiTableDDL(ctx context.Context, ddl *commo
 		case *ast.RenameTableStmt:
 			// Track intermediate names without applying any rename downstream.
 			// Only the final names determine which tables require ordering.
-			origins := make(map[commonEvent.SchemaTableName]common.TableName)
-			targets := make([]common.TableName, 0, len(stmt.TableToTables))
 			for _, pair := range stmt.TableToTables {
 				old := tableName(pair.OldTable)
 				target := tableName(pair.NewTable)
@@ -122,29 +122,29 @@ func (ra *RedoApplier) verifyLegacyMultiTableDDL(ctx context.Context, ddl *commo
 				origins[key(target)] = origin
 				targets = append(targets, target)
 			}
-			for _, target := range targets {
-				old, final := origins[key(target)]
-				if !final {
-					continue
-				}
-				delete(origins, key(target))
-				if err := ra.verifyRedoTable(nil, &target); err != nil {
-					return err
-				}
-				if !ra.txnOrderMatcher.Match(target.Schema, target.Table) {
-					continue
-				}
-				target.IsPartition, err = ra.mysqlSink.IsTablePartitioned(ctx, old.Schema, old.Table)
-				if err != nil {
-					return err
-				}
-				if err := ra.verifyTxnOrderTable(&target); err != nil {
-					return err
-				}
-			}
 		default:
 			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 				"redo log lacks per-table partition metadata for multi-table DDL with txn-order-tables")
+		}
+	}
+	for _, target := range targets {
+		old, final := origins[key(target)]
+		if !final {
+			continue
+		}
+		delete(origins, key(target))
+		if err := ra.verifyRedoTable(nil, &target); err != nil {
+			return err
+		}
+		if !ra.txnOrderMatcher.Match(target.Schema, target.Table) {
+			continue
+		}
+		target.IsPartition, err = ra.mysqlSink.IsTablePartitioned(ctx, old.Schema, old.Table)
+		if err != nil {
+			return err
+		}
+		if err := ra.verifyTxnOrderTable(&target); err != nil {
+			return err
 		}
 	}
 	return nil

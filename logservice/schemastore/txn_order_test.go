@@ -20,7 +20,9 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -68,11 +70,34 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 					TableID: 200, TableName: "ordered", TableInfo: tableInfo, FinishedTs: 101,
 					Query: "CREATE TABLE test.ordered (id INT PRIMARY KEY)",
 				}
-				_, _, err = buildDDLEvent(raw, f, matcher, common.DDLSpanTableID)
+				ddl, ok, err := buildDDLEvent(raw, f, matcher, common.DDLSpanTableID)
+				require.NoError(t, err)
+				require.True(t, ok)
 				if partitioned && rule == "test.ordered" {
-					require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
-				} else {
+					require.ErrorContains(t, ddl.GetError(), "txn-order-tables does not support partitioned table")
+					data, err := ddl.Marshal()
 					require.NoError(t, err)
+					var decoded commonEvent.DDLEvent
+					require.NoError(t, decoded.Unmarshal(data))
+					require.ErrorContains(t, decoded.GetError(), "txn-order-tables does not support partitioned table")
+					require.True(t, errors.ShouldFailChangefeed(decoded.GetError()))
+				} else {
+					require.NoError(t, ddl.GetError())
+				}
+				// Existing table dispatchers must receive the same validation error.
+				raw.Type = byte(model.ActionAddIndex)
+				physicalID := int64(200)
+				if partitioned {
+					physicalID = 201
+				}
+				tableDDL, ok, err := buildTableDDLEvent(raw, f, matcher, physicalID)
+				require.NoError(t, err)
+				require.True(t, ok)
+				if partitioned && rule == "test.ordered" {
+					require.ErrorContains(t, tableDDL.GetError(), "does not support partitioned table")
+					require.True(t, errors.ShouldFailChangefeed(tableDDL.GetError()))
+				} else {
+					require.NoError(t, tableDDL.GetError())
 				}
 			}
 			if !partitioned {

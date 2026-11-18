@@ -548,6 +548,9 @@ func (c *Controller) loadBootstrapAddedTables(
 			return nil, err
 		}
 		for _, event := range events {
+			if err := event.GetError(); err != nil {
+				return nil, err
+			}
 			if dropped := event.NeedDroppedTables; dropped != nil {
 				switch dropped.InfluenceType {
 				case commonEvent.InfluenceTypeNormal:

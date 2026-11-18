@@ -119,11 +119,14 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 	for _, tc := range []struct {
 		name                           string
 		partitioned, queryError, chain bool
+		separateStatements             bool
 	}{
-		{"partitioned second table", true, false, false},
-		{"regular tables", false, false, false},
-		{"query failure", false, true, false},
-		{"partitioned table through intermediate rename", true, false, true},
+		{name: "partitioned second table", partitioned: true},
+		{name: "regular tables"},
+		{name: "query failure", queryError: true},
+		{name: "partitioned table through intermediate rename", partitioned: true, chain: true},
+		{name: "partitioned table through separate renames", partitioned: true, chain: true, separateStatements: true},
+		{name: "regular table through separate renames", chain: true, separateStatements: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -139,7 +142,7 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 			require.NoError(t, err)
 			defer ap.spillStore.Cleanup()
 			query := "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
-			mock.ExpectQuery(query).WithArgs("test", "first").WillReturnRows(sqlmock.NewRows([]string{"partitioned"}).AddRow(tc.chain))
+			mock.ExpectQuery(query).WithArgs("test", "first").WillReturnRows(sqlmock.NewRows([]string{"partitioned"}).AddRow(tc.chain && tc.partitioned))
 			if !tc.chain {
 				second := mock.ExpectQuery(query).WithArgs("test", "second")
 				if tc.queryError {
@@ -153,6 +156,9 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 			}}
 			if tc.chain {
 				ddl.DDL.Query = "RENAME TABLE test.first TO test.tmp, test.second TO test.first, test.tmp TO test.ordered_second"
+			}
+			if tc.separateStatements {
+				ddl.DDL.Query = "RENAME TABLE test.first TO test.tmp; RENAME TABLE test.second TO test.first; RENAME TABLE test.tmp TO test.ordered_second"
 			}
 			// Marshal without the optional metadata, as older writers did.
 			data, err := ddl.MarshalMsg(nil)
@@ -195,5 +201,7 @@ func TestLegacyRedoCreateTablesChecksEveryPartitionClause(t *testing.T) {
 	require.ErrorContains(t, ap.verifyTxnOrderDDL(context.Background(), ddl), "does not support partitioned table")
 	ddl.Type = byte(model.ActionRenameTables)
 	ddl.DDL.Query = "RENAME TABLE test.first TO test.ordered_tmp, test.ordered_tmp TO test.unordered"
+	require.NoError(t, ap.verifyTxnOrderDDL(context.Background(), ddl))
+	ddl.DDL.Query = "RENAME TABLE test.first TO test.ordered_tmp; RENAME TABLE test.ordered_tmp TO test.unordered"
 	require.NoError(t, ap.verifyTxnOrderDDL(context.Background(), ddl))
 }

@@ -990,7 +990,10 @@ func getDDLHandler(rawEvent *PersistedDDLEvent) *persistStorageDDLHandler {
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddl, ok, err := getDDLHandler(rawEvent).buildDDLEventFunc(rawEvent, tableFilter, tableID)
 	if err == nil && ok {
-		err = verifyTxnOrderDDL(rawEvent, tableFilter, txnOrderMatcher)
+		if validationErr := verifyTxnOrderDDL(rawEvent, tableFilter, txnOrderMatcher); validationErr != nil {
+			// Deliver permanent validation failures through the dispatcher error path.
+			ddl.Err = errors.WrapChangefeedUnretryableErr(validationErr).Error()
+		}
 	}
 	return ddl, ok, err
 }
@@ -1053,7 +1056,7 @@ func buildTableDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, 
 		return ddlEvent, ok, err
 	}
 	if err := verifyTxnOrderDDL(rawEvent, tableFilter, txnOrderMatcher); err != nil {
-		return ddlEvent, false, err
+		ddlEvent.Err = errors.WrapChangefeedUnretryableErr(err).Error()
 	}
 	tableInfo, _ := handler.extractTableInfoFunc(rawEvent, tableID)
 	change := &commonEvent.TableStateChange{

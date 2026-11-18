@@ -65,6 +65,27 @@ func TestSinkDispatchRulesUpdate(t *testing.T) {
 	}
 }
 
+func TestMySQLTxnOrderTablesUpdate(t *testing.T) {
+	storedRules := []string{"app.orders"}
+	for _, rules := range [][]string{nil, {}, {"app.ledger"}} {
+		cfg := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: rules}}}
+		converted := ToAPIReplicaConfig(cfg.ToInternalReplicaConfig())
+		require.Equal(t, rules, converted.Sink.MySQLConfig.TxnOrderTables)
+		info, err := (&ChangeFeedInfo{Config: converted}).Clone()
+		require.NoError(t, err)
+		require.Equal(t, rules, info.Config.Sink.MySQLConfig.TxnOrderTables)
+		body, err := json.Marshal(info.Config)
+		require.NoError(t, err)
+		stored := &ReplicaConfig{Sink: &SinkConfig{MySQLConfig: &MySQLConfig{TxnOrderTables: storedRules}}}
+		require.NoError(t, json.Unmarshal(body, stored))
+		want := rules
+		if rules == nil {
+			want = storedRules
+		}
+		require.Equal(t, want, stored.Sink.MySQLConfig.TxnOrderTables)
+	}
+}
+
 func TestChangeFeedInfoCloneWithMaskedSensitiveData(t *testing.T) {
 	info := &ChangeFeedInfo{
 		ID:      "test",
