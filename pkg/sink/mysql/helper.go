@@ -44,9 +44,9 @@ import (
 const checkRunningAddIndexSQL = `
 SELECT *
 FROM information_schema.ddl_jobs
-WHERE DB_NAME = "%s"
-    AND TABLE_NAME = "%s"
-    AND JOB_TYPE LIKE "add index%%"
+WHERE DB_NAME = ?
+    AND TABLE_NAME = ?
+    AND JOB_TYPE LIKE "add index%"
     AND (STATE = "running" OR STATE = "queueing")
 LIMIT 1;
 `
