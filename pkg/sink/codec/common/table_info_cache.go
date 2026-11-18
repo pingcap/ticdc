@@ -15,7 +15,6 @@ package common
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -40,7 +39,6 @@ func newAccessKey(schema, table string) accessKey {
 
 // tableIDAllocator is a fake table id allocator
 type tableIDAllocator struct {
-	mu              sync.RWMutex
 	tableIDs        map[accessKey]int64
 	currentTableID  int64
 	blockedTableIDs map[accessKey]map[int64]struct{}
@@ -65,17 +63,11 @@ func (a *tableIDAllocator) allocateByKey(key accessKey) int64 {
 
 // Allocate allocates a table id
 func (a *tableIDAllocator) Allocate(schema, table string) int64 {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	key := newAccessKey(schema, table)
 	return a.allocateByKey(key)
 }
 
 func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	key := newAccessKey(schema, table)
 	blocked := a.blockedTableIDs[key]
 	result := make([]int64, 0, len(blocked))
@@ -86,9 +78,6 @@ func (a *tableIDAllocator) GetBlockedTables(schema, table string) []int64 {
 }
 
 func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physicalTableID int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	key := newAccessKey(schema, table)
 	if _, ok := a.blockedTableIDs[key]; !ok {
 		a.blockedTableIDs[key] = make(map[int64]struct{})
@@ -102,9 +91,6 @@ func (a *tableIDAllocator) AddBlockTableID(schema string, table string, physical
 }
 
 func (a *tableIDAllocator) Clean() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	a.currentTableID = 0
 	clear(a.tableIDs)
 	clear(a.blockedTableIDs)

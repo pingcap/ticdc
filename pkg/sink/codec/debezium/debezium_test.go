@@ -127,7 +127,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 
@@ -216,7 +216,7 @@ func TestDebeziumNumericStringHandling(t *testing.T) {
 
 			decoder := NewDecoder(cfg, 0, nil)
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			change, ok := decoded.GetNextRow()
 			require.True(t, ok)
 			common.CompareRow(t, row, helper.tableInfo, change, decoded.TableInfo)
@@ -355,7 +355,7 @@ func TestEncodeStartTsInSource(t *testing.T) {
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, uint64(5), decoded.GetStartTs())
 }
 
@@ -392,7 +392,7 @@ func TestDecodeStartTsFallbackToCommitTs(t *testing.T) {
 	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
 	require.NotEqual(t, uint64(5), decoded.GetStartTs())
 }
@@ -434,7 +434,7 @@ func TestDecodeNonPositiveStartTsFallbackToCommitTs(t *testing.T) {
 			messageType, hasNext := decoder.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
-			decoded := decoder.NextDMLMessage().ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			require.Equal(t, decoded.GetCommitTs(), decoded.GetStartTs())
 		})
 	}
@@ -473,7 +473,7 @@ func TestDecodedTableInfoLocatesRowByPrimaryKey(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event := decoder.NextDMLMessage().ToDMLEvent()
+	event := decoder.NextDMLEvent()
 	common.RequireRowLocatorByPrimaryKey(t, event.TableInfo, "a", "b")
 }
 

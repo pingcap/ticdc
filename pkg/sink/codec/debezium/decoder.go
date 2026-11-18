@@ -152,8 +152,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return event
 }
 
-// NextDMLMessage returns the next dml message if exists
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next dml event if exists
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DML message failed, since value payload is empty")
 	}
@@ -167,16 +167,8 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	keyPayload := d.keyPayload
 	valuePayload := d.valuePayload
 	valueSchema := d.valueSchema
-	commitTs := getCommitTsFromPayload(valuePayload)
-	schemaName := getSchemaNameFromPayload(valuePayload)
-	tableName := getTableNameFromPayload(valuePayload)
-	rowType := rowTypeFromPayload(valuePayload)
-	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	d.clear()
-
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
-	})
+	return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
 }
 
 func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {

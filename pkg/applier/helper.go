@@ -17,11 +17,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/applier/message"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 func isNonEmptyUniqueOrHandleCol(col commonEvent.RedoColumnValue) bool {
@@ -141,8 +140,8 @@ func splitUpdateEvent(
 
 // Share one restorer across all redo rows so the spill backlog does not retain
 // a decoder closure or a materialized DML event for each row.
-var redoDMLMessageRestorer = codeccommon.NewDMLMessageRestorer(func(data []byte) ([]*codeccommon.DMLMessage, error) {
-	_, value, err := util.UnmarshalDMLMessageData(data)
+var redoDMLMessageRestorer = message.NewDMLMessageRestorer(func(data []byte) ([]*message.DMLMessage, error) {
+	_, value, err := message.UnmarshalDMLMessageData(data)
 	if err != nil {
 		return nil, err
 	}
@@ -150,17 +149,17 @@ var redoDMLMessageRestorer = codeccommon.NewDMLMessageRestorer(func(data []byte)
 	if _, err := row.UnmarshalMsg(value); err != nil {
 		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
-	return []*codeccommon.DMLMessage{newRedoDMLMessage(row)}, nil
+	return []*message.DMLMessage{newRedoDMLMessage(row)}, nil
 })
 
-func newRedoDMLMessage(row *commonEvent.RedoDMLEvent) *codeccommon.DMLMessage {
+func newRedoDMLMessage(row *commonEvent.RedoDMLEvent) *message.DMLMessage {
 	rowType := commonType.RowTypeInsert
 	if row.IsDelete() {
 		rowType = commonType.RowTypeDelete
 	} else if row.IsUpdate() {
 		rowType = commonType.RowTypeUpdate
 	}
-	return codeccommon.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
+	return message.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
 		row.Row.Table.Table, row.Row.CommitTs, rowType, func() *commonEvent.DMLEvent {
 			event := row.ToDMLEvent()
 			if source := row.Row.SourceTable; source != nil &&

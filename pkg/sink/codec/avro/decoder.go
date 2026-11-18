@@ -128,24 +128,10 @@ func (d *decoder) NextResolvedEvent() uint64 {
 	return ts
 }
 
-// NextDMLMessage returns the next row changed message if exists
-func (d *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent returns the next row changed event if exists
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs := d.decodeDMLPayload()
-	schemaName, tableName := schemaAndTableName(valueSchema)
-	commitTs := deleteCommitTs
-	if hasValue {
-		commitTs = uint64(valueMap[tidbCommitTs].(int64))
-	}
-	rowType := commonType.RowTypeInsert
-	if isDelete {
-		rowType = commonType.RowTypeDelete
-	} else if operation, ok := valueMap[tidbOp]; ok && operation == updateOperation {
-		rowType = commonType.RowTypeUpdate
-	}
-	tableID := tableIDAllocator.Allocate(schemaName, tableName)
-	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
-		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
-	})
+	return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 }
 
 func (d *decoder) decodeDMLPayload() (

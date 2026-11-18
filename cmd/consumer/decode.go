@@ -237,10 +237,9 @@ func (f *future) finish() {
 	close(f.done)
 }
 
-func (d *decoderGroup) addRow(future *future, message *common.DMLMessage) {
-	dml := message.ToDMLEvent()
+func (d *decoderGroup) addRow(future *future, dml *event.DMLEvent) {
 	if dml == nil {
-		log.Panic("consumer DML decoding failed", zap.String("schema", message.Schema), zap.String("table", message.Table), zap.Uint64("commitTs", message.GetCommitTs()))
+		log.Panic("consumer DML decoding failed")
 	}
 	if input := future.payload; input.File != nil {
 		dml.PhysicalTableID = input.File.TableID
@@ -260,10 +259,10 @@ func (d *decoderGroup) drainCached(decoder decoder, waiting []*future) ([]*futur
 		return waiting, nil
 	}
 	changed := d.schemas.Changes()
-	for _, message := range decoder.schema.GetCachedMessages() {
+	for _, dml := range decoder.schema.GetCachedEvents() {
 		future := waiting[0]
 		waiting = waiting[1:]
-		d.addRow(future, message)
+		d.addRow(future, dml)
 		future.finish()
 	}
 	return waiting, changed
@@ -291,13 +290,13 @@ func (d *decoderGroup) decodeInput(ctx context.Context, decoder decoder, future 
 		}
 		switch kind {
 		case common.MessageTypeRow:
-			message := decoder.NextDMLMessage()
-			if message == nil {
+			dml := decoder.NextDMLEvent()
+			if dml == nil {
 				// Simple has one message per input; the decoder keeps it cached
 				// until the table info arrives.
 				return true, nil
 			}
-			d.addRow(future, message)
+			d.addRow(future, dml)
 		case common.MessageTypeDDL:
 			ddl := decoder.NextDDLEvent()
 			if d.schemas != nil && ddl.Query == "" {
@@ -359,8 +358,7 @@ func (d *decoderGroup) decodeStorage(ctx context.Context, future *future) error 
 		if kind != common.MessageTypeRow {
 			continue
 		}
-		message := decoder.NextDMLMessage()
-		d.addRow(future, message)
+		d.addRow(future, decoder.NextDMLEvent())
 	}
 }
 

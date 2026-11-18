@@ -522,7 +522,7 @@ func TestConflictKeysReconstructedSchemas(t *testing.T) {
 									break
 								}
 								require.Equal(t, codeccommon.MessageTypeRow, typ)
-								events = append(events, decoder.NextDMLMessage().ToDMLEvent())
+								events = append(events, decoder.NextDMLEvent())
 							}
 						}
 					} else {

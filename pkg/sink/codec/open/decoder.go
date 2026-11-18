@@ -218,8 +218,8 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextDMLMessage implements the Decoder interface
-func (b *decoder) NextDMLMessage() *common.DMLMessage {
+// NextDMLEvent implements the Decoder interface
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
@@ -227,15 +227,7 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	key := *b.nextKey
 	value := b.nextDMLValue()
 	b.nextKey = nil
-
-	rowType := commonType.RowTypeInsert
-	if key.ClaimCheckLocation == "" {
-		rowType = b.rowTypeFromDMLValue(value)
-	}
-	tableID := tableIDAllocator.Allocate(key.Schema, key.Table)
-	return common.NewDMLMessage(tableID, key.Schema, key.Table, key.Ts, rowType, func() *commonEvent.DMLEvent {
-		return b.decodeDMLMessage(&key, value)
-	})
+	return b.decodeDMLMessage(&key, value)
 }
 
 func (b *decoder) nextDMLValue() []byte {

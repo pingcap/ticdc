@@ -361,10 +361,7 @@ func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			message := decoder.NextDMLMessage()
-			require.Equal(t, tc.rowType, message.RowType)
-			require.Equal(t, tc.event.CommitTs, message.GetCommitTs())
-			decoded := message.ToDMLEvent()
+			decoded := decoder.NextDMLEvent()
 			require.NotNil(t, decoded)
 			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
 
@@ -513,7 +510,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded := decoder.NextDMLMessage().ToDMLEvent()
+	decoded := decoder.NextDMLEvent()
 	require.NotNil(t, decoded)
 	require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 	require.Len(t, decoded.RowTypes, 1)
@@ -546,17 +543,15 @@ func TestAvroLegacyDeleteUsesCachedValueSchema(t *testing.T) {
 		t.Run("watermark="+strconv.FormatBool(withWatermark), func(t *testing.T) {
 			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
 			decoder.AddKeyValue(insert.Key, insert.Value)
-			// The consumer may defer materialization until after receiving the delete.
-			insertMessage := decoder.NextDMLMessage()
+			insertEvent := decoder.NextDMLEvent()
+			t.Cleanup(insertEvent.PostFlush)
 			value := deleted.Value
 			if !withWatermark {
 				value = nil
 			}
 			decoder.AddKeyValue(deleted.Key, value)
-			deleteEvent := decoder.NextDMLMessage().ToDMLEvent()
+			deleteEvent := decoder.NextDMLEvent()
 			t.Cleanup(deleteEvent.PostFlush)
-			insertEvent := insertMessage.ToDMLEvent()
-			t.Cleanup(insertEvent.PostFlush)
 
 			require.Equal(t, insertEvent.TableInfo.GetColumns(), deleteEvent.TableInfo.GetColumns())
 			require.Equal(t, []commonType.RowType{commonType.RowTypeDelete}, deleteEvent.RowTypes)
