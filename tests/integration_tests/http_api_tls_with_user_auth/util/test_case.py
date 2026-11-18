@@ -473,6 +473,23 @@ def set_log_level():
     print("pass test: set log level")
 
 
+def log_redact():
+    keyspace = os.getenv("KEYSPACE_NAME", "default")
+    url = BASE_URL0 + "/log/redact?keyspace=" + keyspace
+    data = json.dumps({"redact_info_log": "marker"})
+    headers = {"Content-Type": "application/json"}
+
+    resp = rq.post(url, data=data, headers=headers,
+                   cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.unauthorized
+
+    resp = rq.post(url, data=data, auth=Auth,
+                   headers=headers, cert=CERT, verify=VERIFY)
+    assert resp.status_code == rq.codes.ok
+
+    print("pass test: log redact")
+
+
 def verify_table():
     url = BASE_URL0 + "/tso"
     # we need to retry since owner resign before this func call
@@ -616,6 +633,7 @@ if __name__ == "__main__":
         "resume_changefeed": resume_changefeed,
         "move_table": move_table,
         "set_log_level": set_log_level,
+        "log_redact": log_redact,
         "remove_changefeed": remove_changefeed,
         "resign_owner": resign_owner,
         # api v2
