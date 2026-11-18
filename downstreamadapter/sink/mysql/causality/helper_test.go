@@ -38,8 +38,8 @@ func TestTxnOrderTableKeys(t *testing.T) {
 	pk := types.NewFieldType(mysql.TypeLong)
 	pk.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 	ti := common.WrapTableInfo("test", &timodel.TableInfo{
-		ID: 100, Name: ast.NewCIStr("ordered"), PKIsHandle: true,
-		Columns: []*timodel.ColumnInfo{{ID: 1, Name: ast.NewCIStr("id"), State: timodel.StatePublic, FieldType: *pk}},
+		ID: 100, Name: parser_model.NewCIStr("ordered"), PKIsHandle: true,
+		Columns: []*timodel.ColumnInfo{{ID: 1, Name: parser_model.NewCIStr("id"), State: timodel.StatePublic, FieldType: *pk}},
 	})
 	makeEvent := func(id int64) *commonEvent.DMLEvent {
 		e := commonEvent.NewDMLEvent(common.DispatcherID{Low: 1}, 100, 1, 2, ti)
@@ -487,7 +487,7 @@ func TestConflictKeysOpenProtocolWithoutPrimaryKey(t *testing.T) {
 			require.Len(t, event.TableInfo.GetColumns(), 2)
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			var conflictKeys map[uint64]struct{}
-			require.NotPanics(t, func() { conflictKeys = ConflictKeys(event) })
+			require.NotPanics(t, func() { conflictKeys = ConflictKeys(event, nil) })
 			require.NotEmpty(t, conflictKeys)
 			keys = append(keys, conflictKeys)
 
@@ -508,7 +508,7 @@ func TestConflictKeysOpenProtocolWithoutPrimaryKey(t *testing.T) {
 			replayed := decoded.RedoRow.ToDMLEvent()
 			t.Cleanup(replayed.PostFlush)
 			replayed.DispatcherID = event.DispatcherID
-			replayedKeys := ConflictKeys(replayed)
+			replayedKeys := ConflictKeys(replayed, nil)
 			require.NotEmpty(t, replayedKeys)
 			redoKeys = append(redoKeys, replayedKeys)
 		}

@@ -225,7 +225,8 @@ func callback() {
 }
 
 func TestTxnOrderDDLErrorReachesDispatcher(t *testing.T) {
-	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
+	span := common.TableIDToComparableSpan(getTestingKeyspaceID(), 1)
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), &span)
 	validationErr := errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 		"sink.mysql-config.txn-order-tables does not support partitioned table test.ordered")
 	ddl := &commonEvent.DDLEvent{

@@ -15,7 +15,6 @@
 package schemastore
 
 import (
-	"context"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -26,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,15 +35,15 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 			db, err := pebble.Open(t.TempDir(), &pebble.Options{})
 			require.NoError(t, err)
 			defer db.Close()
-			dbInfo := &model.DBInfo{ID: 100, Name: ast.NewCIStr("test")}
+			dbInfo := &model.DBInfo{ID: 100, Name: parser_model.NewCIStr("test")}
 			tableInfo := newEligibleTableInfoForTest(200, "ordered")
 			if partitioned {
-				tableInfo.Partition = &model.PartitionInfo{Enable: true, Definitions: []model.PartitionDefinition{{ID: 201, Name: ast.NewCIStr("p0")}}}
+				tableInfo.Partition = &model.PartitionInfo{Enable: true, Definitions: []model.PartitionDefinition{{ID: 201, Name: parser_model.NewCIStr("p0")}}}
 			}
 			batch := db.NewBatch()
 			defer batch.Close()
-			require.NoError(t, addSchemaInfoToBatchWithEncryption(context.Background(), batch, 100, dbInfo, nil, 0))
-			_, _, _, _, err = addTableInfoToBatchWithEncryption(context.Background(), batch, 100, dbInfo, tableInfo, nil, 0, nil)
+			addSchemaInfoToBatch(batch, 100, dbInfo)
+			_, _, _, _, err = addTableInfoToBatch(batch, 100, dbInfo, tableInfo, nil)
 			require.NoError(t, err)
 			require.NoError(t, batch.Commit(pebble.NoSync))
 			snap := db.NewSnapshot()
@@ -54,7 +53,7 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 				require.NoError(t, err)
 				matcher, err := ordering.NewTxnOrderMatcher([]string{rule}, false)
 				require.NoError(t, err)
-				tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, f, matcher, nil, 0)
+				tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, f, matcher)
 				if partitioned && rule == "test.ordered" {
 					require.ErrorContains(t, err, "txn-order-tables does not support partitioned table")
 				} else {
@@ -132,7 +131,7 @@ func TestTxnOrderSnapshotAndDDL(t *testing.T) {
 			excluded, err := filter.NewFilter(excludedConfig, "", false, false)
 			require.NoError(t, err)
 			require.NoError(t, applyTxnOrderDDLPolicy(raw, excluded, matcher, nil))
-			tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, excluded, matcher, nil, 0)
+			tables, err := loadAllPhysicalTablesAtTs(snap, 100, 100, excluded, matcher)
 			require.NoError(t, err)
 			require.Empty(t, tables)
 		})

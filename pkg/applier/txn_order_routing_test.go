@@ -17,7 +17,6 @@ package applier
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -28,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/ordering"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +39,6 @@ func TestRoutedRedoPreservesOrdering(t *testing.T) {
 	ap.needRecoveryInfo = false
 	ap.txnOrderMatcher = f
 	ap.hasTableRoute = true
-	defer ap.spillStore.Cleanup()
 	source := &common.TableName{Schema: "app", Table: "orders", TableID: 42}
 	target := &common.TableName{Schema: "archive", Table: "orders_copy", TableID: 42}
 	for id := int64(1); id <= 2; id++ {
@@ -53,12 +51,10 @@ func TestRoutedRedoPreservesOrdering(t *testing.T) {
 		}
 		require.NoError(t, ap.applyRow(row, 0))
 	}
-	batch, _, err := ap.eventsGroup[42].PrepareResolve(300, ap.spillStore.ResolveLimit())
-	require.NoError(t, err)
-	require.Len(t, batch.Messages, 2)
+	events := ap.eventsGroup[42].getEvents()
+	require.Len(t, events, 2)
 	var keys map[uint64]struct{}
-	for _, message := range batch.Messages {
-		event := message.ToDMLEvent()
+	for _, event := range events {
 		require.Equal(t, "app", event.TableInfo.GetSchemaName())
 		require.Equal(t, "orders", event.TableInfo.GetTableName())
 		require.Equal(t, "archive", event.TableInfo.GetTargetSchemaName())
@@ -72,7 +68,6 @@ func TestRoutedRedoPreservesOrdering(t *testing.T) {
 		keys = current
 		event.PostFlush()
 	}
-	require.NoError(t, batch.Ack())
 
 	update := &commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{Table: target, SourceTable: source}}
 	deleted, inserted, err := splitUpdateEvent(update)
@@ -84,8 +79,8 @@ func TestRoutedRedoPreservesOrdering(t *testing.T) {
 }
 
 func TestRedoMultiTablePartitionMetadata(t *testing.T) {
-	regular := common.NewTableInfo4Decoder("app", &model.TableInfo{ID: 1, Name: ast.NewCIStr("regular")})
-	partitioned := common.NewTableInfo4Decoder("app", &model.TableInfo{ID: 2, Name: ast.NewCIStr("ordered_p"), Partition: &model.PartitionInfo{Enable: true}})
+	regular := common.NewTableInfo4Decoder("app", &model.TableInfo{ID: 1, Name: parser_model.NewCIStr("regular")})
+	partitioned := common.NewTableInfo4Decoder("app", &model.TableInfo{ID: 2, Name: parser_model.NewCIStr("ordered_p"), Partition: &model.PartitionInfo{Enable: true}})
 	regular = regular.CloneWithRouting("archive", "regular_copy")
 	partitioned = partitioned.CloneWithRouting("archive", "partition_copy")
 	for _, action := range []model.ActionType{model.ActionCreateTables, model.ActionRenameTables} {
@@ -111,7 +106,6 @@ func TestRedoMultiTablePartitionMetadata(t *testing.T) {
 		// No sink is installed: rejection must happen before any downstream work.
 		require.ErrorContains(t, ap.applyDDL(context.Background(), restored, 100), "does not support partitioned table")
 		require.Zero(t, ap.appliedDDLCount)
-		require.NoError(t, ap.spillStore.Cleanup())
 	}
 }
 
@@ -133,14 +127,13 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 			require.NoError(t, err)
 			cfg := mysqlsink.New()
 			cfg.WorkerCount = 1
-			sink := dmysql.NewMySQLSink(context.Background(), common.NewChangefeedID4Test("test", "legacy-redo"), cfg, db, false, false, time.Minute, 0)
+			sink := dmysql.NewMySQLSink(context.Background(), common.NewChangefeedID4Test("test", "legacy-redo"), cfg, db, false, 0)
 			defer func() { mock.ExpectClose(); sink.Close(); require.NoError(t, mock.ExpectationsWereMet()) }()
 			ap := NewRedoApplier(&RedoApplierConfig{})
 			ap.mysqlSink = sink
 			ap.needRecoveryInfo = false
 			ap.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered_*"}, false)
 			require.NoError(t, err)
-			defer ap.spillStore.Cleanup()
 			query := "SELECT EXISTS(SELECT 1 FROM information_schema.partitions WHERE table_schema = ? AND table_name = ? AND partition_name IS NOT NULL)"
 			mock.ExpectQuery(query).WithArgs("test", "first").WillReturnRows(sqlmock.NewRows([]string{"partitioned"}).AddRow(tc.chain && tc.partitioned))
 			if !tc.chain {
@@ -187,7 +180,6 @@ func TestLegacyRedoRenameChecksEveryTable(t *testing.T) {
 
 func TestLegacyRedoCreateTablesChecksEveryPartitionClause(t *testing.T) {
 	ap := NewRedoApplier(&RedoApplierConfig{})
-	defer ap.spillStore.Cleanup()
 	var err error
 	ap.txnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered_*"}, false)
 	require.NoError(t, err)

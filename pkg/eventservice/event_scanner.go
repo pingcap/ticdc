@@ -28,11 +28,8 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -166,13 +163,8 @@ func (s *eventScanner) scan(
 		s.schemaGetter,
 		dispatcherStat.filter,
 		dispatcherStat.info.IsOutputRawChangeEvent(),
-<<<<<<< HEAD
 		s.mode)
-=======
-		s.mode,
-		dispatcherStat.info.EnableIgnoreUpdateOnlyColumns())
 	scanCtx.processor.txnOrderMatcher = dispatcherStat.txnOrderMatcher
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	scanCtx.processor.ctx = ctx
 	scanCtx.processor.dispatcherStat = dispatcherStat
 	checkpoint, err := dispatcherStat.snapshotOriginalScan()
@@ -278,7 +270,7 @@ func matchesTxnOrder(matcher *ordering.TxnOrderMatcher, tableFilter filter.Filte
 }
 
 func txnOrderSplitSpanError(info *common.TableInfo) error {
-	return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+	return cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 		"sink.mysql-config.txn-order-tables does not support split spans for table " + info.TableName.String())
 }
 
@@ -872,11 +864,7 @@ type dmlProcessor struct {
 	schemaGetter schemaGetter
 
 	filter                   filter.Filter
-<<<<<<< HEAD
-=======
 	txnOrderMatcher          *ordering.TxnOrderMatcher
-	filterContext            filter.DMLFilterContext
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	dispatcherStat           *dispatcherStat
 	spillDir                 string
 	cleanupLargeTxnAfterScan bool
@@ -936,7 +924,7 @@ func (p *dmlProcessor) startTxn(
 ) error {
 	if matchesTxnOrder(p.txnOrderMatcher, p.filter, tableInfo) {
 		if tableInfo.IsPartitionTable() {
-			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			return cerrors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 				"sink.mysql-config.txn-order-tables does not support partitioned table " + tableInfo.TableName.String())
 		}
 		if p.dispatcherStat != nil && p.dispatcherStat.isSplitSpan {

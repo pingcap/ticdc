@@ -47,14 +47,10 @@ run_mockgen() {
 run_mockgen -source coordinator/changefeed/changefeed_db_backend.go -destination coordinator/changefeed/mock/changefeed_db_backend.go
 run_mockgen -source pkg/etcd/etcd.go -destination pkg/etcd/etcd_mock.go -package etcd
 run_mockgen -source pkg/etcd/client.go -destination pkg/etcd/client_mock.go -package etcd
-<<<<<<< HEAD
 
 # Server mock generation queries pkg/etcd, whose mocks must be complete.
 wait_for_batch
-run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock
-=======
 run_mockgen -source pkg/server/server.go -destination pkg/server/mock/server_mock.go -package mock -imports pd=github.com/tikv/pd/client
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 run_mockgen -source pkg/api/v2/tso.go -destination pkg/api/v2/mock/tso_mock.go -package mock
 run_mockgen -source pkg/api/v2/unsafe.go -destination pkg/api/v2/mock/unsafe_mock.go -package mock
 run_mockgen -source pkg/api/v2/status.go -destination pkg/api/v2/mock/status_mock.go -package mock

@@ -190,21 +190,11 @@ func newMySQLSinkWithDBs(
 				Size:          1024,
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
-<<<<<<< HEAD
-			changefeedID),
+			changefeedID, cfg.TxnOrderMatcher),
 		isNormal:   atomic.NewBool(true),
 		cfg:        cfg,
 		maxTxnRows: cfg.MaxTxnRow,
 		bdrMode:    bdrMode,
-=======
-			changefeedID, cfg.TxnOrderMatcher),
-		isNormal:                       atomic.NewBool(true),
-		cfg:                            cfg,
-		maxTxnRows:                     cfg.MaxTxnRow,
-		bdrMode:                        bdrMode,
-		enableActiveActive:             enableActiveActive,
-		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, dmlDB, cfg, changefeedID, stat)

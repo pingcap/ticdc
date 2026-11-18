@@ -17,7 +17,6 @@ package applier
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -29,7 +28,7 @@ import (
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +38,7 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	cfg := mysqlsink.New()
 	cfg.WorkerCount = 4
 	cfg.MaxTxnRow = 2
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 	cfg.MultiStmtEnable = false
 	cfg.BatchDMLEnable = false
@@ -47,7 +46,7 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	cfg.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
-	sink := dmysql.NewMySQLSink(ctx, common.NewChangefeedID4Test("test", "ordered-redo"), cfg, db, false, false, time.Minute, 0)
+	sink := dmysql.NewMySQLSink(ctx, common.NewChangefeedID4Test("test", "ordered-redo"), cfg, db, false, 0)
 	done := make(chan error, 1)
 	go func() { done <- sink.Run(ctx) }()
 	t.Cleanup(func() {
@@ -61,7 +60,6 @@ func TestTxnOrderRedoReplay(t *testing.T) {
 	ap.mysqlSink = sink
 	ap.needRecoveryInfo = false
 	ap.txnOrderMatcher = cfg.TxnOrderMatcher
-	defer ap.spillStore.Cleanup()
 
 	// Spill rows are restored as complete table transactions, even above max-txn-row.
 	mock.ExpectBegin()
@@ -108,7 +106,6 @@ func TestTxnOrderRedoInvalidRules(t *testing.T) {
 		SinkURI:    "mysql://127.0.0.1:1/",
 		SinkConfig: &config.SinkConfig{MySQLConfig: &config.MySQLConfig{TxnOrderTables: []string{"invalid"}}},
 	})
-	defer ap.spillStore.Cleanup()
 	require.ErrorContains(t, ap.Apply(context.Background()), "txn-order-tables")
 }
 
@@ -135,7 +132,6 @@ func TestTxnOrderRedoSkipsValidationForRecoveredRows(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ap := NewRedoApplier(&RedoApplierConfig{})
-			t.Cleanup(func() { require.NoError(t, ap.spillStore.Cleanup()) })
 			ap.txnOrderMatcher = matcher
 			ap.hasTableRoute = tc.routed
 			row := &commonEvent.RedoDMLEvent{Row: &commonEvent.DMLEventInRedoLog{
@@ -153,7 +149,6 @@ func TestTxnOrderRedoSkipsValidationForRecoveredRows(t *testing.T) {
 			ap.tableDDLTs[tc.table.TableID] = ddlTs{ts: 100}
 			require.ErrorContains(t, ap.applyRow(row, 0), tc.want)
 			require.Zero(t, ap.appliedLogCount)
-			require.Zero(t, ap.spillStore.Stats().PayloadWriteCount)
 		})
 	}
 }

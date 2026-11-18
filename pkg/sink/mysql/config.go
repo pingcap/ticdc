@@ -31,12 +31,8 @@ import (
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-<<<<<<< HEAD
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-=======
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"

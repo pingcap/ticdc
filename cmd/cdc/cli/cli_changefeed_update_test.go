@@ -16,6 +16,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,16 +192,6 @@ func TestChangefeedUpdateCli(t *testing.T) {
 	require.NotNil(t, o.run(cmd))
 }
 
-<<<<<<< HEAD
-func TestChangefeedUpdatePassword(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	f := newMockFactory(ctrl)
-	oldInfo := &v2.ChangeFeedInfo{
-		ID:      "abc",
-		SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol",
-		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
-=======
 func TestTxnOrderUpdateConfigs(t *testing.T) {
 	for _, tc := range []struct {
 		name, content string
@@ -233,13 +224,14 @@ func TestTxnOrderUpdateConfigs(t *testing.T) {
 	}
 }
 
-func TestSameClusterUpdateConfigs(t *testing.T) {
-	replica := config.GetDefaultReplicaConfig()
-	replica.AllowSameCluster = new(true)
-	replica.Filter.Rules = []string{"src.*"}
-	replica.Sink.DispatchRules = []*config.DispatchRule{
-		{Matcher: []string{"src.*"}, TargetSchema: "dst", TargetTable: "{table}_copy"},
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
+func TestChangefeedUpdatePassword(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	f := newMockFactory(ctrl)
+	oldInfo := &v2.ChangeFeedInfo{
+		ID:      "abc",
+		SinkURI: "kafka://127.0.0.1:9092/topic?protocol=open-protocol",
+		Config:  v2.ToAPIReplicaConfig(config.GetDefaultReplicaConfig()),
 	}
 	oldInfo.Config.Sink.KafkaConfig = &v2.KafkaConfig{
 		SASLUser:      util.AddressOf("alice"),

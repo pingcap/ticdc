@@ -307,11 +307,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-<<<<<<< HEAD
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
-=======
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, txnOrderMatcher, p.encryptionManager, p.keyspaceID)
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, txnOrderMatcher)
 }
 
 // only return when table info is initialized
@@ -466,13 +462,8 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	// TODO: if the first event is a create table ddl, return error?
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
-<<<<<<< HEAD
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, tableID)
-=======
-		rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
 		ddlEvent, ok, err := buildTableDDLEvent(&rawEvent, tableFilter, txnOrderMatcher, tableID)
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -541,14 +532,9 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
-<<<<<<< HEAD
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, common.DDLSpanTableID)
-=======
-			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, txnOrderMatcher, common.DDLSpanTableID)
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 			if err != nil {
 				return nil, errors.Trace(err)
 			}

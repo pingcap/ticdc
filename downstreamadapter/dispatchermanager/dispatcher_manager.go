@@ -305,24 +305,10 @@ func NewDispatcherManager(
 	manager.writeSink = withCaptureWriteGate(ctx, createdSink)
 	manager.writePathMu.Unlock()
 
-<<<<<<< HEAD
-=======
-	sinkType := manager.sink.SinkType()
-	if sinkType == common.MysqlSinkType {
+	if manager.sink.SinkType() == common.MysqlSinkType {
 		filterCfg.TxnOrderTables = cfConfig.SinkConfig.GetTxnOrderTables(config.MySQLScheme)
 	}
-	if sinkType != common.KafkaSinkType {
-		ignoreUpdateOnlyColumnsRuleCount := countIgnoreUpdateOnlyColumnsRules(cfConfig.Filter)
-		if ignoreUpdateOnlyColumnsRuleCount > 0 {
-			_, downstreamType := config.ParseSinkURI(manager.config.SinkURI)
-			log.Warn("ignore update only columns is configured but does not take effect for this sink",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.String("sinkType", downstreamType),
-				zap.Int("eventFilterRuleCount", ignoreUpdateOnlyColumnsRuleCount))
-		}
-	}
 
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
 	switch manager.sink.SinkType() {

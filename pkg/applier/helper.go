@@ -159,7 +159,6 @@ func newEventsGroup(tableID int64) *eventsGroup {
 	return &eventsGroup{
 		tableID: tableID,
 	}
-<<<<<<< HEAD
 }
 
 // append will append an event to event groups.
@@ -187,21 +186,6 @@ func (g *eventsGroup) getEvents() []*commonEvent.DMLEvent {
 	result := g.events
 	g.events = nil
 	return result
-=======
-	return codeccommon.NewDMLMessage(row.Row.Table.TableID, row.Row.Table.Schema,
-		row.Row.Table.Table, row.Row.CommitTs, rowType, func() *commonEvent.DMLEvent {
-			event := row.ToDMLEvent()
-			if source := row.Row.SourceTable; source != nil &&
-				(source.Schema != row.Row.Table.Schema || source.Table != row.Row.Table.Table) {
-				// Match ordering rules against the source while writing the recorded target.
-				info := event.TableInfo.CloneWithRouting(row.Row.Table.Schema, row.Row.Table.Table)
-				info.TableName.Schema, info.TableName.Table = source.Schema, source.Table
-				info.TableName.IsPartition = source.IsPartition
-				event.TableInfo = info
-			}
-			return event
-		})
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 }
 
 type ddlTs struct {

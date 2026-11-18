@@ -18,11 +18,7 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
-<<<<<<< HEAD
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-=======
-	"github.com/pingcap/tidb/pkg/parser/ast"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/testkit"
 	"github.com/pingcap/tidb/pkg/types"
@@ -217,11 +213,7 @@ func TestRedoDDLEventToRedoLogWithoutRouting(t *testing.T) {
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 	originalTableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
 		ID:   1001,
-<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t_redo"),
-=======
-		Name: ast.NewCIStr("t_redo"),
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 		Columns: []*model.ColumnInfo{
 			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, model.CurrLatestColumnInfoVersion),
 			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", model.CurrLatestColumnInfoVersion),
@@ -395,11 +387,7 @@ func newRedoDDLTestColumn(
 	column := &model.ColumnInfo{
 		ID:        id,
 		Offset:    int(id - 1),
-<<<<<<< HEAD
 		Name:      parser_model.NewCIStr(name),
-=======
-		Name:      ast.NewCIStr(name),
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 		State:     model.StatePublic,
 		FieldType: *fieldType,
 		Version:   version,

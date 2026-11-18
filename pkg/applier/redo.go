@@ -398,7 +398,16 @@ func (ra *RedoApplier) applyRow(
 		return err
 	}
 
-	ra.eventsGroup[tableID].append(row.ToDMLEvent())
+	event := row.ToDMLEvent()
+	if source := row.Row.SourceTable; source != nil &&
+		(source.Schema != row.Row.Table.Schema || source.Table != row.Row.Table.Table) {
+		// Match ordering rules against the source while writing the recorded target.
+		info := event.TableInfo.CloneWithRouting(row.Row.Table.Schema, row.Row.Table.Table)
+		info.TableName.Schema, info.TableName.Table = source.Schema, source.Table
+		info.TableName.IsPartition = source.IsPartition
+		event.TableInfo = info
+	}
+	ra.eventsGroup[tableID].append(event)
 
 	ra.appliedLogCount++
 	return nil
@@ -515,21 +524,13 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		return err
 	}
 	replicaConfig := &config.ChangefeedConfig{
-<<<<<<< HEAD
-		SinkURI:    sinkURI.String(),
-		TimeZone:   timezone,
-		SinkConfig: &config.SinkConfig{},
-=======
-		SinkURI: sinkURI.String(),
-		// Redo apply runs without a CDC server instance, so resolve the default
-		// server timezone for the same sink URI validation as normal changefeeds.
+		SinkURI:       sinkURI.String(),
 		TimeZone:      timezone,
 		CaseSensitive: ra.cfg.CaseSensitive,
 		SinkConfig:    ra.cfg.SinkConfig,
 	}
 	if replicaConfig.SinkConfig == nil {
 		replicaConfig.SinkConfig = &config.SinkConfig{}
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(

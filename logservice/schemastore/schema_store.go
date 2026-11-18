@@ -30,11 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-<<<<<<< HEAD
 	"github.com/pingcap/ticdc/pkg/metrics"
-=======
 	"github.com/pingcap/ticdc/pkg/ordering"
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
@@ -367,13 +364,8 @@ func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) 
 	return err
 }
 
-<<<<<<< HEAD
-func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
-=======
 func (s *schemaStore) GetAllPhysicalTables(ctx context.Context, keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher) ([]commonEvent.Table, error) {
-	store, err := s.acquireKeyspaceSchemaStore(ctx, keyspaceMeta)
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
+	store, err := s.getKeyspaceSchemaStore(ctx, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -482,13 +474,8 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-<<<<<<< HEAD
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	store, err := s.getKeyspaceSchemaStore(context.Background(), keyspaceMeta)
-=======
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, _ common.DispatcherID, tableFilter filter.Filter, txnOrderMatcher *ordering.TxnOrderMatcher, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
-	store, err := s.acquireKeyspaceSchemaStore(context.Background(), keyspaceMeta)
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 	if err != nil {
 		return nil, 0, err
 	}

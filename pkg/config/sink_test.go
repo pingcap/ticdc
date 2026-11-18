@@ -25,13 +25,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-=======
 func TestTxnOrderTables(t *testing.T) {
 	for _, scheme := range []string{"mysql", "mysql+ssl", "tidb", "tidb+ssl"} {
 		cfg := GetDefaultReplicaConfig()
 		cfg.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"APP.orders", "app.ledger_*", "!app.ledger_skip"}}
-		cfg.Scheduler.ForceSplit = util.AddressOf(true)
+		cfg.Scheduler.ForceSplit = new(true)
 		uri, err := url.Parse(scheme + "://127.0.0.1/")
 		require.NoError(t, err)
 		require.NoError(t, cfg.ValidateAndAdjust(uri))
@@ -48,8 +46,8 @@ func TestTxnOrderTables(t *testing.T) {
 		require.True(t, f.Match("APP", "orders"))
 		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
 		for _, forceSplit := range []bool{false, true} {
-			cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
-			cfg.Scheduler.ForceSplit = util.AddressOf(forceSplit)
+			cfg.Scheduler.EnableTableAcrossNodes = new(true)
+			cfg.Scheduler.ForceSplit = new(forceSplit)
 			err := cfg.ValidateAndAdjust(uri)
 			require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 			require.ErrorContains(t, err, "txn-order-tables")
@@ -68,7 +66,7 @@ func TestTxnOrderTables(t *testing.T) {
 	uri, err := url.Parse("mysql://127.0.0.1/")
 	require.NoError(t, err)
 	require.ErrorContains(t, cfg.ValidateAndAdjust(uri), "txn-order-tables")
-	cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
+	cfg.Scheduler.EnableTableAcrossNodes = new(true)
 	for _, sinkURI := range []string{"kafka://127.0.0.1/topic?protocol=open-protocol", "blackhole://", "s3://bucket/prefix?protocol=csv"} {
 		uri, err := url.Parse(sinkURI)
 		require.NoError(t, err)
@@ -82,35 +80,6 @@ func TestTxnOrderTables(t *testing.T) {
 	require.Nil(t, f)
 }
 
-func TestDecodeAWSMSKIAMConfig(t *testing.T) {
-	t.Parallel()
-
-	var replicaConfig ReplicaConfig
-	metadata, err := toml.Decode(`
-[sink.kafka-config]
-sasl-mechanism = "OAUTHBEARER"
-sasl-oauth-provider = "AWS_MSK_IAM"
-enable-tls = true
-
-[sink.kafka-config.aws-msk-iam]
-region = "ap-northeast-1"
-role-arn = "arn:aws:iam::123456789012:role/TiCDCMSKProducer"
-role-session-name = "ticdc"
-external-id = "external-id"
-`, &replicaConfig)
-	require.NoError(t, err)
-	require.Empty(t, metadata.Undecoded())
-	require.NotNil(t, replicaConfig.Sink)
-	require.NotNil(t, replicaConfig.Sink.KafkaConfig)
-	require.Equal(t, &AWSMSKIAMConfig{
-		Region:          "ap-northeast-1",
-		RoleARN:         "arn:aws:iam::123456789012:role/TiCDCMSKProducer",
-		RoleSessionName: "ticdc",
-		ExternalID:      "external-id",
-	}, replicaConfig.Sink.KafkaConfig.AWSMSKIAM)
-}
-
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 func TestDateSeparatorSerialization(t *testing.T) {
 	t.Parallel()
 

@@ -25,7 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/ordering"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,7 +88,7 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 			cfg := mysql.New()
 			cfg.WorkerCount = workers
 			cfg.MaxTxnRow = 4
-			cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+			cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 			cfg.CachePrepStmts = false
 			cfg.MultiStmtEnable = false
 			cfg.BatchDMLEnable = false
@@ -97,7 +97,7 @@ func TestTxnOrderTablesBacklog(t *testing.T) {
 			cfg.TxnOrderMatcher, err = ordering.NewTxnOrderMatcher([]string{"test.ordered"}, false)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.Background())
-			sink := NewMySQLSink(ctx, common.NewChangefeedID4Test("test", fmt.Sprint(workers)), cfg, db, false, false, time.Minute, common.DefaultKeyspaceID)
+			sink := NewMySQLSink(ctx, common.NewChangefeedID4Test("test", fmt.Sprint(workers)), cfg, db, false, common.DefaultKeyspaceID)
 			done := make(chan error, 1)
 			t.Cleanup(func() {
 				cancel()

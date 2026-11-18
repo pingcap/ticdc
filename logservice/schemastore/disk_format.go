@@ -797,12 +797,7 @@ func loadAllPhysicalTablesAtTs(
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
-<<<<<<< HEAD
-=======
 	txnOrderMatcher *ordering.TxnOrderMatcher,
-	encMgr encryption.EncryptionManager,
-	keyspaceID uint32,
->>>>>>> c68c69d88 (sink: support per-table transaction ordering for MySQL sinks (#6860))
 ) ([]commonEvent.Table, error) {
 	// Replay DDLs before applying the filter to the final physical table list.
 	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
