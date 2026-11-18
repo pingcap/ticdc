@@ -29,7 +29,7 @@ func TestTxnOrderTables(t *testing.T) {
 	for _, scheme := range []string{"mysql", "mysql+ssl", "tidb", "tidb+ssl"} {
 		cfg := GetDefaultReplicaConfig()
 		cfg.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"APP.orders", "app.ledger_*", "!app.ledger_skip"}}
-		cfg.Scheduler.ForceSplit = util.AddressOf(true)
+		cfg.Scheduler.ForceSplit = new(true)
 		uri, err := url.Parse(scheme + "://127.0.0.1/")
 		require.NoError(t, err)
 		require.NoError(t, cfg.ValidateAndAdjust(uri))
@@ -46,8 +46,8 @@ func TestTxnOrderTables(t *testing.T) {
 		require.True(t, f.Match("APP", "orders"))
 		require.Equal(t, cfg.Sink.MySQLConfig.TxnOrderTables, cfg.Clone().Sink.MySQLConfig.TxnOrderTables)
 		for _, forceSplit := range []bool{false, true} {
-			cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
-			cfg.Scheduler.ForceSplit = util.AddressOf(forceSplit)
+			cfg.Scheduler.EnableTableAcrossNodes = new(true)
+			cfg.Scheduler.ForceSplit = new(forceSplit)
 			err := cfg.ValidateAndAdjust(uri)
 			require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 			require.ErrorContains(t, err, "txn-order-tables")
@@ -66,7 +66,7 @@ func TestTxnOrderTables(t *testing.T) {
 	uri, err := url.Parse("mysql://127.0.0.1/")
 	require.NoError(t, err)
 	require.ErrorContains(t, cfg.ValidateAndAdjust(uri), "txn-order-tables")
-	cfg.Scheduler.EnableTableAcrossNodes = util.AddressOf(true)
+	cfg.Scheduler.EnableTableAcrossNodes = new(true)
 	for _, sinkURI := range []string{"kafka://127.0.0.1/topic?protocol=open-protocol", "blackhole://", "s3://bucket/prefix?protocol=csv"} {
 		uri, err := url.Parse(sinkURI)
 		require.NoError(t, err)

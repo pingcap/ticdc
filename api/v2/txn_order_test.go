@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/server/mock"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -68,7 +67,7 @@ func TestTxnOrderUpdateRejectsPartitionedTables(t *testing.T) {
 			request := &ChangefeedConfig{ReplicaConfig: ToAPIReplicaConfig(cfg)}
 			request.ReplicaConfig.Filter.Rules = []string{"test.*"}
 			request.ReplicaConfig.Sink.MySQLConfig = &MySQLConfig{TxnOrderTables: []string{"test.partitioned"}}
-			request.ReplicaConfig.IgnoreIneligibleTable = util.AddressOf(true)
+			request.ReplicaConfig.IgnoreIneligibleTable = new(true)
 			body, err := json.Marshal(request)
 			require.NoError(t, err)
 			router := gin.New()
