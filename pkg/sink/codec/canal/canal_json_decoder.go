@@ -17,18 +17,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -47,12 +45,15 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-const decoderTableCacheSize = 128
-
 type tableKey struct {
-	schema  string
-	table   string
-	columns string
+	schema      string
+	table       string
+	ddlCommitTs uint64
+}
+
+type tableNameKey struct {
+	schema string
+	table  string
 }
 
 type bufferedJSONDecoder struct {
@@ -91,27 +92,16 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 
 // decoder decodes the byte into the original message.
 type decoder struct {
-	tableInfoMu    sync.Mutex
-	tableInfoCache *lru.Cache
-	msg            canalJSONMessageInterface
-	decoder        *bufferedJSONDecoder
-	row            *jsonRow
+	msg     canalJSONMessageInterface
+	decoder *bufferedJSONDecoder
 
 	config *common.Config
 
-	storage      storeapi.Storage
-	upstreamTiDB *sql.DB
-}
-
-// Parse routing and control metadata first. Column maps are decoded only when
-// the captured DMLMessage is converted, which can run in a consumer worker.
-type jsonRow struct {
-	*JSONMessage
-	Extensions *tidbExtension  `json:"_tidb"`
-	SQLType    json.RawMessage `json:"sqlType"` // Shadow the unused SQLType map.
-	MySQLType  json.RawMessage `json:"mysqlType"`
-	Data       json.RawMessage `json:"data"`
-	Old        json.RawMessage `json:"old"`
+	storage        storeapi.Storage
+	upstreamTiDB   *sql.DB
+	tableInfoMu    sync.RWMutex
+	tableInfoCache map[tableKey]*commonType.TableInfo
+	ddlCommitTs    map[tableNameKey][]uint64
 }
 
 var tableIDAllocator = common.NewTableIDAllocator()
@@ -140,10 +130,12 @@ func NewDecoder(
 
 	tableIDAllocator.Clean()
 	return &decoder{
-		config:       codecConfig,
-		decoder:      newBufferedJSONDecoder(),
-		storage:      externalStorage,
-		upstreamTiDB: db,
+		config:         codecConfig,
+		decoder:        newBufferedJSONDecoder(),
+		storage:        externalStorage,
+		upstreamTiDB:   db,
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
 	}, nil
 }
 
@@ -167,17 +159,20 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeUnknown, false
 	}
 
-	row := &jsonRow{JSONMessage: &JSONMessage{}, Extensions: &tidbExtension{}}
-	if err := d.decoder.Decode(row); err != nil {
+	var msg canalJSONMessageInterface = &JSONMessage{}
+	if d.config.EnableTiDBExtension {
+		msg = &canalJSONMessageWithTiDBExtension{
+			JSONMessage: &JSONMessage{},
+			Extensions:  &tidbExtension{},
+		}
+	}
+
+	if err := d.decoder.Decode(msg); err != nil {
 		log.Panic("canal-json decode failed",
 			zap.ByteString("data", d.decoder.Bytes()),
 			zap.Error(err))
 	}
-	var msg canalJSONMessageInterface = row.JSONMessage
-	if d.config.EnableTiDBExtension {
-		msg = &canalJSONMessageWithTiDBExtension{JSONMessage: row.JSONMessage, Extensions: row.Extensions}
-	}
-	d.msg, d.row = msg, row
+	d.msg = msg
 	return d.msg.messageType(), true
 }
 
@@ -323,8 +318,6 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	}
 
 	msg := d.msg
-	row := d.row
-	d.msg, d.row = nil, nil
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
@@ -342,33 +335,9 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 
-	message := common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
-		if row != nil {
-			for _, field := range []jsonColumnField{
-				{data: row.MySQLType, target: &row.JSONMessage.MySQLType},
-				{data: row.Data, target: &row.JSONMessage.Data},
-				{data: row.Old, target: &row.JSONMessage.Old},
-			} {
-				if len(field.data) != 0 {
-					if err := json.Unmarshal(field.data, field.target); err != nil {
-						log.Panic("canal-json decode failed", zap.Error(errors.WrapError(errors.ErrCodecDecode, err)))
-					}
-				}
-			}
-			row.SQLType, row.MySQLType, row.Data, row.Old = nil, nil, nil, nil
-		}
+	return common.NewDMLMessage(tableID, schemaName, tableName, msg.getCommitTs(), rowType, func() *commonEvent.DMLEvent {
 		return d.decodeDMLMessage(msg)
 	})
-	message.ApproximateSize = int64(len(schemaName) + len(tableName))
-	if row != nil {
-		message.ApproximateSize += int64(len(row.SQLType) + len(row.MySQLType) + len(row.Data) + len(row.Old))
-	}
-	return message
-}
-
-type jsonColumnField struct {
-	data   json.RawMessage
-	target any
 }
 
 func (d *decoder) decodeDMLMessage(msg canalJSONMessageInterface) *commonEvent.DMLEvent {
@@ -399,8 +368,31 @@ func (d *decoder) canalJSONMessage2DMLEvent(msg canalJSONMessageInterface) *comm
 	})
 	result.Length++
 
-	result.RowTypes = appendCanalJSONRows(msg, tableInfo.GetColumns(), result.Rows)
-
+	columns := tableInfo.GetColumns()
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		data := formatAllColumnsValue(msg.getData(), columns)
+		common.AppendRow2Chunk(data, columns, result.Rows)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeDelete)
+	case canal.EventType_INSERT:
+		data := formatAllColumnsValue(msg.getData(), columns)
+		common.AppendRow2Chunk(data, columns, result.Rows)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeInsert)
+	case canal.EventType_UPDATE:
+		previous := formatAllColumnsValue(msg.getOld(), columns)
+		data := formatAllColumnsValue(msg.getData(), columns)
+		for k, v := range data {
+			if _, ok := previous[k]; !ok {
+				previous[k] = v
+			}
+		}
+		common.AppendRow2Chunk(previous, columns, result.Rows)
+		common.AppendRow2Chunk(data, columns, result.Rows)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate)
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
 	return result
 }
 
@@ -422,7 +414,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	d.msg, d.row = nil, nil
+	d.addDDLCommitTs(result.SchemaName, result.TableName, result.GetCommitTs())
+	d.addDDLCommitTs(result.ExtraSchemaName, result.ExtraTableName, result.GetCommitTs())
 	return result
 }
 
@@ -438,37 +431,19 @@ func (d *decoder) NextResolvedEvent() uint64 {
 		log.Panic("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", d.msg))
 	}
-	d.msg, d.row = nil, nil
 	return withExtensionEvent.Extensions.WatermarkTs
 }
 
-func appendCanalJSONRows(msg canalJSONMessageInterface, columns []*timodel.ColumnInfo, rows *chunk.Chunk) []commonType.RowType {
-	var rowTypes []commonType.RowType
-	eventType := msg.eventType()
-	switch eventType {
-	case canal.EventType_DELETE:
-		rowTypes = []commonType.RowType{commonType.RowTypeDelete}
-	case canal.EventType_INSERT:
-		rowTypes = []commonType.RowType{commonType.RowTypeInsert}
-	case canal.EventType_UPDATE:
-		rowTypes = []commonType.RowType{commonType.RowTypeUpdate, commonType.RowTypeUpdate}
-	default:
-		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
-	}
-	data, old := msg.getData(), msg.getOld()
-	for idx, col := range columns {
-		value := formatValue(data[col.Name.O], col.FieldType)
-		if eventType == canal.EventType_UPDATE {
-			previous := value
-			// Missing old columns inherit the new value; an explicit null stays null.
-			if raw, ok := old[col.Name.O]; ok {
-				previous = formatValue(raw, col.FieldType)
-			}
-			common.AppendColumn2Chunk(idx, previous, col.FieldType, rows)
+func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
+	for _, col := range columns {
+		raw, ok := data[col.Name.O]
+		if !ok {
+			continue
 		}
-		common.AppendColumn2Chunk(idx, value, col.FieldType, rows)
+		result[col.Name.O] = formatValue(raw, col.FieldType)
 	}
-	return rowTypes
+	return result
 }
 
 func formatValue(value any, ft types.FieldType) any {
@@ -593,49 +568,68 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
-// Column types and primary-key membership completely describe the TableInfo
-// constructed below; the fingerprint is independent of values and DDL arrival.
-func tableColumnSignature(msg canalJSONMessageInterface) string {
-	types := msg.getMySQLType()
-	keys := msg.pkNameSet()
-	var key []byte
-	for _, name := range slices.Sorted(maps.Keys(types)) {
-		tp := types[name]
-		key = binary.AppendUvarint(key, uint64(len(name)))
-		key = append(key, name...)
-		key = binary.AppendUvarint(key, uint64(len(tp)))
-		key = append(key, tp...)
-		var primary byte
-		if _, ok := keys[name]; ok {
-			primary = 1
-		}
-		key = append(key, primary)
-	}
-	return string(key)
-}
-
 func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
-	cacheKey := tableKey{schema: schemaName, table: tableName, columns: tableColumnSignature(msg)}
+
 	d.tableInfoMu.Lock()
 	defer d.tableInfoMu.Unlock()
-	if d.tableInfoCache == nil {
-		d.tableInfoCache, _ = lru.New(decoderTableCacheSize)
+
+	cacheKey := tableKey{
+		schema:      schemaName,
+		table:       tableName,
+		ddlCommitTs: d.getDDLCommitTsLocked(schemaName, tableName, msg.getCommitTs()),
 	}
-	if cached, ok := d.tableInfoCache.Get(cacheKey); ok {
-		return cached.(*commonType.TableInfo)
+	tableInfo, ok := d.tableInfoCache[cacheKey]
+	if !ok {
+		tidbTableInfo := new(timodel.TableInfo)
+		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
+		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
+		tidbTableInfo.Name = ast.NewCIStr(tableName)
+
+		columns := newTiColumns(msg)
+		tidbTableInfo.Columns = columns
+		tidbTableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+		commonType.SetHandleKeyFlags(tidbTableInfo)
+		tableInfo = commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
+		d.tableInfoCache[cacheKey] = tableInfo
 	}
-	table := new(timodel.TableInfo)
-	table.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, table.ID)
-	table.Name = ast.NewCIStr(tableName)
-	table.Columns = newTiColumns(msg)
-	table.Indices = newTiIndices(table.Columns, msg.pkNameSet())
-	commonType.SetHandleKeyFlags(table)
-	info := commonType.NewTableInfo4Decoder(schemaName, table)
-	d.tableInfoCache.Add(cacheKey, info)
-	return info
+	return tableInfo
+}
+
+func (d *decoder) addDDLCommitTs(schema, table string, commitTs uint64) {
+	if schema == "" || table == "" || commitTs == 0 {
+		return
+	}
+
+	d.tableInfoMu.Lock()
+	defer d.tableInfoMu.Unlock()
+
+	key := tableNameKey{schema: schema, table: table}
+	commitTsList := d.ddlCommitTs[key]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		return commitTsList[i] >= commitTs
+	})
+	if i < len(commitTsList) && commitTsList[i] == commitTs {
+		return
+	}
+	d.ddlCommitTs[key] = slices.Insert(commitTsList, i, commitTs)
+}
+
+func (d *decoder) getDDLCommitTsLocked(schema, table string, commitTs uint64) uint64 {
+	if commitTs == 0 {
+		return 0
+	}
+
+	commitTsList := d.ddlCommitTs[tableNameKey{schema: schema, table: table}]
+	i := sort.Search(len(commitTsList), func(i int) bool {
+		// DMLs with the same commit-ts as a DDL are flushed before that DDL.
+		return commitTsList[i] >= commitTs
+	})
+	if i == 0 {
+		return 0
+	}
+	return commitTsList[i-1]
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {

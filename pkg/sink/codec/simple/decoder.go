@@ -64,7 +64,6 @@ type Decoder struct {
 	// The same object is returned by GetCachedMessages once its schema is known.
 	// It cannot be materialized until it is returned by GetCachedMessages.
 	PendingDMLMessage *common.DMLMessage
-	pendingSchema     <-chan struct{}
 }
 
 type cachedDMLMessage struct {
@@ -177,10 +176,8 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 			zap.String("table", msg.Table),
 			zap.Uint64("version", msg.SchemaVersion))
 		pending := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), nil)
-		pending.ApproximateSize = msg.approximateSize()
 		d.cachedMessages.PushBack(&cachedDMLMessage{message: msg, decoded: pending})
 		d.PendingDMLMessage = pending
-		d.pendingSchema = d.memo.schemaReady(msg.Schema, msg.Table, msg.SchemaVersion)
 		return nil
 	}
 
@@ -189,16 +186,9 @@ func (d *Decoder) NextDMLMessage() *common.DMLMessage {
 
 func (d *Decoder) newDMLMessage(msg *message, tableInfo *commonType.TableInfo) *common.DMLMessage {
 	tableIDAllocator.AddBlockTableID(msg.Schema, msg.Table, msg.TableID)
-	message := common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
+	return common.NewDMLMessage(msg.TableID, msg.Schema, msg.Table, msg.CommitTs, rowTypeFromMessageType(msg.Type), func() *commonEvent.DMLEvent {
 		return d.assembleDMLEvent(msg, tableInfo)
 	})
-	message.ApproximateSize = msg.approximateSize()
-	return message
-}
-
-func (m *message) approximateSize() int64 {
-	return int64(len(m.Schema)+len(m.Table)+len(m.ClaimCheckLocation)) +
-		common.DecodedDataSize(m.Data) + common.DecodedDataSize(m.Old)
 }
 
 func rowTypeFromMessageType(tp MessageType) commonType.RowType {
@@ -226,7 +216,6 @@ func (d *Decoder) assembleDMLEvent(msg *message, tableInfo *commonType.TableInfo
 
 	event := buildDMLEvent(msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 
-	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
 }
 
@@ -323,20 +312,6 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
 		log.Panic("msg is not set when parse the DDL event")
 	}
-	if d.msg.Type == MessageTypeBootstrap {
-		schema := d.msg.TableSchema
-		if info := d.memo.Read(schema.Schema, schema.Table, schema.Version); info != nil {
-			ddl := &commonEvent.DDLEvent{
-				TableInfo:          info,
-				MultipleTableInfos: []*commonType.TableInfo{info, nil},
-				SchemaName:         schema.Schema,
-				TableName:          schema.Table,
-				FinishedTs:         d.msg.CommitTs,
-			}
-			d.msg = nil
-			return ddl
-		}
-	}
 	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
@@ -378,15 +353,13 @@ func (d *Decoder) GetTableIDs(schema, table string) []int64 {
 type TableInfoCache struct {
 	mu      sync.RWMutex
 	changed chan struct{}
-	pending map[tableSchemaKey]chan struct{}
 	memo    map[tableSchemaKey]*commonType.TableInfo
 }
 
 // NewTableInfoCache creates an empty schema cache.
 func NewTableInfoCache() *TableInfoCache {
 	return &TableInfoCache{
-		memo:    make(map[tableSchemaKey]*commonType.TableInfo),
-		pending: make(map[tableSchemaKey]chan struct{}),
+		memo: make(map[tableSchemaKey]*commonType.TableInfo),
 	}
 }
 
@@ -439,10 +412,6 @@ func (m *TableInfoCache) Write(info *commonType.TableInfo) {
 	}
 
 	m.memo[key] = info
-	if ready := m.pending[key]; ready != nil {
-		close(ready)
-		delete(m.pending, key)
-	}
 	if m.changed != nil {
 		close(m.changed)
 		m.changed = nil
@@ -464,39 +433,6 @@ func (m *TableInfoCache) Read(schema, table string, version uint64) *commonType.
 		version: version,
 	}
 	return m.memo[key]
-}
-
-// PendingSchemaReady closes when the last pending DML's exact schema version
-// has been stored, or immediately when there is no pending DML.
-func (d *Decoder) PendingSchemaReady() <-chan struct{} {
-	if d.pendingSchema != nil {
-		return d.pendingSchema
-	}
-	ready := make(chan struct{})
-	close(ready)
-	return ready
-}
-
-// schemaReady returns a channel closed once the exact schema version is stored.
-func (m *TableInfoCache) schemaReady(schema, table string, version uint64) <-chan struct{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := tableSchemaKey{
-		schema:  schema,
-		table:   table,
-		version: version,
-	}
-	if m.memo[key] != nil {
-		ready := make(chan struct{})
-		close(ready)
-		return ready
-	}
-	if ready := m.pending[key]; ready != nil {
-		return ready
-	}
-	ready := make(chan struct{})
-	m.pending[key] = ready
-	return ready
 }
 
 // Changes returns a channel closed on the next schema write.

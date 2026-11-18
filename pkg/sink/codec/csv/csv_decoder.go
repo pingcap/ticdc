@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -140,7 +139,6 @@ func filterTableInfoByColumnSelector(
 	}
 
 	tidbTableInfo := tableInfo.ToTiDBTableInfo().Clone()
-	tidbTableInfo.UpdateTS = tableInfo.UpdateTS
 	tidbTableInfo.Columns = selectedColumns
 	tidbTableInfo.Indices = filterSelectedIndices(tableInfo.GetIndices(), columns, selectedColumnOffsets)
 	tidbTableInfo.PKIsHandle = tableInfo.PKIsHandle() && hasSelectedPKIsHandleColumn(selectedColumns)
@@ -225,37 +223,25 @@ func (b *decoder) NextDMLMessage() *common.DMLMessage {
 	msg := *b.msg
 	msg.columns = append([]any(nil), b.msg.columns...)
 	msg.preColumns = append([]any(nil), b.msg.preColumns...)
-	msg.schemaName, msg.tableName = strings.Clone(msg.schemaName), strings.Clone(msg.tableName)
-	for _, columns := range [][]any{msg.columns, msg.preColumns} {
-		for i, value := range columns {
-			if text, ok := value.(string); ok {
-				columns[i] = strings.Clone(text)
-			}
-		}
-	}
 
 	rowType := commonType.RowTypeInsert
 	if msg.opType == operationDelete {
 		rowType = commonType.RowTypeDelete
 	}
-	codecConfig, tableInfo := b.codecConfig, b.tableInfo
 
-	message := common.NewDMLMessage(
+	return common.NewDMLMessage(
 		b.tableInfo.TableName.TableID,
 		msg.schemaName,
 		msg.tableName,
 		msg.commitTs,
 		rowType,
 		func() *commonEvent.DMLEvent {
-			e, err := csvMsg2RowChangedEvent(codecConfig, &msg, tableInfo)
+			e, err := csvMsg2RowChangedEvent(b.codecConfig, &msg, b.tableInfo)
 			if err != nil {
 				log.Panic("convert message to event failed", zap.Error(err))
 			}
 			return e
 		})
-	message.ApproximateSize = int64(len(msg.schemaName)+len(msg.tableName)) +
-		common.DecodedDataSize(msg.columns) + common.DecodedDataSize(msg.preColumns)
-	return message
 }
 
 // NextDDLEvent implements the Decoder interface.
@@ -360,13 +346,10 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		}
 	}
 
-	rows := 1
-	if deleteData != nil {
-		rows++
-	}
-	// Each message has one or two rows. Its chunk can be released as soon as
-	// those rows are copied into a merged event, independently of downstream flush.
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), rows)
+	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
+	e.AddPostFlushFunc(func() {
+		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
+	})
 	if deleteData != nil {
 		// Handle-key changes are split upstream. Keep the keyed delete and
 		// after-image insert in one event, as for Avro updates without before values.

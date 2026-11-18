@@ -174,11 +174,9 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
 	d.clear()
 
-	message := common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
 		return d.assembleDMLEventFromPayload(keyPayload, valuePayload, valueSchema)
 	})
-	message.ApproximateSize = common.DecodedDataSize(keyPayload) + common.DecodedDataSize(valuePayload)
-	return message
 }
 
 func rowTypeFromPayload(valuePayload map[string]any) commonType.RowType {

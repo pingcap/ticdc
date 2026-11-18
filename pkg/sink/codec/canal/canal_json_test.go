@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -1137,7 +1136,7 @@ func TestDDLSequence(t *testing.T) {
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 }
 
-func TestDecoderMessageSchemaAcrossColumnChanges(t *testing.T) {
+func TestDecoderTableInfoCacheUsesDDLCommitTsAcrossColumnChanges(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.EnableTiDBExtension = true
@@ -1232,9 +1231,12 @@ func TestDecoderMessageSchemaAcrossColumnChanges(t *testing.T) {
 	require.Equal(t, oldEvent.GetTableID(), newEvent.GetTableID())
 }
 
-func TestDecoderMessageSchemaWithoutDDL(t *testing.T) {
+func TestDecoderTableInfoCacheUsesDDLCommitTsBoundary(t *testing.T) {
 	tableIDAllocator.Clean()
-	dec := &decoder{}
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
 	buildMessage := func(commitTs uint64, mysqlTypes map[string]string) *canalJSONMessageWithTiDBExtension {
 		return &canalJSONMessageWithTiDBExtension{
 			JSONMessage: &JSONMessage{
@@ -1264,6 +1266,7 @@ func TestDecoderMessageSchemaWithoutDDL(t *testing.T) {
 		"id":   "int",
 	}
 
+	dec.addDDLCommitTs("test", "table_5", 200)
 	sameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
 	afterDDL := dec.queryTableInfo(buildMessage(300, afterDropSchema))
 	lateSameTsAsDDL := dec.queryTableInfo(buildMessage(200, beforeDropSchema))
@@ -1272,17 +1275,7 @@ func TestDecoderMessageSchemaWithoutDDL(t *testing.T) {
 	require.Equal(t, []string{"data", "id"}, columnNames(afterDDL))
 	require.NotSame(t, sameTsAsDDL, afterDDL)
 	require.Same(t, sameTsAsDDL, lateSameTsAsDDL)
-	changedKey := buildMessage(400, beforeDropSchema)
-	changedKey.PKNames = []string{"data"}
-	keyInfo := dec.queryTableInfo(changedKey)
-	require.NotSame(t, sameTsAsDDL, keyInfo)
-	common.RequireRowLocatorByPrimaryKey(t, keyInfo, "data")
-	for i := range decoderTableCacheSize + 1 {
-		message := buildMessage(500, beforeDropSchema)
-		message.Table = fmt.Sprint(i)
-		dec.queryTableInfo(message)
-	}
-	require.Equal(t, decoderTableCacheSize, dec.tableInfoCache.Len())
+	require.Equal(t, []uint64{200}, dec.ddlCommitTs[tableNameKey{schema: "test", table: "table_5"}])
 }
 
 func TestCreateTableDDL(t *testing.T) {
@@ -1432,7 +1425,10 @@ func TestRowKey(t *testing.T) {
 // name) was used instead, which made every UPDATE scan the whole table.
 func TestTableInfoFromMessageLocatesRowByPrimaryKey(t *testing.T) {
 	tableIDAllocator.Clean()
-	dec := &decoder{}
+	dec := &decoder{
+		tableInfoCache: make(map[tableKey]*commonType.TableInfo),
+		ddlCommitTs:    make(map[tableNameKey][]uint64),
+	}
 	tableInfo := dec.queryTableInfo(&canalJSONMessageWithTiDBExtension{
 		JSONMessage: &JSONMessage{
 			Schema:  "test",

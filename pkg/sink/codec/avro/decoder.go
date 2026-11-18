@@ -14,7 +14,6 @@
 package avro
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -44,7 +43,7 @@ import (
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
-// decoderCodecCacheSize bounds the compiled codecs retained by each decoder.
+// decoderCodecCacheSize bounds the compiled codecs retained by each partition decoder.
 // It keeps recently active routed-table schemas without retaining every historical version.
 const decoderCodecCacheSize = 128
 
@@ -55,10 +54,11 @@ type decoder struct {
 
 	upstreamTiDB *sql.DB
 
+	// valueSchemas supplies the column layout for subsequent key-only deletes.
+	valueSchemas map[[2]string]map[string]any
+
 	schemaM schemamanager.SchemaManager
 	codecs  *lru.Cache
-	// Key schema identity protects delete locators across table schema changes.
-	valueSchemas *lru.Cache
 
 	key   []byte
 	value []byte
@@ -74,15 +74,14 @@ func NewDecoder(
 ) common.Decoder {
 	tableIDAllocator.Clean()
 	codecs, _ := lru.New(decoderCodecCacheSize)
-	valueSchemas, _ := lru.New(decoderCodecCacheSize)
 	return &decoder{
 		idx:          idx,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
 		codecs:       codecs,
-		valueSchemas: valueSchemas,
 		upstreamTiDB: db,
+		valueSchemas: make(map[[2]string]map[string]any),
 	}
 }
 
@@ -144,14 +143,9 @@ func (d *decoder) NextDMLMessage() *common.DMLMessage {
 		rowType = commonType.RowTypeUpdate
 	}
 	tableID := tableIDAllocator.Allocate(schemaName, tableName)
-	message := common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
+	return common.NewDMLMessage(tableID, schemaName, tableName, commitTs, rowType, func() *commonEvent.DMLEvent {
 		return d.assembleDMLEventFromDecoded(keyMap, valueMap, valueSchema, isDelete, hasValue, deleteCommitTs)
 	})
-	message.ApproximateSize = common.DecodedDataSize(keyMap)
-	if hasValue {
-		message.ApproximateSize += common.DecodedDataSize(valueMap)
-	}
-	return message
 }
 
 func (d *decoder) decodeDMLPayload() (
@@ -163,13 +157,12 @@ func (d *decoder) decodeDMLPayload() (
 	deleteCommitTs uint64,
 ) {
 	var (
-		keySchema   map[string]any
-		keyIdentity schemamanager.SchemaID
-		err         error
+		keySchema map[string]any
+		err       error
 	)
 
 	ctx := context.Background()
-	keyMap, keySchema, keyIdentity, err = d.decodeKey(ctx)
+	keyMap, keySchema, err = d.decodeKey(ctx)
 	if err != nil {
 		log.Panic("decode key failed", zap.Error(err))
 	}
@@ -179,17 +172,18 @@ func (d *decoder) decodeDMLPayload() (
 	isDelete = !hasValue
 	if !hasValue {
 		// Legacy delete event only has the key payload or a delete marker value.
-		// A compatible full layout keeps key-only deletes batchable with full rows.
+		// Reuse the last value schema to preserve the full column layout.
 		if isDeleteValue {
 			deleteCommitTs = d.decodeDeleteCommitTs()
 		}
 		valueMap = keyMap
 		valueSchema = keySchema
-		if cached, ok := d.valueSchemas.Get(keyIdentity); ok && len(keyMap) != 0 {
-			valueSchema = cached.(map[string]any)
+		schemaName, tableName := schemaAndTableName(keySchema)
+		if cached := d.valueSchemas[[2]string{schemaName, tableName}]; cached != nil {
+			valueSchema = cached
 			valueMap = maps.Clone(keyMap)
-			for _, item := range valueSchema["fields"].([]any) {
-				name := item.(map[string]any)["name"].(string)
+			for _, field := range cached["fields"].([]any) {
+				name := field.(map[string]any)["name"].(string)
 				if isAvroExtensionField(name) {
 					break
 				}
@@ -203,7 +197,8 @@ func (d *decoder) decodeDMLPayload() (
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err))
 		}
-		d.valueSchemas.Add(keyIdentity, valueSchema)
+		schemaName, tableName := schemaAndTableName(valueSchema)
+		d.valueSchemas[[2]string{schemaName, tableName}] = valueSchema
 		if operation, ok := valueMap[tidbOp]; ok {
 			isDelete = operation == deleteOperation
 		}
@@ -741,7 +736,7 @@ func extractGlueSchemaIDAndBinaryData(data []byte) (string, []byte, error) {
 
 func (d *decoder) decodeRawBytes(
 	ctx context.Context, data []byte,
-) (map[string]any, map[string]any, schemamanager.SchemaID, error) {
+) (map[string]any, map[string]any, error) {
 	var schemaID schemamanager.SchemaID
 	var binary []byte
 	var err error
@@ -752,59 +747,40 @@ func (d *decoder) decodeRawBytes(
 	case common.SchemaRegistryTypeConfluent:
 		cid, binary, err = extractConfluentSchemaIDAndBinaryData(data)
 		if err != nil {
-			return nil, nil, schemaID, err
+			return nil, nil, err
 		}
 		schemaID = schemamanager.NewConfluentSchemaID(cid)
 	case common.SchemaRegistryTypeGlue:
 		gid, binary, err = extractGlueSchemaIDAndBinaryData(data)
 		if err != nil {
-			return nil, nil, schemaID, err
+			return nil, nil, err
 		}
 		schemaID = schemamanager.NewGlueSchemaID(gid)
 	default:
-		return nil, nil, schemaID, errors.ErrCodecDecode.GenWithStack("unknown schema registry type")
+		return nil, nil, errors.ErrCodecDecode.GenWithStack("unknown schema registry type")
 	}
 
 	codec, err := d.lookupCodec(ctx, schemaID)
 	if err != nil {
-		return nil, nil, schemaID, err
+		return nil, nil, err
 	}
 
 	native, _, err := codec.NativeFromBinary(binary)
 	if err != nil {
-		return nil, nil, schemaID, err
+		return nil, nil, err
 	}
 
 	result, ok := native.(map[string]any)
 	if !ok {
-		return nil, nil, schemaID, errors.ErrCodecDecode.GenWithStack("raw avro message is not a map")
+		return nil, nil, errors.ErrCodecDecode.GenWithStack("raw avro message is not a map")
 	}
-	// goavro byte values can alias the encoded input. Detach them before the
-	// consumer releases the raw input and transfers quota to this message.
-	detachAvroBytes(result)
 
 	schema := make(map[string]any)
 	if err := json.Unmarshal([]byte(codec.Schema()), &schema); err != nil {
-		return nil, nil, schemaID, errors.Trace(err)
+		return nil, nil, errors.Trace(err)
 	}
 
-	return result, schema, schemaID, nil
-}
-
-func detachAvroBytes(value any) any {
-	switch value := value.(type) {
-	case []byte:
-		return bytes.Clone(value)
-	case map[string]any:
-		for key, item := range value {
-			value[key] = detachAvroBytes(item)
-		}
-	case []any:
-		for i, item := range value {
-			value[i] = detachAvroBytes(item)
-		}
-	}
-	return value
+	return result, schema, nil
 }
 
 func (d *decoder) lookupCodec(
@@ -826,7 +802,7 @@ func (d *decoder) lookupCodec(
 	return codec, nil
 }
 
-func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any, schemamanager.SchemaID, error) {
+func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.key
 	d.key = nil
 	return d.decodeRawBytes(ctx, data)
@@ -835,8 +811,7 @@ func (d *decoder) decodeKey(ctx context.Context) (map[string]any, map[string]any
 func (d *decoder) decodeValue(ctx context.Context) (map[string]any, map[string]any, error) {
 	data := d.value
 	d.value = nil
-	value, schema, _, err := d.decodeRawBytes(ctx, data)
-	return value, schema, err
+	return d.decodeRawBytes(ctx, data)
 }
 
 func mysqlTypeFromTiDBType(tidbType string) byte {
