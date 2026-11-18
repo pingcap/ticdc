@@ -117,6 +117,7 @@ func TestSplitUpdatePreservesIndexPrefixLength(t *testing.T) {
 	update := &commonEvent.RedoDMLEvent{
 		Row: &commonEvent.DMLEventInRedoLog{
 			Table:              &common.TableName{Schema: "test", Table: "t", TableID: 42},
+			SourceTable:        &common.TableName{Schema: "app", Table: "t", TableID: 42},
 			Columns:            []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeVarchar}},
 			PreColumns:         []*commonEvent.RedoColumn{{Name: "id", Type: pmysql.TypeVarchar}},
 			IndexColumns:       [][]int{{0}},
@@ -133,6 +134,7 @@ func TestSplitUpdatePreservesIndexPrefixLength(t *testing.T) {
 		var decoded commonEvent.RedoDMLEvent
 		_, err = decoded.UnmarshalMsg(data)
 		require.NoError(t, err)
+		require.Equal(t, update.Row.SourceTable, decoded.Row.SourceTable)
 		event := decoded.ToDMLEvent()
 		require.Equal(t, 4, event.TableInfo.GetIndices()[0].Columns[0].Length)
 		event.PostFlush()
